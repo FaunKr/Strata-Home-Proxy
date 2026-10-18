@@ -525,3 +525,74 @@ async fn a_damaged_model_config_stops_the_key_change() {
     assert_eq!(s.agent.managed().strata_api_key.as_deref(), Some(OLD_KEY));
     assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn with_strata_started_by_start_here_the_model_used_last_is_active() {
+    let s = setup_with("models-start-here", |c| {
+        c.strata_start = Some(c.strata_dir.join("START-HERE.bat"));
+    })
+    .await;
+    installed(&s);
+    s.agent.set_managed(Managed::default()).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    write(
+        s.agent.cfg.strata_dir.join("strata-iq3_xxs.json"),
+        &config_json("a.gguf"),
+    );
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "delete", "model": "IQ3_XXS"}),
+    )
+    .await;
+    assert_eq!(code, 409, "{answer}");
+    let done = job(&s, json!({"kind": "benchmark"})).await;
+    assert_eq!(done["model"], "IQ3_XXS");
+}
+
+#[tokio::test]
+async fn another_model_gets_the_key_the_proxy_sends() {
+    let s = setup("models-add-key").await;
+    installed(&s);
+    job(
+        &s,
+        json!({"kind": "add_model", "family": "swift", "size": "IQ2_XS", "context": 65536, "api_key": NEW_KEY}),
+    )
+    .await;
+    let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+    assert!(args.contains(&NEW_KEY.to_string()), "{args:?}");
+    assert!(!args.contains(&OLD_KEY.to_string()), "{args:?}");
+}
+
+#[tokio::test]
+async fn a_little_of_a_download_does_not_count_as_most_of_it() {
+    let s = setup("models-space-partial").await;
+    installed(&s);
+    write(
+        s.agent
+            .cfg
+            .strata_data_dir
+            .join("models/swift-IQ3_XXS/part-00001.gguf.part"),
+        "0123456789",
+    );
+    *s.fake.disk_free.lock().unwrap() = Some(20_000_000_000);
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "add_model", "family": "swift", "size": "IQ3_XXS", "context": 65536}),
+    )
+    .await;
+    assert_eq!(code, 409, "{answer}");
+}
+
+#[tokio::test]
+async fn adding_a_model_needs_an_installed_strata() {
+    let s = setup("models-add-not-installed").await;
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "add_model", "family": "swift", "size": "IQ2_XS", "context": 65536}),
+    )
+    .await;
+    assert_eq!(code, 409, "{answer}");
+}

@@ -368,3 +368,26 @@ async fn shows_the_last_benchmark_with_its_local_time() {
     assert!(html.contains("38.5 Token/s mit IQ3_XXS"), "{html}");
     assert!(html.contains("neuere Version"), "{html}");
 }
+
+#[tokio::test]
+async fn another_model_gets_the_strata_key_in_use() {
+    let s = setup(true, |_| {}).await;
+    s.state
+        .settings
+        .set("STRATA_API_KEY", "strata-geheim-0123456789")
+        .unwrap();
+    let mut b = logged_in(&s.url).await;
+    let resp = b
+        .call(
+            "strata-job",
+            &[
+                ("kind", "add_model"),
+                ("family", "swift"),
+                ("size", "IQ2_XS"),
+                ("context", "65536"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(last_body(&s)["api_key"], "strata-geheim-0123456789");
+}

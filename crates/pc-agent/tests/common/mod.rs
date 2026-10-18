@@ -56,7 +56,7 @@ pub struct Fake {
     pub started: Mutex<Option<(PathBuf, Vec<String>)>>,
     /// What the last stop was told to end.
     pub stopped: Mutex<Option<Vec<String>>>,
-    /// Fake commands by program file name (`git`, `START-HERE.bat`).
+    /// Fake commands by program name without `.exe` (`git`, `START-HERE.bat`).
     pub commands: Mutex<HashMap<String, FakeCommand>>,
     /// Every command run, in order.
     pub ran: Mutex<Vec<CommandSpec>>,
@@ -89,10 +89,14 @@ impl Fake {
     }
 }
 
+/// The program's name without `.exe`: under Windows the service may run
+/// `git.exe` by its full path where elsewhere it runs `git`.
 fn file_name(path: &Path) -> String {
-    path.file_name()
+    let name = path
+        .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    name.strip_suffix(".exe").map_or(name.clone(), String::from)
 }
 
 pub struct FakePlatform(pub Arc<Fake>);

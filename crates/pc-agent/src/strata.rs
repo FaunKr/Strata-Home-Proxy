@@ -28,6 +28,9 @@ const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
 const POLL: Duration = Duration::from_millis(250);
 /// How long a benchmark waits for Strata to load its model.
 const READY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Time for an ended Strata to free its port before the next one starts,
+/// as the watchdog gives it.
+const STOP_SETTLE: Duration = Duration::from_secs(2);
 /// Lines of output a job keeps, for the page to show after a failure.
 const KEPT_LINES: usize = 20;
 /// Strata's port and network access, as the proxy expects them.
@@ -105,6 +108,9 @@ pub enum JobRequest {
         family: String,
         size: String,
         context: u32,
+        /// The key the proxy uses; without it the service's own.
+        #[serde(default)]
+        api_key: Option<String>,
     },
     Activate {
         model: String,
@@ -137,6 +143,7 @@ enum Plan {
     AddModel {
         size: &'static Size,
         context: u32,
+        api_key: Option<String>,
     },
     Activate {
         id: String,
@@ -345,10 +352,16 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             family,
             size: s,
             context: c,
-        } => Ok(Plan::AddModel {
-            size: size(&family, &s)?,
-            context: context(c)?,
-        }),
+            api_key,
+        } => {
+            let plan = Plan::AddModel {
+                size: size(&family, &s)?,
+                context: context(c)?,
+                api_key: api_key.map(check_key).transpose()?,
+            };
+            strata_installed(dir)?;
+            Ok(plan)
+        }
         JobRequest::Activate { model } => {
             let id = installed_model(dir, &model)?;
             if active_model(agent).as_deref() == Some(id.as_str()) {
@@ -412,13 +425,26 @@ fn installed_model(dir: &Path, model: &str) -> Result<String, Refusal> {
 }
 
 /// The model the managed start script starts, in the catalog's letter case.
+/// Without a model's own start script (`START-HERE.bat` starts the model
+/// used last), the config Strata touched last, as Strata picks it.
 fn active_model(agent: &Agent) -> Option<String> {
     let managed = agent.managed();
-    let (start, _) = managed.start(&agent.cfg)?;
-    let script = start.file_name()?.to_string_lossy().to_lowercase();
-    installed_models(&agent.cfg.strata_dir)
+    let script = managed
+        .start(&agent.cfg)
+        .and_then(|(start, _)| start.file_name())
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let dir = &agent.cfg.strata_dir;
+    let id = installed_models(dir)
         .find(|id| run_script(id) == script)
-        .map(|id| catalog::by_id(&id).map_or(id, Size::id))
+        .or_else(|| {
+            installed_models(dir).max_by_key(|id| {
+                std::fs::metadata(dir.join(format!("strata-{id}.json")))
+                    .and_then(|m| m.modified())
+                    .ok()
+            })
+        })?;
+    Some(catalog::by_id(&id).map_or(id, Size::id))
 }
 
 /// Keys go into a command line and an HTTP header: printable ASCII only.
@@ -436,18 +462,15 @@ fn check_key(key: String) -> Result<String, Refusal> {
     }
 }
 
-/// Refuses a download that does not fit on the data drive. A model already
-/// partly downloaded needs only the spare room.
+/// Refuses a download that does not fit on the data drive. Of a model partly
+/// downloaded, only the rest counts.
 fn check_space(agent: &Agent, size: &Size) -> Result<(), Refusal> {
     let data = &agent.cfg.strata_data_dir;
     let Some(free) = agent.platform().disk_free(data) else {
         return Ok(());
     };
-    let need_gb = if partly_downloaded(data, size) {
-        catalog::DISK_SPARE_GB
-    } else {
-        size.download_gb + catalog::DISK_SPARE_GB
-    };
+    let have_gb = dir_size(&data.join("models").join(size.id())) as f64 / 1e9;
+    let need_gb = (size.download_gb - have_gb).max(0.0) + catalog::DISK_SPARE_GB;
     let free_gb = free as f64 / 1e9;
     if free_gb < need_gb {
         return Err(Refusal::Conflict(format!(
@@ -479,7 +502,11 @@ async fn run(agent: &Arc<Agent>, plan: Plan) -> Outcome {
             context,
             api_key,
         } => install(agent, size, context, api_key).await,
-        Plan::AddModel { size, context } => add_model(agent, size, context).await,
+        Plan::AddModel {
+            size,
+            context,
+            api_key,
+        } => add_model(agent, size, context, api_key).await,
         Plan::Activate { id } => activate(agent, &id).await,
         Plan::Delete { id } => delete(agent, &id).await,
         Plan::Update => update(agent).await,
@@ -546,18 +573,20 @@ async fn install(
     agent
         .set_managed(managed)
         .map_err(|e| Step::Failed(e.to_string()))?;
-    if !agent.gaming() {
-        agent.start_strata();
-    }
+    restart_strata(agent).await;
     Ok(None)
 }
 
-async fn add_model(agent: &Arc<Agent>, size: &Size, context: u32) -> Result<Option<String>, Step> {
-    if !agent.cfg.strata_dir.join("setup.py").is_file() {
-        return Err("Strata ist noch nicht eingerichtet".to_string().into());
-    }
-    let managed = agent.managed();
-    let key = managed.api_key(&agent.cfg).unwrap_or_default().to_string();
+async fn add_model(
+    agent: &Arc<Agent>,
+    size: &Size,
+    context: u32,
+    api_key: Option<String>,
+) -> Result<Option<String>, Step> {
+    // The proxy's key first: a model with another key would answer it with 401.
+    let key = api_key
+        .or_else(|| agent.managed().api_key(&agent.cfg).map(String::from))
+        .unwrap_or_default();
     setup(agent, size, context, &key).await?;
     Ok(None)
 }
@@ -610,7 +639,8 @@ where
 }
 
 /// Starts Strata again after a job ended it, unless gaming mode is on.
-fn restart_strata(agent: &Agent) {
+async fn restart_strata(agent: &Agent) {
+    tokio::time::sleep(STOP_SETTLE).await;
     if !agent.gaming() {
         agent.start_strata();
     }
@@ -631,7 +661,7 @@ async fn activate(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> 
         .set_managed(managed)
         .map_err(|e| Step::Failed(e.to_string()));
     // Also when saving failed: Strata runs again, with the old model then.
-    restart_strata(agent);
+    restart_strata(agent).await;
     saved?;
     Ok(None)
 }
@@ -696,7 +726,7 @@ async fn update(agent: &Arc<Agent>) -> Result<Option<String>, Step> {
         dir: Some(dir),
     };
     let updated = command(agent, spec, true).await;
-    restart_strata(agent);
+    restart_strata(agent).await;
     updated?;
     agent.updates.found(Some(false));
     Ok(None)
@@ -715,9 +745,11 @@ pub struct Benchmark {
 /// Runs Strata's `BENCH.bat` against the running Strata and keeps its chat
 /// decode speed.
 async fn benchmark(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
-    // A Strata that is still loading gets no second start.
+    // A Strata that is still loading gets no second start; one that hangs
+    // ends first.
     if !agent.strata_healthy().await && !agent.strata_loading() {
-        restart_strata(agent);
+        agent.stop_strata();
+        restart_strata(agent).await;
     }
     wait_for(
         agent,
@@ -788,19 +820,20 @@ async fn set_key(agent: &Arc<Agent>, api_key: String) -> Result<Option<String>, 
         .map_err(|e| Step::Failed(e.to_string()))?;
     set_step(agent, "Strata neu starten");
     agent.stop_strata();
-    restart_strata(agent);
+    restart_strata(agent).await;
     Ok(None)
 }
 
 /// Sets `api_key` in each model config (`strata-*.json` with `exe` and
 /// `args`, as Strata's own tools tell them apart), keeping everything else.
 fn write_key(dir: &Path, key: &str) -> Result<(), String> {
+    // Every config is read first: one that does not parse stops the change
+    // before any has the new key.
+    let mut changed = Vec::new();
     for id in installed_models(dir) {
         let path = dir.join(format!("strata-{id}.json"));
         let text = std::fs::read_to_string(&path)
             .map_err(|e| format!("{} nicht lesbar: {e}", path.display()))?;
-        // A config that does not parse would keep the old key: stop, before
-        // the proxy takes the new one.
         let mut cfg =
             serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
                 .map_err(|e| format!("{} ist kein gültiges JSON: {e}", path.display()))?;
@@ -816,8 +849,16 @@ fn write_key(dir: &Path, key: &str) -> Result<(), String> {
         let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
         let mut ser = serde_json::Serializer::with_formatter(&mut out, formatter);
         serde::Serialize::serialize(&cfg, &mut ser).expect("config serializes");
-        crate::write_replacing(&path, &String::from_utf8(out).expect("JSON is UTF-8"))
-            .map_err(|e| format!("{} nicht geschrieben: {e}", path.display()))?;
+        changed.push((path, text, String::from_utf8(out).expect("JSON is UTF-8")));
+    }
+    for (i, (path, _, new)) in changed.iter().enumerate() {
+        if let Err(e) = crate::write_replacing(path, new) {
+            // Back to the old key, so all configs agree with the service.
+            for (path, old, _) in &changed[..i] {
+                let _ = crate::write_replacing(path, old);
+            }
+            return Err(format!("{} nicht geschrieben: {e}", path.display()));
+        }
     }
     Ok(())
 }

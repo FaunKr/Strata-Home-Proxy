@@ -1,0 +1,13 @@
+# Auf dem NAS: Werte in .env eintragen (Vorlage: env.example), dann
+#   docker compose up -d --build
+services:
+  strata-proxy:
+    build: ..
+    container_name: strata-proxy
+    restart: unless-stopped
+    # Host-Netz ist nötig: das Weckpaket ist ein Broadcast und kommt aus
+    # einem Bridge-Netz nicht ins Heimnetz.
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./data:/data

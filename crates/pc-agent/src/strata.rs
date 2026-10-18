@@ -37,9 +37,15 @@ const KEPT_LINES: usize = 20;
 const STRATA_PORT: &str = "8080";
 const STRATA_HOST: &str = "0.0.0.0";
 /// The engine flag setup loads the speed projection's control vector with.
-const ESP_VECTOR_FLAG: &str = "--control-vector-scaled";
-/// Strata's vector for it, in the Strata folder.
-const ESP_VECTOR: [&str; 3] = [
+const PROJECTION_VECTOR_FLAG: &str = "--control-vector-scaled";
+/// The flags setup writes after it, with their values.
+const PROJECTION_FLAGS: [(&str, &[&str]); 3] = [
+    ("--control-vector-layer-range", &["4", "44"]),
+    ("--cvec-mode", &["project"]),
+    ("--cvec-dir", &["per-layer"]),
+];
+/// Strata's vector, in the Strata folder.
+const PROJECTION_VECTOR: [&str; 3] = [
     "data",
     "experimental-speed-projection",
     "Qwen3.8-Flash-Next-experimental-speed-projection.gguf",
@@ -836,7 +842,7 @@ async fn benchmark(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step>
     .await?;
     set_step(agent, "Benchmark läuft (etwa 10 min)");
     let dir = agent.cfg.strata_dir.clone();
-    let config = dir.join(format!("strata-{}.json", id.to_lowercase()));
+    let config = config_path(&dir, id);
     let spec = CommandSpec {
         program: dir.join("BENCH.bat"),
         args: vec!["--config".into(), config.display().to_string()],
@@ -950,10 +956,10 @@ async fn set_speed_projection(
 }
 
 fn write_speed_projection(dir: &Path, id: &str, on: bool) -> Result<(), String> {
-    let path = dir.join(format!("strata-{}.json", id.to_lowercase()));
+    let path = config_path(dir, id);
     let (_, mut cfg) = read_config(&path)?
         .ok_or_else(|| format!("{} ist keine Modell-Konfiguration", path.display()))?;
-    let vector: PathBuf = ESP_VECTOR
+    let vector: PathBuf = PROJECTION_VECTOR
         .iter()
         .fold(dir.to_path_buf(), |p, part| p.join(part));
     if on && !vector.is_file() {
@@ -965,20 +971,12 @@ fn write_speed_projection(dir: &Path, id: &str, on: bool) -> Result<(), String> 
     let args = cfg["args"].as_array_mut().expect("read_config checks args");
     without_speed_projection(args);
     if on {
-        args.extend(
-            [
-                ESP_VECTOR_FLAG.to_string(),
-                format!("{}:1.0", vector.display()),
-                "--control-vector-layer-range".into(),
-                "4".into(),
-                "44".into(),
-                "--cvec-mode".into(),
-                "project".into(),
-                "--cvec-dir".into(),
-                "per-layer".into(),
-            ]
-            .map(serde_json::Value::from),
-        );
+        args.push(PROJECTION_VECTOR_FLAG.into());
+        args.push(format!("{}:1.0", vector.display()).into());
+        for (flag, values) in PROJECTION_FLAGS {
+            args.push(flag.into());
+            args.extend(values.iter().map(|&v| serde_json::Value::from(v)));
+        }
     }
     // Without its own start script Strata starts the config touched last:
     // the change keeps the time, so the same model stays active.
@@ -1003,7 +1001,7 @@ fn without_speed_projection(args: &mut Vec<serde_json::Value>) {
     let mut kept = Vec::with_capacity(args.len());
     let mut values = 0;
     for arg in args.drain(..) {
-        if let Some(n) = arg.as_str().and_then(esp_flag_values) {
+        if let Some(n) = arg.as_str().and_then(projection_flag_values) {
             values = n;
         } else if values > 0 && !arg.as_str().is_some_and(|a| a.starts_with("--")) {
             values -= 1;
@@ -1016,12 +1014,19 @@ fn without_speed_projection(args: &mut Vec<serde_json::Value>) {
 }
 
 /// How many values one of setup's speed projection flags takes.
-fn esp_flag_values(flag: &str) -> Option<usize> {
-    match flag {
-        ESP_VECTOR_FLAG | "--cvec-mode" | "--cvec-dir" => Some(1),
-        "--control-vector-layer-range" => Some(2),
-        _ => None,
+fn projection_flag_values(flag: &str) -> Option<usize> {
+    if flag == PROJECTION_VECTOR_FLAG {
+        return Some(1);
     }
+    PROJECTION_FLAGS
+        .iter()
+        .find(|(f, _)| *f == flag)
+        .map(|(_, values)| values.len())
+}
+
+/// `strata-<id>.json`, as setup names it.
+fn config_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!("strata-{}.json", id.to_lowercase()))
 }
 
 /// A model config with its text as read, or `None` for a `strata-*.json`
@@ -1606,13 +1611,13 @@ pub fn view(agent: &Agent) -> StrataView {
 /// Whether a model's config loads a control vector; a config that cannot
 /// be read has none.
 fn has_speed_projection(dir: &Path, id: &str) -> bool {
-    read_config(&dir.join(format!("strata-{}.json", id.to_lowercase())))
+    read_config(&config_path(dir, id))
         .ok()
         .flatten()
         .is_some_and(|(_, cfg)| {
             cfg["args"]
                 .as_array()
-                .is_some_and(|a| a.iter().any(|v| v == ESP_VECTOR_FLAG))
+                .is_some_and(|a| a.iter().any(|v| v == PROJECTION_VECTOR_FLAG))
         })
 }
 

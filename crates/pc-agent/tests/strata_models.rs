@@ -843,8 +843,15 @@ async fn switching_the_speed_projection_is_refused_where_it_does_not_fit() {
         let (code, answer) = post(&s, "/strata/jobs", body.clone()).await;
         assert_eq!(code, status, "{body}: {answer}");
     }
-    s.agent.set_gaming(true);
+    s.fake.strata_busy.store(true, Ordering::SeqCst);
+    let activate = json!({"kind": "activate", "model": "coder-IQ1_M"});
+    assert_eq!(post(&s, "/strata/jobs", activate).await.0, 202);
     let body = json!({"kind": "set_speed_projection", "model": "IQ3_XXS", "on": true});
+    let (code, answer) = post(&s, "/strata/jobs", body.clone()).await;
+    assert_eq!(code, 409, "a job running: {answer}");
+    s.fake.strata_busy.store(false, Ordering::SeqCst);
+    finished(&s).await;
+    s.agent.set_gaming(true);
     let (code, answer) = post(&s, "/strata/jobs", body).await;
     assert_eq!(code, 409, "Gaming: {answer}");
 }

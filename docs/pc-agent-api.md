@@ -140,7 +140,8 @@ nimmt Setups Flags heraus und hängt sie neu an, mit Stratas Vektor aus dem
 Strata-Ordner (siehe [strata-api.md](strata-api.md)); fehlt der Vektor,
 scheitert der Vorgang und die Konfiguration bleibt. `on: false` nimmt die
 vier Flags mit ihren Werten heraus, auch einen eigenen Vektor. Andere
-Familien als Qwen und Coder sind ein `400`. Die Änderungszeit der
+Familien als Qwen und Coder sind ein `400`, ein Modell aus dem Katalog, das
+nicht installiert ist, wie bei `activate` ein `409`. Die Änderungszeit der
 Konfiguration bleibt, denn ohne eigenes Startskript startet Strata die
 zuletzt geänderte.
 

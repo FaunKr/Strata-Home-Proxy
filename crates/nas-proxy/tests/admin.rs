@@ -47,6 +47,32 @@ async fn admin_does_not_wake_the_pc() {
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 0);
 }
 
+/// Server functions meant to wake the PC; their own tests cover them.
+const WAKES: &[&str] = &["wake"];
+
+#[tokio::test]
+async fn no_server_function_wakes_the_pc() {
+    let s = setup(false, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let mut names: Vec<&str> = strata_admin_ui::server::server_fn_paths()
+        .into_iter()
+        .filter_map(|path| path.strip_prefix("/admin/api/"))
+        .filter(|name| !WAKES.contains(name))
+        .collect();
+    // Logging out last keeps the session for the others.
+    names.sort_by_key(|name| (*name == "logout", *name));
+    assert!(names.len() > 10, "{names:?}");
+    for name in names {
+        // Without fields, functions with arguments stop at decoding; the rest run.
+        let status = b.call(name, &[]).await.status();
+        assert_ne!(status, 502, "{name}");
+        assert_ne!(status, 404, "{name}");
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+    assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn managing_api_keys_does_not_wake_the_pc() {
     let s = setup(false, |_| {}).await;

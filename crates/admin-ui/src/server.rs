@@ -169,6 +169,13 @@ pub fn options(site_root: PathBuf) -> LeptosOptions {
         .build()
 }
 
+/// The paths of all server functions, so a test can call every one.
+pub fn server_fn_paths() -> Vec<&'static str> {
+    leptos::server_fn::axum::server_fn_paths()
+        .map(|(path, _)| path)
+        .collect()
+}
+
 /// Routes for the pages, the server functions and the browser files.
 pub fn router<S>(options: LeptosOptions, backend: SharedBackend) -> Router<S>
 where

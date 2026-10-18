@@ -33,7 +33,7 @@ fn data_files_are_written_through_write_private() {
 fn write_private_leaves_only_the_owner_able_to_read() {
     use std::os::unix::fs::PermissionsExt;
     let dir = std::env::temp_dir().join(format!("strata-files-{}", std::process::id()));
-    // A leftover from a crash, readable by everyone.
+    // A leftover from a crash, readable by everyone, is never reused.
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("geheim.tmp"), "alt").unwrap();
     std::fs::set_permissions(
@@ -47,6 +47,25 @@ fn write_private_leaves_only_the_owner_able_to_read() {
     let meta = std::fs::metadata(dir.join("geheim")).unwrap();
     assert_eq!(meta.permissions().mode() & 0o777, 0o600);
     assert_eq!(std::fs::read(dir.join("geheim")).unwrap(), b"neu");
-    assert!(!dir.join("geheim.tmp").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn simultaneous_writes_of_one_file_never_mix() {
+    let dir = std::env::temp_dir().join(format!("strata-files-race-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let contents: Vec<Vec<u8>> = (0..8u8).map(|i| vec![b'a' + i; 64 * 1024]).collect();
+    std::thread::scope(|s| {
+        for bytes in &contents {
+            let dir = &dir;
+            s.spawn(move || {
+                for _ in 0..50 {
+                    strata_nas_proxy::files::write_private(dir, "geheim", bytes).unwrap();
+                }
+            });
+        }
+    });
+    let written = std::fs::read(dir.join("geheim")).unwrap();
+    assert!(contents.contains(&written), "Inhalte vermischt");
     std::fs::remove_dir_all(&dir).unwrap();
 }

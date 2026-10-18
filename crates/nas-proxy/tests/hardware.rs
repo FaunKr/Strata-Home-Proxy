@@ -90,3 +90,20 @@ async fn an_older_pc_service_is_unsupported_until_it_reports() {
         .await;
     assert_eq!(v["hardware"]["Values"], cpu_only());
 }
+
+#[tokio::test]
+async fn gpu_values_reach_the_overview() {
+    let s = setup(true, |_| {}).await;
+    let hardware = json!({
+        "gpu": {"load_pct": 37.0, "temp_c": null, "vram_used_bytes": 12_670_000_000u64,
+                "vram_total_bytes": 17_163_091_968u64, "fan_rpm": null, "power_pct": null},
+        "cpu": {"load_pct": 12.5, "ram_used_bytes": 21_400_000_000u64, "ram_total_bytes": 34_359_738_368u64}
+    });
+    *s.pc.hardware.lock().unwrap() = Some(hardware.clone());
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live
+        .until("Hardwarewerte", |v| v["hardware"]["Values"].is_object())
+        .await;
+    assert_eq!(v["hardware"]["Values"], hardware);
+}

@@ -50,3 +50,25 @@ async fn unreadable_values_are_null() {
         })
     );
 }
+
+#[tokio::test]
+async fn status_reports_the_gpu() {
+    let s = setup("hardware-gpu").await;
+    *s.fake.hardware.lock().unwrap() = Hardware {
+        gpu: Some(Gpu {
+            load_pct: Some(37.0),
+            vram_used_bytes: Some(12_670_000_000),
+            vram_total_bytes: Some(17_163_091_968),
+            ..Gpu::default()
+        }),
+        cpu: Cpu::default(),
+    };
+    let status = status_json(&s).await;
+    assert_eq!(
+        status["hardware"]["gpu"],
+        json!({
+            "load_pct": 37.0, "temp_c": null, "vram_used_bytes": 12_670_000_000u64,
+            "vram_total_bytes": 17_163_091_968u64, "fan_rpm": null, "power_pct": null
+        })
+    );
+}

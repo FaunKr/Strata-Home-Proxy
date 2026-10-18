@@ -12,6 +12,7 @@ pub mod overview;
 pub mod proxy;
 pub mod settings;
 pub mod state;
+pub mod strata;
 pub mod wol;
 
 use std::sync::Arc;

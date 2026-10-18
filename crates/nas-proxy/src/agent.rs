@@ -2,6 +2,7 @@
 
 use reqwest::Client;
 use serde::Deserialize;
+use strata_admin_ui::api::{StrataInfo, StrataJob};
 
 use crate::config::Config;
 
@@ -13,6 +14,9 @@ pub struct PcStatus {
     /// MAC address of the PC's network card, if the service reports it.
     #[serde(default)]
     pub mac: Option<String>,
+    /// A Strata job (setup, download, update, benchmark) runs.
+    #[serde(default)]
+    pub strata_job: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -21,10 +25,21 @@ pub enum SleepAnswer {
     Refused(String),
 }
 
+/// A refusal's body: `{"reason": "..."}`.
 #[derive(Debug, Deserialize)]
 struct SleepBody {
     #[serde(default)]
     reason: Option<String>,
+}
+
+/// The reason in a refusal, or the status if there is none.
+async fn reason(resp: reqwest::Response) -> String {
+    let status = resp.status();
+    resp.json::<SleepBody>()
+        .await
+        .ok()
+        .and_then(|b| b.reason)
+        .unwrap_or_else(|| format!("Der PC-Dienst hat abgelehnt (HTTP {status})."))
 }
 
 pub struct AgentClient {
@@ -100,5 +115,63 @@ impl AgentClient {
             .and_then(|b| b.reason)
             .unwrap_or_else(|| format!("HTTP {status}"));
         Ok(SleepAnswer::Refused(reason))
+    }
+
+    /// Strata on the PC; `None` if the service does not answer.
+    pub async fn strata(&self) -> Option<StrataInfo> {
+        let resp = self
+            .request(reqwest::Method::GET, "/strata")?
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.json().await.ok()
+    }
+
+    /// The running or last Strata job.
+    pub async fn strata_job(&self) -> Option<StrataJob> {
+        let resp = self
+            .request(reqwest::Method::GET, "/strata/job")?
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.json::<Option<StrataJob>>().await.ok().flatten()
+    }
+
+    /// Starts a Strata job; `Err` carries the service's reason for refusing.
+    pub async fn start_strata_job(&self, body: &serde_json::Value) -> Result<StrataJob, String> {
+        let req = self
+            .request(reqwest::Method::POST, "/strata/jobs")
+            .ok_or_else(|| "PC_AGENT_URL ist nicht gesetzt".to_string())?;
+        let resp = req
+            .json(body)
+            .send()
+            .await
+            .map_err(|_| "Der PC-Dienst antwortet nicht.".to_string())?;
+        if !resp.status().is_success() {
+            return Err(reason(resp).await);
+        }
+        resp.json()
+            .await
+            .map_err(|e| format!("Antwort des PC-Dienstes nicht lesbar: {e}"))
+    }
+
+    pub async fn cancel_strata_job(&self) -> Result<(), String> {
+        let req = self
+            .request(reqwest::Method::POST, "/strata/job/cancel")
+            .ok_or_else(|| "PC_AGENT_URL ist nicht gesetzt".to_string())?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|_| "Der PC-Dienst antwortet nicht.".to_string())?;
+        if !resp.status().is_success() {
+            return Err(reason(resp).await);
+        }
+        Ok(())
     }
 }

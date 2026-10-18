@@ -204,6 +204,8 @@ pub struct AppState {
     pub events: EventLog,
     /// Live state for the overview page.
     pub overview: Monitor,
+    /// Strata jobs on the PC and the Strata key.
+    pub strata: crate::strata::StrataState,
     in_flight: AtomicUsize,
     inner: Mutex<Inner>,
     wake_lock: tokio::sync::Mutex<()>,
@@ -246,6 +248,7 @@ impl AppState {
             events: EventLog::new(cfg.data_dir.clone()),
             upstream,
             overview: Monitor::default(),
+            strata: Default::default(),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
             inner: Mutex::new(Inner {
@@ -284,7 +287,7 @@ impl AppState {
     }
 
     /// Asks the PC service for its status and takes over a reported MAC.
-    async fn pc_status(&self, agent: &AgentClient) -> Option<PcStatus> {
+    pub async fn pc_status(&self, agent: &AgentClient) -> Option<PcStatus> {
         let status = agent.status().await?;
         if let Some(mac) = status.mac.as_deref().and_then(|m| parse_mac(m).ok())
             && self.settings.set_reported_mac(mac)
@@ -292,6 +295,7 @@ impl AppState {
             self.events
                 .record(EventKind::MacLearned, Some(format_mac(mac)));
         }
+        crate::strata::note_status(self, agent, &status).await;
         Some(status)
     }
 

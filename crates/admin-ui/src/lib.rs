@@ -7,6 +7,7 @@ pub mod labels;
 pub mod overview;
 #[cfg(feature = "ssr")]
 pub mod server;
+pub mod strata;
 
 pub use app::{App, shell};
 

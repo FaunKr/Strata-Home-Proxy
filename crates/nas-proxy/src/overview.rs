@@ -12,7 +12,7 @@ use std::{
 };
 
 use futures_util::{StreamExt, stream::BoxStream};
-use strata_admin_ui::api::{EventView, Overview, PcView, SleepView, StrataView};
+use strata_admin_ui::api::{EventView, Overview, PcView, SleepView, StrataJob, StrataView};
 use tokio::sync::{Notify, watch};
 
 use crate::{
@@ -23,6 +23,8 @@ use crate::{
 
 /// How often the PC and Strata are asked while a page watches.
 const POLL: Duration = Duration::from_secs(5);
+/// The same while a Strata job runs, so its progress moves along.
+const POLL_JOB: Duration = Duration::from_secs(2);
 /// How often the overview is rebuilt from what the proxy knows, without asking
 /// anyone; changes from requests and buttons show up this fast.
 const REFRESH: Duration = Duration::from_millis(250);
@@ -42,6 +44,8 @@ struct Probe {
     health: Health,
     metrics: Option<Metrics>,
     pc: Option<PcStatus>,
+    /// The running Strata job, asked for only while one runs.
+    job: Option<StrataJob>,
 }
 
 pub struct Monitor {
@@ -141,7 +145,14 @@ async fn run(state: &Arc<AppState>) {
     // A fresh start shows nothing stale: the first overview comes after asking.
     monitor.tx.send_replace(None);
     while monitor.watchers.load(Ordering::SeqCst) > 0 {
+        let job_runs = monitor
+            .probe
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|p| p.job.is_some());
         let poll = *monitor.poll.lock().unwrap();
+        let poll = if job_runs { poll.min(POLL_JOB) } else { poll };
         if last_probe.is_none_or(|t| t.elapsed() >= poll) {
             let probe = probe(state).await;
             *monitor.probe.lock().unwrap() = Some(probe);
@@ -178,10 +189,19 @@ async fn probe(state: &AppState) -> Probe {
     let health = state.strata_health().await;
     let up = matches!(health, Health::Up { .. });
     let (metrics, pc) = tokio::join!(metrics(state), state.check_pc(up));
+    let job = match &pc {
+        Some(status) if status.strata_job => state
+            .agent()
+            .strata_job()
+            .await
+            .filter(|j| j.state == strata_admin_ui::api::StrataJobState::Running),
+        _ => None,
+    };
     Probe {
         health,
         metrics,
         pc,
+        job,
     }
 }
 
@@ -294,6 +314,7 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
         mac_known: cfg.pc_mac.is_some(),
         agent_configured: cfg.pc_agent_url.is_some(),
         api_key_exists: !state.api_keys.list().is_empty(),
+        strata_job: probe.job.clone(),
         pc,
         strata,
         last_request: snap.last_request.map(|t| clock::local_text(clock::unix(t))),

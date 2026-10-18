@@ -10,7 +10,7 @@ use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
     api::{
         ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, Session, SettingEntry,
-        SettingsView, Source,
+        SettingsView, Source, StrataJobForm, StrataPage,
     },
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
@@ -240,6 +240,21 @@ impl Backend for UiBackend {
             .record(EventKind::ApiKeyRevoked, Some(name.to_string()));
         self.0.overview.refresh_now();
         Ok(())
+    }
+
+    fn strata(&self) -> BoxFuture<'static, StrataPage> {
+        let state = Arc::clone(&self.0);
+        async move { crate::strata::page(&state).await }.boxed()
+    }
+
+    fn start_strata_job(&self, form: StrataJobForm) -> BoxFuture<'static, Result<(), String>> {
+        let state = Arc::clone(&self.0);
+        async move { crate::strata::start_job(&state, form).await }.boxed()
+    }
+
+    fn cancel_strata_job(&self) -> BoxFuture<'static, Result<(), String>> {
+        let state = Arc::clone(&self.0);
+        async move { crate::strata::cancel(&state).await }.boxed()
     }
 }
 

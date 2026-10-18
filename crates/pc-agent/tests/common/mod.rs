@@ -121,7 +121,8 @@ impl Platform for FakePlatform {
         let fake = Arc::clone(&self.0);
         fake.ran.lock().unwrap().push(spec.clone());
         let name = file_name(&spec.program);
-        if name == "git" && fake.git_missing.load(Ordering::SeqCst) {
+        // Under Windows the service also tries `...\Git\cmd\git.exe`.
+        if (name == "git" || name == "git.exe") && fake.git_missing.load(Ordering::SeqCst) {
             anyhow::bail!("git nicht gefunden");
         }
         if name == "winget" {

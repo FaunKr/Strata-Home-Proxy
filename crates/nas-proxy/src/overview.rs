@@ -313,7 +313,7 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
         configured: cfg.strata_url.is_some(),
         mac_known: cfg.pc_mac.is_some(),
         agent_configured: cfg.pc_agent_url.is_some(),
-        api_key_exists: !state.api_keys.list().is_empty(),
+        api_key_exists: !state.api_keys.is_empty(),
         strata_job: probe.job.clone(),
         pc,
         strata,

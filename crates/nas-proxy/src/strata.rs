@@ -138,16 +138,21 @@ pub async fn start_job(state: &AppState, form: StrataJobForm) -> Result<(), Stri
     }
     let key = matches!(form.kind, StrataJobKind::Install | StrataJobKind::SetKey)
         .then(|| hex(&random_key()));
-    let body = body(&form, key.as_deref());
+    // Another model gets the key the proxy uses now.
+    let current = (form.kind == StrataJobKind::AddModel)
+        .then(|| state.cfg().strata_api_key.clone())
+        .flatten();
+    let body = body(&form, key.as_deref().or(current.as_deref()));
     let job = agent.start_strata_job(&body).await?;
-    state.strata.job_running.store(true, Ordering::SeqCst);
     // Strata has the key once the job is done; until then the old one holds.
+    // The key first: whoever then sees the job end takes it over.
     if let Some(key) = key {
         state.strata.set_pending(Some(PendingKey {
             job: job.id.unwrap_or_default(),
             key,
         }));
     }
+    state.strata.job_running.store(true, Ordering::SeqCst);
     state
         .events
         .record(EventKind::StrataJobStarted, Some(detail(&job)));

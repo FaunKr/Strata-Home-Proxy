@@ -175,6 +175,10 @@ impl ApiKeys {
     }
 
     /// All keys, oldest first.
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().unwrap().keys.is_empty()
+    }
+
     pub fn list(&self) -> Vec<KeyInfo> {
         self.inner
             .lock()

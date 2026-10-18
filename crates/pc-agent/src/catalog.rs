@@ -13,6 +13,9 @@ pub struct Family {
     /// folder after tag + size.
     #[serde(skip)]
     pub tag: &'static str,
+    /// Setup offers Strata's experimental speed projection; made for the
+    /// original Qwen3.8-Flash-Next, which the Coder shares.
+    pub speed_projection: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -28,26 +31,31 @@ pub const FAMILIES: &[Family] = &[
         id: "qwen",
         title: "Qwen3.8-Flash-Next",
         tag: "",
+        speed_projection: true,
     },
     Family {
         id: "swift",
         title: "Swift 1.5",
         tag: "swift-",
+        speed_projection: false,
     },
     Family {
         id: "coder",
         title: "Qwen3.8-Flash-Next Coder",
         tag: "coder-",
+        speed_projection: true,
     },
     Family {
         id: "unsloth",
         title: "Qwen3.8-Flash-Next (Unsloth)",
         tag: "unsloth-",
+        speed_projection: false,
     },
     Family {
         id: "qwen36",
         title: "Qwen3.6-35B-A3B",
         tag: "qwen36-",
+        speed_projection: false,
     },
 ];
 

@@ -27,6 +27,7 @@ impl Actions {
             size: None,
             context: None,
             model: None,
+            speed_projection: None,
         });
     }
 
@@ -37,6 +38,7 @@ impl Actions {
             size: None,
             context: None,
             model: Some(model),
+            speed_projection: None,
         });
     }
 }
@@ -252,6 +254,20 @@ fn ModelChoice(
         .unwrap_or_else(|| sizes[0].id.clone());
     let choice = RwSignal::new(first);
     let context = RwSignal::new(info.default_context);
+    let speed_projection = RwSignal::new(false);
+    let takes_projection = {
+        let sizes = sizes.clone();
+        let families = info.families.clone();
+        Memo::new(move |_| {
+            choice.with(|id| {
+                sizes.iter().filter(|s| &s.id == id).any(|s| {
+                    families
+                        .iter()
+                        .any(|f| f.id == s.family && f.speed_projection)
+                })
+            })
+        })
+    };
     let family_title = |id: &str| {
         info.families
             .iter()
@@ -315,13 +331,22 @@ fn ModelChoice(
             size: Some(size.size.clone()),
             context: Some(context.get()),
             model: None,
+            speed_projection: Some(takes_projection.get() && speed_projection.get()),
         });
     };
     let picker = format!("{kind:?}-size");
     let ctx = format!("{kind:?}-context");
+    let projection = format!("{kind:?}-speed-projection");
     view! {
         <label for=picker.clone()>"Modell"</label>
-        <select id=picker on:change=move |ev| choice.set(event_target_value(&ev))>
+        <select
+            id=picker
+            on:change=move |ev| {
+                choice.set(event_target_value(&ev));
+                // A tick counts only for the model it was given for.
+                speed_projection.set(false);
+            }
+        >
             {options}
         </select>
         <label for=ctx.clone()>"Kontext"</label>
@@ -335,6 +360,24 @@ fn ModelChoice(
         >
             {contexts}
         </select>
+        <Show when=move || takes_projection.get()>
+            <div>
+                <input
+                    id=projection.clone()
+                    type="checkbox"
+                    prop:checked=move || speed_projection.get()
+                    on:change=move |ev| speed_projection.set(event_target_checked(&ev))
+                />
+                <label for=projection.clone() class="inline">
+                    "Experimentelle Speed-Projection"
+                </label>
+                <p class="hint">
+                    "Experimentell und trotz des Namens nicht schneller: Strata entfernt damit die Ablehnungsrichtung des Modells, es lehnt dann kaum noch Anfragen ab. Clients können sie pro Anfrage mit "
+                    <code>"\"experimental_speed_projection\": false"</code>
+                    " abschalten."
+                </p>
+            </div>
+        </Show>
         {disk.map(|d| view! { <p class="hint">{d}</p> })}
         <div class="actions">
             <button disabled=move || blocked.get() on:click=start>

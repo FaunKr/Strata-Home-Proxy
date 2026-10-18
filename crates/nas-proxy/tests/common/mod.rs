@@ -495,6 +495,17 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     }
 }
 
+/// Waits up to 5 s until `check` holds; panics naming `what` otherwise.
+pub async fn eventually(what: &str, check: impl Fn() -> bool) {
+    for _ in 0..100 {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{what} ist nicht eingetreten");
+}
+
 pub async fn post_json(s: &Setup, path: &str, body: Value) -> reqwest::Response {
     reqwest::Client::new()
         .post(format!("{}{path}", s.url))

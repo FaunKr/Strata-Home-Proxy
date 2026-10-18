@@ -14,7 +14,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 console_error_panic_hook = { version = "0.1.7", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
-web-sys = { version = "0.3", features = ["EventSource", "MessageEvent"], optional = true }
+web-sys = { version = "0.3", features = ["EventSource", "HtmlDocument", "MessageEvent"], optional = true }
 futures = { version = "0.3.34", optional = true }
 send_wrapper = { version = "0.6", optional = true }
 leptos_axum = { version = "0.8", optional = true }

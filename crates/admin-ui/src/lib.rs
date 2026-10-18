@@ -4,6 +4,7 @@
 pub mod access;
 pub mod api;
 pub mod app;
+pub mod copy;
 pub mod icons;
 pub mod labels;
 pub mod overview;

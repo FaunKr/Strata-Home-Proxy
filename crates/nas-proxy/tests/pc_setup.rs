@@ -221,8 +221,10 @@ async fn setup_page_offers_the_command() {
     let s = setup(false, |_| {}).await;
     let b = logged_in(&s.url).await;
     let html = b.page("/admin/pc").await;
-    assert!(html.contains("PC-Dienst einrichten"), "{html}");
-    assert!(html.contains("Befehl erzeugen"), "{html}");
+    assert!(html.contains("Install on a PC"), "{html}");
+    assert!(html.contains("Create install command"), "{html}");
+    // The service card waits for the live overview.
+    assert!(html.contains("PC service"), "{html}");
 }
 
 async fn script(s: &Setup, query: &str) -> (u16, String) {

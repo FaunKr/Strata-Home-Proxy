@@ -30,6 +30,9 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 - **Gaming-Modus:** sofort `503` mit Header `x-strata-proxy-status: gaming`.
   Wacht der PC nicht rechtzeitig auf: `504` mit `wake_timeout`. Daran kann der
   Skill `local-agent` einen Lauf zurückstellen.
+- **Nicht eingerichtet:** Ohne Strata-Adresse startet der Proxy trotzdem und
+  antwortet mit `503` und `not_configured`; ohne MAC-Adresse scheitert das
+  Wecken mit `503` und `no_mac`.
 - **Leerlauf:** 15 min ohne Anfrage und ohne offene Antwort, dann Schlafen-
   Anfrage an den PC-Dienst. Lehnt er ab, fragt der Proxy nach 1 min erneut.
 - **Verlauf:** Weck- und Schlafereignisse in `/data/events.jsonl`.

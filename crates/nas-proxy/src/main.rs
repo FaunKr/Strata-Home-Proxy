@@ -9,7 +9,11 @@ async fn main() -> anyhow::Result<()> {
     match std::env::args().nth(1).as_deref() {
         // Sends one magic packet and exits, for testing Wake on LAN by hand.
         Some("wake") => {
-            strata_nas_proxy::wol::send(cfg.pc_mac, cfg.wol_addr).await?;
+            let cfg = strata_nas_proxy::Settings::new(cfg, &[]).current();
+            let mac = cfg
+                .pc_mac
+                .ok_or_else(|| anyhow::anyhow!("Keine MAC-Adresse bekannt (PC_MAC)"))?;
+            strata_nas_proxy::wol::send(mac, cfg.wol_addr).await?;
             println!("Weckpaket an {} gesendet", cfg.wol_addr);
             Ok(())
         }

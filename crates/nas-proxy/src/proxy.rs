@@ -18,7 +18,7 @@ use crate::{
 };
 
 /// Header that tells clients (e.g. the `local-agent` skill) why Strata is not
-/// available: `gaming` or `wake_timeout`.
+/// available: `gaming`, `wake_timeout`, `no_mac` or `not_configured`.
 pub const STATUS_HEADER: &str = "x-strata-proxy-status";
 
 /// Which API format a request uses; decides how pings and errors are written.
@@ -120,12 +120,16 @@ fn wake_error_parts(err: &WakeError) -> (StatusCode, &'static str, &'static str,
             "api_error",
             "Strata ist nicht verfügbar: der PC ist nicht rechtzeitig aufgewacht.",
         ),
+        WakeError::NoMac => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no_mac",
+            "api_error",
+            "Strata ist nicht verfügbar: die MAC-Adresse des PCs ist nicht bekannt, er kann nicht geweckt werden.",
+        ),
     }
 }
 
-fn unavailable(flavor: Flavor, err: &WakeError) -> Response {
-    let (status, tag, kind, message) = wake_error_parts(err);
-    let mut resp = (status, axum::Json(flavor.error_json(kind, message))).into_response();
+fn tagged(mut resp: Response, tag: &'static str) -> Response {
     let headers = resp.headers_mut();
     headers.insert(
         HeaderName::from_static(STATUS_HEADER),
@@ -133,6 +137,26 @@ fn unavailable(flavor: Flavor, err: &WakeError) -> Response {
     );
     headers.insert(header::RETRY_AFTER, HeaderValue::from_static("300"));
     resp
+}
+
+/// Answer while no Strata URL is set.
+fn not_configured(flavor: Flavor) -> Response {
+    let body = flavor.error_json(
+        "api_error",
+        "Proxy ist nicht eingerichtet: die Adresse von Strata fehlt (STRATA_URL oder Einstellungsseite).",
+    );
+    tagged(
+        (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response(),
+        "not_configured",
+    )
+}
+
+fn unavailable(flavor: Flavor, err: &WakeError) -> Response {
+    let (status, tag, kind, message) = wake_error_parts(err);
+    tagged(
+        (status, axum::Json(flavor.error_json(kind, message))).into_response(),
+        tag,
+    )
 }
 
 struct Incoming {
@@ -143,10 +167,12 @@ struct Incoming {
 }
 
 async fn send_upstream(st: &AppState, req: &Incoming) -> reqwest::Result<reqwest::Response> {
+    // Checked before forwarding; an empty base only fails if it was unset since.
+    let strata = st.cfg().strata_url.clone().unwrap_or_default();
     st.upstream
         .request(
             req.method.clone(),
-            format!("{}{}", st.cfg.strata_url, req.path_and_query),
+            format!("{strata}{}", req.path_and_query),
         )
         .headers(copy_headers(&req.headers, true))
         .body(req.body.clone())
@@ -208,7 +234,7 @@ async fn forward(
     let status = resp.status();
     let sse = is_event_stream(resp.headers());
     let headers = copy_headers(resp.headers(), sse);
-    let ping_interval = st.cfg.ping_interval;
+    let ping_interval = st.cfg().ping_interval;
     let body = resp.bytes_stream();
     let body = if sse {
         Body::from_stream(keep_guard(with_pings(body, flavor, ping_interval), guard))
@@ -254,7 +280,7 @@ fn wake_then_stream(
         let woke = loop {
             tokio::select! {
                 r = &mut wake => break r,
-                _ = tokio::time::sleep(st.cfg.ping_interval) => {
+                _ = tokio::time::sleep(st.cfg().ping_interval) => {
                     if tx.send(flavor.ping()).await.is_err() {
                         return;
                     }
@@ -290,7 +316,7 @@ fn wake_then_stream(
         let mut body = Box::pin(with_pings(
             resp.bytes_stream(),
             flavor,
-            st.cfg.ping_interval,
+            st.cfg().ping_interval,
         ));
         while let Some(chunk) = body.next().await {
             match chunk {
@@ -318,10 +344,14 @@ fn wake_then_stream(
 }
 
 pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
-    let guard = ActivityGuard::new(&st);
     let (parts, body) = req.into_parts();
     let flavor = Flavor::from_path(parts.uri.path());
-    let body = match axum::body::to_bytes(body, st.cfg.max_body_bytes).await {
+    let cfg = st.cfg();
+    if cfg.strata_url.is_none() {
+        return not_configured(flavor);
+    }
+    let guard = ActivityGuard::new(&st);
+    let body = match axum::body::to_bytes(body, cfg.max_body_bytes).await {
         Ok(b) => b,
         Err(_) => {
             return (

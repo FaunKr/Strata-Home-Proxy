@@ -4,6 +4,7 @@ pub mod agent;
 pub mod config;
 pub mod events;
 pub mod proxy;
+pub mod settings;
 pub mod state;
 pub mod wol;
 
@@ -12,6 +13,7 @@ use std::sync::Arc;
 use axum::Router;
 
 pub use config::Config;
+pub use settings::Settings;
 pub use state::AppState;
 
 /// The API router: every path is forwarded to Strata.
@@ -20,9 +22,16 @@ pub fn api_router(state: Arc<AppState>) -> Router {
 }
 
 pub async fn run(cfg: Config) -> anyhow::Result<()> {
-    let listen = cfg.listen_addr;
-    let state = AppState::new(cfg);
-    if !state.agent.configured() {
+    let state = AppState::with_settings(Settings::new(cfg, &Config::env_keys()));
+    let current = state.cfg();
+    let listen = current.listen_addr;
+    if current.strata_url.is_none() {
+        tracing::warn!("STRATA_URL fehlt: der Proxy ist nicht eingerichtet");
+    }
+    if current.pc_mac.is_none() {
+        tracing::warn!("PC_MAC fehlt: der PC kann nicht geweckt werden");
+    }
+    if current.pc_agent_url.is_none() {
         tracing::warn!("PC_AGENT_URL fehlt: kein Gaming-Modus und kein automatisches Schlafen");
     }
     state.spawn_idle_loop();

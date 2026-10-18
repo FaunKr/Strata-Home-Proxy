@@ -10,6 +10,7 @@ use crate::{
         CancelStrataJob, StartStrataJob, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
         StrataModel, StrataPage, StrataSize, error_text, get_strata,
     },
+    confirm::{Confirm, Question},
     labels::{STRATA_CONNECTION, strata_job_label},
     overview::Live,
     settings::SettingsSections,
@@ -298,6 +299,7 @@ fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoVi
         figures.push(format!("about {} left", eta_text(eta)));
     }
     let lines = job.lines.join("\n");
+    let confirm = expect_context::<Confirm>();
     view! {
         <section class="card job" role="status">
             <div class="card-head">
@@ -321,29 +323,25 @@ fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoVi
                     class="secondary"
                     disabled=move || cancel.pending().get()
                     on:click=move |_| {
-                        if confirmed(
-                            "Cancel the job? A download continues from the same point next time.",
-                        ) {
-                            cancel.dispatch(CancelStrataJob {});
-                        }
+                        confirm
+                            .ask(
+                                Question {
+                                    title: "Cancel the job?".into(),
+                                    text: "A download continues from the same point next time."
+                                        .into(),
+                                    confirm: "Cancel job",
+                                    danger: true,
+                                },
+                                move || {
+                                    cancel.dispatch(CancelStrataJob {});
+                                },
+                            );
                     }
                 >
                     "Cancel job"
                 </button>
             </div>
         </section>
-    }
-}
-
-fn confirmed(question: &str) -> bool {
-    #[cfg(feature = "hydrate")]
-    {
-        window().confirm_with_message(question).unwrap_or(false)
-    }
-    #[cfg(not(feature = "hydrate"))]
-    {
-        let _ = question;
-        true
     }
 }
 
@@ -535,7 +533,9 @@ fn ModelRow(model: StrataModel, actions: Actions, blocked: Signal<bool>) -> impl
     let buttons = (!model.active).then(|| {
         let activate = model.id.clone();
         let delete = model.id.clone();
-        let question = format!("Delete {}? This frees {size}.", model.id);
+        let title = format!("Delete {}?", model.id);
+        let text = format!("This frees {size} on the PC. You can load it again later.");
+        let confirm = expect_context::<Confirm>();
         view! {
             <span class="actions inline">
                 <button
@@ -551,9 +551,17 @@ fn ModelRow(model: StrataModel, actions: Actions, blocked: Signal<bool>) -> impl
                     class="ghost-danger"
                     disabled=move || blocked.get()
                     on:click=move |_| {
-                        if confirmed(&question) {
-                            actions.model_job(StrataJobKind::Delete, delete.clone());
-                        }
+                        let delete = delete.clone();
+                        confirm
+                            .ask(
+                                Question {
+                                    title: title.clone(),
+                                    text: text.clone(),
+                                    confirm: "Delete model",
+                                    danger: true,
+                                },
+                                move || actions.model_job(StrataJobKind::Delete, delete.clone()),
+                            );
                     }
                 >
                     "Delete"
@@ -584,6 +592,7 @@ fn ModelRow(model: StrataModel, actions: Actions, blocked: Signal<bool>) -> impl
 
 #[component]
 fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+    let confirm = expect_context::<Confirm>();
     let version = info
         .version
         .clone()
@@ -615,9 +624,17 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
                     type="button"
                     disabled=move || blocked.get()
                     on:click=move |_| {
-                        if confirmed("Update Strata? Strata is unreachable for a moment.") {
-                            actions.job(StrataJobKind::Update);
-                        }
+                        confirm
+                            .ask(
+                                Question {
+                                    title: "Update Strata?".into(),
+                                    text: "Strata restarts with the new version and cannot answer requests for a moment."
+                                        .into(),
+                                    confirm: "Update Strata",
+                                    danger: false,
+                                },
+                                move || actions.job(StrataJobKind::Update),
+                            );
                     }
                 >
                     "Update Strata"
@@ -644,6 +661,7 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
 
 #[component]
 fn StrataKey(actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+    let confirm = expect_context::<Confirm>();
     view! {
         <section class="card">
             <h2>"Strata key"</h2>
@@ -656,9 +674,17 @@ fn StrataKey(actions: Actions, blocked: Signal<bool>) -> impl IntoView {
                     class="secondary"
                     disabled=move || blocked.get()
                     on:click=move |_| {
-                        if confirmed("Create a new Strata key? Strata restarts for it.") {
-                            actions.job(StrataJobKind::SetKey);
-                        }
+                        confirm
+                            .ask(
+                                Question {
+                                    title: "Create a new Strata key?".into(),
+                                    text: "Strata restarts to take it over and cannot answer requests for a moment. The proxy switches to the new key by itself."
+                                        .into(),
+                                    confirm: "Create new key",
+                                    danger: false,
+                                },
+                                move || actions.job(StrataJobKind::SetKey),
+                            );
                     }
                 >
                     "Create new Strata key"

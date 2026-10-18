@@ -1,11 +1,13 @@
 //! The area "Access": the clients' API keys, the admin password and signing
 //! out.
 
-use leptos::prelude::*;
+use leptos::{html::Input, prelude::*};
 
 use crate::{
     api::{ApiKeyInfo, CreateApiKey, CreatedKey, RevokeApiKey, error_text, get_api_keys},
     app::{PasswordFields, SessionActions, action_error},
+    confirm::{Confirm, Question},
+    copy::CopyField,
 };
 
 #[component]
@@ -34,8 +36,14 @@ fn ApiKeys() -> impl IntoView {
     // for a key that no longer exists.
     let shown = RwSignal::<Option<CreatedKey>>::new(None);
     // A failed create hides the previous key, so it does not sit next to the error.
+    let name = NodeRef::<Input>::new();
     Effect::new(move |_| match create.value().get() {
-        Some(Ok(c)) => shown.set(Some(c)),
+        Some(Ok(c)) => {
+            shown.set(Some(c));
+            if let Some(input) = name.get_untracked() {
+                input.set_value("");
+            }
+        }
         Some(Err(_)) => shown.set(None),
         None => {}
     });
@@ -49,8 +57,7 @@ fn ApiKeys() -> impl IntoView {
             view! {
                 <section class="card created" role="status">
                     <h2>{format!("New key for “{}”", c.info.name)}</h2>
-                    <label for="new-key">"Key"</label>
-                    <input id="new-key" type="text" class="mono" readonly value=c.key />
+                    <CopyField id="new-key" label="Key" text=c.key />
                     <p class="hint">
                         "Copy it now and enter it in the client. It is not shown again."
                     </p>
@@ -69,7 +76,7 @@ fn ApiKeys() -> impl IntoView {
         {created}
         <section class="card">
             <h2>"API keys"</h2>
-            <p class="hint">
+            <p class="muted small">
                 "Each client (Claude Code, Open WebUI, …) gets its own key and sends it as “Authorization: Bearer …” or “x-api-key”. Without a valid key the proxy answers 401 and does not wake the PC."
             </p>
             <ActionForm action=create attr:class="form-row">
@@ -78,6 +85,7 @@ fn ApiKeys() -> impl IntoView {
                 </label>
                 <input
                     id="key-name"
+                    node_ref=name
                     type="text"
                     name="name"
                     placeholder="Client name, e.g. Claude Code laptop"
@@ -99,7 +107,7 @@ fn ApiKeys() -> impl IntoView {
                                     .then(|| {
                                         view! {
                                             <p class="warning" role="status">
-                                                "No key yet. Until you create one, every client gets 401."
+                                                "No API keys yet. Until you create one, every client gets 401."
                                             </p>
                                         }
                                     })}
@@ -124,31 +132,47 @@ fn ApiKeys() -> impl IntoView {
 #[component]
 fn ApiKeyRow(key: ApiKeyInfo) -> impl IntoView {
     let revoke = expect_context::<ServerAction<RevokeApiKey>>();
+    let confirm = expect_context::<Confirm>();
     let used = key
         .last_used_text
         .as_deref()
         .map_or_else(|| "never used".to_string(), |t| format!("last used {t}"));
-    let confirm_id = format!("confirm-{}", key.prefix);
+    let ApiKeyInfo { name, prefix, .. } = key.clone();
+    let on_revoke = move |_| {
+        let (name, prefix) = (name.clone(), prefix.clone());
+        confirm.ask(
+            Question {
+                title: format!("Revoke “{name}”?"),
+                text: "Clients using this key get 401 from now on. This cannot be undone.".into(),
+                confirm: "Revoke key",
+                danger: true,
+            },
+            move || {
+                revoke.dispatch(RevokeApiKey {
+                    name: name.clone(),
+                    prefix: prefix.clone(),
+                });
+            },
+        );
+    };
     view! {
-        <li class="api-key">
+        <li>
             <div class="grow">
                 <p class="strong">{key.name.clone()}</p>
-                <p class="hint">
+                <p class="muted small">
                     <span class="mono">{format!("{}…", key.prefix)}</span>
                     {format!(" · created {} · {used}", key.created_text)}
                 </p>
             </div>
-            <ActionForm action=revoke attr:class="actions inline">
-                <input type="hidden" name="name" value=key.name />
-                <input type="hidden" name="prefix" value=key.prefix.clone() />
-                <input id=confirm_id.clone() type="checkbox" required />
-                <label for=confirm_id class="inline">
-                    "Yes, this client gets 401 afterwards"
-                </label>
-                <button type="submit" class="ghost-danger">
-                    "Revoke"
-                </button>
-            </ActionForm>
+            <button
+                type="button"
+                class="ghost-danger"
+                aria-label=format!("Revoke {}", key.name)
+                disabled=move || revoke.pending().get()
+                on:click=on_revoke
+            >
+                "Revoke"
+            </button>
         </li>
     }
 }

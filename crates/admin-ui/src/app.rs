@@ -10,6 +10,7 @@ use leptos_router::{
 use crate::{
     access::AccessPage,
     api::{ChangePassword, Login, Logout, Session, error_text, get_session},
+    confirm::{Confirm, ConfirmDialog},
     icons::Icon,
     labels::{pc_badge, strata_badge},
     overview::{Live, OverviewPage},
@@ -123,6 +124,7 @@ fn Layout() -> impl IntoView {
 fn Frame() -> impl IntoView {
     let live = Live::follow();
     provide_context(live);
+    let confirm = Confirm::provide();
     let pc = move || live.overview.with(|o| o.as_ref().map(|o| pc_badge(o.pc)));
     let strata = move || live.overview.with(|o| o.as_ref().map(strata_badge));
     view! {
@@ -146,6 +148,7 @@ fn Frame() -> impl IntoView {
             <main class="content">
                 <Outlet />
             </main>
+            <ConfirmDialog confirm />
         </div>
     }
 }

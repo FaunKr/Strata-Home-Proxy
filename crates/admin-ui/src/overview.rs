@@ -9,6 +9,7 @@ use crate::{
         KeepAwake, KeepAwakeChoice, Overview, PcServiceView, PcView, SetGaming, Setup, SleepNow,
         SleepView, StrataView, Wake, error_text, get_setup,
     },
+    confirm::{Confirm, Question},
     icons::Icon,
     labels::{event_class, event_label, pc_badge, strata_badge, strata_job_label},
 };
@@ -322,6 +323,7 @@ fn GamingCard(overview: Overview, actions: Actions) -> impl IntoView {
     let busy = matches!(overview.strata, StrataView::Busy { .. });
     let agent = overview.setup.agent_configured;
     let on = overview.pc == PcView::Gaming;
+    let confirm = expect_context::<Confirm>();
     view! {
         <section class="card">
             <div class="toggle-row">
@@ -334,13 +336,23 @@ fn GamingCard(overview: Overview, actions: Actions) -> impl IntoView {
                     disabled=move || !agent || gaming.pending().get()
                     on:click=move |_| {
                         let enabled = !on;
-                        if !enabled
-                            || confirmed(
-                                busy,
-                                "Strata is working on a request, and gaming mode stops Strata. Switch it on anyway?",
-                            )
-                        {
+                        let switch = move || {
                             gaming.dispatch(SetGaming { enabled });
+                        };
+                        if enabled && busy {
+                            confirm
+                                .ask(
+                                    Question {
+                                        title: "Switch on gaming mode?".into(),
+                                        text: "Strata is working on a request right now. Gaming mode stops Strata, so the request fails."
+                                            .into(),
+                                        confirm: "Switch on",
+                                        danger: false,
+                                    },
+                                    switch,
+                                );
+                        } else {
+                            switch();
                         }
                     }
                 >
@@ -560,22 +572,6 @@ fn SleepText(sleep: SleepView, now: u64, since: RwSignal<u64>) -> impl IntoView 
         }
         SleepView::NoAgent => "Never (no PC service)".into(),
         SleepView::Unknown => "PC state unknown".into(),
-    }
-}
-
-/// Asks first, but only when Strata is working on a request.
-fn confirmed(busy: bool, question: &str) -> bool {
-    if !busy {
-        return true;
-    }
-    #[cfg(feature = "hydrate")]
-    {
-        window().confirm_with_message(question).unwrap_or(false)
-    }
-    #[cfg(not(feature = "hydrate"))]
-    {
-        let _ = question;
-        true
     }
 }
 

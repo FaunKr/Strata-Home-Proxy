@@ -7,6 +7,7 @@ use strata_admin_ui::api::{StrataInfo, StrataJob};
 use crate::config::Config;
 
 const LOG_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+const LOG_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct PcStatus {
@@ -64,8 +65,17 @@ impl AgentClient {
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> Option<reqwest::RequestBuilder> {
+        self.request_with(&self.http, method, path)
+    }
+
+    fn request_with(
+        &self,
+        http: &Client,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Option<reqwest::RequestBuilder> {
         let base = self.base.as_ref()?;
-        let mut req = self.http.request(method, format!("{base}{path}"));
+        let mut req = http.request(method, format!("{base}{path}"));
         if let Some(token) = &self.token {
             req = req.bearer_auth(token);
         }
@@ -160,17 +170,19 @@ impl AgentClient {
     /// The Strata-Ausgabe as the service streams it: `None` without an
     /// answer, `Err` with the status of a refusal.
     pub async fn strata_log(&self) -> Option<Result<reqwest::Response, reqwest::StatusCode>> {
-        let base = self.base.as_ref()?;
-        // Its own client: the stream stays open far longer than a probe may take.
+        // Its own client: the stream stays open far longer than a probe may
+        // take. The service sends a keep-alive every 15 s; a PC that went to
+        // standby mid-stream sends nothing, and the read times out.
         let http = Client::builder()
             .connect_timeout(LOG_CONNECT_TIMEOUT)
+            .read_timeout(LOG_READ_TIMEOUT)
             .build()
             .ok()?;
-        let mut req = http.get(format!("{base}/strata-log"));
-        if let Some(token) = &self.token {
-            req = req.bearer_auth(token);
-        }
-        let resp = req.send().await.ok()?;
+        let resp = self
+            .request_with(&http, reqwest::Method::GET, "/strata-log")?
+            .send()
+            .await
+            .ok()?;
         if !resp.status().is_success() {
             return Some(Err(resp.status()));
         }

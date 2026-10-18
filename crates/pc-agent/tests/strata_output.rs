@@ -260,3 +260,17 @@ async fn a_strata_that_ended_is_a_notice() {
         .store(false, std::sync::atomic::Ordering::SeqCst);
     notice(&mut log, "not_running").await;
 }
+
+#[tokio::test]
+async fn the_strata_key_never_shows() {
+    let s = setup_with("output-key", |c| {
+        c.strata_api_key = Some("sk-geheim-123".into())
+    })
+    .await;
+    strata_prints(&s, &["set STRATA_API_KEY=sk-geheim-123"]);
+    let mut log = Log::open(&s).await;
+    restart(&s).await;
+    log.until(|m| m["text"] == "set STRATA_API_KEY=***").await;
+    let file = std::fs::read_to_string(s.dir.join("strata.log")).unwrap();
+    assert!(!file.contains("sk-geheim-123"), "{file}");
+}

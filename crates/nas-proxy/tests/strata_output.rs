@@ -86,4 +86,22 @@ async fn gaming_mode_reaches_the_page_as_a_notice() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open_at(&b, STREAM).await;
     live.until("Hinweis", |m| m["notice"] == "gaming").await;
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn an_open_page_does_not_keep_the_pc_awake() {
+    let s = setup(true, |c| c.idle_timeout = Duration::from_millis(600)).await;
+    *s.pc.strata_log.lock().unwrap() = vec![json!({"kind": "line", "text": "läuft"})];
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("Zeile", |m| m["text"] == "läuft").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while s.pc.sleep_requests.load(Ordering::SeqCst) == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "keine Schlafen-Anfrage"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }

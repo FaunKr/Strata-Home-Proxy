@@ -264,9 +264,18 @@ impl Agent {
         };
         let output = Arc::clone(&self.output);
         let id = output.started();
+        // The page shows this output; the key must not reach it. A new key
+        // comes with a restart, so the one of this start is enough.
+        let key = managed
+            .api_key(&self.cfg)
+            .filter(|k| !k.is_empty())
+            .map(String::from);
         tokio::spawn(async move {
             while let Some(line) = run.next_output().await {
-                output.push(id, &line);
+                match &key {
+                    Some(key) => output.push(id, &line.replace(key.as_str(), "***")),
+                    None => output.push(id, &line),
+                }
             }
             output.ended(id);
         });

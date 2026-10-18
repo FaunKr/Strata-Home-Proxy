@@ -66,7 +66,7 @@ impl Entry {
 struct Inner {
     entries: VecDeque<Entry>,
     /// The last line ended with `\r`: the next one takes its place.
-    open: bool,
+    replaceable: bool,
     /// Counts the starts; output of an earlier run is dropped.
     run: u64,
     /// The output of the current run is still open.
@@ -85,7 +85,7 @@ impl StrataOutput {
         Self {
             inner: Mutex::new(Inner {
                 entries: VecDeque::new(),
-                open: false,
+                replaceable: false,
                 run: 0,
                 reading: false,
                 file: None,
@@ -104,7 +104,7 @@ impl StrataOutput {
         let mut inner = self.inner.lock().unwrap();
         inner.run += 1;
         inner.reading = true;
-        inner.open = false;
+        inner.replaceable = false;
         inner.file = File::create(&self.file)
             .inspect_err(|e| tracing::warn!("{} nicht anlegbar: {e}", self.file.display()))
             .ok();
@@ -124,7 +124,7 @@ impl StrataOutput {
         if inner.run != run {
             return;
         }
-        if inner.open
+        if inner.replaceable
             && let Some(Entry::Line(last)) = inner.entries.back_mut()
         {
             last.clone_from(&text);
@@ -132,7 +132,7 @@ impl StrataOutput {
         } else {
             self.add(&mut inner, Entry::Line(text.clone()));
         }
-        inner.open = rewritten;
+        inner.replaceable = rewritten;
         // Only finished lines go to the file; a progress bar's states would fill it.
         if !rewritten
             && let Some(file) = inner.file.as_mut()

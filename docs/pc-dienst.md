@@ -45,7 +45,13 @@ selbst mit. Die Zeilen des laufenden Strata stehen in
 der Übersicht). Python-Programme bekommen `PYTHONUNBUFFERED=1`, damit die
 Ausgabe sofort kommt und nicht in Schüben. Ein Strata, das du selbst per
 Doppelklick startest, läuft in seinem eigenen Fenster; dessen Ausgabe sieht
-der Dienst nicht.
+der Dienst nicht. Startet das Startskript Strata seinerseits mit `start` in
+einem eigenen Fenster, gilt das ebenso. Der Strata-Key steht in der Ausgabe
+als `***`.
+
+Strata schreibt seine Ausgabe in den Dienst. Wird der Dienst beendet oder neu
+gestartet, während Strata läuft, laufen Stratas Ausgaben ins Leere; stürzt
+Strata daran ab, startet der neu gestartete Dienst es wieder.
 
 ## Verwaltete Werte
 

@@ -7,7 +7,7 @@ use leptos::{html::Pre, prelude::*};
 use crate::api::OutputMessage;
 use crate::api::OutputNotice;
 
-/// Lines the page keeps, like the PC service.
+/// Lines the page keeps, like `KEPT` of the PC service's Strata-Ausgabe.
 #[cfg(feature = "hydrate")]
 const KEPT: usize = 500;
 
@@ -32,11 +32,14 @@ pub fn StrataOutputPage() -> impl IntoView {
         );
         Effect::new(move |_| {
             lines.track();
-            if at_end.get_untracked()
-                && let Some(pre) = pre.get()
-            {
-                pre.set_scroll_top(pre.scroll_height());
-            }
+            // After the browser drew the new text, so the end is the new end.
+            request_animation_frame(move || {
+                if at_end.get_untracked()
+                    && let Some(pre) = pre.get_untracked()
+                {
+                    pre.set_scroll_top(pre.scroll_height());
+                }
+            });
         });
     }
     let on_scroll = move |_| {

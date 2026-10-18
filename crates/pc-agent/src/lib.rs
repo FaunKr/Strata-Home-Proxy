@@ -19,7 +19,9 @@ pub use config::Config;
 /// Crate version plus build, e.g. `0.1.0+558db97`; see `build.rs`.
 pub const VERSION: &str = env!("STRATA_PC_AGENT_VERSION");
 
-const MARKER_PREFIX: &str = "strata-pc-agent-version:";
+/// Only the length: a second copy of the prefix as its own text would sit
+/// in the program next to the marker and could be found first.
+const MARKER_PREFIX_LEN: usize = "strata-pc-agent-version:".len();
 /// The version as plain text in the program, so the NAS reads it from the
 /// .exe it serves without running it (see `nas-proxy/src/pc_setup.rs`).
 static VERSION_MARKER: &str = concat!(
@@ -34,7 +36,7 @@ static VERSION_MARKER: &str = concat!(
 pub fn version() -> &'static str {
     let marker: &'static str = std::hint::black_box(VERSION_MARKER);
     marker
-        .strip_prefix(MARKER_PREFIX)
+        .get(MARKER_PREFIX_LEN..)
         .and_then(|v| v.strip_suffix('\n'))
         .unwrap_or(VERSION)
 }
@@ -54,8 +56,19 @@ const BIND_PAUSE: Duration = Duration::from_millis(500);
 
 pub async fn run(agent: Arc<Agent>) -> anyhow::Result<()> {
     let listener = bind(agent.cfg.listen).await?;
-    // The old program has ended once the port is free.
-    platform::remove_replaced_program();
+    // The old program has ended once the port is free; Windows may keep its
+    // file a moment longer.
+    tokio::spawn(async {
+        for _ in 0..10 {
+            if tokio::task::spawn_blocking(platform::remove_replaced_program)
+                .await
+                .unwrap_or(false)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
     agent.spawn_watchdog(WATCHDOG_EVERY);
     tracing::info!("PC-Dienst {VERSION} hört auf {}", agent.cfg.listen);
     axum::serve(

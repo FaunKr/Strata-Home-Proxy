@@ -53,6 +53,15 @@ async fn reason(resp: reqwest::Response) -> String {
 /// The service loads the new program from the NAS before it answers.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(330);
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum UpdateAnswer {
+    Accepted,
+    /// The service said no, or failed; it runs on as before.
+    Refused(String),
+    /// No answer in time: the service may still be loading and finish.
+    NoAnswer,
+}
+
 pub const TOO_OLD_FOR_UPDATE: &str = "Dieser PC-Dienst ist zu alt für ein Update über die Weboberfläche. Einmal mit dem Befehl von der Seite PC-Dienst neu einrichten.";
 
 pub struct AgentClient {
@@ -214,22 +223,20 @@ impl AgentClient {
     }
 
     /// Asks the service to put the program the NAS carries in place of its
-    /// own and restart; `Err` carries why it did not.
-    pub async fn update(&self) -> Result<(), String> {
-        let req = self
-            .request(reqwest::Method::POST, "/update")
-            .ok_or_else(|| "PC_AGENT_URL ist nicht gesetzt".to_string())?;
-        let resp = req
-            .timeout(UPDATE_TIMEOUT)
-            .send()
-            .await
-            .map_err(|_| "Der PC-Dienst antwortet nicht.".to_string())?;
+    /// own and restart.
+    pub async fn update(&self) -> UpdateAnswer {
+        let Some(req) = self.request(reqwest::Method::POST, "/update") else {
+            return UpdateAnswer::Refused("PC_AGENT_URL ist nicht gesetzt".into());
+        };
+        let Ok(resp) = req.timeout(UPDATE_TIMEOUT).send().await else {
+            return UpdateAnswer::NoAnswer;
+        };
         if resp.status() == StatusCode::NOT_FOUND {
-            return Err(TOO_OLD_FOR_UPDATE.to_string());
+            return UpdateAnswer::Refused(TOO_OLD_FOR_UPDATE.into());
         }
         if !resp.status().is_success() {
-            return Err(reason(resp).await);
+            return UpdateAnswer::Refused(reason(resp).await);
         }
-        Ok(())
+        UpdateAnswer::Accepted
     }
 }

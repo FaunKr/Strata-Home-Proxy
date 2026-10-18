@@ -12,6 +12,9 @@ use serde_json::Value;
 struct Log {
     body: std::pin::Pin<Box<dyn futures_util::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>>,
     buf: String,
+    /// The reason of the last notice read: the service sends a notice only
+    /// when it changes.
+    notice: Option<String>,
 }
 
 impl Log {
@@ -26,6 +29,7 @@ impl Log {
         Self {
             body: Box::pin(resp.bytes_stream()),
             buf: String::new(),
+            notice: None,
         }
     }
 
@@ -44,9 +48,13 @@ impl Log {
                 self.buf.push_str(&String::from_utf8_lossy(&chunk));
             }
         };
-        tokio::time::timeout(Duration::from_secs(5), read)
+        let msg: Value = tokio::time::timeout(Duration::from_secs(5), read)
             .await
-            .expect("keine Nachricht")
+            .expect("keine Nachricht");
+        if msg["kind"] == "notice" {
+            self.notice = msg["reason"].as_str().map(String::from);
+        }
+        msg
     }
 
     /// The next messages until `check` holds for one; returns all of them.
@@ -216,7 +224,13 @@ async fn a_restart_keeps_the_lines_before_it() {
     );
 }
 
+/// Waits until the notice in effect is `reason`. It may already be: a
+/// notice that does not change is not sent again, e.g. "not running" seen
+/// once between gaming off and the start, then again after the end.
 async fn notice(log: &mut Log, reason: &str) {
+    if log.notice.as_deref() == Some(reason) {
+        return;
+    }
     log.until(|m| m["kind"] == "notice" && m["reason"] == reason)
         .await;
 }

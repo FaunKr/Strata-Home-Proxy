@@ -265,6 +265,12 @@ impl Jobs {
 
 /// Starts a job, or says why not.
 pub fn start(agent: &Arc<Agent>, request: JobRequest) -> Result<Job, Refusal> {
+    // The service ends after an update, and a job with it.
+    if agent.updating.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(Refusal::Conflict(
+            "Der PC-Dienst wird gerade aktualisiert".into(),
+        ));
+    }
     let plan = check(agent, request)?;
     if agent.gaming() {
         return Err(Refusal::Conflict(

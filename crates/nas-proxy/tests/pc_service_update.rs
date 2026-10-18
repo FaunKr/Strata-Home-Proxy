@@ -12,13 +12,14 @@ const OLD: &str = "0.1.0+alt1234";
 const NEW: &str = "0.1.0+neu5678";
 
 /// A stand-in for the image's `strata-pc-agent.exe` that carries `version`
-/// as the real program does.
+/// as the real program does, with the marker's prefix on its own before it
+/// (the compiler may put other text right after such a copy).
 fn program(name: &str, version: &str) -> std::path::PathBuf {
     let dir =
         std::env::temp_dir().join(format!("strata-proxy-update-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let exe = dir.join("strata-pc-agent.exe");
-    let mut bytes = b"MZ\x90\x00 code ".to_vec();
+    let mut bytes = b"MZ\x90\x00 code strata-pc-agent-version:called `Result::unwrap()`\n".to_vec();
     bytes.extend_from_slice(format!("strata-pc-agent-version:{version}\n").as_bytes());
     bytes.extend_from_slice(b"\x00 more code");
     std::fs::write(&exe, bytes).unwrap();
@@ -189,4 +190,64 @@ async fn an_update_that_never_reports_back_fails_after_a_while() {
         .await;
     assert_eq!(v["pc_service"]["updating"], false);
     assert!(kinds(&s.state).contains(&EventKind::PcServiceUpdateFailed));
+}
+
+#[tokio::test]
+async fn a_second_press_while_an_update_runs_changes_nothing() {
+    let s = outdated("twice").await;
+    s.state.pc_setup.set_update_timeout(Duration::from_secs(60));
+    let mut b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    live.until("Version", |v| v["pc_service"]["version"] == OLD)
+        .await;
+    assert_eq!(b.call("pc-service-update", &[]).await.status(), 200);
+    let resp = b.call("pc-service-update", &[]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(resp.text().await.unwrap().contains("läuft schon"));
+    assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 1);
+    let v = live
+        .until("Update läuft", |v| v["pc_service"]["updating"] == true)
+        .await;
+    assert!(v["pc_service"]["update_error"].is_null());
+
+    // The new version arrives: counted as done, no error from the second press.
+    *s.pc.version.lock().unwrap() = Some(NEW.into());
+    let v = live
+        .until("neue Version", |v| v["pc_service"]["version"] == NEW)
+        .await;
+    assert_eq!(v["pc_service"]["updating"], false);
+    assert!(v["pc_service"]["update_error"].is_null());
+    assert!(kinds(&s.state).contains(&EventKind::PcServiceUpdated));
+}
+
+#[tokio::test]
+async fn an_up_to_date_service_is_not_updated() {
+    let s = outdated("current").await;
+    *s.pc.version.lock().unwrap() = Some(NEW.into());
+    let mut b = logged_in(&s.url).await;
+    let resp = b.call("pc-service-update", &[]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(resp.text().await.unwrap().contains("schon"));
+    assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_failure_clears_once_the_service_runs_the_new_version() {
+    let s = outdated("clears").await;
+    *s.pc.refuse_update.lock().unwrap() = Some("Strata bearbeitet eine Anfrage".into());
+    let mut b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    live.until("Version", |v| v["pc_service"]["version"] == OLD)
+        .await;
+    b.call("pc-service-update", &[]).await;
+    live.until("Grund", |v| !v["pc_service"]["update_error"].is_null())
+        .await;
+    // Set up again with the command, say: the right version runs.
+    *s.pc.version.lock().unwrap() = Some(NEW.into());
+    let v = live
+        .until("ohne Fehler", |v| {
+            v["pc_service"]["version"] == NEW && v["pc_service"]["update_error"].is_null()
+        })
+        .await;
+    assert_eq!(v["pc_service"]["update_available"], false);
 }

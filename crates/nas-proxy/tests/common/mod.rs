@@ -46,7 +46,8 @@ pub struct FakePc {
     pub starting: AtomicBool,
     /// Strata answers, but its model is not in memory (`"loaded": false`).
     pub unloaded: AtomicBool,
-    /// Body of Strata's `/metrics/prometheus`; 404 (an older build) if unset.
+    /// Body of Strata's `/metrics?format=prometheus`, e.g. `METRICS_BUSY`; 404
+    /// (an older build) if unset.
     pub metrics: Mutex<Option<String>>,
     pub metrics_requests: AtomicUsize,
     /// `Authorization` header of the last metrics request.
@@ -151,10 +152,18 @@ pub async fn agent_status(State(pc): State<Pc>) -> Response {
     Json(status).into_response()
 }
 
-/// Strata's `/metrics/prometheus`, with the values set in `metrics`.
-pub async fn metrics(State(pc): State<Pc>, headers: axum::http::HeaderMap) -> Response {
+/// Strata's `/metrics`: the text set in `metrics` when asked for Prometheus'
+/// format, like Strata.
+pub async fn metrics(
+    State(pc): State<Pc>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+    headers: axum::http::HeaderMap,
+) -> Response {
     if !pc.strata_up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if !query.unwrap_or_default().contains("format=prometheus") {
+        return Json(json!({})).into_response();
     }
     pc.metrics_requests.fetch_add(1, Ordering::SeqCst);
     *pc.metrics_auth.lock().unwrap() = headers
@@ -166,15 +175,10 @@ pub async fn metrics(State(pc): State<Pc>, headers: axum::http::HeaderMap) -> Re
     }
 }
 
-/// Text of `/metrics/prometheus` with these numbers.
-pub fn metrics_text(processing: u32, deferred: u32, tokens_per_sec: f64) -> String {
-    format!(
-        "# TYPE llamacpp:requests_processing gauge\n\
-         llamacpp:requests_processing {processing}\n\
-         llamacpp:requests_deferred {deferred}\n\
-         llamacpp:predicted_tokens_seconds {tokens_per_sec}\n"
-    )
-}
+/// Real output of Strata's `serve/prometheus.py` (docs/strata-api.md): one
+/// request generating at 38.5 tokens/s with one waiting, and nothing running.
+pub const METRICS_BUSY: &str = include_str!("../fixtures/strata-metrics-busy.prom");
+pub const METRICS_IDLE: &str = include_str!("../fixtures/strata-metrics-idle.prom");
 
 pub async fn agent_gaming(State(pc): State<Pc>, Json(body): Json<Value>) -> Response {
     if !pc.up() {
@@ -240,7 +244,7 @@ pub async fn serve_strata(pc: Pc) -> SocketAddr {
     serve(
         Router::new()
             .route("/health", get(health))
-            .route("/metrics/prometheus", get(metrics))
+            .route("/metrics", get(metrics))
             .route("/v1/messages", post(messages))
             .route("/v1/chat/completions", post(chat))
             .with_state(pc),

@@ -46,9 +46,11 @@ mod windows {
 
     use windows_sys::{
         Wdk::Graphics::Direct3D::{
-            D3DKMT_ADAPTERINFO, D3DKMT_CLOSEADAPTER, D3DKMT_ENUMADAPTERS2, D3DKMT_QUERYADAPTERINFO,
+            D3DKMT_ADAPTER_PERFDATA, D3DKMT_ADAPTER_PERFDATACAPS, D3DKMT_ADAPTERINFO,
+            D3DKMT_CLOSEADAPTER, D3DKMT_ENUMADAPTERS2, D3DKMT_QUERYADAPTERINFO,
             D3DKMT_SEGMENTSIZEINFO, D3DKMTCloseAdapter, D3DKMTEnumAdapters2,
-            D3DKMTQueryAdapterInfo, KMTQAITYPE_GETSEGMENTSIZE, KMTQUERYADAPTERINFOTYPE,
+            D3DKMTQueryAdapterInfo, KMTQAITYPE_ADAPTERPERFDATA, KMTQAITYPE_ADAPTERPERFDATA_CAPS,
+            KMTQAITYPE_GETSEGMENTSIZE, KMTQUERYADAPTERINFOTYPE,
         },
         Win32::{
             Foundation::{FILETIME, LUID},
@@ -146,7 +148,9 @@ mod windows {
                     .find(|(name, _)| name.to_ascii_lowercase().starts_with(&tag))
                     .map(|(_, bytes)| *bytes as u64),
                 vram_total_bytes: Some(adapter.vram_total),
-                ..Gpu::default()
+                temp_c: adapter.temp_c,
+                fan_rpm: adapter.fan_rpm,
+                power_pct: adapter.power_pct,
             })
         }
     }
@@ -180,6 +184,9 @@ mod windows {
     struct Adapter {
         luid: LUID,
         vram_total: u64,
+        temp_c: Option<f32>,
+        fan_rpm: Option<u32>,
+        power_pct: Option<f32>,
     }
 
     /// The adapter with the most dedicated VRAM; an integrated chip has
@@ -200,22 +207,28 @@ mod windows {
             return None;
         }
         adapters.truncate(list.NumAdapters as usize);
-        let mut biggest: Option<Adapter> = None;
+        let mut biggest: Option<(&D3DKMT_ADAPTERINFO, u64)> = None;
         for info in &adapters {
             let mut size = D3DKMT_SEGMENTSIZEINFO::default();
             // SAFETY: the handle comes from the enumeration above.
             if unsafe { query(info.hAdapter, KMTQAITYPE_GETSEGMENTSIZE, &mut size) }
                 && size.DedicatedVideoMemorySize > 0
-                && biggest
-                    .as_ref()
-                    .is_none_or(|b| size.DedicatedVideoMemorySize > b.vram_total)
+                && biggest.is_none_or(|(_, vram)| size.DedicatedVideoMemorySize > vram)
             {
-                biggest = Some(Adapter {
-                    luid: info.AdapterLuid,
-                    vram_total: size.DedicatedVideoMemorySize,
-                });
+                biggest = Some((info, size.DedicatedVideoMemorySize));
             }
         }
+        let biggest = biggest.map(|(info, vram_total)| {
+            // SAFETY: the handle is still open.
+            let (temp_c, fan_rpm, power_pct) = unsafe { perf(info.hAdapter) };
+            Adapter {
+                luid: info.AdapterLuid,
+                vram_total,
+                temp_c,
+                fan_rpm,
+                power_pct,
+            }
+        });
         for info in &adapters {
             let close = D3DKMT_CLOSEADAPTER {
                 hAdapter: info.hAdapter,
@@ -224,6 +237,31 @@ mod windows {
             unsafe { D3DKMTCloseAdapter(&close) };
         }
         biggest
+    }
+
+    /// Temperature, fan and power, from the data Task Manager shows. The
+    /// driver reports 0 for what it does not know; only for the fan 0 is
+    /// also a real value, so it counts if the driver names a fan maximum.
+    ///
+    /// # Safety
+    /// `handle` is an open adapter.
+    unsafe fn perf(handle: u32) -> (Option<f32>, Option<u32>, Option<f32>) {
+        let mut data = D3DKMT_ADAPTER_PERFDATA::default();
+        // SAFETY: the caller's handle; PhysicalAdapterIndex 0 is the first GPU behind it.
+        if !unsafe { query(handle, KMTQAITYPE_ADAPTERPERFDATA, &mut data) } {
+            return (None, None, None);
+        }
+        let mut caps = D3DKMT_ADAPTER_PERFDATACAPS::default();
+        // SAFETY: as above.
+        let fan_known = unsafe { query(handle, KMTQAITYPE_ADAPTERPERFDATA_CAPS, &mut caps) }
+            && caps.MaxFanRPM > 0;
+        (
+            // Tenths of a degree Celsius.
+            (data.Temperature > 0).then(|| data.Temperature as f32 / 10.0),
+            (data.FanRPM > 0 || fan_known).then_some(data.FanRPM),
+            // Tenths of a percent of the power limit.
+            (data.Power > 0).then(|| data.Power as f32 / 10.0),
+        )
     }
 
     /// Asks the adapter for `kind`, written into `out`.

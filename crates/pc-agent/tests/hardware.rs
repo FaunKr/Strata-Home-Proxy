@@ -72,3 +72,23 @@ async fn status_reports_the_gpu() {
         })
     );
 }
+
+#[tokio::test]
+async fn status_reports_temperature_fan_and_power() {
+    let s = setup("hardware-perf").await;
+    *s.fake.hardware.lock().unwrap() = Hardware {
+        gpu: Some(Gpu {
+            temp_c: Some(61.5),
+            fan_rpm: Some(0),
+            power_pct: Some(41.0),
+            ..Gpu::default()
+        }),
+        cpu: Cpu::default(),
+    };
+    let gpu = &status_json(&s).await["hardware"]["gpu"];
+    assert_eq!(gpu["temp_c"], 61.5);
+    // A stopped fan is 0, not unreadable.
+    assert_eq!(gpu["fan_rpm"], 0);
+    assert_eq!(gpu["power_pct"], 41.0);
+    assert_eq!(gpu["load_pct"], Value::Null);
+}

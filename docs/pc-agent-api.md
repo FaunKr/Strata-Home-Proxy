@@ -43,7 +43,10 @@ letzten Messung:
 - `gpu` ist die Grafikkarte mit dem meisten VRAM, `null` ohne Grafikkarte.
 - `power_pct` ist die Leistungsaufnahme als Anteil am Leistungslimit der
   Karte, keine Watt.
-- `fan_rpm: 0` heißt, der Lüfter steht.
+- `fan_rpm: 0` heißt, der Lüfter steht. Meldet der Treiber 0 und keine
+  Höchstdrehzahl, kennt er den Lüfter nicht, und der Wert ist `null`.
+- Temperatur und Leistung meldet der Treiber als 0, wenn er sie nicht kennt;
+  der Dienst macht daraus `null`.
 - Jeder Wert, den der Dienst nicht lesen kann, ist `null`; die anderen bleiben.
 - Die CPU-Last gilt seit der vorigen Messung und ist in der ersten `null`.
 

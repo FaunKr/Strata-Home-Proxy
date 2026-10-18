@@ -107,3 +107,21 @@ async fn gpu_values_reach_the_overview() {
         .await;
     assert_eq!(v["hardware"]["Values"], hardware);
 }
+
+#[tokio::test]
+async fn a_stopped_fan_stays_zero() {
+    let s = setup(true, |_| {}).await;
+    let hardware = json!({
+        "gpu": {"load_pct": 2.0, "temp_c": 41.0, "vram_used_bytes": null,
+                "vram_total_bytes": null, "fan_rpm": 0, "power_pct": null},
+        "cpu": {"load_pct": null, "ram_used_bytes": null, "ram_total_bytes": null}
+    });
+    *s.pc.hardware.lock().unwrap() = Some(hardware.clone());
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live
+        .until("Hardwarewerte", |v| v["hardware"]["Values"].is_object())
+        .await;
+    assert_eq!(v["hardware"]["Values"]["gpu"]["fan_rpm"], 0);
+    assert_eq!(v["hardware"]["Values"]["gpu"]["power_pct"], Value::Null);
+}

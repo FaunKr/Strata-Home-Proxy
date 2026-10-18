@@ -62,15 +62,11 @@ RUN cargo leptos build --release --project admin-ui
 # daran erkennt die Übersicht, ob ein Update verfügbar ist.
 ARG STRATA_BUILD_ID=dev
 RUN cargo build --locked --release --target x86_64-pc-windows-gnu -p strata-pc-agent
-# Der NAS liest die Version aus der .exe (nas-proxy/src/pc_setup.rs): die
-# erste Marke, auf die eine Version folgt. Fehlt sie, zeigt die Übersicht nie
-# ein Update an; das soll hier auffallen, nicht erst auf dem PC. Die ID nach
-# dem + ist der Anfang von STRATA_BUILD_ID (build.rs kürzt einen Commit-Hash).
-RUN found="$(LC_ALL=C grep -ao 'strata-pc-agent-version:[!-~]\{1,63\}$' \
-        target/x86_64-pc-windows-gnu/release/strata-pc-agent.exe | head -n1)"; \
-    id="${found##*+}"; \
-    case "$found" in *+?*) ;; *) id="" ;; esac; \
-    case "$STRATA_BUILD_ID" in "$id"*) [ -n "$id" ] ;; *) false ;; esac || { echo "Keine Version mit ${STRATA_BUILD_ID} in strata-pc-agent.exe, gefunden: '$found'" >&2; exit 1; }
+# Der NAS liest die Version aus der .exe; fehlt sie, zeigt die Übersicht nie
+# ein Update an. Das soll hier auffallen, nicht erst auf dem PC.
+COPY scripts/check-exe-version.sh ./scripts/
+RUN scripts/check-exe-version.sh \
+        target/x86_64-pc-windows-gnu/release/strata-pc-agent.exe "$STRATA_BUILD_ID"
 
 FROM debian:trixie-slim
 COPY --from=build /src/target/release/strata-nas-proxy /usr/local/bin/strata-nas-proxy

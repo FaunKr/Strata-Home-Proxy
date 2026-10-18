@@ -604,12 +604,32 @@ impl Browser {
         resp.json::<String>().await.unwrap()
     }
 
+    /// The page's HTML. A page that does not finish fails the test with
+    /// what arrived so far, e.g. the shell with "Lädt …" (#69).
     pub async fn page(&self, path: &str) -> String {
+        use futures_util::StreamExt;
         let mut req = reqwest::Client::new().get(format!("{}{path}", self.base));
         if let Some(c) = &self.cookie {
             req = req.header("cookie", c);
         }
-        req.send().await.unwrap().text().await.unwrap()
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let mut html = Vec::new();
+        let Ok(resp) = tokio::time::timeout_at(deadline, req.send()).await else {
+            panic!("{path}: keine Antwort");
+        };
+        let mut body = resp
+            .unwrap_or_else(|e| panic!("{path}: {e}"))
+            .bytes_stream();
+        loop {
+            match tokio::time::timeout_at(deadline, body.next()).await {
+                Ok(Some(chunk)) => html.extend_from_slice(&chunk.unwrap()),
+                Ok(None) => return String::from_utf8(html).unwrap(),
+                Err(_) => panic!(
+                    "{path} wird nicht fertig, bisher:\n{}",
+                    String::from_utf8_lossy(&html)
+                ),
+            }
+        }
     }
 }
 

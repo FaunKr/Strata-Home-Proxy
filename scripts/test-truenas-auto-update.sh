@@ -114,12 +114,19 @@ grep -q '"rolled_back":true' "$FAKE/calls.log" || fail "no webhook"
 : >"$FAKE/calls.log"
 update || fail "exit code $? for a known bad image"
 grep -q app.redeploy "$FAKE/calls.log" && fail "retried a known bad image"
+[ "$(cat "$FAKE/latest")" = sha256:old ] || fail ":latest left on the known bad image"
 
 setup old new rollback-fails
 printf 'sha256:new\nsha256:old\n' >"$FAKE/unhealthy"
 update && fail "exit code 0 after a failed rollback"
 grep -q "ROLLBACK FAILED" "$base/auto-update.log" || fail "no ROLLBACK FAILED line"
 grep -q '"rolled_back":false' "$FAKE/calls.log" || fail "no webhook"
+
+setup old new base-in-data
+base="$FAKE/data/update"
+mkdir -p "$base"
+update && fail "exit code 0 with the base directory inside the data directory"
+grep -q app.redeploy "$FAKE/calls.log" && fail "redeployed with the base directory inside the data"
 
 setup old new registry-down
 touch "$FAKE/registry-down"

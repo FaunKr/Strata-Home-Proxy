@@ -103,7 +103,7 @@ oben in der YAML-Datei).
    neben dem Skript schreiben. Bei einem gescheiterten Update geht dorthin
    `{"event":"nas_update_failed","data":{"app":"strata-proxy","from":…,"to":…,"rolled_back":true}}`.
 
-Anderer App-Name, Port oder Pfad: als Variablen vor den Befehl im Cron Job,
+Anderer App-Name, eine andere `LISTEN_ADDR` oder ein anderer Pfad: als Variablen vor den Befehl im Cron Job,
 z. B. `STRATA_PROXY_APP_NAME=proxy STRATA_PROXY_HEALTH_URL=http://127.0.0.1:9000/admin/ /mnt/…/truenas-auto-update.sh`.
 Alle Variablen stehen oben im Skript. Das Datenverzeichnis liest es aus dem
 Container (Mount auf `/data`).

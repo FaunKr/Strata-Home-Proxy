@@ -200,14 +200,17 @@ run() {
     log "container of app $APP_NAME not found, nothing done"
     return 1
   fi
-  if [ -z "$DATA_DIR" ] && ! DATA_DIR="$(data_mount 2>/dev/null)"; then
-    DATA_DIR=""
-  fi
+  [ -n "$DATA_DIR" ] || DATA_DIR="$(data_mount 2>/dev/null || true)"
   # A rollback moves everything out of DATA_DIR, so it must be a real directory of its own.
   if [ "${DATA_DIR#/}" = "$DATA_DIR" ] || [ "$DATA_DIR" = "/" ] || [ ! -d "$DATA_DIR" ]; then
     log "data directory not found (no /data mount?), set STRATA_PROXY_DATA_DIR; nothing done"
     return 1
   fi
+  case "$(cd "$BASE_DIR" && pwd -P)/" in
+    "$(cd "$DATA_DIR" && pwd -P)"/*)
+      log "base directory $BASE_DIR lies inside the data directory $DATA_DIR, move the script elsewhere; nothing done"
+      return 1 ;;
+  esac
   if ! docker pull -q "$IMAGE" >/dev/null 2>&1; then
     log "docker pull failed (registry unreachable or not logged in to ghcr.io?), will retry next run"
     return 0
@@ -217,6 +220,9 @@ run() {
     return 0
   fi
   if is_bad_image "$new_id"; then
+    # The pull moved :latest to the bad image; point it back, or the next restart of the app
+    # (a reboot, Edit -> Save) would start the bad image without any health check.
+    docker tag "$old_id" "$IMAGE" || true
     log "image $(short_id "$new_id") failed before, skipping until a newer image appears"
     return 0
   fi
@@ -232,8 +238,8 @@ run() {
 
   log "redeploying $APP_NAME"
   if ! tn_redeploy; then
+    # The middleware failed, not necessarily the image: the next run tries it again.
     log "redeploy call failed"
-    mark_bad_image "$new_id"
     rollback "$old_id" "$new_id" "$backup"
     return $?
   fi

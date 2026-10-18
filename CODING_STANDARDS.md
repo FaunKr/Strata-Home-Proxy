@@ -24,6 +24,10 @@ Schon entschiedene Fragen: `docs/adr/`.
 - **`/admin` weckt den PC nie** und setzt die Zeit bis zum Standby nicht
   zurück. Server-Funktionen prüft `no_server_function_wakes_the_pc` von selbst;
   eine eigene Route wie `overview-stream` braucht einen eigenen Test.
+- **Timer in Tests mit Abstand.** Muss ein Test erst etwas sehen, bevor ein
+  Timer abläuft (Leerlaufzeit, Nachlauf), liegt der Timer mindestens 2 s
+  dahinter; der CI-Runner ist langsamer als die Session. Knappe Timer nur,
+  wenn der Test danach nur noch wartet.
 - **Vorrang der Einstellungen:** vom PC gemeldete MAC, dann Wert von der
   Seite, dann Umgebungsvariable, dann Standardwert. Neue Einstellungen folgen
   derselben Reihenfolge und werden live über `AppState::cfg()` gelesen.

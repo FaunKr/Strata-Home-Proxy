@@ -10,4 +10,4 @@ Standard-Labels: needs-triage, needs-info, ready-for-agent, ready-for-human, won
 
 ### Domain docs
 
-Single-context: ein `CONTEXT.md` und `docs/adr/` im Repo-Root. See `docs/agents/domain.md`.
+Single-context: ein `GLOSSARY.md` und `docs/adr/` im Repo-Root. See `docs/agents/domain.md`.

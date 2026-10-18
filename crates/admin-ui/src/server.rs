@@ -24,7 +24,7 @@ use leptos_axum::{
 };
 
 use crate::{
-    api::{ApiKeysView, CreatedKey, Overview, Session, SettingsView},
+    api::{ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, Session, SettingsView},
     app::{App, shell},
 };
 
@@ -61,8 +61,7 @@ pub trait Backend: Send + Sync + 'static {
     fn sleep_now(&self) -> BoxFuture<'static, Result<(), String>>;
     /// Switches gaming mode, waking the PC first if needed.
     fn set_gaming(&self, enabled: bool) -> BoxFuture<'static, Result<(), String>>;
-    /// `1h`, `4h`, `8h`, `morning` or `off`.
-    fn keep_awake(&self, choice: &str) -> Result<(), String>;
+    fn keep_awake(&self, choice: KeepAwakeChoice) -> Result<(), String>;
     fn api_keys(&self) -> ApiKeysView;
     /// Creates a client key; a message for the user if the name is invalid.
     fn create_api_key(&self, name: &str) -> Result<CreatedKey, String>;

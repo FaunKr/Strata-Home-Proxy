@@ -18,7 +18,7 @@ use tokio::sync::{Notify, watch};
 use crate::{
     agent::PcStatus,
     clock,
-    state::{AppState, Health, PcState},
+    state::{AppState, Health},
 };
 
 /// How often the PC and Strata are asked while a page watches.
@@ -249,13 +249,7 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
     let snap = state.snapshot();
     let now = SystemTime::now();
     let strata = strata_view(probe, snap.in_flight);
-    let pc = match snap.pc {
-        PcState::Unknown => PcView::Unknown,
-        PcState::Asleep => PcView::Asleep,
-        PcState::Waking => PcView::Waking,
-        PcState::Awake => PcView::Awake,
-        PcState::Gaming => PcView::Gaming,
-    };
+    let pc = PcView::from(snap.pc);
     let keep_awake_until = snap
         .keep_awake_until
         .map(|t| clock::local_text(clock::unix(t)));
@@ -274,9 +268,9 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
                 // Only requests through the proxy hold off the sleep request;
                 // others make the PC service refuse it, which shows up below.
                 _ if snap.in_flight > 0 => SleepView::Busy,
-                (None, Some((reason, retry))) if *retry > now => SleepView::Refused {
-                    reason: reason.clone(),
-                    retry_at: clock::unix(*retry),
+                (None, Some(r)) if r.retry_at > now => SleepView::Refused {
+                    reason: r.reason.clone(),
+                    retry_at: clock::unix(r.retry_at),
                 },
                 _ => SleepView::At(clock::unix(snap.last_activity_at + cfg.idle_timeout)),
             },
@@ -288,7 +282,7 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
         .into_iter()
         .map(|e| EventView {
             time: clock::local_text(e.ts),
-            kind: e.kind.name(),
+            kind: e.kind,
             detail: e.detail,
         })
         .collect();

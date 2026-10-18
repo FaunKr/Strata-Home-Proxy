@@ -2,68 +2,19 @@
 
 use std::{
     collections::VecDeque,
-    io::Write,
-    path::PathBuf,
+    io::{BufRead, BufReader, Write},
+    path::{Path, PathBuf},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const KEEP_IN_MEMORY: usize = 1000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EventKind {
-    WakeSent,
-    Awake,
-    WakeTimeout,
-    SleepAccepted,
-    SleepRefused,
-    GamingRejected,
-    PasswordChanged,
-    /// Detail: the setting's name, never its value.
-    SettingSaved,
-    SettingReset,
-    /// The PC service reported a new MAC address (detail: the address).
-    MacLearned,
-    /// Detail: the key's name, never the key.
-    ApiKeyCreated,
-    ApiKeyRevoked,
-    // Buttons on the overview. Wake and sleep are recorded when pressed, their
-    // outcome as above; the others once they took effect.
-    WakeRequested,
-    SleepRequested,
-    GamingOn,
-    GamingOff,
-    /// Detail: until when.
-    KeepAwakeSet,
-    KeepAwakeEnded,
-}
+pub use strata_admin_ui::api::EventKind;
 
-impl EventKind {
-    /// About the web UI itself rather than the PC; left out of the overview.
-    pub fn is_admin(self) -> bool {
-        matches!(
-            self,
-            Self::PasswordChanged
-                | Self::SettingSaved
-                | Self::SettingReset
-                | Self::ApiKeyCreated
-                | Self::ApiKeyRevoked
-        )
-    }
-
-    /// The name in `events.jsonl`, e.g. `wake_sent`.
-    pub fn name(self) -> String {
-        serde_json::to_value(self)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_default()
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Event {
     /// Unix time in seconds.
     pub ts: u64,
@@ -86,8 +37,10 @@ impl EventLog {
                 None
             }
         });
+        // The history so far, so the overview shows it after a restart too.
+        let recent = file.as_deref().map(load).unwrap_or_default();
         Self {
-            recent: Mutex::new(VecDeque::new()),
+            recent: Mutex::new(recent),
             file,
         }
     }
@@ -133,4 +86,22 @@ impl EventLog {
             .cloned()
             .collect()
     }
+}
+
+/// The last `KEEP_IN_MEMORY` events from `events.jsonl`; lines that cannot be
+/// read, e.g. of kinds this version does not know, are skipped.
+fn load(path: &Path) -> VecDeque<Event> {
+    let Ok(file) = std::fs::File::open(path) else {
+        return VecDeque::new();
+    };
+    let mut recent = VecDeque::new();
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if let Ok(event) = serde_json::from_str::<Event>(&line) {
+            if recent.len() == KEEP_IN_MEMORY {
+                recent.pop_front();
+            }
+            recent.push_back(event);
+        }
+    }
+    recent
 }

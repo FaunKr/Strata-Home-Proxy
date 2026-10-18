@@ -9,8 +9,10 @@ use std::{
 use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
     api::{
-        ApiKeyInfo, ApiKeysView, CreatedKey, Overview, Session, SettingEntry, SettingsView, Source,
+        ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, Session, SettingEntry,
+        SettingsView, Source,
     },
+    labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
 };
 
@@ -118,10 +120,10 @@ impl Backend for UiBackend {
     fn wake(&self) -> Result<(), String> {
         let cfg = self.0.cfg();
         if cfg.strata_url.is_none() {
-            return Err("Die Strata-Adresse fehlt, der Proxy ist nicht eingerichtet.".into());
+            return Err(NOT_CONFIGURED.into());
         }
         if cfg.pc_mac.is_none() {
-            return Err("Keine MAC-Adresse bekannt, der PC kann nicht geweckt werden.".into());
+            return Err(NO_MAC.into());
         }
         self.0
             .events
@@ -143,7 +145,7 @@ impl Backend for UiBackend {
         async move {
             let agent = state.agent();
             if !agent.configured() {
-                return Err("Kein PC-Dienst eingerichtet (PC_AGENT_URL).".to_string());
+                return Err(NO_AGENT.to_string());
             }
             state
                 .events
@@ -163,7 +165,10 @@ impl Backend for UiBackend {
         let state = Arc::clone(&self.0);
         async move {
             state.overview.refresh_now();
-            let result = state.set_gaming(enabled).await.map_err(|e| e.to_string());
+            let result = state
+                .set_gaming(enabled, BY_UI)
+                .await
+                .map_err(|e| e.to_string());
             if result.is_ok() {
                 let kind = if enabled {
                     EventKind::GamingOn
@@ -178,14 +183,16 @@ impl Backend for UiBackend {
         .boxed()
     }
 
-    fn keep_awake(&self, choice: &str) -> Result<(), String> {
+    fn keep_awake(&self, choice: KeepAwakeChoice) -> Result<(), String> {
         let now = SystemTime::now();
         let until = match choice {
-            "1h" => now + Duration::from_secs(3600),
-            "4h" => now + Duration::from_secs(4 * 3600),
-            "8h" => now + Duration::from_secs(8 * 3600),
-            "morning" => UNIX_EPOCH + Duration::from_secs(clock::next_morning_unix()),
-            "off" => {
+            KeepAwakeChoice::OneHour => now + Duration::from_secs(3600),
+            KeepAwakeChoice::FourHours => now + Duration::from_secs(4 * 3600),
+            KeepAwakeChoice::EightHours => now + Duration::from_secs(8 * 3600),
+            KeepAwakeChoice::Morning => {
+                UNIX_EPOCH + Duration::from_secs(clock::next_morning_unix())
+            }
+            KeepAwakeChoice::Off => {
                 if self.0.snapshot().keep_awake_until.is_some() {
                     self.0
                         .events
@@ -194,7 +201,6 @@ impl Backend for UiBackend {
                 self.0.set_keep_awake(None);
                 return Ok(());
             }
-            _ => return Err(format!("Unbekannte Auswahl {choice:?}.")),
         };
         self.0.set_keep_awake(Some(until));
         let text = clock::local_text(clock::unix(until));

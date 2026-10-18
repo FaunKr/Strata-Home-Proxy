@@ -5,9 +5,10 @@ use leptos::prelude::*;
 
 use crate::{
     api::{
-        KeepAwake, Overview, PcView, SetGaming, SleepNow, SleepView, StrataView, Wake, error_text,
+        KeepAwake, KeepAwakeChoice, Overview, PcView, SetGaming, SleepNow, SleepView, StrataView,
+        Wake, error_text,
     },
-    labels::event_label,
+    labels::{NO_MAC, event_label},
 };
 
 /// The buttons' actions; made once per page, so a result stays visible
@@ -67,8 +68,7 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
         (!overview.configured).then_some(
             "Der Proxy ist noch nicht eingerichtet: die Strata-Adresse fehlt (Einstellungen).",
         ),
-        (!overview.mac_known)
-            .then_some("Keine MAC-Adresse bekannt: der PC kann nicht geweckt werden."),
+        (!overview.mac_known).then_some(NO_MAC),
         (!overview.agent_configured).then_some(
             "Kein PC-Dienst eingerichtet: kein Gaming-Modus und kein automatisches Schlafen.",
         ),
@@ -120,7 +120,7 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
                                     <li>
                                         <span class="time">{e.time}</span>
                                         " "
-                                        {event_label(&e.kind)}
+                                        {event_label(e.kind)}
                                         {e.detail.map(|d| view! { <span class="hint">{format!(" ({d})")}</span> })}
                                     </li>
                                 }
@@ -249,13 +249,13 @@ fn Controls(overview: Overview, actions: Actions) -> impl IntoView {
     let can_sleep = agent && pc == PcView::Awake;
     let gaming_on = pc == PcView::Gaming;
     let kept = overview.keep_awake_until.clone();
-    let keep_button = move |choice: &'static str, text: &'static str| {
+    let keep_button = move |choice: KeepAwakeChoice, text: &'static str| {
         view! {
             <button
                 class="secondary"
                 disabled=move || keep.pending().get()
                 on:click=move |_| {
-                    keep.dispatch(KeepAwake { choice: choice.to_string() });
+                    keep.dispatch(KeepAwake { choice });
                 }
             >
                 {text}
@@ -309,11 +309,11 @@ fn Controls(overview: Overview, actions: Actions) -> impl IntoView {
             <h3>"Wach halten"</h3>
             {kept.map(|until| view! { <p class="hint">{format!("Bis {until}, auch über einen Neustart.")}</p> })}
             <div class="actions">
-                {keep_button("1h", "1 h")}
-                {keep_button("4h", "4 h")}
-                {keep_button("8h", "8 h")}
-                {keep_button("morning", "bis morgen 8 Uhr")}
-                {overview.keep_awake_until.is_some().then(|| keep_button("off", "beenden"))}
+                {keep_button(KeepAwakeChoice::OneHour, "1 h")}
+                {keep_button(KeepAwakeChoice::FourHours, "4 h")}
+                {keep_button(KeepAwakeChoice::EightHours, "8 h")}
+                {keep_button(KeepAwakeChoice::Morning, "bis morgen 8 Uhr")}
+                {overview.keep_awake_until.is_some().then(|| keep_button(KeepAwakeChoice::Off, "beenden"))}
             </div>
             {result_text(keep.value())}
         </section>
@@ -346,15 +346,22 @@ mod client {
         _on_error: Closure<dyn FnMut()>,
     }
 
-    /// Browser-only state; `None` once the page is gone.
-    type Shared = Rc<RefCell<Option<Option<Open>>>>;
+    enum Connection {
+        /// Shown, with the stream if one is open.
+        Shown(Option<Open>),
+        /// The page is gone: no new connection, and no signals to set.
+        Gone,
+    }
+
+    /// Browser-only state, shared with the handlers.
+    type Shared = Rc<RefCell<Connection>>;
 
     /// Follows the overview stream while the page is shown. The browser
     /// reconnects by itself after a dropped connection; after a refused one
     /// it tries again every few seconds, or shows the login when the session
     /// has ended.
     pub fn connect(live: Live) {
-        let shared: Shared = Rc::new(RefCell::new(Some(None)));
+        let shared: Shared = Rc::new(RefCell::new(Connection::Shown(None)));
         open(live, Rc::clone(&shared));
         let ticker = set_interval_with_handle(
             move || live.since.update(|s| *s += 1),
@@ -363,7 +370,8 @@ mod client {
         .ok();
         let shared = SendWrapper::new(shared);
         on_cleanup(move || {
-            if let Some(Some(o)) = shared.borrow_mut().take() {
+            let gone = std::mem::replace(&mut *shared.borrow_mut(), Connection::Gone);
+            if let Connection::Shown(Some(o)) = gone {
                 o.source.close();
             }
             if let Some(t) = ticker {
@@ -374,8 +382,7 @@ mod client {
 
     fn open(live: Live, shared: Shared) {
         let mut slot = shared.borrow_mut();
-        // The page is gone: no new connection, and no signals to set.
-        let Some(current) = slot.as_mut() else {
+        let Connection::Shown(current) = &mut *slot else {
             return;
         };
         if let Some(old) = current.take() {
@@ -398,7 +405,7 @@ mod client {
         let watched = source.clone();
         let again = Rc::clone(&shared);
         let on_error = Closure::<dyn FnMut()>::new(move || {
-            if again.borrow().is_none() {
+            if matches!(*again.borrow(), Connection::Gone) {
                 return;
             }
             live.lost.set(true);

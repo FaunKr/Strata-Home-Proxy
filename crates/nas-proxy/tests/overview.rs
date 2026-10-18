@@ -393,7 +393,11 @@ async fn gaming_on_wakes_a_sleeping_pc_first() {
     let mut live = Live::open(&b).await;
     let v = live.until("Gaming", |v| v["pc"] == "Gaming").await;
     let kinds = kind_list(&v);
-    assert_eq!(kinds[..3], ["gaming_on", "awake", "wake_sent"], "{kinds:?}");
+    assert_eq!(
+        kinds[..4],
+        ["gaming_on", "awake", "wake_sent", "wake_requested"],
+        "{kinds:?}"
+    );
 }
 
 #[tokio::test]
@@ -430,13 +434,26 @@ async fn gaming_on_reports_a_failed_wake() {
         .map(|k| format!("{k:?}"))
         .collect();
     assert!(!kinds.contains(&"GamingOn".into()), "{kinds:?}");
+    // The history still shows that the page started the wake-up.
+    let requested = s
+        .state
+        .events
+        .recent()
+        .into_iter()
+        .find(|e| format!("{:?}", e.kind) == "WakeRequested")
+        .expect("Wecken angefordert");
+    assert_eq!(
+        requested.detail.as_deref(),
+        Some("für Gaming-Modus, über Weboberfläche")
+    );
 }
 
 // --- Keep awake (#21) ---
 
 #[tokio::test]
 async fn keep_awake_holds_off_sleep_until_ended() {
-    let s = setup(true, |c| c.idle_timeout = Duration::from_millis(300)).await;
+    // Long enough for the login before the button, short enough to wait out.
+    let s = setup(true, |c| c.idle_timeout = Duration::from_secs(2)).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(
         b.call("keep-awake", &[("choice", "1h")]).await.status(),
@@ -447,7 +464,7 @@ async fn keep_awake_holds_off_sleep_until_ended() {
         .until("wach gehalten", |v| v["sleep"]["KeptAwake"].is_object())
         .await;
     assert_eq!(v["sleep"]["KeptAwake"]["until"], v["keep_awake_until"]);
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 0);
 
     assert_eq!(
@@ -503,14 +520,80 @@ async fn keep_awake_survives_a_restart() {
 async fn keep_awake_rejects_unknown_choices() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
-    assert_eq!(
-        b.call("keep-awake", &[("choice", "99h")]).await.status(),
-        400
-    );
+    // Only the page's choices are understood.
+    let resp = b.call("keep-awake", &[("choice", "99h")]).await;
+    assert!(!resp.status().is_success(), "{}", resp.status());
     // Ending what was never set is no event.
     assert_eq!(
         b.call("keep-awake", &[("choice", "off")]).await.status(),
         200
     );
     assert!(s.state.events.latest_pc(10).is_empty());
+}
+
+// --- Review follow-ups ---
+
+#[tokio::test]
+async fn shows_a_running_request_as_the_reason_not_to_sleep() {
+    let s = setup(true, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    live.until("Countdown", |v| countdown(v).is_some()).await;
+    let client = s.clone();
+    let request = tokio::spawn(async move {
+        post_json(
+            &client,
+            "/v1/messages",
+            json!({"stream": true, "pause_ms": 1500}),
+        )
+        .await
+        .text()
+        .await
+        .unwrap()
+    });
+    live.until("Anfrage läuft", |v| v["sleep"] == "Busy").await;
+    request.await.unwrap();
+    live.until("Countdown wieder", |v| countdown(v).is_some())
+        .await;
+}
+
+#[tokio::test]
+async fn lists_events_from_before_a_restart() {
+    let dir = std::env::temp_dir().join(format!("strata-events-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let data = dir.clone();
+    let s = setup(true, move |c| c.data_dir = Some(data)).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("sleep-now", &[]).await.status(), 200);
+    let restarted = AppState::new((*s.state.cfg()).clone());
+    let kinds: Vec<_> = restarted
+        .events
+        .latest_pc(10)
+        .into_iter()
+        .map(|e| format!("{:?}", e.kind))
+        .collect();
+    assert_eq!(kinds, ["SleepAccepted", "SleepRequested"], "{kinds:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn watching_after_a_start_does_not_restart_the_idle_time() {
+    let s = setup(true, |_| {}).await;
+    // The proxy just started and does not know the PC yet; a page opened
+    // later finds it awake, which is no activity.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live.until("Countdown", |v| countdown(v).is_some()).await;
+    assert!(countdown(&v).unwrap() <= 3598, "{v}");
+}
+
+#[tokio::test]
+async fn gaming_on_without_strata_address_says_why() {
+    let s = setup(false, |c| c.strata_url = None).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = b.call("gaming", &[("enabled", "true")]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(resp.text().await.unwrap().contains("Strata-Adresse"));
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
 }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/nas-proxy"]
+members = ["crates/nas-proxy", "crates/pc-agent"]
 
 [profile.release]
 lto = "thin"

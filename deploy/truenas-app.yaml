@@ -1,0 +1,22 @@
+# TrueNAS SCALE: Apps → Discover Apps → ⋮ → Install via YAML.
+# Vorher einmal per SSH: sudo docker login ghcr.io -u FaunKr (Token als Passwort)
+# und sudo docker pull ghcr.io/faunkr/strata-home-proxy:latest
+services:
+  strata-proxy:
+    image: ghcr.io/faunkr/strata-home-proxy:latest
+    pull_policy: missing
+    restart: unless-stopped
+    # Nötig, damit das Weckpaket (Broadcast) ins Heimnetz kommt.
+    network_mode: host
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8080
+      STRATA_URL: http://192.168.1.50:8080
+      PC_MAC: AA-BB-CC-DD-EE-FF
+      WOL_ADDR: 192.168.1.255:9
+      # Ab Schritt 3, wenn der PC-Dienst läuft:
+      # PC_AGENT_URL: http://192.168.1.50:8091
+      # PC_AGENT_TOKEN: dasselbe-geheimnis-wie-in-strata-pc-agent.toml
+      IDLE_TIMEOUT_SECS: "900"
+      WAKE_TIMEOUT_SECS: "240"
+    volumes:
+      - /mnt/POOL/apps/strata-proxy:/data

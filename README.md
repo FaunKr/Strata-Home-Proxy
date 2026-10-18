@@ -13,7 +13,7 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 | --- | --- |
 | 1. Einmalige Einrichtung | Anleitung: [docs/einrichtung.md](docs/einrichtung.md) |
 | 2. NAS-Proxy | gebaut, gegen nachgebautes Strata getestet |
-| 3. PC-Dienst und Gaming-Schalter | offen; Schnittstelle: [docs/pc-agent-api.md](docs/pc-agent-api.md) |
+| 3. PC-Dienst und Gaming-Schalter | gebaut, gegen nachgebauten PC getestet: [docs/pc-dienst.md](docs/pc-dienst.md) |
 | 4. Weboberfläche | offen |
 | 5. Abnahme auf echter Hardware | offen |
 
@@ -35,6 +35,10 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 - **Verlauf:** Weck- und Schlafereignisse in `/data/events.jsonl`.
 
 ## Auf dem NAS starten
+
+**TrueNAS SCALE:** [deploy/truenas-app.yaml](deploy/truenas-app.yaml) als eigene App über *Install via YAML*. Anleitung steht oben in der Datei.
+
+**Andere NAS mit Docker Compose:**
 
 Das Image baut die CI bei jedem Push: `ghcr.io/faunkr/strata-home-proxy:latest`.
 

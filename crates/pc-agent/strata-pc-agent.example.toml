@@ -1,0 +1,38 @@
+# Konfiguration des PC-Dienstes. Als strata-pc-agent.toml neben
+# strata-pc-agent.exe ablegen und anpassen.
+
+# Adresse und Port des Dienstes. Der NAS-Proxy zeigt mit PC_AGENT_URL hierhin.
+listen = "0.0.0.0:8091"
+
+# Gemeinsames Geheimnis mit dem NAS (dort PC_AGENT_TOKEN). Lang und zufällig,
+# z. B. in PowerShell: -join ((48..57)+(97..122) | Get-Random -Count 40 | % {[char]$_})
+token = "hier-ein-langes-zufaelliges-geheimnis"
+
+# Nur das NAS darf den Dienst aufrufen (die Desktop-Verknüpfung über 127.0.0.1
+# ist immer erlaubt). Leer lassen erlaubt jeden mit Token.
+allowed_clients = ["192.168.1.10"]
+
+# Strata auf diesem PC.
+strata_url = "http://127.0.0.1:8080"
+# API-Key von Strata, falls /health oder /slots ihn verlangen.
+#strata_api_key = "..."
+
+# Womit Strata gestartet wird, und mit welchen Argumenten.
+strata_start = 'C:\Strata\START-HERE.bat'
+strata_args = []
+
+# Prozessnamen, aus denen ein laufendes Strata besteht (im Task-Manager unter
+# "Details" nachsehen, während Strata läuft). Werden im Gaming-Modus beendet.
+strata_processes = ["llama-server.exe"]
+
+# Kein Schlafen, solange die letzte Tastatur- oder Mauseingabe jünger ist.
+user_idle_minutes = 10
+
+# Strata selbst starten, wenn es nicht läuft und der Gaming-Modus aus ist.
+auto_start = true
+
+# Antwortet Strata so lange nicht auf /health, wird es neu gestartet.
+restart_after_secs = 60
+
+# Nach einem Start so lange warten, bis das Modell geladen ist.
+load_time_secs = 240

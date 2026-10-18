@@ -150,6 +150,61 @@ pub struct Overview {
     pub events: Vec<EventView>,
 }
 
+/// Kinds of events in the history; their snake_case names are what
+/// `events.jsonl` stores.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    WakeSent,
+    Awake,
+    WakeTimeout,
+    SleepAccepted,
+    SleepRefused,
+    GamingRejected,
+    PasswordChanged,
+    /// Detail: the setting's name, never its value.
+    SettingSaved,
+    SettingReset,
+    /// The PC service reported a new MAC address (detail: the address).
+    MacLearned,
+    // Buttons on the overview. Wake and sleep are recorded when pressed, their
+    // outcome as above; the others once they took effect.
+    WakeRequested,
+    SleepRequested,
+    GamingOn,
+    GamingOff,
+    /// Detail: until when.
+    KeepAwakeSet,
+    KeepAwakeEnded,
+}
+
+impl EventKind {
+    /// About the web UI itself rather than the PC; left out of the overview.
+    pub fn is_admin(self) -> bool {
+        matches!(
+            self,
+            Self::PasswordChanged | Self::SettingSaved | Self::SettingReset
+        )
+    }
+}
+
+/// How long the "keep awake" buttons keep the PC awake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KeepAwakeChoice {
+    #[serde(rename = "1h")]
+    OneHour,
+    #[serde(rename = "4h")]
+    FourHours,
+    #[serde(rename = "8h")]
+    EightHours,
+    /// Until 8 o'clock the next morning, in the NAS's time zone.
+    #[serde(rename = "morning")]
+    Morning,
+    /// Ends keeping awake.
+    #[serde(rename = "off")]
+    Off,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PcView {
     Unknown,
@@ -202,8 +257,7 @@ pub enum SleepView {
 pub struct EventView {
     /// Local time text.
     pub time: String,
-    /// The event's kind, e.g. `wake_sent`.
-    pub kind: String,
+    pub kind: EventKind,
     pub detail: Option<String>,
 }
 
@@ -225,9 +279,8 @@ pub async fn set_gaming(enabled: bool) -> Result<(), ServerFnError> {
     backend().set_gaming(enabled).await.map_err(bad_request)
 }
 
-/// `choice` is `1h`, `4h`, `8h`, `morning` (until 8 o'clock) or `off`.
 #[server(prefix = "/admin/api", endpoint = "keep-awake")]
-pub async fn keep_awake(choice: String) -> Result<(), ServerFnError> {
+pub async fn keep_awake(choice: KeepAwakeChoice) -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().keep_awake(&choice).map_err(bad_request)
+    backend().keep_awake(choice).map_err(bad_request)
 }

@@ -12,6 +12,10 @@ use std::{
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use strata_admin_ui::{
+    api::PcView,
+    labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
+};
 
 use crate::{
     agent::{AgentClient, PcStatus, SleepAnswer},
@@ -32,6 +36,18 @@ pub enum PcState {
     Waking,
     Awake,
     Gaming,
+}
+
+impl From<PcState> for PcView {
+    fn from(pc: PcState) -> Self {
+        match pc {
+            PcState::Unknown => Self::Unknown,
+            PcState::Asleep => Self::Asleep,
+            PcState::Waking => Self::Waking,
+            PcState::Awake => Self::Awake,
+            PcState::Gaming => Self::Gaming,
+        }
+    }
 }
 
 /// What a request should do right now.
@@ -71,6 +87,14 @@ fn loaded_default() -> bool {
     true
 }
 
+/// The PC service refused to sleep.
+#[derive(Clone, Debug)]
+pub struct Refusal {
+    pub reason: String,
+    /// When it is asked again.
+    pub retry_at: SystemTime,
+}
+
 struct Inner {
     pc: PcState,
     last_activity: Instant,
@@ -81,8 +105,8 @@ struct Inner {
     last_healthy: Option<Instant>,
     sleep_accepted_at: Option<Instant>,
     next_sleep_attempt: Option<Instant>,
-    /// Why the PC service last refused to sleep and when it is asked again.
-    refused: Option<(String, SystemTime)>,
+    /// The last refusal, until something happens.
+    refused: Option<Refusal>,
     /// Wall-clock time, so it can be saved and survive a restart.
     keep_awake_until: Option<SystemTime>,
 }
@@ -101,6 +125,50 @@ impl Inner {
         self.last_request = Some(SystemTime::now());
     }
 
+    /// The PC is up. Woken or gaming just ended: the idle time starts now.
+    /// Unknown before (just started): it keeps running from the start.
+    fn mark_awake(&mut self) {
+        match self.pc {
+            PcState::Awake => {}
+            PcState::Unknown => self.pc = PcState::Awake,
+            _ => {
+                self.pc = PcState::Awake;
+                self.touch();
+            }
+        }
+    }
+
+    /// Notes the PC service's answer: gaming mode, a sleeping PC (no answer,
+    /// unless Strata answers or a wake-up runs) or a PC that is up. True if
+    /// the PC is up and not in gaming mode.
+    fn note_pc_status(
+        &mut self,
+        status: Option<&PcStatus>,
+        strata_answers: bool,
+        settling: bool,
+    ) -> bool {
+        match status {
+            None => {
+                if !strata_answers && self.pc != PcState::Waking {
+                    self.pc = PcState::Asleep;
+                }
+                false
+            }
+            Some(s) if s.gaming_mode => {
+                self.pc = PcState::Gaming;
+                false
+            }
+            // A PC that just accepted sleep may still answer.
+            Some(_) if settling => false,
+            // `ensure_awake` ends a wake-up once Strata answers.
+            Some(_) if self.pc == PcState::Waking => true,
+            Some(_) => {
+                self.mark_awake();
+                true
+            }
+        }
+    }
+
     fn kept_awake(&self) -> bool {
         self.keep_awake_until.is_some_and(|t| t > SystemTime::now())
     }
@@ -112,7 +180,7 @@ pub struct Snapshot {
     pub in_flight: usize,
     pub last_activity_at: SystemTime,
     pub last_request: Option<SystemTime>,
-    pub refused: Option<(String, SystemTime)>,
+    pub refused: Option<Refusal>,
     pub keep_awake_until: Option<SystemTime>,
 }
 
@@ -318,11 +386,7 @@ impl AppState {
         }
         if matches!(health, Health::Up { .. }) {
             inner.last_healthy = Some(Instant::now());
-            if inner.pc != PcState::Awake {
-                inner.pc = PcState::Awake;
-                // Count idle time from the moment the PC is known to be up.
-                inner.touch();
-            }
+            inner.mark_awake();
         }
         health
     }
@@ -336,21 +400,8 @@ impl AppState {
         }
         let status = self.pc_status(&agent).await;
         let mut inner = self.inner.lock().unwrap();
-        match &status {
-            Some(s) if s.gaming_mode => inner.pc = PcState::Gaming,
-            Some(_)
-                if matches!(
-                    inner.pc,
-                    PcState::Asleep | PcState::Unknown | PcState::Gaming
-                ) =>
-            {
-                // Woken by hand or gaming just ended: start counting now.
-                inner.pc = PcState::Awake;
-                inner.touch();
-            }
-            None if !strata_answers && inner.pc != PcState::Waking => inner.pc = PcState::Asleep,
-            _ => {}
-        }
+        let settling = Self::settling(&inner, self.cfg().sleep_settle);
+        inner.note_pc_status(status.as_ref(), strata_answers, settling);
         status
     }
 
@@ -405,20 +456,9 @@ impl AppState {
                 }
             }
             let settling = Self::settling(&self.inner.lock().unwrap(), cfg.sleep_settle);
-            if !pc_answers && last_wol.is_none_or(|t| t.elapsed() >= cfg.wol_resend) {
-                let Some(mac) = cfg.pc_mac else {
-                    tracing::warn!("Keine MAC-Adresse bekannt, der PC kann nicht geweckt werden");
-                    self.set_pc(PcState::Unknown);
-                    return Err(WakeError::NoMac);
-                };
-                match wol::send(mac, cfg.wol_addr).await {
-                    Ok(()) if last_wol.is_none() => {
-                        self.events.record(EventKind::WakeSent, None);
-                    }
-                    Ok(()) => {}
-                    Err(e) => tracing::warn!("Weckpaket nicht gesendet: {e}"),
-                }
-                last_wol = Some(Instant::now());
+            if !pc_answers && let Err(e) = self.send_wake_packet(&cfg, &mut last_wol).await {
+                self.set_pc(PcState::Unknown);
+                return Err(e);
             }
             if !settling && self.strata_healthy().await {
                 let waited = started.elapsed();
@@ -437,6 +477,29 @@ impl AppState {
         }
     }
 
+    /// Sends a magic packet unless the last one is younger than `WOL_RESEND_SECS`;
+    /// the first one of a wake-up is recorded.
+    async fn send_wake_packet(
+        &self,
+        cfg: &Config,
+        last_wol: &mut Option<Instant>,
+    ) -> Result<(), WakeError> {
+        if last_wol.is_some_and(|t| t.elapsed() < cfg.wol_resend) {
+            return Ok(());
+        }
+        let Some(mac) = cfg.pc_mac else {
+            tracing::warn!("{NO_MAC}");
+            return Err(WakeError::NoMac);
+        };
+        match wol::send(mac, cfg.wol_addr).await {
+            Ok(()) if last_wol.is_none() => self.events.record(EventKind::WakeSent, None),
+            Ok(()) => {}
+            Err(e) => tracing::warn!("Weckpaket nicht gesendet: {e}"),
+        }
+        *last_wol = Some(Instant::now());
+        Ok(())
+    }
+
     /// One pass of the idle check: asks the PC to sleep when nothing has
     /// happened for `idle_timeout`.
     pub async fn idle_tick(&self) {
@@ -450,27 +513,8 @@ impl AppState {
         {
             let mut inner = self.inner.lock().unwrap();
             let settling = Self::settling(&inner, cfg.sleep_settle);
-            match &status {
-                None if inner.pc != PcState::Waking => {
-                    inner.pc = PcState::Asleep;
-                    return;
-                }
-                None => return,
-                Some(s) if s.gaming_mode => {
-                    inner.pc = PcState::Gaming;
-                    return;
-                }
-                Some(_) if settling => return,
-                Some(_) => {
-                    if matches!(
-                        inner.pc,
-                        PcState::Asleep | PcState::Unknown | PcState::Gaming
-                    ) {
-                        // Woken by hand or gaming just ended: start counting now.
-                        inner.pc = PcState::Awake;
-                        inner.touch();
-                    }
-                }
+            if !inner.note_pc_status(status.as_ref(), false, settling) {
+                return;
             }
             if self.in_flight.load(Ordering::SeqCst) > 0
                 || inner.last_activity.elapsed() < cfg.idle_timeout
@@ -503,7 +547,10 @@ impl AppState {
             }
             Ok(SleepAnswer::Refused(reason)) => {
                 inner.next_sleep_attempt = Some(Instant::now() + retry);
-                inner.refused = Some((reason.clone(), SystemTime::now() + retry));
+                inner.refused = Some(Refusal {
+                    reason: reason.clone(),
+                    retry_at: SystemTime::now() + retry,
+                });
                 drop(inner);
                 self.events
                     .record(EventKind::SleepRefused, Some(reason.clone()));
@@ -534,19 +581,10 @@ impl AppState {
                 }
                 return Ok(());
             }
-            if last_wol.is_none_or(|t| t.elapsed() >= cfg.wol_resend) {
-                let Some(mac) = cfg.pc_mac else {
-                    return Err(WakeError::NoMac);
-                };
-                if last_wol.is_none() {
-                    self.set_pc(PcState::Waking);
-                    self.events.record(EventKind::WakeSent, None);
-                }
-                if let Err(e) = wol::send(mac, cfg.wol_addr).await {
-                    tracing::warn!("Weckpaket nicht gesendet: {e}");
-                }
-                last_wol = Some(Instant::now());
+            if last_wol.is_none() && cfg.pc_mac.is_some() {
+                self.set_pc(PcState::Waking);
             }
+            self.send_wake_packet(&cfg, &mut last_wol).await?;
             if started.elapsed() >= cfg.wake_timeout {
                 self.set_pc(PcState::Unknown);
                 self.events.record(EventKind::WakeTimeout, None);
@@ -556,21 +594,31 @@ impl AppState {
         }
     }
 
-    /// Switches gaming mode on the PC, waking it first if needed. Switching
-    /// it off starts the idle time again, so the PC sleeps after the session.
-    pub async fn set_gaming(&self, enabled: bool) -> anyhow::Result<()> {
+    /// Switches gaming mode on the PC, waking it first if needed (recorded
+    /// with `by`). Switching it off starts the idle time again, so the PC
+    /// sleeps after the session.
+    pub async fn set_gaming(&self, enabled: bool, by: &str) -> anyhow::Result<()> {
         let agent = self.agent();
         if !agent.configured() {
-            anyhow::bail!("Kein PC-Dienst eingerichtet (PC_AGENT_URL).");
+            anyhow::bail!(NO_AGENT);
         }
         if self.pc_status(&agent).await.is_none() {
             if !enabled {
                 anyhow::bail!("Der PC schläft, der Gaming-Modus ist also schon aus.");
             }
+            let cfg = self.cfg();
+            if cfg.strata_url.is_none() {
+                anyhow::bail!(NOT_CONFIGURED);
+            }
+            if cfg.pc_mac.is_none() {
+                anyhow::bail!(NO_MAC);
+            }
+            self.events.record(
+                EventKind::WakeRequested,
+                Some(format!("für Gaming-Modus, {by}")),
+            );
             self.wake_until_agent().await.map_err(|e| match e {
-                WakeError::NoMac => {
-                    anyhow::anyhow!("Keine MAC-Adresse bekannt, der PC kann nicht geweckt werden.")
-                }
+                WakeError::NoMac => anyhow::anyhow!(NO_MAC),
                 _ => anyhow::anyhow!("Der PC ist nicht rechtzeitig aufgewacht."),
             })?;
         }

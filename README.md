@@ -35,6 +35,9 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
   Wecken mit `503` und `no_mac`.
 - **Leerlauf:** 15 min ohne Anfrage und ohne offene Antwort, dann Schlafen-
   Anfrage an den PC-Dienst. Lehnt er ab, fragt der Proxy nach 1 min erneut.
+- **MAC-Adresse:** Der PC-Dienst meldet sie selbst; der Proxy merkt sie sich in
+  `/data/pc-mac` und weckt damit. `PC_MAC` braucht es nur für den allerersten
+  Start, bevor der PC-Dienst je geantwortet hat.
 - **Verlauf:** Weck- und Schlafereignisse in `/data/events.jsonl`.
 
 ## Auf dem NAS starten

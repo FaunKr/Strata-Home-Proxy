@@ -10,8 +10,14 @@ NAS) und von 127.0.0.1 an.
 ## `GET /status`
 
 ```json
-{ "gaming_mode": false, "strata_running": true, "user_idle_secs": 1840 }
+{ "gaming_mode": false, "strata_running": true, "user_idle_secs": 1840, "mac": "AA:BB:CC:DD:EE:FF" }
 ```
+
+`mac` ist die MAC-Adresse der Netzwerkkarte, über die die Anfrage kam (also
+die, die das Weckpaket empfangen muss), oder der Wert `mac` aus der
+Konfiguration. Ist sie unbekannt, fehlt das Feld. Der Proxy merkt sich die
+gemeldete MAC in `DATA_DIR` und weckt damit; sie hat Vorrang vor `PC_MAC` und
+der Einstellungsseite.
 
 Antwortet der Dienst nicht, geht der Proxy davon aus, dass der PC schläft,
 und weckt ihn.

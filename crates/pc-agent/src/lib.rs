@@ -5,9 +5,9 @@ pub mod agent;
 pub mod config;
 pub mod platform;
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-pub use agent::{Agent, Status};
+pub use agent::{Agent, Peer, Status};
 pub use config::Config;
 
 const WATCHDOG_EVERY: Duration = Duration::from_secs(5);
@@ -18,7 +18,7 @@ pub async fn run(agent: Arc<Agent>) -> anyhow::Result<()> {
     tracing::info!("PC-Dienst hört auf {}", agent.cfg.listen);
     axum::serve(
         listener,
-        agent::router(agent).into_make_service_with_connect_info::<SocketAddr>(),
+        agent::router(agent).into_make_service_with_connect_info::<Peer>(),
     )
     .await?;
     Ok(())

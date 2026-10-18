@@ -40,6 +40,8 @@ pub struct FakePc {
     pub wake_mac: Mutex<Option<[u8; 6]>>,
     /// MAC in the last magic packet received.
     pub last_mac: Mutex<Option<[u8; 6]>>,
+    /// MAC the fake PC service reports in `/status`.
+    pub report_mac: Mutex<Option<String>>,
 }
 
 impl FakePc {
@@ -123,11 +125,14 @@ pub async fn agent_status(State(pc): State<Pc>) -> Response {
         // A sleeping PC does not answer; a refused status is the closest stand-in.
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    Json(json!({
+    let mut status = json!({
         "gaming_mode": pc.gaming.load(Ordering::SeqCst),
         "strata_running": pc.strata_up(),
-    }))
-    .into_response()
+    });
+    if let Some(mac) = pc.report_mac.lock().unwrap().clone() {
+        status["mac"] = json!(mac);
+    }
+    Json(status).into_response()
 }
 
 pub async fn agent_sleep(State(pc): State<Pc>) -> Response {

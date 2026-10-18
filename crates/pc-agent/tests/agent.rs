@@ -12,7 +12,7 @@ use std::{
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use serde_json::{Value, json};
-use strata_pc_agent::{Agent, Config, Status, agent::router, platform::Platform};
+use strata_pc_agent::{Agent, Config, Peer, Status, agent::router, platform::Platform};
 use tokio::net::TcpListener;
 
 #[derive(Default)]
@@ -23,6 +23,8 @@ struct Fake {
     stops: AtomicUsize,
     strata_up: AtomicBool,
     strata_busy: AtomicBool,
+    mac: Mutex<Option<[u8; 6]>>,
+    mac_lookups: AtomicUsize,
 }
 
 struct FakePlatform(Arc<Fake>);
@@ -45,6 +47,10 @@ impl Platform for FakePlatform {
         self.0.strata_up.store(false, Ordering::SeqCst);
         Ok(())
     }
+    fn mac_for(&self, _local: std::net::IpAddr) -> Option<[u8; 6]> {
+        self.0.mac_lookups.fetch_add(1, Ordering::SeqCst);
+        *self.0.mac.lock().unwrap()
+    }
 }
 
 async fn health(State(f): State<Arc<Fake>>) -> StatusCode {
@@ -65,7 +71,7 @@ async fn serve(router: Router) -> SocketAddr {
     tokio::spawn(async move {
         axum::serve(
             listener,
-            router.into_make_service_with_connect_info::<SocketAddr>(),
+            router.into_make_service_with_connect_info::<Peer>(),
         )
         .await
         .unwrap()
@@ -105,10 +111,15 @@ fn config(strata: SocketAddr, dir: &Path) -> Config {
         restart_after_secs: 0,
         load_time_secs: 1,
         state_dir: Some(dir.to_path_buf()),
+        mac: None,
     }
 }
 
 async fn setup(name: &str) -> Setup {
+    setup_with(name, |_| {}).await
+}
+
+async fn setup_with(name: &str, tweak: impl FnOnce(&mut Config)) -> Setup {
     let fake = Arc::new(Fake::default());
     fake.strata_up.store(true, Ordering::SeqCst);
     *fake.idle.lock().unwrap() = Duration::from_secs(3600);
@@ -122,7 +133,9 @@ async fn setup(name: &str) -> Setup {
     let dir = std::env::temp_dir().join(format!("strata-pc-agent-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let agent = Agent::new(config(strata, &dir), Box::new(FakePlatform(fake.clone())));
+    let mut cfg = config(strata, &dir);
+    tweak(&mut cfg);
+    let agent = Agent::new(cfg, Box::new(FakePlatform(fake.clone())));
     let addr = serve(router(agent.clone())).await;
     Setup {
         fake,
@@ -291,4 +304,42 @@ async fn healthy_strata_is_left_alone() {
     }
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
     assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+}
+
+async fn status_json(s: &Setup) -> Value {
+    client()
+        .get(format!("{}/status", s.url))
+        .bearer_auth("geheim")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn status_reports_the_mac_of_the_network_card() {
+    let s = setup("mac").await;
+    *s.fake.mac.lock().unwrap() = Some([0xaa, 0xbb, 0xcc, 1, 2, 3]);
+    assert_eq!(status_json(&s).await["mac"], "AA:BB:CC:01:02:03");
+    // Looked up once, then reused.
+    assert_eq!(status_json(&s).await["mac"], "AA:BB:CC:01:02:03");
+    assert_eq!(s.fake.mac_lookups.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn status_leaves_out_an_unknown_mac() {
+    let s = setup("no-mac").await;
+    let status = status_json(&s).await;
+    assert!(status.get("mac").is_none(), "{status}");
+    assert_eq!(status["gaming_mode"], false);
+}
+
+#[tokio::test]
+async fn configured_mac_replaces_the_found_one() {
+    let s = setup_with("mac-config", |c| c.mac = Some("11-22-33-44-55-66".into())).await;
+    *s.fake.mac.lock().unwrap() = Some([9; 6]);
+    assert_eq!(status_json(&s).await["mac"], "11:22:33:44:55:66");
+    assert_eq!(s.fake.mac_lookups.load(Ordering::SeqCst), 0);
 }

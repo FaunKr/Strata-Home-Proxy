@@ -13,9 +13,9 @@ use reqwest::Client;
 use serde::Serialize;
 
 use crate::{
-    agent::{AgentClient, SleepAnswer},
+    agent::{AgentClient, PcStatus, SleepAnswer},
     auth::Auth,
-    config::Config,
+    config::{Config, format_mac, parse_mac},
     events::{EventKind, EventLog},
     settings::Settings,
     wol,
@@ -129,6 +129,18 @@ impl AppState {
         probe.1.clone()
     }
 
+    /// Asks the PC service for its status and takes over a reported MAC.
+    async fn pc_status(&self, agent: &AgentClient) -> Option<PcStatus> {
+        let status = agent.status().await?;
+        if let Some(mac) = status.mac.as_deref().and_then(|m| parse_mac(m).ok())
+            && self.settings.set_reported_mac(mac)
+        {
+            self.events
+                .record(EventKind::MacLearned, Some(format_mac(mac)));
+        }
+        Some(status)
+    }
+
     /// Client for the PC service with the current address and token.
     pub fn agent(&self) -> AgentClient {
         let cfg = self.cfg();
@@ -194,7 +206,7 @@ impl AppState {
         if self.strata_healthy().await {
             return Readiness::Ready;
         }
-        match self.agent().status().await {
+        match self.pc_status(&self.agent()).await {
             Some(status) if status.gaming_mode => {
                 self.set_pc(PcState::Gaming);
                 Readiness::Gaming
@@ -222,7 +234,7 @@ impl AppState {
             if last_agent_check.is_none_or(|t| t.elapsed() >= AGENT_CHECK_WHILE_WAKING) {
                 last_agent_check = Some(Instant::now());
                 pc_answers = false;
-                if let Some(status) = self.agent().status().await {
+                if let Some(status) = self.pc_status(&self.agent()).await {
                     if status.gaming_mode {
                         self.set_pc(PcState::Gaming);
                         return Err(WakeError::Gaming);
@@ -271,7 +283,7 @@ impl AppState {
         if !agent.configured() {
             return;
         }
-        let status = agent.status().await;
+        let status = self.pc_status(&agent).await;
         let now = Instant::now();
         {
             let mut inner = self.inner.lock().unwrap();

@@ -1,0 +1,6 @@
+[env]
+# Leptos reads this when compiling (option_env!): without it the page asks for
+# `admin-ui_bg.wasm`, but cargo-leptos builds `admin-ui.wasm`. So a proxy built
+# by `cargo build` or `cargo test` serves the UI just like one from
+# `cargo leptos build` or the Docker image (same value there).
+LEPTOS_OUTPUT_NAME = "admin-ui"

@@ -11,6 +11,10 @@ pub fn label(key: &str) -> Label {
             "Strata-Adresse",
             "Basis-URL von Strata auf dem PC, z. B. http://192.168.1.50:8080.",
         ),
+        "STRATA_API_KEY" => (
+            "API-Key von Strata",
+            "Setzt der Proxy bei jeder Anfrage an Strata ein; Clients nutzen ihre eigenen API-Keys. Wird nie angezeigt.",
+        ),
         "PC_MAC" => (
             "MAC-Adresse des PCs",
             "Netzwerkkarte, die das Weckpaket empfängt. Meldet der PC-Dienst seine MAC, gilt diese.",

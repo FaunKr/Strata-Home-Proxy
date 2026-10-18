@@ -16,7 +16,7 @@ use axum::{
     Json, Router,
     body::{Body, Bytes},
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -42,6 +42,27 @@ pub struct FakePc {
     pub last_mac: Mutex<Option<[u8; 6]>>,
     /// MAC the fake PC service reports in `/status`.
     pub report_mac: Mutex<Option<String>>,
+    /// `authorization` and `x-api-key` of the last API request Strata got.
+    pub api_auth: Mutex<Option<Auth>>,
+    /// The same for the last `/health` call.
+    pub health_auth: Mutex<Option<Auth>>,
+}
+
+/// Credential headers as Strata saw them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Auth {
+    pub authorization: Option<String>,
+    pub x_api_key: Option<String>,
+}
+
+impl Auth {
+    fn of(headers: &HeaderMap) -> Self {
+        let get = |name: &str| headers.get(name).map(|v| v.to_str().unwrap().to_string());
+        Self {
+            authorization: get("authorization"),
+            x_api_key: get("x-api-key"),
+        }
+    }
 }
 
 impl FakePc {
@@ -55,7 +76,8 @@ impl FakePc {
 
 pub type Pc = Arc<FakePc>;
 
-pub async fn health(State(pc): State<Pc>) -> StatusCode {
+pub async fn health(State(pc): State<Pc>, headers: HeaderMap) -> StatusCode {
+    *pc.health_auth.lock().unwrap() = Some(Auth::of(&headers));
     if pc.strata_up() {
         StatusCode::OK
     } else {
@@ -84,10 +106,15 @@ pub fn sse(events: Vec<String>, pause_after_first: Duration) -> Response {
         .unwrap()
 }
 
-pub async fn messages(State(pc): State<Pc>, Json(body): Json<Value>) -> Response {
+pub async fn messages(
+    State(pc): State<Pc>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
     if !pc.strata_up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    *pc.api_auth.lock().unwrap() = Some(Auth::of(&headers));
     pc.api_requests.fetch_add(1, Ordering::SeqCst);
     let pause = Duration::from_millis(body["pause_ms"].as_u64().unwrap_or(0));
     if body["stream"].as_bool() == Some(true) {
@@ -103,10 +130,11 @@ pub async fn messages(State(pc): State<Pc>, Json(body): Json<Value>) -> Response
     Json(json!({"type": "message", "content": [{"type": "text", "text": "Hallo"}]})).into_response()
 }
 
-pub async fn chat(State(pc): State<Pc>, Json(body): Json<Value>) -> Response {
+pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
     if !pc.strata_up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    *pc.api_auth.lock().unwrap() = Some(Auth::of(&headers));
     pc.api_requests.fetch_add(1, Ordering::SeqCst);
     if body["stream"].as_bool() == Some(true) {
         return sse(
@@ -197,6 +225,7 @@ pub async fn serve_strata(pc: Pc) -> SocketAddr {
     .await
 }
 
+#[derive(Clone)]
 pub struct Setup {
     pub pc: Pc,
     pub state: Arc<AppState>,
@@ -218,6 +247,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     let mut cfg = Config {
         listen_addr: "127.0.0.1:0".parse().unwrap(),
         strata_url: Some(format!("http://{strata}")),
+        strata_api_key: None,
         pc_mac: Some(MAC),
         wol_addr: wol,
         pc_agent_url: Some(format!("http://{agent}")),
@@ -246,9 +276,9 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     }
 }
 
-pub async fn post_json(url: &str, path: &str, body: Value) -> reqwest::Response {
+pub async fn post_json(s: &Setup, path: &str, body: Value) -> reqwest::Response {
     reqwest::Client::new()
-        .post(format!("{url}{path}"))
+        .post(format!("{}{path}", s.url))
         .json(&body)
         .send()
         .await

@@ -91,6 +91,24 @@ fn copy_headers(from: &HeaderMap, drop_length: bool) -> HeaderMap {
     out
 }
 
+/// Credentials of the client. They are meant for the proxy and never reach
+/// Strata, which gets the proxy's own key instead.
+const CLIENT_CREDENTIALS: [&str; 2] = ["authorization", "x-api-key"];
+
+/// The request headers for Strata: the client's, minus hop-by-hop headers and
+/// its credentials, plus the Strata key if one is set.
+fn upstream_headers(from: &HeaderMap, strata_key: Option<&str>) -> HeaderMap {
+    let mut out = copy_headers(from, true);
+    for name in CLIENT_CREDENTIALS {
+        out.remove(name);
+    }
+    if let Some(value) = strata_key.and_then(|k| HeaderValue::from_str(&format!("Bearer {k}")).ok())
+    {
+        out.insert(header::AUTHORIZATION, value);
+    }
+    out
+}
+
 fn is_streaming(body: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(body)
         .ok()
@@ -167,14 +185,18 @@ struct Incoming {
 }
 
 async fn send_upstream(st: &AppState, req: &Incoming) -> reqwest::Result<reqwest::Response> {
+    let cfg = st.cfg();
     // Checked before forwarding; an empty base only fails if it was unset since.
-    let strata = st.cfg().strata_url.clone().unwrap_or_default();
+    let strata = cfg.strata_url.as_deref().unwrap_or_default();
     st.upstream
         .request(
             req.method.clone(),
             format!("{strata}{}", req.path_and_query),
         )
-        .headers(copy_headers(&req.headers, true))
+        .headers(upstream_headers(
+            &req.headers,
+            cfg.strata_api_key.as_deref(),
+        ))
         .body(req.body.clone())
         .send()
         .await

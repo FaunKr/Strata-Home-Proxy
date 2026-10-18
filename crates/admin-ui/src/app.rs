@@ -335,7 +335,7 @@ fn SettingRow(entry: SettingEntry) -> impl IntoView {
             .unwrap_or_default()
     };
     let placeholder = if entry.secret {
-        "Neues Token (leer = entfernen)"
+        "Neuer Wert (leer = entfernen)"
     } else if entry.optional {
         "leer lassen = nicht gesetzt"
     } else {

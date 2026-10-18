@@ -51,7 +51,7 @@ async fn shows_every_value_with_its_origin() {
     let view = settings(&mut b).await;
     assert_eq!(view["persistent"], true);
     assert_eq!(view["configured"], true);
-    assert_eq!(view["entries"].as_array().unwrap().len(), 16);
+    assert_eq!(view["entries"].as_array().unwrap().len(), 17);
     assert!(!view.to_string().contains("DATA_DIR"));
     assert_eq!(entry(&view, "STRATA_URL")["source"], "Env");
     assert_eq!(entry(&view, "STRATA_URL")["value"], "http://pc:8080");
@@ -128,7 +128,7 @@ async fn saved_strata_url_applies_at_once_and_reset_restores_it() {
 
     let resp = save(&mut b, "STRATA_URL", &format!("http://{other_strata}")).await;
     assert_eq!(resp.status(), 200);
-    post_json(&s.url, "/v1/messages", serde_json::json!({})).await;
+    post_json(&s, "/v1/messages", serde_json::json!({})).await;
     assert_eq!(other.api_requests.load(Ordering::SeqCst), 1);
     assert_eq!(
         entry(&settings(&mut b).await, "STRATA_URL")["source"],
@@ -137,7 +137,7 @@ async fn saved_strata_url_applies_at_once_and_reset_restores_it() {
 
     let resp = b.call("reset-setting", &[("key", "STRATA_URL")]).await;
     assert_eq!(resp.status(), 200);
-    post_json(&s.url, "/v1/messages", serde_json::json!({})).await;
+    post_json(&s, "/v1/messages", serde_json::json!({})).await;
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 1);
     assert_ne!(
         entry(&settings(&mut b).await, "STRATA_URL")["source"],
@@ -150,7 +150,7 @@ async fn saved_idle_timeout_brings_sleep_forward() {
     use std::{sync::atomic::Ordering, time::Duration};
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
-    post_json(&s.url, "/v1/messages", serde_json::json!({})).await;
+    post_json(&s, "/v1/messages", serde_json::json!({})).await;
     assert_eq!(save(&mut b, "IDLE_TIMEOUT_SECS", "1").await.status(), 200);
     tokio::time::sleep(Duration::from_millis(1300)).await;
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);

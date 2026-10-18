@@ -175,8 +175,11 @@ impl AppState {
         let Some(strata) = &cfg.strata_url else {
             return false;
         };
-        let url = format!("{strata}/health");
-        let ok = matches!(self.probe(&cfg).get(url).send().await, Ok(r) if r.status().is_success());
+        let mut req = self.probe(&cfg).get(format!("{strata}/health"));
+        if let Some(key) = &cfg.strata_api_key {
+            req = req.bearer_auth(key);
+        }
+        let ok = matches!(req.send().await, Ok(r) if r.status().is_success());
         if ok {
             let mut inner = self.inner.lock().unwrap();
             if !Self::settling(&inner, cfg.sleep_settle) {

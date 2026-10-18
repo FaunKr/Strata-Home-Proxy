@@ -36,6 +36,20 @@ const KEPT_LINES: usize = 20;
 /// Strata's port and network access, as the proxy expects them.
 const STRATA_PORT: &str = "8080";
 const STRATA_HOST: &str = "0.0.0.0";
+/// The engine flag setup loads the speed projection's control vector with.
+const PROJECTION_VECTOR_FLAG: &str = "--control-vector-scaled";
+/// The flags setup writes after it, with their values.
+const PROJECTION_FLAGS: [(&str, &[&str]); 3] = [
+    ("--control-vector-layer-range", &["4", "44"]),
+    ("--cvec-mode", &["project"]),
+    ("--cvec-dir", &["per-layer"]),
+];
+/// Strata's vector, in the Strata folder.
+const PROJECTION_VECTOR: [&str; 3] = [
+    "data",
+    "experimental-speed-projection",
+    "Qwen3.8-Flash-Next-experimental-speed-projection.gguf",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,6 +61,7 @@ pub enum JobKind {
     Update,
     Benchmark,
     SetKey,
+    SetSpeedProjection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +144,10 @@ pub enum JobRequest {
     SetKey {
         api_key: String,
     },
+    SetSpeedProjection {
+        model: String,
+        on: bool,
+    },
 }
 
 /// Why a job was not started: a value outside the catalog (400), or a state
@@ -166,6 +185,10 @@ enum Plan {
     SetKey {
         api_key: String,
     },
+    SetSpeedProjection {
+        id: String,
+        on: bool,
+    },
 }
 
 impl Plan {
@@ -178,15 +201,17 @@ impl Plan {
             Self::Update => JobKind::Update,
             Self::Benchmark { .. } => JobKind::Benchmark,
             Self::SetKey { .. } => JobKind::SetKey,
+            Self::SetSpeedProjection { .. } => JobKind::SetSpeedProjection,
         }
     }
 
     fn model(&self) -> Option<String> {
         match self {
             Self::Install { size, .. } | Self::AddModel { size, .. } => Some(size.id()),
-            Self::Activate { id } | Self::Delete { id } | Self::Benchmark { id } => {
-                Some(id.clone())
-            }
+            Self::Activate { id }
+            | Self::Delete { id }
+            | Self::Benchmark { id }
+            | Self::SetSpeedProjection { id, .. } => Some(id.clone()),
             Self::Update | Self::SetKey { .. } => None,
         }
     }
@@ -443,6 +468,12 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             strata_installed(dir)?;
             Ok(Plan::SetKey { api_key })
         }
+        JobRequest::SetSpeedProjection { model, on } => {
+            let id = installed_model(dir, &model)?;
+            let size = catalog::by_id(&id).expect("installed_model checks the catalog");
+            check_speed_projection(size, true)?;
+            Ok(Plan::SetSpeedProjection { id, on })
+        }
     }
 }
 
@@ -560,6 +591,7 @@ async fn run(agent: &Arc<Agent>, plan: Plan) -> Outcome {
         Plan::Update => update(agent).await,
         Plan::Benchmark { id } => benchmark(agent, &id).await,
         Plan::SetKey { api_key } => set_key(agent, api_key).await,
+        Plan::SetSpeedProjection { id, on } => set_speed_projection(agent, &id, on).await,
     };
     match result {
         Ok(result) => Outcome::Done(result),
@@ -810,7 +842,7 @@ async fn benchmark(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step>
     .await?;
     set_step(agent, "Benchmark läuft (etwa 10 min)");
     let dir = agent.cfg.strata_dir.clone();
-    let config = dir.join(format!("strata-{}.json", id.to_lowercase()));
+    let config = config_path(&dir, id);
     let spec = CommandSpec {
         program: dir.join("BENCH.bat"),
         args: vec!["--config".into(), config.display().to_string()],
@@ -874,32 +906,18 @@ async fn set_key(agent: &Arc<Agent>, api_key: String) -> Result<Option<String>, 
     Ok(None)
 }
 
-/// Sets `api_key` in each model config (`strata-*.json` with `exe` and
-/// `args`, as Strata's own tools tell them apart), keeping everything else.
+/// Sets `api_key` in each model config, keeping everything else.
 fn write_key(dir: &Path, key: &str) -> Result<(), String> {
     // Every config is read first: one that does not parse stops the change
     // before any has the new key.
     let mut changed = Vec::new();
     for id in installed_models(dir) {
         let path = dir.join(format!("strata-{id}.json"));
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| format!("{} nicht lesbar: {e}", path.display()))?;
-        let mut cfg =
-            serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
-                .map_err(|e| format!("{} ist kein gültiges JSON: {e}", path.display()))?;
-        let Some(fields) = cfg.as_object_mut() else {
+        let Some((text, mut cfg)) = read_config(&path)? else {
             continue;
         };
-        if !fields.contains_key("exe") || !fields.get("args").is_some_and(|a| a.is_array()) {
-            continue;
-        }
-        fields.insert("api_key".into(), key.into());
-        // As Strata writes it (`json.dumps(cfg, indent=1)`).
-        let mut out = Vec::new();
-        let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
-        let mut ser = serde_json::Serializer::with_formatter(&mut out, formatter);
-        serde::Serialize::serialize(&cfg, &mut ser).expect("config serializes");
-        changed.push((path, text, String::from_utf8(out).expect("JSON is UTF-8")));
+        cfg.insert("api_key".into(), key.into());
+        changed.push((path, text, config_text(cfg)));
     }
     for (i, (path, _, new)) in changed.iter().enumerate() {
         if let Err(e) = crate::write_replacing(path, new) {
@@ -911,6 +929,132 @@ fn write_key(dir: &Path, key: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Switches the speed projection in a model's config, with the flags setup
+/// writes for it; everything else in the config stays. The active model
+/// restarts with it once Strata has no request at work.
+async fn set_speed_projection(
+    agent: &Arc<Agent>,
+    id: &str,
+    on: bool,
+) -> Result<Option<String>, Step> {
+    set_step(agent, "Konfiguration ändern");
+    let dir = agent.cfg.strata_dir.clone();
+    let model = id.to_string();
+    tokio::task::spawn_blocking(move || write_speed_projection(&dir, &model, on))
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))??;
+    // The engine reads its flags at the start: the active model starts again.
+    if active_model(agent).as_deref() == Some(id) {
+        wait_idle(agent).await?;
+        set_step(agent, "Strata neu starten");
+        agent.stop_strata();
+        restart_strata(agent).await;
+    }
+    Ok(None)
+}
+
+fn write_speed_projection(dir: &Path, id: &str, on: bool) -> Result<(), String> {
+    let path = config_path(dir, id);
+    let (_, mut cfg) = read_config(&path)?
+        .ok_or_else(|| format!("{} ist keine Modell-Konfiguration", path.display()))?;
+    let vector: PathBuf = PROJECTION_VECTOR
+        .iter()
+        .fold(dir.to_path_buf(), |p, part| p.join(part));
+    if on && !vector.is_file() {
+        return Err(format!(
+            "Der Steuervektor der Speed-Projection fehlt: {}",
+            vector.display()
+        ));
+    }
+    let args = cfg["args"].as_array_mut().expect("read_config checks args");
+    without_speed_projection(args);
+    if on {
+        args.push(PROJECTION_VECTOR_FLAG.into());
+        args.push(format!("{}:1.0", vector.display()).into());
+        for (flag, values) in PROJECTION_FLAGS {
+            args.push(flag.into());
+            args.extend(values.iter().map(|&v| serde_json::Value::from(v)));
+        }
+    }
+    // Without its own start script Strata starts the config touched last:
+    // the change keeps the time, so the same model stays active.
+    let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    crate::write_replacing(&path, &config_text(cfg))
+        .map_err(|e| format!("{} nicht geschrieben: {e}", path.display()))?;
+    if let Some(time) = modified {
+        let kept = std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|f| f.set_modified(time));
+        if let Err(e) = kept {
+            tracing::warn!("Änderungszeit von {} nicht behalten: {e}", path.display());
+        }
+    }
+    Ok(())
+}
+
+/// Takes setup's speed projection flags out of `args`, each with its values,
+/// whatever they are.
+fn without_speed_projection(args: &mut Vec<serde_json::Value>) {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut values = 0;
+    for arg in args.drain(..) {
+        if let Some(n) = arg.as_str().and_then(projection_flag_values) {
+            values = n;
+        } else if values > 0 && !arg.as_str().is_some_and(|a| a.starts_with("--")) {
+            values -= 1;
+        } else {
+            values = 0;
+            kept.push(arg);
+        }
+    }
+    *args = kept;
+}
+
+/// How many values one of setup's speed projection flags takes.
+fn projection_flag_values(flag: &str) -> Option<usize> {
+    if flag == PROJECTION_VECTOR_FLAG {
+        return Some(1);
+    }
+    PROJECTION_FLAGS
+        .iter()
+        .find(|(f, _)| *f == flag)
+        .map(|(_, values)| values.len())
+}
+
+/// `strata-<id>.json`, as setup names it.
+fn config_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!("strata-{}.json", id.to_lowercase()))
+}
+
+/// A model config with its text as read, or `None` for a `strata-*.json`
+/// that is none: model configs have `exe` and an `args` array, as Strata's
+/// own tools tell them apart.
+fn read_config(path: &Path) -> Result<Option<(String, ConfigFields)>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("{} nicht lesbar: {e}", path.display()))?;
+    let cfg = serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
+        .map_err(|e| format!("{} ist kein gültiges JSON: {e}", path.display()))?;
+    let serde_json::Value::Object(fields) = cfg else {
+        return Ok(None);
+    };
+    if !fields.contains_key("exe") || !fields.get("args").is_some_and(|a| a.is_array()) {
+        return Ok(None);
+    }
+    Ok(Some((text, fields)))
+}
+
+type ConfigFields = serde_json::Map<String, serde_json::Value>;
+
+/// A config as Strata writes it (`json.dumps(cfg, indent=1)`).
+fn config_text(cfg: ConfigFields) -> String {
+    let mut out = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+    let mut ser = serde_json::Serializer::with_formatter(&mut out, formatter);
+    serde::Serialize::serialize(&cfg, &mut ser).expect("config serializes");
+    String::from_utf8(out).expect("JSON is UTF-8")
 }
 
 /// Whether Strata's Git source has commits this folder lacks; asked in the
@@ -1340,6 +1484,7 @@ fn kind_text(kind: JobKind) -> &'static str {
         JobKind::Update => "Update",
         JobKind::Benchmark => "Benchmark",
         JobKind::SetKey => "Strata-Key setzen",
+        JobKind::SetSpeedProjection => "Speed-Projection umschalten",
     }
 }
 
@@ -1386,6 +1531,8 @@ pub struct InstalledModel {
     pub size: Option<String>,
     pub disk_bytes: u64,
     pub active: bool,
+    /// Its config loads a control vector, Strata's or another one.
+    pub speed_projection: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1414,6 +1561,7 @@ pub fn view(agent: &Agent) -> StrataView {
             InstalledModel {
                 disk_bytes: model_paths(cfg, &id)[..2].iter().map(|p| dir_size(p)).sum(),
                 active: active.as_deref() == Some(id.as_str()),
+                speed_projection: has_speed_projection(dir, &id),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,
@@ -1458,6 +1606,19 @@ pub fn view(agent: &Agent) -> StrataView {
         benchmark: load_benchmark(agent),
         job: agent.jobs.current(),
     }
+}
+
+/// Whether a model's config loads a control vector; a config that cannot
+/// be read has none.
+fn has_speed_projection(dir: &Path, id: &str) -> bool {
+    read_config(&config_path(dir, id))
+        .ok()
+        .flatten()
+        .is_some_and(|(_, cfg)| {
+            cfg["args"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v == PROJECTION_VECTOR_FLAG))
+        })
 }
 
 fn dir_size(dir: &Path) -> u64 {

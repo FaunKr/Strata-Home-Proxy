@@ -204,6 +204,10 @@ fn body(form: &StrataJobForm, key: Option<&str>) -> serde_json::Value {
             }
         }
         StrataJobKind::Activate | StrataJobKind::Delete => put("model", json!(form.model)),
+        StrataJobKind::SetSpeedProjection => {
+            put("model", json!(form.model));
+            put("on", json!(form.speed_projection));
+        }
         StrataJobKind::Update | StrataJobKind::Benchmark | StrataJobKind::SetKey => {}
     }
     if let Some(key) = key {

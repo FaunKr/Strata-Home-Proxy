@@ -27,7 +27,8 @@ pub enum EventKind {
     SettingReset,
     /// The PC service reported a new MAC address (detail: the address).
     MacLearned,
-    // Buttons on the overview; their outcome is recorded as above.
+    // Buttons on the overview. Wake and sleep are recorded when pressed, their
+    // outcome as above; the others once they took effect.
     WakeRequested,
     SleepRequested,
     GamingOn,

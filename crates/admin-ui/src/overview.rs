@@ -323,36 +323,48 @@ fn Controls(overview: Overview, actions: Actions) -> impl IntoView {
 /// The live connection in the browser.
 #[cfg(feature = "hydrate")]
 mod client {
-    use std::time::Duration;
+    use std::{cell::RefCell, rc::Rc, time::Duration};
 
     use leptos::{
         prelude::*,
+        task::spawn_local,
         wasm_bindgen::{JsCast, closure::Closure},
     };
     use send_wrapper::SendWrapper;
     use web_sys::{EventSource, MessageEvent};
 
     use super::{Live, Overview};
+    use crate::api::{Session, get_session};
 
     const STREAM: &str = "/admin/api/overview-stream";
     const RETRY: Duration = Duration::from_secs(5);
 
+    /// The open stream with its handlers, dropped together.
+    struct Open {
+        source: EventSource,
+        _on_message: Closure<dyn FnMut(MessageEvent)>,
+        _on_error: Closure<dyn FnMut()>,
+    }
+
+    /// Browser-only state; `None` once the page is gone.
+    type Shared = Rc<RefCell<Option<Option<Open>>>>;
+
     /// Follows the overview stream while the page is shown. The browser
     /// reconnects by itself after a dropped connection; after a refused one
-    /// (e.g. a restart of the proxy) it tries again every few seconds.
+    /// it tries again every few seconds, or shows the login when the session
+    /// has ended.
     pub fn connect(live: Live) {
-        let current = StoredValue::new(None::<SendWrapper<EventSource>>);
-        let alive = StoredValue::new(true);
-        open(live, current, alive);
+        let shared: Shared = Rc::new(RefCell::new(Some(None)));
+        open(live, Rc::clone(&shared));
         let ticker = set_interval_with_handle(
             move || live.since.update(|s| *s += 1),
             Duration::from_secs(1),
         )
         .ok();
+        let shared = SendWrapper::new(shared);
         on_cleanup(move || {
-            alive.set_value(false);
-            if let Some(source) = current.get_value() {
-                source.close();
+            if let Some(Some(o)) = shared.borrow_mut().take() {
+                o.source.close();
             }
             if let Some(t) = ticker {
                 t.clear();
@@ -360,13 +372,14 @@ mod client {
         });
     }
 
-    fn open(
-        live: Live,
-        current: StoredValue<Option<SendWrapper<EventSource>>>,
-        alive: StoredValue<bool>,
-    ) {
-        if !alive.get_value() {
+    fn open(live: Live, shared: Shared) {
+        let mut slot = shared.borrow_mut();
+        // The page is gone: no new connection, and no signals to set.
+        let Some(current) = slot.as_mut() else {
             return;
+        };
+        if let Some(old) = current.take() {
+            old.source.close();
         }
         let Ok(source) = EventSource::new(STREAM) else {
             return;
@@ -382,16 +395,30 @@ mod client {
             }
         });
         source.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-        on_message.forget();
         let watched = source.clone();
+        let again = Rc::clone(&shared);
         let on_error = Closure::<dyn FnMut()>::new(move || {
+            if again.borrow().is_none() {
+                return;
+            }
             live.lost.set(true);
             if watched.ready_state() == EventSource::CLOSED {
-                set_timeout(move || open(live, current, alive), RETRY);
+                let again = Rc::clone(&again);
+                spawn_local(async move {
+                    match get_session().await {
+                        Ok(Session::Anonymous | Session::MustChange) => {
+                            let _ = window().location().reload();
+                        }
+                        _ => set_timeout(move || open(live, again), RETRY),
+                    }
+                });
             }
         });
         source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-        on_error.forget();
-        current.set_value(Some(SendWrapper::new(source)));
+        *current = Some(Open {
+            source,
+            _on_message: on_message,
+            _on_error: on_error,
+        });
     }
 }

@@ -179,7 +179,8 @@ async fn shows_running_and_waiting_requests_from_metrics() {
         v["strata"]["Busy"],
         json!({"processing": 2, "deferred": 1, "tokens_per_sec": 38.5})
     );
-    assert_eq!(v["sleep"], "Busy");
+    // Requests that bypass the proxy do not hold off the sleep request.
+    assert!(countdown(&v).is_some(), "{v}");
     assert_eq!(
         s.pc.metrics_auth.lock().unwrap().as_deref(),
         Some("Bearer geheim")
@@ -391,7 +392,8 @@ async fn gaming_on_wakes_a_sleeping_pc_first() {
     assert!(s.pc.gaming.load(Ordering::SeqCst));
     let mut live = Live::open(&b).await;
     let v = live.until("Gaming", |v| v["pc"] == "Gaming").await;
-    assert!(kind_list(&v).contains(&"gaming_on".into()));
+    let kinds = kind_list(&v);
+    assert_eq!(kinds[..3], ["gaming_on", "awake", "wake_sent"], "{kinds:?}");
 }
 
 #[tokio::test]
@@ -423,6 +425,11 @@ async fn gaming_on_reports_a_failed_wake() {
     assert_eq!(resp.status(), 400);
     assert!(resp.text().await.unwrap().contains("nicht rechtzeitig"));
     assert!(!s.pc.gaming.load(Ordering::SeqCst));
+    let kinds: Vec<_> = kinds(&s.state)
+        .into_iter()
+        .map(|k| format!("{k:?}"))
+        .collect();
+    assert!(!kinds.contains(&"GamingOn".into()), "{kinds:?}");
 }
 
 // --- Keep awake (#21) ---
@@ -500,4 +507,10 @@ async fn keep_awake_rejects_unknown_choices() {
         b.call("keep-awake", &[("choice", "99h")]).await.status(),
         400
     );
+    // Ending what was never set is no event.
+    assert_eq!(
+        b.call("keep-awake", &[("choice", "off")]).await.status(),
+        200
+    );
+    assert!(s.state.events.latest_pc(10).is_empty());
 }

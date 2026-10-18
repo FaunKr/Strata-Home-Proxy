@@ -13,7 +13,7 @@ pub fn label(key: &str) -> Label {
         ),
         "STRATA_API_KEY" => (
             "API-Key von Strata",
-            "Nur damit die Übersicht /metrics lesen kann (laufende und wartende Anfragen, Token/s). Wird nie angezeigt.",
+            "Derselbe Key wie in Strata. Der Proxy nutzt ihn für seine eigenen Aufrufe bei Strata, z. B. für laufende und wartende Anfragen und Token/s auf der Übersicht. Wird nie angezeigt.",
         ),
         "PC_MAC" => (
             "MAC-Adresse des PCs",

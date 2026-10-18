@@ -271,9 +271,9 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
                 (Some(until), _) => SleepView::KeptAwake {
                     until: until.clone(),
                 },
-                _ if snap.in_flight > 0 || matches!(strata, StrataView::Busy { .. }) => {
-                    SleepView::Busy
-                }
+                // Only requests through the proxy hold off the sleep request;
+                // others make the PC service refuse it, which shows up below.
+                _ if snap.in_flight > 0 => SleepView::Busy,
                 (None, Some((reason, retry))) if *retry > now => SleepView::Refused {
                     reason: reason.clone(),
                     retry_at: clock::unix(*retry),

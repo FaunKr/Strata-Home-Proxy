@@ -159,14 +159,16 @@ impl Backend for UiBackend {
     fn set_gaming(&self, enabled: bool) -> BoxFuture<'static, Result<(), String>> {
         let state = Arc::clone(&self.0);
         async move {
-            let kind = if enabled {
-                EventKind::GamingOn
-            } else {
-                EventKind::GamingOff
-            };
-            state.events.record(kind, Some(BY_UI.into()));
             state.overview.refresh_now();
             let result = state.set_gaming(enabled).await.map_err(|e| e.to_string());
+            if result.is_ok() {
+                let kind = if enabled {
+                    EventKind::GamingOn
+                } else {
+                    EventKind::GamingOff
+                };
+                state.events.record(kind, Some(BY_UI.into()));
+            }
             state.overview.refresh_now();
             result
         }
@@ -181,10 +183,12 @@ impl Backend for UiBackend {
             "8h" => now + Duration::from_secs(8 * 3600),
             "morning" => UNIX_EPOCH + Duration::from_secs(clock::next_morning_unix()),
             "off" => {
+                if self.0.snapshot().keep_awake_until.is_some() {
+                    self.0
+                        .events
+                        .record(EventKind::KeepAwakeEnded, Some(BY_UI.into()));
+                }
                 self.0.set_keep_awake(None);
-                self.0
-                    .events
-                    .record(EventKind::KeepAwakeEnded, Some(BY_UI.into()));
                 return Ok(());
             }
             _ => return Err(format!("Unbekannte Auswahl {choice:?}.")),

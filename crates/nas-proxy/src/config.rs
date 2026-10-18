@@ -12,8 +12,8 @@ pub struct Config {
     /// Base URL of Strata on the PC, e.g. `http://192.168.1.50:8080` (`STRATA_URL`).
     /// Without it the proxy is not set up yet and answers API requests with 503.
     pub strata_url: Option<String>,
-    /// Strata's API key (`STRATA_API_KEY`), only for reading `/metrics` for the
-    /// overview; clients send their own key with their requests.
+    /// Strata's API key (`STRATA_API_KEY`): the one key for the proxy's own
+    /// calls to Strata, so far reading `/metrics/prometheus` for the overview.
     pub strata_api_key: Option<String>,
     /// MAC address of the PC's network card (`PC_MAC`). Without it the PC
     /// cannot be woken.

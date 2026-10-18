@@ -95,6 +95,12 @@ impl Inner {
         self.refused = None;
     }
 
+    /// A forwarded request started or ended.
+    fn note_request(&mut self) {
+        self.touch();
+        self.last_request = Some(SystemTime::now());
+    }
+
     fn kept_awake(&self) -> bool {
         self.keep_awake_until.is_some_and(|t| t > SystemTime::now())
     }
@@ -509,12 +515,23 @@ impl AppState {
 
     /// Sends magic packets until the PC service answers (not Strata), for
     /// switching gaming mode on a sleeping PC.
+    /// Shares the wake lock with `ensure_awake`, so only one wake-up runs.
     pub async fn wake_until_agent(&self) -> Result<(), WakeError> {
+        let _lock = self.wake_lock.lock().await;
         let started = Instant::now();
         let mut last_wol: Option<Instant> = None;
         loop {
             let cfg = self.cfg();
-            if self.pc_status(&self.agent()).await.is_some() {
+            // A PC that just accepted sleep may still answer: not awake yet.
+            let settling = Self::settling(&self.inner.lock().unwrap(), cfg.sleep_settle);
+            if !settling && self.pc_status(&self.agent()).await.is_some() {
+                self.set_pc(PcState::Awake);
+                if last_wol.is_some() {
+                    self.events.record(
+                        EventKind::Awake,
+                        Some(format!("nach {:.1} s", started.elapsed().as_secs_f64())),
+                    );
+                }
                 return Ok(());
             }
             if last_wol.is_none_or(|t| t.elapsed() >= cfg.wol_resend) {
@@ -587,20 +604,14 @@ pub struct ActivityGuard(Arc<AppState>);
 impl ActivityGuard {
     pub fn new(state: &Arc<AppState>) -> Self {
         state.in_flight.fetch_add(1, Ordering::SeqCst);
-        let mut inner = state.inner.lock().unwrap();
-        inner.touch();
-        inner.last_request = Some(SystemTime::now());
-        drop(inner);
+        state.inner.lock().unwrap().note_request();
         Self(Arc::clone(state))
     }
 }
 
 impl Drop for ActivityGuard {
     fn drop(&mut self) {
-        let mut inner = self.0.inner.lock().unwrap();
-        inner.touch();
-        inner.last_request = Some(SystemTime::now());
-        drop(inner);
+        self.0.inner.lock().unwrap().note_request();
         self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
     }
 }

@@ -25,8 +25,8 @@ use leptos_axum::{
 
 use crate::{
     api::{
-        ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, Session, SettingsView, StrataJobForm,
-        StrataPage,
+        ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, PcSetupCommand, Session, SettingsView,
+        StrataJobForm, StrataPage,
     },
     app::{App, shell},
 };
@@ -76,6 +76,9 @@ pub trait Backend: Send + Sync + 'static {
     /// it refuses.
     fn start_strata_job(&self, form: StrataJobForm) -> BoxFuture<'static, Result<(), String>>;
     fn cancel_strata_job(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// A new one-time code and the command with it, for the PC to reach the
+    /// NAS at `host` (as the browser did); a message if that is not usable.
+    fn pc_setup_command(&self, host: &str) -> Result<PcSetupCommand, String>;
 }
 
 pub type SharedBackend = Arc<dyn Backend>;
@@ -100,6 +103,13 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
             let (name, value) = pair.trim().split_once('=')?;
             (name == COOKIE).then(|| value.to_string())
         })
+}
+
+/// The `Host` the browser used to reach the page.
+pub async fn request_host() -> Option<String> {
+    let headers: HeaderMap = leptos_axum::extract().await.ok()?;
+    let host = headers.get(header::HOST)?.to_str().ok()?;
+    Some(host.to_string())
 }
 
 pub async fn client_ip() -> IpAddr {

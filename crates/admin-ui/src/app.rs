@@ -15,6 +15,7 @@ use crate::{
     },
     labels::label,
     overview::OverviewPage,
+    pc_setup::PcSetupPage,
     strata::StrataPage,
 };
 
@@ -86,6 +87,10 @@ pub fn App() -> impl IntoView {
                         view=|| view! { <Protected><StrataPage /></Protected> }
                     />
                     <Route
+                        path=path!("/admin/pc-dienst")
+                        view=|| view! { <Protected><PcSetupPage /></Protected> }
+                    />
+                    <Route
                         path=path!("/admin/settings")
                         view=|| view! { <Protected><SettingsPage /></Protected> }
                     />
@@ -110,6 +115,7 @@ fn Nav() -> impl IntoView {
         <nav>
             <A href="/admin/">"Übersicht"</A>
             <A href="/admin/strata">"Strata"</A>
+            <A href="/admin/pc-dienst">"PC-Dienst"</A>
             <A href="/admin/settings">"Einstellungen"</A>
             <A href="/admin/api-keys">"API-Keys"</A>
             <A href="/admin/password">"Passwort"</A>

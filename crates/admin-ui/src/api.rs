@@ -5,7 +5,9 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ssr")]
-use crate::server::{backend, clear_cookie, client_ip, require_login, set_cookie, token};
+use crate::server::{
+    backend, clear_cookie, client_ip, request_host, require_login, set_cookie, token,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Session {
@@ -161,6 +163,27 @@ pub async fn revoke_api_key(name: String, prefix: String) -> Result<(), ServerFn
         .map_err(bad_request)
 }
 
+/// The one-line command that sets up the PC service, with its one-time code.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PcSetupCommand {
+    pub command: String,
+    pub code: String,
+    /// How long the code is valid.
+    pub valid_minutes: u64,
+    /// Removes the PC service again; needs no code.
+    pub uninstall_command: String,
+}
+
+/// A new one-time code; the previous one stops working.
+#[server(prefix = "/admin/api", endpoint = "pc-setup-command")]
+pub async fn new_pc_setup_command() -> Result<PcSetupCommand, ServerFnError> {
+    require_login(false).await?;
+    let host = request_host().await;
+    backend()
+        .pc_setup_command(host.as_deref().unwrap_or_default())
+        .map_err(bad_request)
+}
+
 #[cfg(feature = "ssr")]
 fn bad_request(message: String) -> ServerFnError {
     expect_context::<leptos_axum::ResponseOptions>()
@@ -239,6 +262,8 @@ pub enum EventKind {
     StrataJobCancelled,
     /// The proxy made a new Strata key and Strata took it over.
     StrataKeyChanged,
+    /// A PC signed up with a one-time code (detail: the PC service's address).
+    PcServiceRegistered,
 }
 
 impl EventKind {

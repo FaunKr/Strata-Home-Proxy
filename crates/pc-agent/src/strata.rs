@@ -36,6 +36,8 @@ const KEPT_LINES: usize = 20;
 /// Strata's port and network access, as the proxy expects them.
 const STRATA_PORT: &str = "8080";
 const STRATA_HOST: &str = "0.0.0.0";
+/// The engine flag setup loads the speed projection's control vector with.
+const ESP_VECTOR_FLAG: &str = "--control-vector-scaled";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1400,6 +1402,8 @@ pub struct InstalledModel {
     pub size: Option<String>,
     pub disk_bytes: u64,
     pub active: bool,
+    /// Its config loads a control vector, Strata's or another one.
+    pub speed_projection: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1428,6 +1432,7 @@ pub fn view(agent: &Agent) -> StrataView {
             InstalledModel {
                 disk_bytes: model_paths(cfg, &id)[..2].iter().map(|p| dir_size(p)).sum(),
                 active: active.as_deref() == Some(id.as_str()),
+                speed_projection: has_speed_projection(dir, &id),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,
@@ -1472,6 +1477,19 @@ pub fn view(agent: &Agent) -> StrataView {
         benchmark: load_benchmark(agent),
         job: agent.jobs.current(),
     }
+}
+
+/// Whether a model's config loads a control vector; a config that cannot
+/// be read has none.
+fn has_speed_projection(dir: &Path, id: &str) -> bool {
+    read_config(&dir.join(format!("strata-{}.json", id.to_lowercase())))
+        .ok()
+        .flatten()
+        .is_some_and(|(_, cfg)| {
+            cfg["args"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v == ESP_VECTOR_FLAG))
+        })
 }
 
 fn dir_size(dir: &Path) -> u64 {

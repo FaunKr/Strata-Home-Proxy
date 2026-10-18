@@ -638,6 +638,15 @@ fn ModelRow(model: StrataModel, actions: Actions, blocked: Signal<bool>) -> impl
                 <p class="strong">{model.id.clone()}</p>
                 <p class="muted small">{meta}</p>
             </div>
+            {(model.speed_projection == Some(true))
+                .then(|| {
+                    view! {
+                        <span class="badge is-warn">
+                            <span class="dot"></span>
+                            "Speed projection on"
+                        </span>
+                    }
+                })}
             {model
                 .active
                 .then(|| {

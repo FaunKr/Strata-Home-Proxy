@@ -482,3 +482,46 @@ async fn the_setup_offers_the_speed_projection_with_what_it_does() {
     assert!(html.contains("Experimental speed projection"), "{html}");
     assert!(html.contains("refusal direction"), "{html}");
 }
+
+// --- #76 the speed projection of installed models ---
+
+/// Strata with IQ3_XXS (active) and swift-IQ2_XS; `projection` is what the
+/// PC service says about IQ3_XXS, `None` like an older one.
+fn with_two_models(projection: Option<bool>) -> Value {
+    let mut info = strata_info(true);
+    info["families"] = json!([
+        {"id": "qwen", "title": "Qwen3.8-Flash-Next", "speed_projection": true},
+        {"id": "swift", "title": "Swift 1.5", "speed_projection": false},
+    ]);
+    let mut qwen = json!({"id": "IQ3_XXS", "family": "qwen", "size": "IQ3_XXS",
+        "disk_bytes": 81_000_000_000u64, "active": true});
+    let mut swift = json!({"id": "swift-IQ2_XS", "family": "swift", "size": "IQ2_XS",
+        "disk_bytes": 40_000_000_000u64, "active": false});
+    if let Some(on) = projection {
+        qwen["speed_projection"] = json!(on);
+        swift["speed_projection"] = json!(false);
+    }
+    info["models"] = json!([qwen, swift]);
+    info
+}
+
+#[tokio::test]
+async fn an_installed_model_shows_its_speed_projection() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_two_models(Some(true)));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(html.matches("Speed projection on").count(), 1, "{html}");
+}
+
+#[tokio::test]
+async fn without_word_from_the_pc_service_no_speed_projection_shows() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_two_models(None));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("IQ3_XXS"), "{html}");
+    assert!(!html.contains("Speed projection on"), "{html}");
+}

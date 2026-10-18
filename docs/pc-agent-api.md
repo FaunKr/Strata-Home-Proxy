@@ -105,6 +105,10 @@ freier Platz, letzter Benchmark und der laufende oder letzte Vorgang.
 Enthält nie den Strata-Key. Fragt nebenbei höchstens einmal pro Stunde Git,
 ob es eine neuere Strata-Version gibt (`update_available`).
 
+Jedes installierte Modell sagt mit `speed_projection`, ob seine Konfiguration
+einen Steuervektor lädt (`--control-vector-scaled`, Stratas oder ein eigener).
+Ein älterer PC-Dienst lässt das Feld weg.
+
 ### `POST /strata/jobs`
 
 Startet einen Vorgang, Antwort `202` mit dem Vorgang. `400 {"reason": …}`

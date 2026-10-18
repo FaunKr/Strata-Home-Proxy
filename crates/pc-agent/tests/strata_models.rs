@@ -676,3 +676,45 @@ async fn without_a_start_script_any_installed_model_can_be_activated() {
     assert_eq!(model(&get(&s, "/strata").await, "IQ3_XXS")["active"], true);
     assert!(s.fake.starts.load(Ordering::SeqCst) >= 1);
 }
+
+// --- #76 the speed projection of installed models ---
+
+const ESP_FLAGS: [&str; 7] = [
+    "--control-vector-layer-range",
+    "4",
+    "44",
+    "--cvec-mode",
+    "project",
+    "--cvec-dir",
+    "per-layer",
+];
+
+/// `strata-<id>.json` with these engine args.
+fn config_with_args(s: &Setup, id: &str, args: Value) {
+    write(
+        s.agent.cfg.strata_dir.join(format!("strata-{id}.json")),
+        &json!({"exe": "C:/Strata/engine/strata.exe", "args": args, "port": 8080, "api_key": OLD_KEY})
+            .to_string(),
+    );
+}
+
+#[tokio::test]
+async fn the_page_shows_whether_a_model_has_the_speed_projection() {
+    let s = setup("models-esp-view").await;
+    installed(&s);
+    let mut args = vec![
+        json!("--native"),
+        json!("b.gguf"),
+        json!("--control-vector-scaled"),
+    ];
+    args.push(json!("D:/eigen/vektor.gguf:1.0"));
+    args.extend(ESP_FLAGS.map(|f| json!(f)));
+    config_with_args(&s, "coder-iq1_m", json!(args));
+    let view = get(&s, "/strata").await;
+    assert_eq!(
+        model(&view, "coder-IQ1_M")["speed_projection"],
+        true,
+        "{view}"
+    );
+    assert_eq!(model(&view, "IQ3_XXS")["speed_projection"], false, "{view}");
+}

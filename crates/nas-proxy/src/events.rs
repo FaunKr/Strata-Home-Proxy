@@ -21,6 +21,12 @@ pub enum EventKind {
     SleepAccepted,
     SleepRefused,
     GamingRejected,
+    PasswordChanged,
+    /// Detail: the setting's name, never its value.
+    SettingSaved,
+    SettingReset,
+    /// The PC service reported a new MAC address (detail: the address).
+    MacLearned,
 }
 
 #[derive(Clone, Debug, Serialize)]

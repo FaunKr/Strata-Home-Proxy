@@ -1,7 +1,7 @@
 //! Everything that touches the operating system, behind a trait so the
 //! service logic can be tested with a fake PC.
 
-use std::{path::Path, process::Command, time::Duration};
+use std::{net::IpAddr, path::Path, process::Command, time::Duration};
 
 use anyhow::{Result, bail};
 
@@ -12,6 +12,11 @@ pub trait Platform: Send + Sync + 'static {
     fn suspend(&self) -> Result<()>;
     fn start_strata(&self, program: &Path, args: &[String]) -> Result<()>;
     fn stop_strata(&self, processes: &[String]) -> Result<()>;
+    /// MAC address of the network card that holds `local`, the address the
+    /// NAS connected to. `None` if unknown. May be slow; the caller caches it.
+    fn mac_for(&self, _local: IpAddr) -> Option<[u8; 6]> {
+        None
+    }
 }
 
 pub struct System;
@@ -113,6 +118,26 @@ mod imp {
     }
 }
 
+/// Asks Windows which adapter holds `local` and reads its MAC address.
+#[cfg(windows)]
+fn windows_mac_for(local: IpAddr) -> Option<[u8; 6]> {
+    let script = format!(
+        "(Get-NetAdapter -InterfaceIndex (Get-NetIPAddress -IPAddress '{local}' -ErrorAction Stop).InterfaceIndex).MacAddress"
+    );
+    let out = imp::hidden(Command::new("powershell").args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        &script,
+    ]))
+    .output()
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    crate::config::parse_mac(String::from_utf8_lossy(&out.stdout).trim())
+}
+
 impl Platform for System {
     fn user_idle(&self) -> Duration {
         imp::user_idle()
@@ -125,6 +150,10 @@ impl Platform for System {
     }
     fn stop_strata(&self, processes: &[String]) -> Result<()> {
         imp::stop(processes)
+    }
+    #[cfg(windows)]
+    fn mac_for(&self, local: IpAddr) -> Option<[u8; 6]> {
+        windows_mac_for(local)
     }
 }
 

@@ -1,7 +1,27 @@
 [workspace]
 resolver = "3"
-members = ["crates/nas-proxy", "crates/pc-agent"]
+members = ["crates/admin-ui", "crates/nas-proxy", "crates/pc-agent"]
 
 [profile.release]
 lto = "thin"
 strip = true
+
+# Builds the web UI with cargo-leptos: the server part is linked into the NAS
+# proxy, the browser part is compiled to WebAssembly under site/admin/pkg.
+[[workspace.metadata.leptos]]
+name = "admin-ui"
+output-name = "admin-ui"
+bin-package = "strata-nas-proxy"
+lib-package = "strata-admin-ui"
+lib-features = ["hydrate"]
+site-root = "target/site"
+site-pkg-dir = "admin/pkg"
+style-file = "crates/admin-ui/style/main.css"
+lib-profile-release = "wasm-release"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

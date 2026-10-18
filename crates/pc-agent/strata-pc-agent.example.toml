@@ -42,3 +42,7 @@ restart_after_secs = 60
 
 # Nach einem Start so lange warten, bis das Modell geladen ist.
 load_time_secs = 240
+
+# MAC-Adresse, die dem NAS gemeldet wird. Normalerweise leer lassen: der Dienst
+# meldet dann die der Netzwerkkarte, über die das NAS ihn erreicht.
+#mac = "AA-BB-CC-DD-EE-FF"

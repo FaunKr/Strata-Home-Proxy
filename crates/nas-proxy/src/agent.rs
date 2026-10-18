@@ -10,6 +10,9 @@ pub struct PcStatus {
     pub gaming_mode: bool,
     #[serde(default)]
     pub strata_running: bool,
+    /// MAC address of the PC's network card, if the service reports it.
+    #[serde(default)]
+    pub mac: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

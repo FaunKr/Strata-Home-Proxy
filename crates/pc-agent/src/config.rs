@@ -55,6 +55,10 @@ pub struct Config {
     /// Folder for the gaming flag and the log; next to the program by default.
     #[serde(default)]
     pub state_dir: Option<PathBuf>,
+    /// MAC address reported to the NAS instead of the one found on the network
+    /// card the NAS connects to (`AA:BB:CC:DD:EE:FF` or `AA-BB-…`).
+    #[serde(default)]
+    pub mac: Option<String>,
 }
 
 fn default_listen() -> SocketAddr {
@@ -83,6 +87,9 @@ impl Config {
         let mut cfg: Self = toml::from_str(&raw)
             .with_context(|| format!("Konfiguration {} ist fehlerhaft", path.display()))?;
         cfg.strata_url = cfg.strata_url.trim_end_matches('/').to_string();
+        if let Some(mac) = &cfg.mac {
+            parse_mac(mac).with_context(|| format!("mac = {mac:?} ist keine MAC-Adresse"))?;
+        }
         if cfg.state_dir.is_none() {
             cfg.state_dir = path.parent().map(Path::to_path_buf);
         }
@@ -101,6 +108,26 @@ impl Config {
     pub fn local_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.listen.port())
     }
+}
+
+/// Parses `AA:BB:CC:DD:EE:FF` or `AA-BB-CC-DD-EE-FF` (the format Windows prints).
+pub fn parse_mac(raw: &str) -> Option<[u8; 6]> {
+    let parts: Vec<&str> = raw.trim().split([':', '-']).collect();
+    if parts.len() != 6 {
+        return None;
+    }
+    let mut mac = [0u8; 6];
+    for (byte, part) in mac.iter_mut().zip(parts) {
+        if part.len() != 2 {
+            return None;
+        }
+        *byte = u8::from_str_radix(part, 16).ok()?;
+    }
+    Some(mac)
+}
+
+pub fn format_mac(mac: [u8; 6]) -> String {
+    mac.map(|b| format!("{b:02X}")).join(":")
 }
 
 /// `strata-pc-agent.toml` next to the program.
@@ -122,5 +149,19 @@ mod tests {
         assert_eq!(cfg.listen.port(), 8091);
         assert_eq!(cfg.user_idle(), Duration::from_secs(600));
         assert!(!cfg.strata_processes.is_empty());
+    }
+
+    #[test]
+    fn parses_mac_addresses() {
+        assert_eq!(
+            parse_mac("aa-bb-cc-01-02-03"),
+            Some([0xaa, 0xbb, 0xcc, 1, 2, 3])
+        );
+        assert_eq!(
+            parse_mac("AA:BB:CC:01:02:03").map(format_mac).as_deref(),
+            Some("AA:BB:CC:01:02:03")
+        );
+        assert_eq!(parse_mac("aa:bb:cc"), None);
+        assert_eq!(parse_mac("zz:bb:cc:01:02:03"), None);
     }
 }

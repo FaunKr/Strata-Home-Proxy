@@ -13,9 +13,11 @@ use reqwest::Client;
 use serde::Serialize;
 
 use crate::{
-    agent::{AgentClient, SleepAnswer},
-    config::Config,
+    agent::{AgentClient, PcStatus, SleepAnswer},
+    auth::Auth,
+    config::{Config, format_mac, parse_mac},
     events::{EventKind, EventLog},
+    settings::Settings,
     wol,
 };
 
@@ -41,6 +43,8 @@ pub enum Readiness {
 pub enum WakeError {
     Gaming,
     Timeout,
+    /// No MAC address is known, so no magic packet can be sent.
+    NoMac,
 }
 
 struct Inner {
@@ -53,11 +57,13 @@ struct Inner {
 }
 
 pub struct AppState {
-    pub cfg: Config,
+    pub settings: Settings,
+    /// Password and sessions of the web UI.
+    pub auth: Auth,
     /// For forwarding; no overall timeout, since answers can take very long.
     pub upstream: Client,
-    probe: Client,
-    pub agent: AgentClient,
+    /// For `/health` and the PC service, rebuilt when `PROBE_TIMEOUT_MS` changes.
+    probe: Mutex<(Duration, Client)>,
     pub events: EventLog,
     in_flight: AtomicUsize,
     inner: Mutex<Inner>,
@@ -69,22 +75,32 @@ const HEALTH_CACHE: Duration = Duration::from_secs(5);
 /// How often the PC service is asked for its status while waiting for a wake-up.
 const AGENT_CHECK_WHILE_WAKING: Duration = Duration::from_secs(3);
 
+fn probe_client(timeout: Duration) -> Client {
+    Client::builder()
+        .connect_timeout(timeout)
+        .timeout(timeout)
+        .build()
+        .expect("HTTP client")
+}
+
 impl AppState {
+    /// `cfg` holds defaults and environment; values saved on the settings page
+    /// are loaded from its `data_dir` and override it.
     pub fn new(cfg: Config) -> Arc<Self> {
+        Self::with_settings(Settings::new(cfg, &[]))
+    }
+
+    pub fn with_settings(settings: Settings) -> Arc<Self> {
+        let cfg = settings.current();
         let upstream = Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .build()
             .expect("HTTP client");
-        let probe = Client::builder()
-            .connect_timeout(cfg.probe_timeout)
-            .timeout(cfg.probe_timeout)
-            .build()
-            .expect("HTTP client");
         Arc::new(Self {
-            agent: AgentClient::new(&cfg, probe.clone()),
+            auth: Auth::new(cfg.data_dir.clone(), cfg.ui_password.clone()),
             events: EventLog::new(cfg.data_dir.clone()),
             upstream,
-            probe,
+            probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
             inner: Mutex::new(Inner {
                 pc: PcState::Unknown,
@@ -95,8 +111,40 @@ impl AppState {
                 keep_awake_until: None,
             }),
             wake_lock: tokio::sync::Mutex::new(()),
-            cfg,
+            settings,
         })
+    }
+
+    /// The configuration in effect right now; changes on the settings page
+    /// show up in the next call.
+    pub fn cfg(&self) -> Arc<Config> {
+        self.settings.current()
+    }
+
+    fn probe(&self, cfg: &Config) -> Client {
+        let mut probe = self.probe.lock().unwrap();
+        if probe.0 != cfg.probe_timeout {
+            *probe = (cfg.probe_timeout, probe_client(cfg.probe_timeout));
+        }
+        probe.1.clone()
+    }
+
+    /// Asks the PC service for its status and takes over a reported MAC.
+    async fn pc_status(&self, agent: &AgentClient) -> Option<PcStatus> {
+        let status = agent.status().await?;
+        if let Some(mac) = status.mac.as_deref().and_then(|m| parse_mac(m).ok())
+            && self.settings.set_reported_mac(mac)
+        {
+            self.events
+                .record(EventKind::MacLearned, Some(format_mac(mac)));
+        }
+        Some(status)
+    }
+
+    /// Client for the PC service with the current address and token.
+    pub fn agent(&self) -> AgentClient {
+        let cfg = self.cfg();
+        AgentClient::new(&cfg, self.probe(&cfg))
     }
 
     pub fn pc_state(&self) -> PcState {
@@ -123,11 +171,15 @@ impl AppState {
     }
 
     async fn strata_healthy(&self) -> bool {
-        let url = format!("{}/health", self.cfg.strata_url);
-        let ok = matches!(self.probe.get(url).send().await, Ok(r) if r.status().is_success());
+        let cfg = self.cfg();
+        let Some(strata) = &cfg.strata_url else {
+            return false;
+        };
+        let url = format!("{strata}/health");
+        let ok = matches!(self.probe(&cfg).get(url).send().await, Ok(r) if r.status().is_success());
         if ok {
             let mut inner = self.inner.lock().unwrap();
-            if !Self::settling(&inner, self.cfg.sleep_settle) {
+            if !Self::settling(&inner, cfg.sleep_settle) {
                 inner.last_healthy = Some(Instant::now());
                 if inner.pc != PcState::Awake {
                     inner.pc = PcState::Awake;
@@ -143,7 +195,7 @@ impl AppState {
     pub async fn readiness(&self) -> Readiness {
         {
             let inner = self.inner.lock().unwrap();
-            if !Self::settling(&inner, self.cfg.sleep_settle)
+            if !Self::settling(&inner, self.cfg().sleep_settle)
                 && inner
                     .last_healthy
                     .is_some_and(|t| t.elapsed() < HEALTH_CACHE)
@@ -154,7 +206,7 @@ impl AppState {
         if self.strata_healthy().await {
             return Readiness::Ready;
         }
-        match self.agent.status().await {
+        match self.pc_status(&self.agent()).await {
             Some(status) if status.gaming_mode => {
                 self.set_pc(PcState::Gaming);
                 Readiness::Gaming
@@ -176,12 +228,13 @@ impl AppState {
         let mut pc_answers = false;
         self.set_pc(PcState::Waking);
         loop {
+            let cfg = self.cfg();
             // Ask the PC service now and then: gaming mode ends the wait, and an
             // answering service means the PC is up and only Strata is starting.
             if last_agent_check.is_none_or(|t| t.elapsed() >= AGENT_CHECK_WHILE_WAKING) {
                 last_agent_check = Some(Instant::now());
                 pc_answers = false;
-                if let Some(status) = self.agent.status().await {
+                if let Some(status) = self.pc_status(&self.agent()).await {
                     if status.gaming_mode {
                         self.set_pc(PcState::Gaming);
                         return Err(WakeError::Gaming);
@@ -189,9 +242,14 @@ impl AppState {
                     pc_answers = true;
                 }
             }
-            let settling = Self::settling(&self.inner.lock().unwrap(), self.cfg.sleep_settle);
-            if !pc_answers && last_wol.is_none_or(|t| t.elapsed() >= self.cfg.wol_resend) {
-                match wol::send(self.cfg.pc_mac, self.cfg.wol_addr).await {
+            let settling = Self::settling(&self.inner.lock().unwrap(), cfg.sleep_settle);
+            if !pc_answers && last_wol.is_none_or(|t| t.elapsed() >= cfg.wol_resend) {
+                let Some(mac) = cfg.pc_mac else {
+                    tracing::warn!("Keine MAC-Adresse bekannt, der PC kann nicht geweckt werden");
+                    self.set_pc(PcState::Unknown);
+                    return Err(WakeError::NoMac);
+                };
+                match wol::send(mac, cfg.wol_addr).await {
                     Ok(()) if last_wol.is_none() => {
                         self.events.record(EventKind::WakeSent, None);
                     }
@@ -208,26 +266,28 @@ impl AppState {
                 );
                 return Ok(());
             }
-            if started.elapsed() >= self.cfg.wake_timeout {
+            if started.elapsed() >= cfg.wake_timeout {
                 self.set_pc(PcState::Unknown);
                 self.events.record(EventKind::WakeTimeout, None);
                 return Err(WakeError::Timeout);
             }
-            tokio::time::sleep(self.cfg.health_poll).await;
+            tokio::time::sleep(cfg.health_poll).await;
         }
     }
 
     /// One pass of the idle check: asks the PC to sleep when nothing has
     /// happened for `idle_timeout`.
     pub async fn idle_tick(&self) {
-        if !self.agent.configured() {
+        let cfg = self.cfg();
+        let agent = self.agent();
+        if !agent.configured() {
             return;
         }
-        let status = self.agent.status().await;
+        let status = self.pc_status(&agent).await;
         let now = Instant::now();
         {
             let mut inner = self.inner.lock().unwrap();
-            let settling = Self::settling(&inner, self.cfg.sleep_settle);
+            let settling = Self::settling(&inner, cfg.sleep_settle);
             match &status {
                 None if inner.pc != PcState::Waking => {
                     inner.pc = PcState::Asleep;
@@ -251,14 +311,14 @@ impl AppState {
                 }
             }
             if self.in_flight.load(Ordering::SeqCst) > 0
-                || inner.last_activity.elapsed() < self.cfg.idle_timeout
+                || inner.last_activity.elapsed() < cfg.idle_timeout
                 || inner.keep_awake_until.is_some_and(|t| t > now)
                 || inner.next_sleep_attempt.is_some_and(|t| t > now)
             {
                 return;
             }
         }
-        match self.agent.request_sleep().await {
+        match agent.request_sleep().await {
             Ok(SleepAnswer::Accepted) => {
                 let mut inner = self.inner.lock().unwrap();
                 inner.pc = PcState::Asleep;
@@ -269,12 +329,12 @@ impl AppState {
                 self.events.record(EventKind::SleepAccepted, None);
             }
             Ok(SleepAnswer::Refused(reason)) => {
-                self.inner.lock().unwrap().next_sleep_attempt = Some(now + self.cfg.sleep_retry);
+                self.inner.lock().unwrap().next_sleep_attempt = Some(now + cfg.sleep_retry);
                 self.events.record(EventKind::SleepRefused, Some(reason));
             }
             Err(e) => {
                 tracing::warn!("Schlafen-Anfrage fehlgeschlagen: {e}");
-                self.inner.lock().unwrap().next_sleep_attempt = Some(now + self.cfg.sleep_retry);
+                self.inner.lock().unwrap().next_sleep_attempt = Some(now + cfg.sleep_retry);
             }
         }
     }
@@ -282,10 +342,9 @@ impl AppState {
     pub fn spawn_idle_loop(self: &Arc<Self>) {
         let state = Arc::clone(self);
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(state.cfg.idle_check);
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
-                tick.tick().await;
+                // Read each round, so a changed IDLE_CHECK_SECS applies at once.
+                tokio::time::sleep(state.cfg().idle_check).await;
                 state.idle_tick().await;
             }
         });

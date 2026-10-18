@@ -1,33 +1,67 @@
 //! NAS proxy for Strata: wakes the PC on demand and sends it to sleep when idle.
 
+pub mod admin;
 pub mod agent;
+pub mod auth;
 pub mod config;
 pub mod events;
+pub mod files;
 pub mod proxy;
+pub mod settings;
 pub mod state;
 pub mod wol;
 
 use std::sync::Arc;
 
-use axum::Router;
+use axum::{
+    Router,
+    extract::{Request, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 
 pub use config::Config;
+pub use settings::Settings;
 pub use state::AppState;
 
-/// The API router: every path is forwarded to Strata.
+/// The router on the API port: the web UI under `/admin/`, every other path
+/// is forwarded to Strata. UI calls never wake the PC or count as activity.
 pub fn api_router(state: Arc<AppState>) -> Router {
-    Router::new().fallback(proxy::handle).with_state(state)
+    let options = strata_admin_ui::server::options(strata_admin_ui::server::site_root());
+    let admin = strata_admin_ui::server::router(options, admin::backend(&state));
+    Router::new()
+        .merge(admin)
+        .fallback(fallback)
+        .with_state(state)
+}
+
+/// Everything the UI does not answer goes to Strata, except unknown UI paths.
+async fn fallback(state: State<Arc<AppState>>, req: Request) -> Response {
+    let path = req.uri().path();
+    if path == "/admin" || path.starts_with("/admin/") {
+        return (StatusCode::NOT_FOUND, "Nicht gefunden").into_response();
+    }
+    proxy::handle(state, req).await
 }
 
 pub async fn run(cfg: Config) -> anyhow::Result<()> {
-    let listen = cfg.listen_addr;
-    let state = AppState::new(cfg);
-    if !state.agent.configured() {
+    let state = AppState::with_settings(Settings::new(cfg, &Config::env_keys()));
+    let current = state.cfg();
+    let listen = current.listen_addr;
+    if current.strata_url.is_none() {
+        tracing::warn!("STRATA_URL fehlt: der Proxy ist nicht eingerichtet");
+    }
+    if current.pc_mac.is_none() {
+        tracing::warn!("PC_MAC fehlt: der PC kann nicht geweckt werden");
+    }
+    if current.pc_agent_url.is_none() {
         tracing::warn!("PC_AGENT_URL fehlt: kein Gaming-Modus und kein automatisches Schlafen");
     }
     state.spawn_idle_loop();
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!("API-Proxy hört auf {listen}");
-    axum::serve(listener, api_router(state)).await?;
+    // The client address is needed to slow down password guessing.
+    let app = api_router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    axum::serve(listener, app).await?;
     Ok(())
 }

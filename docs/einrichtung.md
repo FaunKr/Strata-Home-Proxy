@@ -54,7 +54,7 @@ Bevor irgendetwas anderes gebaut wird, muss das hier klappen:
    Strata muss noch nicht laufen. Per SSH auf dem NAS (MAC und Broadcast
    anpassen):
    ```sh
-   docker run --rm --network host -e STRATA_URL=http://unbenutzt \
+   docker run --rm --network host \
      -e PC_MAC=AA-BB-CC-DD-EE-FF -e WOL_ADDR=192.168.1.255:9 \
      ghcr.io/faunkr/strata-home-proxy:latest wake
    ```
@@ -87,6 +87,18 @@ New-NetFirewallRule -DisplayName "Strata nur vom NAS" -Direction Inbound -Protoc
 ## 7. Clients umstellen
 
 Erst wenn der Proxy auf dem NAS läuft (siehe README):
+
+- [ ] `http://<NAS-IP>:8080/admin/` öffnen, mit `admin` (oder `UI_PASSWORD`) anmelden und ein eigenes Passwort festlegen
+- [ ] Unter *Einstellungen* prüfen, dass Strata-Adresse, MAC und PC-Dienst stimmen
+
+Was die Weboberfläche speichert, liegt in `/data` und gilt sofort. Es geht vor
+den Umgebungsvariablen, die wiederum vor den eingebauten Standardwerten gelten.
+Einzige Ausnahme ist die MAC-Adresse: Meldet der PC-Dienst eine, gilt immer
+diese. Mit *Zurücksetzen* neben einem Feld gilt wieder Umgebung oder Standard.
+
+Passwort vergessen: `/data/admin-password.json` löschen und den Container neu
+starten. Danach gilt wieder `admin` (bzw. `UI_PASSWORD`), alle alten
+Anmeldungen sind ungültig und beim ersten Login wird ein neues Passwort verlangt.
 
 - [ ] Claude Code / Skill `local-agent`: `STRATA_URLS` auf `http://<NAS-IP>:8080`
 - [ ] Open WebUI (falls genutzt) auf die NAS-Adresse

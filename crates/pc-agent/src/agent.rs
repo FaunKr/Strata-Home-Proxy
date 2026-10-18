@@ -2,7 +2,8 @@
 //! gaming mode and the Strata watchdog.
 
 use std::{
-    net::SocketAddr,
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -13,16 +14,20 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Request, State},
+    extract::{ConnectInfo, Request, State, connect_info::Connected},
     http::{StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
+    serve::IncomingStream,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{config::Config, platform::Platform};
+use crate::{
+    config::{Config, format_mac, parse_mac},
+    platform::Platform,
+};
 
 /// Delay between answering a sleep request and going to standby, so the
 /// answer reaches the NAS first.
@@ -30,6 +35,28 @@ const SUSPEND_DELAY: Duration = Duration::from_secs(2);
 /// A gap in wall-clock time this large between two watchdog passes means the
 /// PC was asleep.
 const RESUME_GAP: Duration = Duration::from_secs(30);
+/// How long a looked-up MAC address is reused before asking the system again.
+const MAC_CACHE: Duration = Duration::from_secs(600);
+
+/// A looked-up MAC address (or none found) and when it was looked up.
+type CachedMac = (Option<[u8; 6]>, Instant);
+
+/// Both ends of a connection: the caller, and the address of this PC it
+/// reached, which names the network card the NAS sees.
+#[derive(Clone, Copy, Debug)]
+pub struct Peer {
+    pub remote: SocketAddr,
+    pub local: Option<SocketAddr>,
+}
+
+impl Connected<IncomingStream<'_, tokio::net::TcpListener>> for Peer {
+    fn connect_info(stream: IncomingStream<'_, tokio::net::TcpListener>) -> Self {
+        Self {
+            remote: *stream.remote_addr(),
+            local: stream.io().local_addr().ok(),
+        }
+    }
+}
 
 pub struct Agent {
     pub cfg: Config,
@@ -37,6 +64,7 @@ pub struct Agent {
     http: reqwest::Client,
     gaming: AtomicBool,
     watchdog: Mutex<Watchdog>,
+    macs: Mutex<HashMap<IpAddr, CachedMac>>,
 }
 
 struct Watchdog {
@@ -49,6 +77,10 @@ pub struct Status {
     pub gaming_mode: bool,
     pub strata_running: bool,
     pub user_idle_secs: u64,
+    /// MAC address of the network card the caller reached, so the NAS can
+    /// wake this PC without it being typed in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +111,7 @@ impl Agent {
                 unhealthy_since: None,
                 last_start: None,
             }),
+            macs: Mutex::new(HashMap::new()),
         })
     }
 
@@ -115,7 +148,38 @@ impl Agent {
             gaming_mode: self.gaming(),
             strata_running: self.strata_healthy().await,
             user_idle_secs: self.platform.user_idle().as_secs(),
+            mac: None,
         }
+    }
+
+    /// The status for a caller that reached this PC at `local`, with the MAC
+    /// address of that network card (or the one from the configuration).
+    pub async fn status_for(self: &Arc<Self>, local: Option<IpAddr>) -> Status {
+        let mut status = self.status().await;
+        status.mac = self.mac_for(local).await.map(format_mac);
+        status
+    }
+
+    async fn mac_for(self: &Arc<Self>, local: Option<IpAddr>) -> Option<[u8; 6]> {
+        if let Some(mac) = &self.cfg.mac {
+            return parse_mac(mac);
+        }
+        let local = local.filter(|ip| !ip.is_unspecified())?;
+        if let Some((mac, at)) = self.macs.lock().unwrap().get(&local)
+            && at.elapsed() < MAC_CACHE
+        {
+            return *mac;
+        }
+        let agent = Arc::clone(self);
+        let mac = tokio::task::spawn_blocking(move || agent.platform.mac_for(local))
+            .await
+            .ok()
+            .flatten();
+        self.macs
+            .lock()
+            .unwrap()
+            .insert(local, (mac, Instant::now()));
+        mac
     }
 
     /// Checks whether the PC may sleep; `Err` carries the reason it may not.
@@ -257,8 +321,13 @@ fn gaming_flag(cfg: &Config) -> PathBuf {
     cfg.state_dir().join("gaming-mode")
 }
 
-async fn status(State(agent): State<Arc<Agent>>) -> Json<Status> {
-    Json(agent.status().await)
+async fn status(State(agent): State<Arc<Agent>>, req: Request) -> Json<Status> {
+    let local = req
+        .extensions()
+        .get::<ConnectInfo<Peer>>()
+        .and_then(|p| p.0.local)
+        .map(|a| a.ip());
+    Json(agent.status_for(local).await)
 }
 
 async fn sleep(State(agent): State<Arc<Agent>>) -> Response {
@@ -295,8 +364,8 @@ async fn gaming(State(agent): State<Arc<Agent>>, Json(req): Json<GamingRequest>)
 async fn guard(State(agent): State<Arc<Agent>>, req: Request, next: Next) -> Response {
     let peer = req
         .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|c| c.0.ip());
+        .get::<ConnectInfo<Peer>>()
+        .map(|c| c.0.remote.ip());
     let allowed = &agent.cfg.allowed_clients;
     let peer_ok =
         allowed.is_empty() || peer.is_some_and(|ip| ip.is_loopback() || allowed.contains(&ip));

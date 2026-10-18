@@ -30,8 +30,14 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 - **Gaming-Modus:** sofort `503` mit Header `x-strata-proxy-status: gaming`.
   Wacht der PC nicht rechtzeitig auf: `504` mit `wake_timeout`. Daran kann der
   Skill `local-agent` einen Lauf zurückstellen.
+- **Nicht eingerichtet:** Ohne Strata-Adresse startet der Proxy trotzdem und
+  antwortet mit `503` und `not_configured`; ohne MAC-Adresse scheitert das
+  Wecken mit `503` und `no_mac`.
 - **Leerlauf:** 15 min ohne Anfrage und ohne offene Antwort, dann Schlafen-
   Anfrage an den PC-Dienst. Lehnt er ab, fragt der Proxy nach 1 min erneut.
+- **MAC-Adresse:** Der PC-Dienst meldet sie selbst; der Proxy merkt sie sich in
+  `/data/pc-mac` und weckt damit. `PC_MAC` braucht es nur für den allerersten
+  Start, bevor der PC-Dienst je geantwortet hat.
 - **Verlauf:** Weck- und Schlafereignisse in `/data/events.jsonl`.
 
 ## Auf dem NAS starten
@@ -59,9 +65,39 @@ ins Heimnetz. Alle Einstellungen stehen mit Erklärung in
 
 Nur ein Weckpaket senden, zum Testen: `docker compose run --rm strata-proxy wake`
 
+## Weboberfläche
+
+Unter `http://<NAS-IP>:8080/admin/`, also auf demselben Port wie die API.
+Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
+
+- **Erste Anmeldung:** Passwort `admin`, oder der Wert von `UI_PASSWORD`, falls
+  gesetzt. Danach muss ein eigenes Passwort (mindestens 8 Zeichen) festgelegt
+  werden, vorher geht nichts anderes. Es liegt als Hash in
+  `/data/admin-password.json`.
+- **Angemeldet bleiben:** 30 Tage, auch über einen Neustart. Ein Passwortwechsel
+  meldet alle anderen Geräte ab.
+- **Passwort vergessen:** `/data/admin-password.json` löschen und den Container
+  neu starten, dann gilt wieder das Standardpasswort.
+- **Einstellungen:** Jeder Wert aus [deploy/env.example](deploy/env.example)
+  außer `DATA_DIR` lässt sich dort ändern und gilt sofort, nur die Adresse des
+  Proxys (`LISTEN_ADDR`) erst nach einem Neustart. Es gilt der Wert von der
+  Seite, sonst die Umgebungsvariable, sonst die Vorgabe; „Zurücksetzen“ verwirft
+  den Wert von der Seite. Bei der MAC hat die vom PC-Dienst gemeldete Vorrang.
+  Gespeichert wird in `/data/settings.json`; ohne `DATA_DIR` warnt die Seite,
+  dass Änderungen beim Neustart verloren gehen. Das Token des PC-Dienstes wird
+  nie angezeigt.
+- Nach 5 Fehlversuchen von derselben Adresse ist die Anmeldung 1 min gesperrt.
+  `/admin/` ist überall erreichbar, wo die API erreichbar ist; das Passwort ist
+  der einzige Schutz.
+
 ## Entwickeln
 
 ```sh
 cargo test      # startet ein nachgebautes Strata, PC-Dienst und WoL-Empfänger
 cargo clippy --all-targets -- -D warnings
 ```
+
+Die Weboberfläche (Leptos, [crates/admin-ui](crates/admin-ui)) braucht für den
+Browser-Teil `rustup target add wasm32-unknown-unknown` und
+`cargo install cargo-leptos --locked`. Dann baut `cargo leptos build` Proxy und
+Oberfläche, `cargo leptos watch` startet beides und baut bei Änderungen neu.

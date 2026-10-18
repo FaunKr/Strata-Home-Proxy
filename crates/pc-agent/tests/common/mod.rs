@@ -56,7 +56,7 @@ pub struct Fake {
     pub started: Mutex<Option<(PathBuf, Vec<String>)>>,
     /// What the last stop was told to end.
     pub stopped: Mutex<Option<Vec<String>>>,
-    /// Fake commands by program file name (`git`, `START-HERE.bat`).
+    /// Fake commands by program name without `.exe` (`git`, `START-HERE.bat`).
     pub commands: Mutex<HashMap<String, FakeCommand>>,
     /// Every command run, in order.
     pub ran: Mutex<Vec<CommandSpec>>,
@@ -89,10 +89,14 @@ impl Fake {
     }
 }
 
+/// The program's name without `.exe`: under Windows the service may run
+/// `git.exe` by its full path where elsewhere it runs `git`.
 fn file_name(path: &Path) -> String {
-    path.file_name()
+    let name = path
+        .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    name.strip_suffix(".exe").map_or(name.clone(), String::from)
 }
 
 pub struct FakePlatform(pub Arc<Fake>);
@@ -121,8 +125,7 @@ impl Platform for FakePlatform {
         let fake = Arc::clone(&self.0);
         fake.ran.lock().unwrap().push(spec.clone());
         let name = file_name(&spec.program);
-        // Under Windows the service also tries `...\Git\cmd\git.exe`.
-        if (name == "git" || name == "git.exe") && fake.git_missing.load(Ordering::SeqCst) {
+        if name == "git" && fake.git_missing.load(Ordering::SeqCst) {
             anyhow::bail!("git nicht gefunden");
         }
         if name == "winget" {

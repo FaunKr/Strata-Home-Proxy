@@ -56,3 +56,20 @@ Dieser Endpunkt liefert llama-server-Namen (`llamacpp:*`, `Service.prometheus`, 
 - **`/status` und `/v1/status`:** was der Server gerade tut.
 
 Der Proxy nutzt beide nicht. Der PC-Dienst fragt `/slots` ab (siehe [pc-agent-api.md](pc-agent-api.md)).
+
+## Setup und Dateien (für die Strata-Vorgänge des PC-Dienstes)
+
+Quellen: `setup.py`, `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_bench.py`.
+
+- **Modell-ID** = Präfix der Familie + Größe: `qwen` ohne Präfix (`IQ3_XXS`), sonst `swift-`, `coder-`, `unsloth-`, `qwen36-`. Die Tabellen dazu spiegelt `crates/pc-agent/src/catalog.rs`.
+- **Setup ohne Fragen:** `START-HERE.bat` startet `.venv\Scripts\python.exe setup.py %*`. Welche Argumente der Dienst übergibt, steht in `strata.rs` (`setup`). `--setup` braucht es, sobald ein Modell installiert ist.
+- **Ausgabe von Setup:** Schritte als `=== Step N: Titel ===`, Downloads als `datei: x / y GB (p%)`, Fehler beginnen mit `[X]`.
+- **Ablage eines Modells:**
+  - `strata-<id klein>.json` (Konfiguration), `run-<id klein>.bat` (Start) und `strata-<id klein>.log` im Strata-Ordner
+  - `<data>/models/<ID>` (GGUF-Dateien, auch `.part`) und `<data>/packs/<id klein>` (Tokenizer)
+  - `<data>/mtp` teilen sich alle Modelle.
+- **Modell-Konfiguration:** ein `strata-*.json` mit `exe` und einem Array `args` (so erkennt `find_configs` in `strata_bench.py` sie). `strata-*.shared-settings.json` ist keine. Strata schreibt sie mit `json.dumps(cfg, indent=1)`. Der Key steht in `api_key`.
+- **Aktives Modell:** `run-<id>.bat` startet `serve/server.py`, das `strata.exe` startet und neu startet, wenn es stirbt; beenden also über den Ordner. Ohne eigenes Startskript startet `START-HERE.bat` die Konfiguration, die zuletzt benutzt wurde (die jüngste Änderungszeit, denn ein Start fasst sie an).
+- **Empfehlung von Setup:** ab 60 GB RAM `IQ3_XXS`, ab 44 GB `Q2_0`, ab 28 GB `coder-IQ1_M`. Kontext 64K bei 14–20 GB VRAM.
+- **Update** wie `UPDATE.bat`: `git pull --ff-only`, dann `START-HERE.bat --update` bei beendetem Strata (die Engine wird sonst nicht ersetzt). Modelldateien bleiben.
+- **Benchmark:** `BENCH.bat --config <strata-<id>.json>` nutzt ein laufendes Strata, sonst startet es selbst eines. Ergebnis ist die Zeile `  chat decode tok/s   38.50   (37.10 - 39.20, n=3)` der Tabelle am Ende. Danach folgen weitere Zeilen.

@@ -149,6 +149,33 @@ async fn install_runs_setup_with_the_fixed_values_and_starts_strata() {
 }
 
 #[tokio::test]
+async fn install_can_turn_on_the_experimental_speed_projection() {
+    let s = setup("strata-esp").await;
+    installable(&s);
+    let mut body = install();
+    body["experimental_speed_projection"] = json!(true);
+    let (code, job) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 202, "{job}");
+    assert_eq!(finished(&s).await["state"], "done");
+    let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+    assert!(
+        args.ends_with(&["--experimental-speed-projection".into(), "on".into()]),
+        "{args:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_speed_projection_is_refused_for_other_families() {
+    let s = setup("strata-esp-swift").await;
+    let body = json!({"kind": "install", "family": "swift", "size": "IQ2_XS", "context": 65536,
+        "api_key": KEY, "experimental_speed_projection": true});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 400, "{answer}");
+    assert!(answer.to_string().contains("Qwen und Coder"), "{answer}");
+    assert!(s.fake.ran.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn missing_git_is_installed_with_winget() {
     let s = setup("strata-git").await;
     installable(&s);

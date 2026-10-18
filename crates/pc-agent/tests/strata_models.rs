@@ -112,6 +112,32 @@ async fn another_model_leaves_the_active_one_active() {
 }
 
 #[tokio::test]
+async fn another_model_can_get_the_experimental_speed_projection() {
+    let s = setup("models-add-esp").await;
+    installed(&s);
+    let strata = s.agent.cfg.strata_dir.clone();
+    s.fake.command(
+        "START-HERE.bat",
+        FakeCommand {
+            creates: vec![(strata.join("strata-q2_0.json"), "{}".into())],
+            ..FakeCommand::default()
+        },
+    );
+    let done = job(
+        &s,
+        json!({"kind": "add_model", "family": "qwen", "size": "Q2_0", "context": 65536,
+            "experimental_speed_projection": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+    assert!(
+        args.ends_with(&["--experimental-speed-projection".into(), "on".into()]),
+        "{args:?}"
+    );
+}
+
+#[tokio::test]
 async fn activating_waits_for_a_running_request_and_switches_the_start_script() {
     let s = setup("models-activate").await;
     installed(&s);

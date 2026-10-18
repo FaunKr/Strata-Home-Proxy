@@ -103,6 +103,9 @@ pub enum JobRequest {
         size: String,
         context: u32,
         api_key: String,
+        /// Strata's experimental speed projection; only for qwen and coder.
+        #[serde(default)]
+        experimental_speed_projection: bool,
     },
     AddModel {
         family: String,
@@ -111,6 +114,8 @@ pub enum JobRequest {
         /// The key the proxy uses; without it the service's own.
         #[serde(default)]
         api_key: Option<String>,
+        #[serde(default)]
+        experimental_speed_projection: bool,
     },
     Activate {
         model: String,
@@ -139,11 +144,13 @@ enum Plan {
         size: &'static Size,
         context: u32,
         api_key: String,
+        speed_projection: bool,
     },
     AddModel {
         size: &'static Size,
         context: u32,
         api_key: Option<String>,
+        speed_projection: bool,
     },
     Activate {
         id: String,
@@ -328,6 +335,22 @@ pub fn start(agent: &Arc<Agent>, request: JobRequest) -> Result<Job, Refusal> {
     Ok(job)
 }
 
+/// Strata's experimental speed projection, which setup offers only for the
+/// original Qwen3.8-Flash-Next and the Coder.
+fn speed_projection(size: &Size, on: bool) -> Result<bool, Refusal> {
+    if on && !takes_speed_projection(size) {
+        return Err(Refusal::BadRequest(format!(
+            "Die experimentelle Speed-Projection gibt es nur für Qwen und Coder, nicht für {}",
+            size.id()
+        )));
+    }
+    Ok(on)
+}
+
+fn takes_speed_projection(size: &Size) -> bool {
+    matches!(size.family, "qwen" | "coder")
+}
+
 fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
     let dir = &agent.cfg.strata_dir;
     let size = |family: &str, size: &str| {
@@ -349,21 +372,29 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             size: s,
             context: c,
             api_key,
-        } => Ok(Plan::Install {
-            size: size(&family, &s)?,
-            context: context(c)?,
-            api_key: check_key(api_key)?,
-        }),
+            experimental_speed_projection: esp,
+        } => {
+            let size = size(&family, &s)?;
+            Ok(Plan::Install {
+                size,
+                context: context(c)?,
+                api_key: check_key(api_key)?,
+                speed_projection: speed_projection(size, esp)?,
+            })
+        }
         JobRequest::AddModel {
             family,
             size: s,
             context: c,
             api_key,
+            experimental_speed_projection: esp,
         } => {
+            let size = size(&family, &s)?;
             let plan = Plan::AddModel {
-                size: size(&family, &s)?,
+                size,
                 context: context(c)?,
                 api_key: api_key.map(check_key).transpose()?,
+                speed_projection: speed_projection(size, esp)?,
             };
             strata_installed(dir)?;
             Ok(plan)
@@ -510,12 +541,14 @@ async fn run(agent: &Arc<Agent>, plan: Plan) -> Outcome {
             size,
             context,
             api_key,
-        } => install(agent, size, context, api_key).await,
+            speed_projection,
+        } => install(agent, size, context, api_key, speed_projection).await,
         Plan::AddModel {
             size,
             context,
             api_key,
-        } => add_model(agent, size, context, api_key).await,
+            speed_projection,
+        } => add_model(agent, size, context, api_key, speed_projection).await,
         Plan::Activate { id } => activate(agent, &id).await,
         Plan::Delete { id } => delete(agent, &id).await,
         Plan::Update => update(agent).await,
@@ -546,6 +579,7 @@ async fn install(
     size: &Size,
     context: u32,
     api_key: String,
+    speed_projection: bool,
 ) -> Result<Option<String>, Step> {
     let dir = agent.cfg.strata_dir.clone();
     if !dir.join("setup.py").is_file() {
@@ -569,7 +603,7 @@ async fn install(
         };
         command(agent, clone, false).await?;
     }
-    setup(agent, size, context, &api_key).await?;
+    setup(agent, size, context, &api_key, speed_projection).await?;
     // A Strata started by hand ends with the old values, the new one starts
     // with the managed ones.
     agent.stop_strata();
@@ -591,12 +625,13 @@ async fn add_model(
     size: &Size,
     context: u32,
     api_key: Option<String>,
+    speed_projection: bool,
 ) -> Result<Option<String>, Step> {
     // The proxy's key first: a model with another key would answer it with 401.
     let key = api_key
         .or_else(|| agent.managed().api_key(&agent.cfg).map(String::from))
         .unwrap_or_default();
-    setup(agent, size, context, &key).await?;
+    setup(agent, size, context, &key, speed_projection).await?;
     Ok(None)
 }
 
@@ -947,7 +982,13 @@ async fn commits_behind(agent: &Agent) -> Option<u64> {
 }
 
 /// Runs Strata's setup without questions, with the fixed values and the key.
-async fn setup(agent: &Arc<Agent>, size: &Size, context: u32, api_key: &str) -> Result<(), Step> {
+async fn setup(
+    agent: &Arc<Agent>,
+    size: &Size,
+    context: u32,
+    api_key: &str,
+    speed_projection: bool,
+) -> Result<(), Step> {
     let dir = &agent.cfg.strata_dir;
     let mut args: Vec<String> = vec!["--yes".into(), "--no-start".into(), "--no-browser".into()];
     if installed_models(dir).next().is_some() {
@@ -976,9 +1017,10 @@ async fn setup(agent: &Arc<Agent>, size: &Size, context: u32, api_key: &str) -> 
         args.extend(["--api-key".into(), api_key.to_string()]);
         agent.jobs.inner.lock().unwrap().secret = Some(api_key.to_string());
     }
-    if matches!(size.family, "qwen" | "coder") {
-        // As Strata's own MCP tool sets it up.
-        args.extend(["--experimental-speed-projection".into(), "off".into()]);
+    if takes_speed_projection(size) {
+        // Always explicit: otherwise setup takes it over from an earlier install.
+        let value = if speed_projection { "on" } else { "off" };
+        args.extend(["--experimental-speed-projection".into(), value.into()]);
     }
     let spec = CommandSpec {
         program: dir.join("START-HERE.bat"),

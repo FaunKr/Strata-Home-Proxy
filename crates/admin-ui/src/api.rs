@@ -599,6 +599,7 @@ pub async fn start_strata_job(
     size: Option<String>,
     context: Option<u32>,
     model: Option<String>,
+    speed_projection: Option<bool>,
 ) -> Result<(), ServerFnError> {
     require_login(false).await?;
     let form = StrataJobForm {
@@ -607,6 +608,7 @@ pub async fn start_strata_job(
         size,
         context,
         model,
+        speed_projection: speed_projection.unwrap_or(false),
     };
     backend().start_strata_job(form).await.map_err(bad_request)
 }
@@ -625,4 +627,6 @@ pub struct StrataJobForm {
     pub size: Option<String>,
     pub context: Option<u32>,
     pub model: Option<String>,
+    /// Strata's experimental speed projection, for setup and another model.
+    pub speed_projection: bool,
 }

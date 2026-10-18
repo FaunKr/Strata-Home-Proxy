@@ -27,13 +27,17 @@ pub struct Config {
     /// Strata's API key, if it needs one for `/health` and `/slots`.
     #[serde(default)]
     pub strata_api_key: Option<String>,
-    /// What starts Strata, usually the path to `START-HERE.bat`.
-    pub strata_start: PathBuf,
+    /// What starts Strata, usually a `.bat` in Strata's folder. Empty after the
+    /// one-line setup until the Strata page sets it; without it the service
+    /// never starts Strata itself.
+    #[serde(default)]
+    pub strata_start: Option<PathBuf>,
     /// Extra arguments for `strata_start`.
     #[serde(default)]
     pub strata_args: Vec<String>,
     /// Process names that make up a running Strata; ended in gaming mode and
     /// before a restart. Check Task Manager while Strata runs.
+    #[serde(default)]
     pub strata_processes: Vec<String>,
     /// No sleep while the last keyboard or mouse input is more recent than this.
     #[serde(default = "default_user_idle")]
@@ -59,6 +63,10 @@ pub struct Config {
     /// card the NAS connects to (`AA:BB:CC:DD:EE:FF` or `AA-BB-…`).
     #[serde(default)]
     pub mac: Option<String>,
+    /// The NAS as the one-line setup reached it (`http://<NAS>:<Port>`);
+    /// where updates of this program come from.
+    #[serde(default)]
+    pub nas_url: Option<String>,
     /// Where Strata is fetched from when the web UI sets it up. Fixed here,
     /// never taken from a request.
     #[serde(default = "default_strata_repo")]
@@ -103,7 +111,8 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("Konfiguration {} nicht lesbar", path.display()))?;
-        let mut cfg: Self = toml::from_str(&raw)
+        // Set-Content -Encoding UTF8 in Windows PowerShell writes a BOM.
+        let mut cfg: Self = toml::from_str(raw.trim_start_matches('\u{feff}'))
             .with_context(|| format!("Konfiguration {} ist fehlerhaft", path.display()))?;
         cfg.strata_url = cfg.strata_url.trim_end_matches('/').to_string();
         if let Some(mac) = &cfg.mac {
@@ -168,6 +177,52 @@ mod tests {
         assert_eq!(cfg.listen.port(), 8091);
         assert_eq!(cfg.user_idle(), Duration::from_secs(600));
         assert!(!cfg.strata_processes.is_empty());
+    }
+
+    #[test]
+    fn start_script_and_programs_may_be_left_out() {
+        let dir = std::env::temp_dir().join(format!("strata-pc-agent-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("strata-pc-agent.toml");
+        std::fs::write(&path, "token = \"geheim\"\n").unwrap();
+        let cfg = Config::load(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(cfg.strata_start, None);
+        assert!(cfg.strata_processes.is_empty());
+    }
+
+    #[test]
+    fn configuration_from_the_one_line_setup_parses() {
+        // What install.ps1 writes after signing up with the NAS.
+        let dir =
+            std::env::temp_dir().join(format!("strata-pc-agent-setup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("strata-pc-agent.toml");
+        std::fs::write(
+            &path,
+            [
+                "# Konfiguration des PC-Dienstes, angelegt bei der Einrichtung vom NAS.",
+                "listen = \"0.0.0.0:8091\"",
+                "token = \"0123abcd\"",
+                "allowed_clients = [\"192.168.1.10\"]",
+                "strata_url = \"http://127.0.0.1:8080\"",
+                "nas_url = \"http://192.168.1.10:8090\"",
+                "fresh_strata_after_standby = true",
+                "strata_api_key = \"strata-geheim\"",
+            ]
+            .join("\r\n")
+            // As Windows PowerShell's Set-Content -Encoding UTF8 writes it.
+            .replacen("", "\u{feff}", 1),
+        )
+        .unwrap();
+        let cfg = Config::load(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(cfg.nas_url.as_deref(), Some("http://192.168.1.10:8090"));
+        assert_eq!(
+            cfg.allowed_clients,
+            ["192.168.1.10".parse::<IpAddr>().unwrap()]
+        );
+        assert_eq!(cfg.strata_start, None);
     }
 
     #[test]

@@ -13,7 +13,7 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 | --- | --- |
 | 1. Einmalige Einrichtung | Anleitung: [docs/einrichtung.md](docs/einrichtung.md) |
 | 2. NAS-Proxy | gebaut, gegen nachgebautes Strata getestet |
-| 3. PC-Dienst und Gaming-Schalter | gebaut, gegen nachgebauten PC getestet: [docs/pc-dienst.md](docs/pc-dienst.md) |
+| 3. PC-Dienst und Gaming-Schalter | gebaut, gegen nachgebauten PC getestet; Einrichtung per Befehl von der Seite *PC-Dienst*: [docs/pc-dienst.md](docs/pc-dienst.md) |
 | 4. Weboberfläche | Anmeldung, Einstellungen und Übersicht gebaut; Verlauf mit Stromschätzung offen |
 | 5. Abnahme auf echter Hardware | offen |
 
@@ -109,6 +109,12 @@ Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
   Gespeichert wird in `/data/settings.json`; ohne `DATA_DIR` warnt die Seite,
   dass Änderungen beim Neustart verloren gehen. Das Token des PC-Dienstes wird
   nie angezeigt.
+- **PC-Dienst:** *Befehl erzeugen* zeigt einen PowerShell-Befehl, der den
+  PC-Dienst vom NAS lädt, einrichtet und beim Proxy anmeldet; Token und
+  `PC_AGENT_URL` trägt der Proxy dann selbst ein. Der Code darin gilt 15 min
+  und einmal. Die .exe liegt im Image und ist ohne Anmeldung unter
+  `/admin/agent/strata-pc-agent.exe` abrufbar. Details:
+  [docs/pc-dienst.md](docs/pc-dienst.md).
 - **API-Keys:** Einen Key pro Client anlegen. Er wird nur direkt nach dem
   Anlegen vollständig angezeigt und nur als Hash in `/data/api-keys.json`
   gespeichert. Die Liste zeigt Anfang, Erstellung und letzte Nutzung; ein

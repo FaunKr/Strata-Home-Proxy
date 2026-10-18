@@ -116,6 +116,7 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::StrataJobFailed => "Strata-Vorgang fehlgeschlagen",
         EventKind::StrataJobCancelled => "Strata-Vorgang abgebrochen",
         EventKind::StrataKeyChanged => "Strata-Key gewechselt",
+        EventKind::PcServiceRegistered => "PC-Dienst eingerichtet",
     }
 }
 

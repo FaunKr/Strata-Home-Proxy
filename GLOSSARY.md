@@ -20,6 +20,14 @@ _Avoid_: NAS-Proxy (nur im Code), Gateway
 Die Seiten des Proxys unter `/admin`: Übersicht, Einstellungen, Anmeldung.
 _Avoid_: Admin-UI, Dashboard
 
+**Einrichtungsbefehl**:
+Der PowerShell-Einzeiler von der Seite *PC-Dienst*, der den PC-Dienst vom NAS lädt, einrichtet und beim Proxy anmeldet.
+_Avoid_: Installer, Setup-Link
+
+**Einmalcode**:
+Der Code im Einrichtungsbefehl. Gilt kurz und nur für eine Anmeldung; ein neuer Einrichtungsbefehl macht den alten ungültig.
+_Avoid_: Pairing-Code, Token (das ist das gemeinsame Geheimnis von Proxy und PC-Dienst)
+
 **Übersicht**:
 Die Startseite der Weboberfläche mit dem Live-Zustand von PC und Strata und den Knöpfen.
 _Avoid_: Status-Seite, Home

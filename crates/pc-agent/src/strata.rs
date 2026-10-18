@@ -429,9 +429,9 @@ fn installed_model(dir: &Path, model: &str) -> Result<String, Refusal> {
 /// used last), the config Strata touched last, as Strata picks it.
 fn active_model(agent: &Agent) -> Option<String> {
     let managed = agent.managed();
-    let (start, _) = managed.start(&agent.cfg);
-    let script = start
-        .file_name()
+    let script = managed
+        .start(&agent.cfg)
+        .and_then(|(start, _)| start.file_name())
         .map(|n| n.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     let dir = &agent.cfg.strata_dir;

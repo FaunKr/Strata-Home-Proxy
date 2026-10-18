@@ -118,6 +118,11 @@ impl Agent {
             .expect("HTTP client");
         let gaming = gaming_flag(&cfg).exists();
         let managed = Managed::load(&cfg.state_dir());
+        if managed.start(&cfg).is_none() {
+            tracing::info!(
+                "Kein Startskript für Strata eingetragen, der Dienst startet Strata nicht"
+            );
+        }
         let jobs = Jobs::load(&cfg.state_dir());
         let output = Arc::new(StrataOutput::new(cfg.state_dir()));
         Arc::new(Self {
@@ -251,10 +256,13 @@ impl Agent {
     }
 
     pub(crate) fn start_strata(&self) {
+        let managed = self.managed();
+        let Some((program, args)) = managed.start(&self.cfg) else {
+            tracing::info!("Kein Startskript für Strata eingetragen, Strata bleibt aus");
+            return;
+        };
         self.watchdog.lock().unwrap().last_start = Some(Instant::now());
         tracing::info!("Strata wird gestartet");
-        let managed = self.managed();
-        let (program, args) = managed.start(&self.cfg);
         let mut run = match self.platform.start_strata(program, args) {
             Ok(run) => run,
             Err(e) => {
@@ -297,7 +305,12 @@ impl Agent {
     pub(crate) fn stop_strata(&self) {
         tracing::info!("Strata wird beendet");
         let managed = self.managed();
-        if let Err(e) = self.platform.stop_strata(managed.processes(&self.cfg)) {
+        let processes = managed.processes(&self.cfg);
+        if processes.is_empty() {
+            tracing::info!("Keine Strata-Programme eingetragen, nichts zu beenden");
+            return;
+        }
+        if let Err(e) = self.platform.stop_strata(processes) {
             tracing::error!("Strata-Ende fehlgeschlagen: {e}");
         }
     }
@@ -336,6 +349,10 @@ impl Agent {
     pub async fn watchdog_tick(&self) {
         // A job sets Strata up or switches it; starting it now would get in the way.
         if self.gaming() || !self.cfg.auto_start || self.jobs.running() {
+            return;
+        }
+        // Nothing to start yet: the Strata page has not set a start script.
+        if self.managed().start(&self.cfg).is_none() {
             return;
         }
         let healthy = self.strata_healthy().await;

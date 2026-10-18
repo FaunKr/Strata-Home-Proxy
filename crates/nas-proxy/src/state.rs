@@ -317,7 +317,7 @@ impl AppState {
     /// `DATA_DIR` so a restart does not end it.
     pub fn set_keep_awake(&self, until: Option<SystemTime>) {
         self.inner.lock().unwrap().keep_awake_until = until;
-        let Some(path) = keep_awake_file(&self.cfg().data_dir) else {
+        let Some(dir) = self.cfg().data_dir.clone() else {
             return;
         };
         let written = match until {
@@ -325,9 +325,10 @@ impl AppState {
                 let file = KeepAwakeFile {
                     until: clock::unix(t),
                 };
-                std::fs::write(&path, serde_json::to_string(&file).expect("serializes"))
+                let json = serde_json::to_string(&file).expect("serializes");
+                crate::files::write_private(&dir, KEEP_AWAKE_FILE, json.as_bytes())
             }
-            None => match std::fs::remove_file(&path) {
+            None => match std::fs::remove_file(dir.join(KEEP_AWAKE_FILE)) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 other => other,
             },
@@ -672,6 +673,8 @@ impl Drop for ActivityGuard {
     }
 }
 
+const KEEP_AWAKE_FILE: &str = "keep-awake.json";
+
 fn keep_awake_file(data_dir: &Option<PathBuf>) -> Option<PathBuf> {
-    data_dir.as_ref().map(|dir| dir.join("keep-awake.json"))
+    data_dir.as_ref().map(|dir| dir.join(KEEP_AWAKE_FILE))
 }

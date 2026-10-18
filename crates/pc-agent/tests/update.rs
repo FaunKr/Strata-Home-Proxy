@@ -51,17 +51,26 @@ async fn status_reports_the_version() {
     assert!(strata_pc_agent::VERSION.starts_with(env!("CARGO_PKG_VERSION")));
 }
 
-/// The NAS reads the version from the .exe it serves, without running it.
+/// The NAS reads the version from the .exe it serves, without running it:
+/// the first marker followed by a version (`version_in` in
+/// `nas-proxy/src/pc_setup.rs`). The Dockerfile checks the image's .exe the
+/// same way.
 #[test]
 fn the_program_carries_its_version_as_text() {
     let program = std::fs::read(env!("CARGO_BIN_EXE_strata-pc-agent")).unwrap();
-    let marker = format!("strata-pc-agent-version:{}\n", strata_pc_agent::VERSION);
-    assert!(
-        program
-            .windows(marker.len())
-            .any(|w| w == marker.as_bytes()),
-        "{marker:?} fehlt"
-    );
+    let marker = b"strata-pc-agent-version:";
+    let found = program
+        .windows(marker.len())
+        .enumerate()
+        .filter(|(_, w)| w == marker)
+        .find_map(|(at, _)| {
+            let rest = &program[at + marker.len()..];
+            let end = rest.iter().take(64).position(|b| *b == b'\n')?;
+            let version = std::str::from_utf8(&rest[..end]).ok()?;
+            (!version.is_empty() && version.bytes().all(|b| b.is_ascii_graphic()))
+                .then_some(version)
+        });
+    assert_eq!(found, Some(strata_pc_agent::VERSION));
 }
 
 #[tokio::test]

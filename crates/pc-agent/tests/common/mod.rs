@@ -65,6 +65,8 @@ pub struct Fake {
     pub git_missing: AtomicBool,
     pub ram: AtomicU64,
     pub disk_free: Mutex<Option<u64>>,
+    /// Ends the fake Strata started last, as stopping it ends its output.
+    pub strata_cancel: Mutex<Option<strata_pc_agent::command::Cancel>>,
     /// The Authorization header of the last `/health` call.
     pub health_auth: Mutex<Option<String>>,
 }
@@ -101,41 +103,15 @@ fn file_name(path: &Path) -> String {
 
 pub struct FakePlatform(pub Arc<Fake>);
 
-impl Platform for FakePlatform {
-    fn user_idle(&self) -> Duration {
-        *self.0.idle.lock().unwrap()
-    }
-    fn suspend(&self) -> anyhow::Result<()> {
-        self.0.suspends.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-    fn start_strata(&self, program: &Path, args: &[String]) -> anyhow::Result<()> {
-        *self.0.started.lock().unwrap() = Some((program.to_path_buf(), args.to_vec()));
-        self.0.starts.fetch_add(1, Ordering::SeqCst);
-        self.0.strata_up.store(true, Ordering::SeqCst);
-        Ok(())
-    }
-    fn stop_strata(&self, processes: &[String]) -> anyhow::Result<()> {
-        *self.0.stopped.lock().unwrap() = Some(processes.to_vec());
-        self.0.stops.fetch_add(1, Ordering::SeqCst);
-        self.0.strata_up.store(false, Ordering::SeqCst);
-        Ok(())
-    }
-    fn run(&self, spec: &CommandSpec) -> anyhow::Result<Running> {
-        let fake = Arc::clone(&self.0);
-        fake.ran.lock().unwrap().push(spec.clone());
-        let name = file_name(&spec.program);
-        if name == "git" && fake.git_missing.load(Ordering::SeqCst) {
-            anyhow::bail!("git nicht gefunden");
-        }
-        if name == "winget" {
-            fake.git_missing.store(false, Ordering::SeqCst);
-        }
-        let command = fake
+impl FakePlatform {
+    /// The fake command `name` as a running command.
+    fn fake_run(&self, name: &str) -> Running {
+        let command = self
+            .0
             .commands
             .lock()
             .unwrap()
-            .get(&name)
+            .get(name)
             .cloned()
             .unwrap_or_default();
         let (tx, lines) = mpsc::unbounded_channel();
@@ -186,7 +162,7 @@ impl Platform for FakePlatform {
             let _ = exit_tx.send(Some(code));
         });
         let counter = Arc::clone(&self.0);
-        Ok(Running::new(
+        Running::new(
             lines,
             exit,
             Arc::new(move || {
@@ -194,7 +170,47 @@ impl Platform for FakePlatform {
                     counter.cancels.fetch_add(1, Ordering::SeqCst);
                 }
             }),
-        ))
+        )
+    }
+}
+
+impl Platform for FakePlatform {
+    fn user_idle(&self) -> Duration {
+        *self.0.idle.lock().unwrap()
+    }
+    fn suspend(&self) -> anyhow::Result<()> {
+        self.0.suspends.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    /// Runs the fake command named like the start script for Strata's output.
+    fn start_strata(&self, program: &Path, args: &[String]) -> anyhow::Result<Running> {
+        *self.0.started.lock().unwrap() = Some((program.to_path_buf(), args.to_vec()));
+        self.0.starts.fetch_add(1, Ordering::SeqCst);
+        self.0.strata_up.store(true, Ordering::SeqCst);
+        let run = self.fake_run(&file_name(program));
+        *self.0.strata_cancel.lock().unwrap() = Some(run.canceller());
+        Ok(run)
+    }
+    fn stop_strata(&self, processes: &[String]) -> anyhow::Result<()> {
+        *self.0.stopped.lock().unwrap() = Some(processes.to_vec());
+        self.0.stops.fetch_add(1, Ordering::SeqCst);
+        self.0.strata_up.store(false, Ordering::SeqCst);
+        if let Some(cancel) = self.0.strata_cancel.lock().unwrap().take() {
+            cancel();
+        }
+        Ok(())
+    }
+    fn run(&self, spec: &CommandSpec) -> anyhow::Result<Running> {
+        let fake = Arc::clone(&self.0);
+        fake.ran.lock().unwrap().push(spec.clone());
+        let name = file_name(&spec.program);
+        if name == "git" && fake.git_missing.load(Ordering::SeqCst) {
+            anyhow::bail!("git nicht gefunden");
+        }
+        if name == "winget" {
+            fake.git_missing.store(false, Ordering::SeqCst);
+        }
+        Ok(self.fake_run(&name))
     }
     fn ram_bytes(&self) -> u64 {
         self.0.ram.load(Ordering::SeqCst)

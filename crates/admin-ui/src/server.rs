@@ -25,8 +25,8 @@ use leptos_axum::{
 
 use crate::{
     api::{
-        ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, PcSetupCommand, Session, SettingsView,
-        StrataJobForm, StrataPage,
+        ApiKeysView, CreatedKey, KeepAwakeChoice, OutputMessage, Overview, PcSetupCommand, Session,
+        SettingsView, StrataJobForm, StrataPage,
     },
     app::{App, shell},
 };
@@ -58,6 +58,8 @@ pub trait Backend: Send + Sync + 'static {
     /// The overview now and after every change, for as long as it is held.
     /// While anyone holds one, the proxy checks on the PC and Strata.
     fn overview(&self) -> BoxStream<'static, Overview>;
+    /// The Strata-Ausgabe for as long as it is held; never wakes the PC.
+    fn strata_output(&self) -> BoxStream<'static, OutputMessage>;
     /// Starts waking the PC; a message for the user if it cannot be woken.
     fn wake(&self) -> Result<(), String>;
     /// Asks the PC service to sleep; its reason if it refuses.
@@ -155,16 +157,20 @@ fn insert_cookie(value: &str) {
     }
 }
 
-/// The overview as server-sent events, only for a logged-in user.
-async fn overview_stream(backend: SharedBackend, headers: HeaderMap) -> Response {
-    match backend.session(cookie_token(&headers).as_deref()) {
+/// A backend stream as server-sent events, only for a logged-in user.
+fn session_stream<T: serde::Serialize + Send + 'static>(
+    backend: &SharedBackend,
+    headers: &HeaderMap,
+    stream: impl FnOnce(&dyn Backend) -> BoxStream<'static, T>,
+) -> Response {
+    match backend.session(cookie_token(headers).as_deref()) {
         Session::Ready => {}
         Session::MustChange => return StatusCode::FORBIDDEN.into_response(),
         Session::Anonymous => return StatusCode::UNAUTHORIZED.into_response(),
     }
-    let events = backend.overview().map(|overview| {
+    let events = stream(backend.as_ref()).map(|item| {
         Event::default()
-            .json_data(overview)
+            .json_data(item)
             .map_err(|e| std::io::Error::other(e.to_string()))
     });
     Sse::new(events)
@@ -201,7 +207,8 @@ where
     S: Clone + Send + Sync + 'static,
 {
     let pkg = PathBuf::from(options.site_root.as_ref()).join(options.site_pkg_dir.as_ref());
-    let stream_backend = Arc::clone(&backend);
+    let overview_backend = Arc::clone(&backend);
+    let output_backend = Arc::clone(&backend);
     let context = move || provide_context(Arc::clone(&backend));
     // Listing the routes renders the app once, which starts the session
     // resource; without the backend in context that call panics.
@@ -210,7 +217,15 @@ where
     Router::new()
         .route(
             "/admin/api/overview-stream",
-            get(move |headers: HeaderMap| overview_stream(Arc::clone(&stream_backend), headers)),
+            get(move |headers: HeaderMap| async move {
+                session_stream(&overview_backend, &headers, |b| b.overview())
+            }),
+        )
+        .route(
+            "/admin/api/strata-output-stream",
+            get(move |headers: HeaderMap| async move {
+                session_stream(&output_backend, &headers, |b| b.strata_output())
+            }),
         )
         .leptos_routes_with_context(&options, routes, context, {
             let options = options.clone();

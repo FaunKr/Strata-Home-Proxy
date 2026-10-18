@@ -42,3 +42,14 @@ async fn cancel_ends_the_command_and_what_it_started() {
     .expect("Befehl läuft nach dem Abbrechen weiter");
     assert_eq!(ended, None);
 }
+
+#[tokio::test]
+async fn a_rewritten_line_keeps_its_carriage_return() {
+    // Windows ends lines with \r\n; only a lone \r rewrites a line.
+    let mut run = spawn(&sh("printf 'eins\\r\\nlädt 5%%\\rlädt 9%%\\r\\n'")).unwrap();
+    let mut lines = Vec::new();
+    while let Some(line) = run.next_output().await {
+        lines.push(line);
+    }
+    assert_eq!(lines, ["eins", "lädt 5%\r", "lädt 9%"]);
+}

@@ -120,6 +120,7 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
             <div>
                 <h2>"Strata"</h2>
                 <p class="state">{strata_text(&overview.strata)}</p>
+                <a class="button secondary" href="/admin/strata-log">"Strata-Ausgabe"</a>
             </div>
             <div>
                 <h2>"Letzte Anfrage"</h2>
@@ -350,109 +351,34 @@ fn Controls(overview: Overview, actions: Actions) -> impl IntoView {
 /// The live connection in the browser.
 #[cfg(feature = "hydrate")]
 mod client {
-    use std::{cell::RefCell, rc::Rc, time::Duration};
+    use std::time::Duration;
 
-    use leptos::{
-        prelude::*,
-        task::spawn_local,
-        wasm_bindgen::{JsCast, closure::Closure},
-    };
-    use send_wrapper::SendWrapper;
-    use web_sys::{EventSource, MessageEvent};
+    use leptos::prelude::*;
 
     use super::{Live, Overview};
-    use crate::api::{Session, get_session};
 
-    const STREAM: &str = "/admin/api/overview-stream";
-    const RETRY: Duration = Duration::from_secs(5);
-
-    /// The open stream with its handlers, dropped together.
-    struct Open {
-        source: EventSource,
-        _on_message: Closure<dyn FnMut(MessageEvent)>,
-        _on_error: Closure<dyn FnMut()>,
-    }
-
-    enum Connection {
-        /// Shown, with the stream if one is open.
-        Shown(Option<Open>),
-        /// The page is gone: no new connection, and no signals to set.
-        Gone,
-    }
-
-    /// Browser-only state, shared with the handlers.
-    type Shared = Rc<RefCell<Connection>>;
-
-    /// Follows the overview stream while the page is shown. The browser
-    /// reconnects by itself after a dropped connection; after a refused one
-    /// it tries again every few seconds, or shows the login when the session
-    /// has ended.
+    /// Follows the overview stream while the page is shown, and counts the
+    /// seconds since the last overview.
     pub fn connect(live: Live) {
-        let shared: Shared = Rc::new(RefCell::new(Connection::Shown(None)));
-        open(live, Rc::clone(&shared));
+        crate::stream::follow(
+            "/admin/api/overview-stream",
+            move |text| {
+                if let Ok(overview) = serde_json::from_str::<Overview>(&text) {
+                    live.overview.set(Some(overview));
+                    live.since.set(0);
+                }
+            },
+            live.lost,
+        );
         let ticker = set_interval_with_handle(
             move || live.since.update(|s| *s += 1),
             Duration::from_secs(1),
         )
         .ok();
-        let shared = SendWrapper::new(shared);
         on_cleanup(move || {
-            let gone = std::mem::replace(&mut *shared.borrow_mut(), Connection::Gone);
-            if let Connection::Shown(Some(o)) = gone {
-                o.source.close();
-            }
             if let Some(t) = ticker {
                 t.clear();
             }
-        });
-    }
-
-    fn open(live: Live, shared: Shared) {
-        let mut slot = shared.borrow_mut();
-        let Connection::Shown(current) = &mut *slot else {
-            return;
-        };
-        if let Some(old) = current.take() {
-            old.source.close();
-        }
-        let Ok(source) = EventSource::new(STREAM) else {
-            return;
-        };
-        let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |ev: MessageEvent| {
-            let Some(text) = ev.data().as_string() else {
-                return;
-            };
-            if let Ok(overview) = serde_json::from_str::<Overview>(&text) {
-                live.overview.set(Some(overview));
-                live.since.set(0);
-                live.lost.set(false);
-            }
-        });
-        source.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-        let watched = source.clone();
-        let again = Rc::clone(&shared);
-        let on_error = Closure::<dyn FnMut()>::new(move || {
-            if matches!(*again.borrow(), Connection::Gone) {
-                return;
-            }
-            live.lost.set(true);
-            if watched.ready_state() == EventSource::CLOSED {
-                let again = Rc::clone(&again);
-                spawn_local(async move {
-                    match get_session().await {
-                        Ok(Session::Anonymous | Session::MustChange) => {
-                            let _ = window().location().reload();
-                        }
-                        _ => set_timeout(move || open(live, again), RETRY),
-                    }
-                });
-            }
-        });
-        source.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-        *current = Some(Open {
-            source,
-            _on_message: on_message,
-            _on_error: on_error,
         });
     }
 }

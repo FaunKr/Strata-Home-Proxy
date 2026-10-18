@@ -12,7 +12,9 @@ pub trait Platform: Send + Sync + 'static {
     fn user_idle(&self) -> Duration;
     /// Puts the PC into standby. Returns after the PC wakes up again.
     fn suspend(&self) -> Result<()>;
-    fn start_strata(&self, program: &Path, args: &[String]) -> Result<()>;
+    /// Starts Strata without a window; its console output comes through the
+    /// returned command.
+    fn start_strata(&self, program: &Path, args: &[String]) -> Result<Running>;
     /// Ends Strata. Each entry is a program name (`strata.exe`) or a folder
     /// (ending in `\` or `/`): every program from that folder ends, with all
     /// it started.
@@ -71,32 +73,6 @@ mod imp {
                 std::io::Error::last_os_error()
             );
         }
-        Ok(())
-    }
-
-    pub fn start(program: &Path, args: &[String]) -> Result<()> {
-        // `start` opens Strata in its own minimised console window, the same
-        // as a double click on START-HERE.bat.
-        // The window title must be quoted for `start`, so the command line is
-        // built by hand instead of letting Command quote each argument.
-        let mut line = format!("/C start \"Strata\" /MIN \"{}\"", program.display());
-        for arg in args {
-            line.push_str(&format!(" \"{arg}\""));
-        }
-        let mut cmd = Command::new("cmd");
-        cmd.raw_arg(line);
-        // A bare file name has an empty parent, which Windows rejects as
-        // working directory ("The directory name is invalid").
-        if let Some(dir) = program.parent().filter(|d| !d.as_os_str().is_empty()) {
-            if !dir.is_dir() {
-                bail!(
-                    "Ordner {} aus strata_start gibt es nicht, Pfad in strata-pc-agent.toml prüfen",
-                    dir.display()
-                );
-            }
-            cmd.current_dir(dir);
-        }
-        hidden(&mut cmd).spawn()?;
         Ok(())
     }
 
@@ -173,11 +149,6 @@ mod imp {
         bail!("Standby gibt es nur unter Windows")
     }
 
-    pub fn start(program: &Path, args: &[String]) -> Result<()> {
-        Command::new(program).args(args).spawn()?;
-        Ok(())
-    }
-
     pub fn stop(processes: &[String]) -> Result<()> {
         for entry in processes {
             if super::is_folder(entry) {
@@ -229,6 +200,27 @@ mod imp {
     }
 }
 
+/// Strata as a command: in the folder of its start script, as a double click
+/// on it would run it.
+fn strata_command(program: &Path, args: &[String]) -> Result<CommandSpec> {
+    // A bare file name has an empty parent, which Windows rejects as
+    // working directory ("The directory name is invalid").
+    let dir = program.parent().filter(|d| !d.as_os_str().is_empty());
+    if let Some(dir) = dir
+        && !dir.is_dir()
+    {
+        bail!(
+            "Ordner {} aus strata_start gibt es nicht, Pfad in strata-pc-agent.toml prüfen",
+            dir.display()
+        );
+    }
+    Ok(CommandSpec {
+        program: program.to_path_buf(),
+        args: args.to_vec(),
+        dir: dir.map(Path::to_path_buf),
+    })
+}
+
 /// Keeps helper programs from flashing a console window.
 #[cfg(windows)]
 pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -268,8 +260,8 @@ impl Platform for System {
     fn suspend(&self) -> Result<()> {
         imp::suspend()
     }
-    fn start_strata(&self, program: &Path, args: &[String]) -> Result<()> {
-        imp::start(program, args)
+    fn start_strata(&self, program: &Path, args: &[String]) -> Result<Running> {
+        command::spawn(&strata_command(program, args)?)
     }
     fn stop_strata(&self, processes: &[String]) -> Result<()> {
         imp::stop(processes)

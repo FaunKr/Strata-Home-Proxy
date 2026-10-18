@@ -1,0 +1,328 @@
+//! A fake PC and a fake Strata on localhost for the service tests.
+#![allow(dead_code)]
+
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+
+use axum::{
+    Json, Router,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    routing::get,
+};
+use serde_json::{Value, json};
+#[allow(unused_imports)]
+pub use strata_pc_agent::{
+    Agent, Config, Peer, Status,
+    agent::router,
+    command::{CommandSpec, Running},
+    platform::Platform,
+};
+use tokio::{net::TcpListener, sync::mpsc, sync::oneshot};
+
+/// How a fake command behaves.
+#[derive(Clone, Default)]
+pub struct FakeCommand {
+    pub lines: Vec<String>,
+    /// Pause before each line.
+    pub pause: Duration,
+    /// Exit code; `None` means 0.
+    pub exit: Option<i32>,
+    /// Keeps running after its lines until cancelled.
+    pub hang: bool,
+    /// Files (path, content) it leaves behind when it succeeds.
+    pub creates: Vec<(PathBuf, String)>,
+}
+
+#[derive(Default)]
+pub struct Fake {
+    pub idle: Mutex<Duration>,
+    pub suspends: AtomicUsize,
+    pub starts: AtomicUsize,
+    pub stops: AtomicUsize,
+    pub strata_up: AtomicBool,
+    pub strata_busy: AtomicBool,
+    pub mac: Mutex<Option<[u8; 6]>>,
+    pub mac_lookups: AtomicUsize,
+    /// Program and arguments of the last start.
+    pub started: Mutex<Option<(PathBuf, Vec<String>)>>,
+    /// What the last stop was told to end.
+    pub stopped: Mutex<Option<Vec<String>>>,
+    /// Fake commands by program file name (`git`, `START-HERE.bat`).
+    pub commands: Mutex<HashMap<String, FakeCommand>>,
+    /// Every command run, in order.
+    pub ran: Mutex<Vec<CommandSpec>>,
+    pub cancels: AtomicUsize,
+    /// Git is not installed until winget installs it.
+    pub git_missing: AtomicBool,
+    pub ram: AtomicU64,
+    pub disk_free: Mutex<Option<u64>>,
+    /// The Authorization header of the last `/health` call.
+    pub health_auth: Mutex<Option<String>>,
+}
+
+impl Fake {
+    pub fn command(&self, program: &str, command: FakeCommand) {
+        self.commands
+            .lock()
+            .unwrap()
+            .insert(program.to_string(), command);
+    }
+
+    /// The runs of `program`, by file name.
+    pub fn runs_of(&self, program: &str) -> Vec<CommandSpec> {
+        self.ran
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| file_name(&c.program) == program)
+            .cloned()
+            .collect()
+    }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+pub struct FakePlatform(pub Arc<Fake>);
+
+impl Platform for FakePlatform {
+    fn user_idle(&self) -> Duration {
+        *self.0.idle.lock().unwrap()
+    }
+    fn suspend(&self) -> anyhow::Result<()> {
+        self.0.suspends.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    fn start_strata(&self, program: &Path, args: &[String]) -> anyhow::Result<()> {
+        *self.0.started.lock().unwrap() = Some((program.to_path_buf(), args.to_vec()));
+        self.0.starts.fetch_add(1, Ordering::SeqCst);
+        self.0.strata_up.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    fn stop_strata(&self, processes: &[String]) -> anyhow::Result<()> {
+        *self.0.stopped.lock().unwrap() = Some(processes.to_vec());
+        self.0.stops.fetch_add(1, Ordering::SeqCst);
+        self.0.strata_up.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+    fn run(&self, spec: &CommandSpec) -> anyhow::Result<Running> {
+        let fake = Arc::clone(&self.0);
+        fake.ran.lock().unwrap().push(spec.clone());
+        let name = file_name(&spec.program);
+        if name == "git" && fake.git_missing.load(Ordering::SeqCst) {
+            anyhow::bail!("git nicht gefunden");
+        }
+        if name == "winget" {
+            fake.git_missing.store(false, Ordering::SeqCst);
+        }
+        let command = fake
+            .commands
+            .lock()
+            .unwrap()
+            .get(&name)
+            .cloned()
+            .unwrap_or_default();
+        let (tx, lines) = mpsc::unbounded_channel();
+        let (exit_tx, exit) = oneshot::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancelled);
+        tokio::spawn(async move {
+            let stopped = || flag.load(Ordering::SeqCst);
+            let wait = |d: Duration| {
+                let flag = Arc::clone(&flag);
+                async move {
+                    let mut left = d;
+                    while !left.is_zero() && !flag.load(Ordering::SeqCst) {
+                        let step = left.min(Duration::from_millis(10));
+                        tokio::time::sleep(step).await;
+                        left -= step;
+                    }
+                }
+            };
+            for line in command.lines {
+                wait(command.pause).await;
+                if stopped() {
+                    break;
+                }
+                let _ = tx.send(line);
+            }
+            while command.hang && !stopped() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            drop(tx);
+            if stopped() {
+                let _ = exit_tx.send(None);
+                return;
+            }
+            let code = command.exit.unwrap_or(0);
+            if code == 0 {
+                for (path, content) in command.creates {
+                    if let Some(dir) = path.parent() {
+                        std::fs::create_dir_all(dir).unwrap();
+                    }
+                    std::fs::write(path, content).unwrap();
+                }
+            }
+            let _ = exit_tx.send(Some(code));
+        });
+        let counter = Arc::clone(&self.0);
+        Ok(Running::new(
+            lines,
+            exit,
+            Arc::new(move || {
+                if !cancelled.swap(true, Ordering::SeqCst) {
+                    counter.cancels.fetch_add(1, Ordering::SeqCst);
+                }
+            }),
+        ))
+    }
+    fn ram_bytes(&self) -> u64 {
+        self.0.ram.load(Ordering::SeqCst)
+    }
+    fn disk_free(&self, _path: &Path) -> Option<u64> {
+        *self.0.disk_free.lock().unwrap()
+    }
+    fn mac_for(&self, _local: std::net::IpAddr) -> Option<[u8; 6]> {
+        self.0.mac_lookups.fetch_add(1, Ordering::SeqCst);
+        *self.0.mac.lock().unwrap()
+    }
+}
+
+async fn health(State(f): State<Arc<Fake>>, headers: HeaderMap) -> StatusCode {
+    *f.health_auth.lock().unwrap() = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+    if f.strata_up.load(Ordering::SeqCst) {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
+
+async fn slots(State(f): State<Arc<Fake>>) -> Json<Value> {
+    Json(json!([{ "id": 0, "is_processing": f.strata_busy.load(Ordering::SeqCst) }]))
+}
+
+pub async fn serve(router: Router) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<Peer>(),
+        )
+        .await
+        .unwrap()
+    });
+    addr
+}
+
+pub struct Setup {
+    pub fake: Arc<Fake>,
+    pub agent: Arc<Agent>,
+    pub url: String,
+    pub dir: PathBuf,
+    _dir: TempDir,
+}
+
+impl Setup {
+    /// A new service process on the same folders, as after a restart.
+    pub fn restarted(&self) -> Arc<Agent> {
+        Agent::new(
+            self.agent.cfg.clone(),
+            Box::new(FakePlatform(self.fake.clone())),
+        )
+    }
+}
+
+/// A throwaway folder for the gaming flag and Strata.
+struct TempDir(PathBuf);
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+pub fn config(strata: SocketAddr, dir: &Path) -> Config {
+    Config {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        token: "geheim".into(),
+        allowed_clients: vec!["192.168.1.10".parse().unwrap()],
+        strata_url: format!("http://{strata}"),
+        strata_api_key: None,
+        strata_start: "START-HERE.bat".into(),
+        strata_args: vec![],
+        strata_processes: vec!["llama-server.exe".into()],
+        user_idle_minutes: 10,
+        auto_start: true,
+        fresh_strata_after_standby: false,
+        restart_after_secs: 0,
+        load_time_secs: 1,
+        state_dir: Some(dir.to_path_buf()),
+        mac: None,
+        strata_repo: "https://example.org/Strata.git".into(),
+        strata_dir: dir.join("Strata"),
+        strata_data_dir: dir.join("Strata-data"),
+    }
+}
+
+pub async fn setup(name: &str) -> Setup {
+    setup_with(name, |_| {}).await
+}
+
+pub async fn setup_with(name: &str, tweak: impl FnOnce(&mut Config)) -> Setup {
+    let fake = Arc::new(Fake::default());
+    fake.strata_up.store(true, Ordering::SeqCst);
+    *fake.idle.lock().unwrap() = Duration::from_secs(3600);
+    fake.ram.store(64 << 30, Ordering::SeqCst);
+    *fake.disk_free.lock().unwrap() = Some(500_000_000_000);
+    let strata = serve(
+        Router::new()
+            .route("/health", get(health))
+            .route("/slots", get(slots))
+            .with_state(fake.clone()),
+    )
+    .await;
+    let dir = std::env::temp_dir().join(format!("strata-pc-agent-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(strata, &dir);
+    tweak(&mut cfg);
+    let agent = Agent::new(cfg, Box::new(FakePlatform(fake.clone())));
+    let addr = serve(router(agent.clone())).await;
+    Setup {
+        fake,
+        agent,
+        url: format!("http://{addr}"),
+        dir: dir.clone(),
+        _dir: TempDir(dir),
+    }
+}
+
+pub fn client() -> reqwest::Client {
+    reqwest::Client::new()
+}
+
+pub async fn sleep_answer(s: &Setup) -> (u16, Value) {
+    let resp = client()
+        .post(format!("{}/sleep", s.url))
+        .bearer_auth("geheim")
+        .send()
+        .await
+        .unwrap();
+    (resp.status().as_u16(), resp.json().await.unwrap())
+}

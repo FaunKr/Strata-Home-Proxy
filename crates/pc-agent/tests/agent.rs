@@ -1,177 +1,11 @@
 //! Service tests with a fake PC and a fake Strata on localhost.
 
-use std::{
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+mod common;
 
-use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
+use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
+
+use common::*;
 use serde_json::{Value, json};
-use strata_pc_agent::{
-    Agent, Config, Peer, Status,
-    agent::router,
-    command::{CommandSpec, Running},
-    platform::Platform,
-};
-use tokio::net::TcpListener;
-
-#[derive(Default)]
-struct Fake {
-    idle: Mutex<Duration>,
-    suspends: AtomicUsize,
-    starts: AtomicUsize,
-    stops: AtomicUsize,
-    strata_up: AtomicBool,
-    strata_busy: AtomicBool,
-    mac: Mutex<Option<[u8; 6]>>,
-    mac_lookups: AtomicUsize,
-    /// Program and arguments of the last start.
-    started: Mutex<Option<(PathBuf, Vec<String>)>>,
-    /// What the last stop was told to end.
-    stopped: Mutex<Option<Vec<String>>>,
-}
-
-struct FakePlatform(Arc<Fake>);
-
-impl Platform for FakePlatform {
-    fn user_idle(&self) -> Duration {
-        *self.0.idle.lock().unwrap()
-    }
-    fn suspend(&self) -> anyhow::Result<()> {
-        self.0.suspends.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-    fn start_strata(&self, program: &Path, args: &[String]) -> anyhow::Result<()> {
-        *self.0.started.lock().unwrap() = Some((program.to_path_buf(), args.to_vec()));
-        self.0.starts.fetch_add(1, Ordering::SeqCst);
-        self.0.strata_up.store(true, Ordering::SeqCst);
-        Ok(())
-    }
-    fn stop_strata(&self, processes: &[String]) -> anyhow::Result<()> {
-        *self.0.stopped.lock().unwrap() = Some(processes.to_vec());
-        self.0.stops.fetch_add(1, Ordering::SeqCst);
-        self.0.strata_up.store(false, Ordering::SeqCst);
-        Ok(())
-    }
-    fn run(&self, spec: &CommandSpec) -> anyhow::Result<Running> {
-        anyhow::bail!("kein nachgebauter Befehl für {}", spec.program.display())
-    }
-    fn mac_for(&self, _local: std::net::IpAddr) -> Option<[u8; 6]> {
-        self.0.mac_lookups.fetch_add(1, Ordering::SeqCst);
-        *self.0.mac.lock().unwrap()
-    }
-}
-
-async fn health(State(f): State<Arc<Fake>>) -> StatusCode {
-    if f.strata_up.load(Ordering::SeqCst) {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    }
-}
-
-async fn slots(State(f): State<Arc<Fake>>) -> Json<Value> {
-    Json(json!([{ "id": 0, "is_processing": f.strata_busy.load(Ordering::SeqCst) }]))
-}
-
-async fn serve(router: Router) -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<Peer>(),
-        )
-        .await
-        .unwrap()
-    });
-    addr
-}
-
-struct Setup {
-    fake: Arc<Fake>,
-    agent: Arc<Agent>,
-    url: String,
-    _dir: TempDir,
-}
-
-/// A throwaway folder for the gaming flag.
-struct TempDir(std::path::PathBuf);
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn config(strata: SocketAddr, dir: &Path) -> Config {
-    Config {
-        listen: "127.0.0.1:0".parse().unwrap(),
-        token: "geheim".into(),
-        allowed_clients: vec!["192.168.1.10".parse().unwrap()],
-        strata_url: format!("http://{strata}"),
-        strata_api_key: None,
-        strata_start: "START-HERE.bat".into(),
-        strata_args: vec![],
-        strata_processes: vec!["llama-server.exe".into()],
-        user_idle_minutes: 10,
-        auto_start: true,
-        fresh_strata_after_standby: false,
-        restart_after_secs: 0,
-        load_time_secs: 1,
-        state_dir: Some(dir.to_path_buf()),
-        mac: None,
-    }
-}
-
-async fn setup(name: &str) -> Setup {
-    setup_with(name, |_| {}).await
-}
-
-async fn setup_with(name: &str, tweak: impl FnOnce(&mut Config)) -> Setup {
-    let fake = Arc::new(Fake::default());
-    fake.strata_up.store(true, Ordering::SeqCst);
-    *fake.idle.lock().unwrap() = Duration::from_secs(3600);
-    let strata = serve(
-        Router::new()
-            .route("/health", get(health))
-            .route("/slots", get(slots))
-            .with_state(fake.clone()),
-    )
-    .await;
-    let dir = std::env::temp_dir().join(format!("strata-pc-agent-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut cfg = config(strata, &dir);
-    tweak(&mut cfg);
-    let agent = Agent::new(cfg, Box::new(FakePlatform(fake.clone())));
-    let addr = serve(router(agent.clone())).await;
-    Setup {
-        fake,
-        agent,
-        url: format!("http://{addr}"),
-        _dir: TempDir(dir),
-    }
-}
-
-fn client() -> reqwest::Client {
-    reqwest::Client::new()
-}
-
-async fn sleep_answer(s: &Setup) -> (u16, Value) {
-    let resp = client()
-        .post(format!("{}/sleep", s.url))
-        .bearer_auth("geheim")
-        .send()
-        .await
-        .unwrap();
-    (resp.status().as_u16(), resp.json().await.unwrap())
-}
 
 #[tokio::test]
 async fn token_is_required() {
@@ -279,13 +113,13 @@ async fn gaming_mode_stops_strata_blocks_sleep_and_survives_restart() {
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
 
     // A new service process (e.g. after a reboot) still knows gaming is on.
-    let again = Agent::new(s.agent.cfg.clone(), Box::new(FakePlatform(s.fake.clone())));
+    let again = s.restarted();
     assert!(again.gaming());
 
     s.agent.set_gaming(false);
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
     assert!(s.fake.strata_up.load(Ordering::SeqCst));
-    let again = Agent::new(s.agent.cfg.clone(), Box::new(FakePlatform(s.fake.clone())));
+    let again = s.restarted();
     assert!(!again.gaming());
 }
 

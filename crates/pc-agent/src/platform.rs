@@ -19,6 +19,11 @@ pub trait Platform: Send + Sync + 'static {
     fn stop_strata(&self, processes: &[String]) -> Result<()>;
     /// Starts a command whose output is read line by line.
     fn run(&self, spec: &CommandSpec) -> Result<Running>;
+    /// Installed RAM in bytes; 0 if unknown.
+    fn ram_bytes(&self) -> u64;
+    /// Bytes free for this user on the drive that holds `path`, which need
+    /// not exist yet.
+    fn disk_free(&self, path: &Path) -> Option<u64>;
     /// MAC address of the network card that holds `local`, the address the
     /// NAS connected to. `None` if unknown. May be slow; the caller caches it.
     fn mac_for(&self, _local: IpAddr) -> Option<[u8; 6]> {
@@ -30,7 +35,7 @@ pub struct System;
 
 #[cfg(windows)]
 mod imp {
-    use std::os::windows::process::CommandExt;
+    use std::os::windows::{ffi::OsStrExt, process::CommandExt};
 
     use windows_sys::Win32::{
         System::{Power::SetSuspendState, SystemInformation::GetTickCount},
@@ -123,6 +128,35 @@ mod imp {
         .status()?;
         Ok(())
     }
+
+    pub fn ram_bytes() -> u64 {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        // SAFETY: MEMORYSTATUSEX is plain data; dwLength is set below.
+        let mut info: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+        info.dwLength = size_of::<MEMORYSTATUSEX>() as u32;
+        // SAFETY: `info` is a valid MEMORYSTATUSEX with dwLength set.
+        if unsafe { GlobalMemoryStatusEx(&mut info) } == 0 {
+            return 0;
+        }
+        info.ullTotalPhys
+    }
+
+    pub fn disk_free(path: &Path) -> Option<u64> {
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+        let existing = path.ancestors().find(|p| p.is_dir())?;
+        let wide: Vec<u16> = existing.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut free = 0u64;
+        // SAFETY: `wide` is NUL-terminated; the unused outputs may be null.
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        (ok != 0).then_some(free)
+    }
 }
 
 #[cfg(not(windows))]
@@ -156,6 +190,31 @@ mod imp {
             }
         }
         Ok(())
+    }
+
+    pub fn ram_bytes() -> u64 {
+        std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|text| {
+                let line = text.lines().find(|l| l.starts_with("MemTotal:"))?;
+                let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+                Some(kb * 1024)
+            })
+            .unwrap_or(0)
+    }
+
+    pub fn disk_free(path: &Path) -> Option<u64> {
+        let existing = path.ancestors().find(|p| p.is_dir())?;
+        let out = Command::new("df").arg("-Pk").arg(existing).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let kb: u64 = text
+            .lines()
+            .nth(1)?
+            .split_whitespace()
+            .nth(3)?
+            .parse()
+            .ok()?;
+        Some(kb * 1024)
     }
 }
 
@@ -206,6 +265,12 @@ impl Platform for System {
     }
     fn run(&self, spec: &CommandSpec) -> Result<Running> {
         command::spawn(spec)
+    }
+    fn ram_bytes(&self) -> u64 {
+        imp::ram_bytes()
+    }
+    fn disk_free(&self, path: &Path) -> Option<u64> {
+        imp::disk_free(path)
     }
     #[cfg(windows)]
     fn mac_for(&self, local: IpAddr) -> Option<[u8; 6]> {

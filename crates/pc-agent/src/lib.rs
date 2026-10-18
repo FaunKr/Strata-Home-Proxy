@@ -2,10 +2,12 @@
 //! mode and restarts Strata when it stops answering.
 
 pub mod agent;
+pub mod catalog;
 pub mod command;
 pub mod config;
 pub mod managed;
 pub mod platform;
+pub mod strata;
 
 use std::{sync::Arc, time::Duration};
 

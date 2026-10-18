@@ -16,6 +16,9 @@ use crate::{
     settings::SettingsSections,
 };
 
+/// What the experimental speed projection does, for whoever switches it on.
+const SPEED_PROJECTION_TEXT: &str = "Experimental, and despite the name not faster: Strata removes the model's refusal direction, so it hardly refuses requests any more.";
+
 #[derive(Clone, Copy)]
 struct Actions {
     start: ServerAction<StartStrataJob>,
@@ -42,6 +45,17 @@ impl Actions {
             context: None,
             model: Some(model),
             speed_projection: None,
+        });
+    }
+
+    fn speed_projection(&self, model: String, on: bool) {
+        self.start.dispatch(StartStrataJob {
+            kind: StrataJobKind::SetSpeedProjection,
+            family: None,
+            size: None,
+            context: None,
+            model: Some(model),
+            speed_projection: Some(on),
         });
     }
 }
@@ -522,7 +536,8 @@ fn ModelChoice(
                         " Experimental speed projection"
                     </label>
                     <p class="hint">
-                        "Experimental, and despite the name not faster: Strata removes the model's refusal direction, so it hardly refuses requests any more. Clients can switch it off per request with "
+                        {SPEED_PROJECTION_TEXT}
+                        " Clients can switch it off per request with "
                         <code>"\"experimental_speed_projection\": false"</code>
                         "."
                     </p>
@@ -565,7 +580,13 @@ fn Models(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl Int
         .models
         .iter()
         .cloned()
-        .map(|m| view! { <ModelRow model=m actions blocked /> })
+        .map(|m| {
+            let takes_projection = info
+                .families
+                .iter()
+                .any(|f| f.speed_projection && m.family.as_deref() == Some(f.id.as_str()));
+            view! { <ModelRow model=m takes_projection actions blocked /> }
+        })
         .collect_view();
     view! {
         <section class="card">
@@ -587,7 +608,13 @@ fn Models(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl Int
 }
 
 #[component]
-fn ModelRow(model: StrataModel, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+fn ModelRow(
+    model: StrataModel,
+    /// Its family offers the speed projection.
+    takes_projection: bool,
+    actions: Actions,
+    blocked: Signal<bool>,
+) -> impl IntoView {
     let size = bytes_gb(model.disk_bytes);
     let meta = match &model.size {
         Some(quant) if *quant != model.id => format!("{quant} · {size}"),
@@ -632,12 +659,60 @@ fn ModelRow(model: StrataModel, actions: Actions, blocked: Signal<bool>) -> impl
             </span>
         }
     });
+    // Only with word from the PC service on its state: an older one does not say.
+    let projection = model.speed_projection.filter(|_| takes_projection).map(|on| {
+        let id = model.id.clone();
+        let (label, question) = if on {
+            (
+                "Switch speed projection off",
+                Question {
+                    title: format!("Switch the speed projection off for {id}?"),
+                    text: "The model answers as it was trained again.".into(),
+                    confirm: "Switch off",
+                    danger: false,
+                },
+            )
+        } else {
+            (
+                "Switch speed projection on",
+                Question {
+                    title: format!("Switch the speed projection on for {id}?"),
+                    text: SPEED_PROJECTION_TEXT.into(),
+                    confirm: "Switch on",
+                    danger: false,
+                },
+            )
+        };
+        let confirm = expect_context::<Confirm>();
+        view! {
+            <button
+                type="button"
+                class="secondary"
+                disabled=move || blocked.get()
+                on:click=move |_| {
+                    let id = id.clone();
+                    confirm.ask(question.clone(), move || actions.speed_projection(id.clone(), !on));
+                }
+            >
+                {label}
+            </button>
+        }
+    });
     view! {
         <li>
             <div class="grow">
                 <p class="strong">{model.id.clone()}</p>
                 <p class="muted small">{meta}</p>
             </div>
+            {(model.speed_projection == Some(true))
+                .then(|| {
+                    view! {
+                        <span class="badge is-warn">
+                            <span class="dot"></span>
+                            "Speed projection on"
+                        </span>
+                    }
+                })}
             {model
                 .active
                 .then(|| {
@@ -648,6 +723,7 @@ fn ModelRow(model: StrataModel, actions: Actions, blocked: Signal<bool>) -> impl
                         </span>
                     }
                 })}
+            {projection}
             {buttons}
         </li>
     }

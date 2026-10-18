@@ -212,6 +212,7 @@ pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
         StrataJobKind::Update => "Updating Strata",
         StrataJobKind::Benchmark => "Benchmark",
         StrataJobKind::SetKey => "New Strata key",
+        StrataJobKind::SetSpeedProjection => "Switching speed projection",
     }
 }
 

@@ -18,6 +18,11 @@ Schon entschiedene Fragen: `docs/adr/`.
 - **Kein veralteter Stand überschreibt einen neueren.** Wer eine Kopie unter
   einem Lock zieht und außerhalb schreibt, hält dabei eine Schreibsperre, die
   auch jeder andere Write derselben Datei nimmt.
+- **Was Leptos beim Bau des Routers tut, geschieht einmal pro Prozess.** Das
+  Erzeugen der Routenliste setzt einen prozessweiten Schalter, der jede
+  Ressource anhält, die währenddessen startet (#69). Neuer Code, der das
+  bei jedem Router-Bau wiederholt, braucht denselben `OnceLock` wie
+  `server::router`.
 
 ## Proxy und PC
 

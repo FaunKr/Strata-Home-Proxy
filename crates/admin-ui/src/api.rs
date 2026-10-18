@@ -514,6 +514,7 @@ pub enum StrataJobKind {
     Update,
     Benchmark,
     SetKey,
+    SetSpeedProjection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -570,6 +571,10 @@ pub struct StrataModel {
     pub size: Option<String>,
     pub disk_bytes: u64,
     pub active: bool,
+    /// Its config loads the speed projection's control vector; `None` from
+    /// an older PC service, which does not say.
+    #[serde(default)]
+    pub speed_projection: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -691,6 +696,7 @@ pub struct StrataJobForm {
     pub size: Option<String>,
     pub context: Option<u32>,
     pub model: Option<String>,
-    /// Strata's experimental speed projection, for setup and another model.
+    /// Strata's experimental speed projection, for setup and another model;
+    /// on or off for an installed one.
     pub speed_projection: bool,
 }

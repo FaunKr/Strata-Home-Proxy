@@ -64,6 +64,8 @@ Quellen: `setup.py`, `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_
 - **Modell-ID** = Präfix der Familie + Größe: `qwen` ohne Präfix (`IQ3_XXS`), sonst `swift-`, `coder-`, `unsloth-`, `qwen36-`. Die Tabellen dazu spiegelt `crates/pc-agent/src/catalog.rs`.
 - **Setup ohne Fragen:** `START-HERE.bat` startet `.venv\Scripts\python.exe setup.py %*`. Welche Argumente der Dienst übergibt, steht in `strata.rs` (`setup`). `--setup` braucht es, sobald ein Modell installiert ist.
 - **Experimentelle Speed-Projection:** `--experimental-speed-projection on|off`, nur für `qwen` und `coder`. Trotz des Namens keine Beschleunigung: ein Steuervektor, der laut Stratas `docs/DETAILS.md` die Ablehnungsrichtung des Modells entfernt. Ohne das Argument übernimmt Setup den Wert einer früheren Installation, der Dienst übergibt es deshalb immer. Clients schalten sie pro Anfrage mit `"experimental_speed_projection": false` ab.
+  - Setup schreibt dafür diese Flags in `args` der Modell-Konfiguration (`setup.py`, Zeile 7011): `--control-vector-scaled <Strata>\data\experimental-speed-projection\Qwen3.8-Flash-Next-experimental-speed-projection.gguf:1.0 --control-vector-layer-range 4 44 --cvec-mode project --cvec-dir per-layer`. Ein späteres Setup liest sie zurück (`choices_from_config`), die Kalibrierung hängt nicht davon ab.
+  - Für installierte Modelle schreibt der PC-Dienst diese Flags selbst (`set_speed_projection`). Ändert Strata sie, passe `strata.rs` (`write_speed_projection`) an.
 - **Ausgabe von Setup:** Schritte als `=== Step N: Titel ===`, Downloads als `datei: x / y GB (p%)`, Fehler beginnen mit `[X]`.
 - **Ablage eines Modells:**
   - `strata-<id klein>.json` (Konfiguration), `run-<id klein>.bat` (Start) und `strata-<id klein>.log` im Strata-Ordner

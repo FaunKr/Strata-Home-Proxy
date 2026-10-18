@@ -101,3 +101,15 @@ button.secondary { background: transparent; color: var(--accent); }
 }
 .source { color: var(--muted); font-size: 0.9rem; }
 .key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+
+.edit { display: flex; gap: 8px; margin-top: 12px; }
+.edit input { flex: 1; min-width: 0; }
+.reset { margin-top: 8px; }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

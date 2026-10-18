@@ -72,11 +72,19 @@ impl Backend for UiBackend {
         }
     }
 
-    fn save_setting(&self, _key: &str, _value: &str) -> Result<(), String> {
-        Err("Noch nicht möglich.".to_string())
+    fn save_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        self.0.settings.set(key, value).map_err(|e| e.to_string())?;
+        self.0
+            .events
+            .record(EventKind::SettingSaved, Some(key.to_string()));
+        Ok(())
     }
 
-    fn reset_setting(&self, _key: &str) -> Result<(), String> {
-        Err("Noch nicht möglich.".to_string())
+    fn reset_setting(&self, key: &str) -> Result<(), String> {
+        self.0.settings.reset(key).map_err(|e| e.to_string())?;
+        self.0
+            .events
+            .record(EventKind::SettingReset, Some(key.to_string()));
+        Ok(())
     }
 }

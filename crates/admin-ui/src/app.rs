@@ -9,8 +9,8 @@ use leptos_router::{
 
 use crate::{
     api::{
-        ChangePassword, Login, Logout, Session, SettingEntry, Source, error_text, get_session,
-        get_settings,
+        ChangePassword, Login, Logout, ResetSetting, SaveSetting, Session, SettingEntry, Source,
+        error_text, get_session, get_settings,
     },
     labels::label,
 };
@@ -255,7 +255,9 @@ fn source_text(entry: &SettingEntry) -> &'static str {
 
 #[component]
 fn SettingsPage() -> impl IntoView {
-    let settings = Resource::new(|| (), |_| get_settings());
+    let refresh = SettingsRefresh(RwSignal::new(0));
+    provide_context(refresh);
+    let settings = Resource::new(move || refresh.0.get(), |_| get_settings());
     view! {
         <h1>"Einstellungen"</h1>
         <Transition fallback=|| view! { <p>"Lädt …"</p> }>
@@ -294,6 +296,10 @@ fn SettingsPage() -> impl IntoView {
     }
 }
 
+/// Bumped after a value is saved or reset, so the page loads them again.
+#[derive(Clone, Copy)]
+struct SettingsRefresh(RwSignal<u32>);
+
 #[component]
 fn SettingRow(entry: SettingEntry) -> impl IntoView {
     let text = label(&entry.key);
@@ -302,12 +308,54 @@ fn SettingRow(entry: SettingEntry) -> impl IntoView {
         .clone()
         .unwrap_or_else(|| "nicht gesetzt".to_string());
     let source = source_text(&entry);
+    let save = ServerAction::<SaveSetting>::new();
+    let reset = ServerAction::<ResetSetting>::new();
+    let refresh = expect_context::<SettingsRefresh>().0;
+    Effect::new(move |_| {
+        let saved = matches!(save.value().get(), Some(Ok(())));
+        let was_reset = matches!(reset.value().get(), Some(Ok(())));
+        if saved || was_reset {
+            refresh.update(|n| *n += 1);
+        }
+    });
+
+    let key = entry.key.clone();
+    let input_id = format!("value-{key}");
+    // What the field starts with: the saved value, else the one in effect.
+    // A reported MAC is not prefilled, since the field holds only the fallback.
+    let initial = if entry.secret {
+        String::new()
+    } else if entry.source == Source::Reported {
+        entry.saved.clone().unwrap_or_default()
+    } else {
+        entry
+            .saved
+            .clone()
+            .or(entry.value.clone())
+            .unwrap_or_default()
+    };
+    let placeholder = if entry.secret {
+        "Neues Token (leer = entfernen)"
+    } else if entry.optional {
+        "leer lassen = nicht gesetzt"
+    } else {
+        ""
+    };
     let fallback = (entry.source == Source::Reported)
         .then(|| entry.saved.clone())
         .flatten()
         .map(|saved| view! { <p class="hint">"Eingetragener Ersatzwert: " {saved}</p> });
+    let mac_note = (entry.key == "PC_MAC").then(|| {
+        view! {
+            <p class="hint">
+                "Ein eingetragener Wert wirkt nur, solange der PC-Dienst keine eigene MAC meldet."
+            </p>
+        }
+    });
+    let can_reset = entry.source == Source::Saved || entry.saved.is_some();
+    let (save_key, reset_key, section_id) = (key.clone(), key.clone(), key.clone());
     view! {
-        <section class="panel setting" id=entry.key.clone()>
+        <section class="panel setting" id=section_id>
             <h2>{text.title}</h2>
             <p class="hint">{text.help}</p>
             <p class="current">
@@ -317,7 +365,37 @@ fn SettingRow(entry: SettingEntry) -> impl IntoView {
             </p>
             {fallback}
             {entry.restart.then(|| view! { <p class="hint">"Gilt nach Neustart."</p> })}
-            <p class="hint key">{entry.key.clone()}</p>
+            <ActionForm action=save attr:class="edit">
+                <input type="hidden" name="key" value=save_key />
+                <label for=input_id.clone() class="visually-hidden">
+                    {format!("Neuer Wert für {}", text.title)}
+                </label>
+                <input
+                    id=input_id
+                    type=if entry.secret { "password" } else { "text" }
+                    name="value"
+                    value=initial
+                    placeholder=placeholder
+                    autocomplete="off"
+                />
+                <button type="submit">"Speichern"</button>
+            </ActionForm>
+            {mac_note}
+            {can_reset
+                .then(|| {
+                    view! {
+                        <ActionForm action=reset attr:class="reset">
+                            <input type="hidden" name="key" value=reset_key />
+                            <button type="submit" class="secondary">
+                                "Zurücksetzen"
+                            </button>
+                            <span class="hint">" auf Umgebungsvariable oder Vorgabe"</span>
+                        </ActionForm>
+                    }
+                })}
+            {action_error(save.value())}
+            {action_error(reset.value())}
+            <p class="hint key">{key}</p>
         </section>
     }
 }

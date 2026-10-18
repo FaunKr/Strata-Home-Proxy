@@ -88,5 +88,8 @@ New-NetFirewallRule -DisplayName "Strata nur vom NAS" -Direction Inbound -Protoc
 
 Erst wenn der Proxy auf dem NAS läuft (siehe README):
 
+- [ ] `http://<NAS-IP>:8080/admin/` öffnen, mit `admin` (oder `UI_PASSWORD`) anmelden und ein eigenes Passwort festlegen
+- [ ] Unter *Einstellungen* prüfen, dass Strata-Adresse, MAC und PC-Dienst stimmen
+
 - [ ] Claude Code / Skill `local-agent`: `STRATA_URLS` auf `http://<NAS-IP>:8080`
 - [ ] Open WebUI (falls genutzt) auf die NAS-Adresse

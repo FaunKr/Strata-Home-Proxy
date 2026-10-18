@@ -97,3 +97,132 @@ async fn reported_mac_is_shown_above_the_saved_one() {
     assert!(html.contains("vom PC gemeldet"), "{html}");
     assert!(html.contains("Ersatzwert"), "{html}");
 }
+
+async fn save(b: &mut Browser, key: &str, value: &str) -> reqwest::Response {
+    b.call("save-setting", &[("key", key), ("value", value)])
+        .await
+}
+
+#[tokio::test]
+async fn saving_and_resetting_need_a_login() {
+    let s = setup(true, |_| {}).await;
+    let mut b = Browser::new(&s.url);
+    assert_eq!(save(&mut b, "IDLE_TIMEOUT_SECS", "1").await.status(), 401);
+    assert_eq!(
+        b.call("reset-setting", &[("key", "IDLE_TIMEOUT_SECS")])
+            .await
+            .status(),
+        401
+    );
+    assert_eq!(s.state.cfg().idle_timeout.as_secs(), 3600);
+}
+
+#[tokio::test]
+async fn saved_strata_url_applies_at_once_and_reset_restores_it() {
+    use std::sync::{Arc, atomic::Ordering};
+    let s = setup(true, |_| {}).await;
+    let other = Arc::new(FakePc::default());
+    other.awake.store(true, Ordering::SeqCst);
+    let other_strata = serve_strata(other.clone()).await;
+    let mut b = logged_in(&s.url).await;
+
+    let resp = save(&mut b, "STRATA_URL", &format!("http://{other_strata}")).await;
+    assert_eq!(resp.status(), 200);
+    post_json(&s.url, "/v1/messages", serde_json::json!({})).await;
+    assert_eq!(other.api_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        entry(&settings(&mut b).await, "STRATA_URL")["source"],
+        "Saved"
+    );
+
+    let resp = b.call("reset-setting", &[("key", "STRATA_URL")]).await;
+    assert_eq!(resp.status(), 200);
+    post_json(&s.url, "/v1/messages", serde_json::json!({})).await;
+    assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 1);
+    assert_ne!(
+        entry(&settings(&mut b).await, "STRATA_URL")["source"],
+        "Saved"
+    );
+}
+
+#[tokio::test]
+async fn saved_idle_timeout_brings_sleep_forward() {
+    use std::{sync::atomic::Ordering, time::Duration};
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    post_json(&s.url, "/v1/messages", serde_json::json!({})).await;
+    assert_eq!(save(&mut b, "IDLE_TIMEOUT_SECS", "1").await.status(), 200);
+    tokio::time::sleep(Duration::from_millis(1300)).await;
+    assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn invalid_values_are_rejected_with_a_message() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    for (key, value) in [
+        ("IDLE_TIMEOUT_SECS", "bald"),
+        ("PC_MAC", "12:34"),
+        ("STRATA_URL", "pc:8080"),
+        ("WOL_ADDR", "192.168.1.255"),
+        ("IDLE_TIMEOUT_SECS", ""),
+        ("DATA_DIR", "/tmp"),
+    ] {
+        let resp = save(&mut b, key, value).await;
+        assert_eq!(resp.status(), 400, "{key}={value}");
+        assert!(!resp.text().await.unwrap().is_empty());
+    }
+    let resp = save(&mut b, "IDLE_TIMEOUT_SECS", "bald").await;
+    assert!(resp.text().await.unwrap().contains("ganze Zahl"));
+    assert_eq!(s.state.cfg().idle_timeout.as_secs(), 3600);
+    assert!(
+        s.state
+            .settings
+            .entries()
+            .iter()
+            .all(|e| e.source != strata_nas_proxy::settings::Source::Saved)
+    );
+}
+
+#[tokio::test]
+async fn changes_are_logged_without_secrets() {
+    use strata_nas_proxy::events::EventKind;
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(
+        save(&mut b, "PC_AGENT_TOKEN", "streng-geheim")
+            .await
+            .status(),
+        200
+    );
+    b.call("reset-setting", &[("key", "PC_AGENT_TOKEN")]).await;
+    let events = s.state.events.recent();
+    let changes: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::SettingSaved | EventKind::SettingReset))
+        .collect();
+    assert_eq!(changes.len(), 2);
+    assert!(
+        changes
+            .iter()
+            .all(|e| e.detail.as_deref() == Some("PC_AGENT_TOKEN"))
+    );
+    let all = serde_json::to_string(&events).unwrap();
+    assert!(!all.contains("streng-geheim"));
+}
+
+#[tokio::test]
+async fn saved_values_survive_a_restart() {
+    let dir = std::env::temp_dir().join(format!("strata-page-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let base = Config {
+        data_dir: Some(dir.clone()),
+        ..Config::default()
+    };
+    let first = AppState::new(base.clone());
+    let mut b = logged_in(&format!("http://{}", serve(api_router(first)).await)).await;
+    assert_eq!(save(&mut b, "WAKE_TIMEOUT_SECS", "99").await.status(), 200);
+    let second = AppState::new(base);
+    assert_eq!(second.cfg().wake_timeout.as_secs(), 99);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

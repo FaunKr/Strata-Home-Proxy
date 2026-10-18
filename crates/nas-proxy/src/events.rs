@@ -22,6 +22,9 @@ pub enum EventKind {
     SleepRefused,
     GamingRejected,
     PasswordChanged,
+    /// Detail: the setting's name, never its value.
+    SettingSaved,
+    SettingReset,
 }
 
 #[derive(Clone, Debug, Serialize)]

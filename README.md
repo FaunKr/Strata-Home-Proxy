@@ -75,6 +75,14 @@ Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
   meldet alle anderen Geräte ab.
 - **Passwort vergessen:** `/data/admin-password.json` löschen und den Container
   neu starten, dann gilt wieder das Standardpasswort.
+- **Einstellungen:** Jeder Wert aus [deploy/env.example](deploy/env.example)
+  außer `DATA_DIR` lässt sich dort ändern und gilt sofort, nur die Adresse des
+  Proxys (`LISTEN_ADDR`) erst nach einem Neustart. Es gilt der Wert von der
+  Seite, sonst die Umgebungsvariable, sonst die Vorgabe; „Zurücksetzen“ verwirft
+  den Wert von der Seite. Bei der MAC hat die vom PC-Dienst gemeldete Vorrang.
+  Gespeichert wird in `/data/settings.json`; ohne `DATA_DIR` warnt die Seite,
+  dass Änderungen beim Neustart verloren gehen. Das Token des PC-Dienstes wird
+  nie angezeigt.
 - Nach 5 Fehlversuchen von derselben Adresse ist die Anmeldung 1 min gesperrt.
   `/admin/` ist überall erreichbar, wo die API erreichbar ist; das Passwort ist
   der einzige Schutz.

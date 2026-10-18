@@ -100,15 +100,13 @@ pub async fn get_settings() -> Result<SettingsView, ServerFnError> {
 #[server(prefix = "/admin/api", endpoint = "save-setting")]
 pub async fn save_setting(key: String, value: String) -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend()
-        .save_setting(&key, &value)
-        .map_err(|e| bad_request(e))
+    backend().save_setting(&key, &value).map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "reset-setting")]
 pub async fn reset_setting(key: String) -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().reset_setting(&key).map_err(|e| bad_request(e))
+    backend().reset_setting(&key).map_err(bad_request)
 }
 
 #[cfg(feature = "ssr")]

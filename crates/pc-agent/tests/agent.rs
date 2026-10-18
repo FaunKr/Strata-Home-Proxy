@@ -228,3 +228,51 @@ async fn without_managed_values_the_configuration_applies() {
         ["llama-server.exe"]
     );
 }
+
+#[tokio::test]
+async fn without_a_start_script_the_service_runs_but_leaves_strata_alone() {
+    // The one-line setup leaves start script and programs empty; the Strata
+    // page sets them later.
+    let s = setup_with("no-start", |cfg| {
+        cfg.strata_start = None;
+        cfg.strata_processes = vec![];
+    })
+    .await;
+    s.fake.strata_up.store(false, Ordering::SeqCst);
+    for _ in 0..3 {
+        s.agent.watchdog_tick().await;
+    }
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+
+    let status = status_json(&s).await;
+    assert_eq!(status["strata_running"], false);
+    let (code, _) = sleep_answer(&s).await;
+    assert_eq!(code, 200);
+
+    // Gaming on and off works and starts or ends nothing.
+    s.agent.set_gaming(true);
+    assert!(s.agent.gaming());
+    s.agent.set_gaming(false);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn managed_start_script_applies_without_one_in_the_configuration() {
+    let s = setup_with("managed-only", |cfg| {
+        cfg.strata_start = None;
+        cfg.strata_processes = vec![];
+        let managed = json!({
+            "strata_start": "C:\\Strata\\run-qwen.bat",
+            "strata_processes": ["C:\\Strata\\"],
+        });
+        let dir = cfg.state_dir.clone().unwrap();
+        std::fs::write(dir.join("strata-managed.json"), managed.to_string()).unwrap();
+    })
+    .await;
+    s.agent.set_gaming(true);
+    s.agent.set_gaming(false);
+    let (program, _) = s.fake.started.lock().unwrap().clone().unwrap();
+    assert_eq!(program, PathBuf::from("C:\\Strata\\run-qwen.bat"));
+}

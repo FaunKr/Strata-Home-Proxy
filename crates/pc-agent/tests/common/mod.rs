@@ -268,7 +268,7 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         allowed_clients: vec!["192.168.1.10".parse().unwrap()],
         strata_url: format!("http://{strata}"),
         strata_api_key: None,
-        strata_start: "START-HERE.bat".into(),
+        strata_start: Some("START-HERE.bat".into()),
         strata_args: vec![],
         strata_processes: vec!["llama-server.exe".into()],
         user_idle_minutes: 10,

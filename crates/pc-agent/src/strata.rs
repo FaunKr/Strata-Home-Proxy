@@ -414,7 +414,7 @@ fn installed_model(dir: &Path, model: &str) -> Result<String, Refusal> {
 /// The model the managed start script starts, in the catalog's letter case.
 fn active_model(agent: &Agent) -> Option<String> {
     let managed = agent.managed();
-    let (start, _) = managed.start(&agent.cfg);
+    let (start, _) = managed.start(&agent.cfg)?;
     let script = start.file_name()?.to_string_lossy().to_lowercase();
     installed_models(&agent.cfg.strata_dir)
         .find(|id| run_script(id) == script)

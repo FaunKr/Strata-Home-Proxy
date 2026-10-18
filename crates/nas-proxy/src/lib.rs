@@ -5,6 +5,7 @@ pub mod agent;
 pub mod auth;
 pub mod config;
 pub mod events;
+pub mod files;
 pub mod proxy;
 pub mod settings;
 pub mod state;

@@ -33,6 +33,9 @@ pub async fn login(password: String) -> Result<(), ServerFnError> {
 
 #[server(prefix = "/admin/api", endpoint = "logout")]
 pub async fn logout() -> Result<(), ServerFnError> {
+    if let Some(token) = token().await {
+        backend().logout(&token);
+    }
     clear_cookie();
     Ok(())
 }
@@ -50,7 +53,7 @@ pub async fn change_password(
         ));
     }
     let token = backend()
-        .change_password(&token, &current, &new)
+        .change_password(&token, &current, &new, client_ip().await)
         .map_err(ServerFnError::new)?;
     set_cookie(&token);
     Ok(())

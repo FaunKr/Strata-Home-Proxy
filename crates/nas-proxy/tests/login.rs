@@ -103,8 +103,29 @@ async fn changing_the_password_ends_other_sessions() {
     assert_eq!(first.session().await, "Ready");
     assert_eq!(second.session().await, "Anonymous");
 
+    // Logging out ends the session also for a copy of the cookie.
+    let mut copy = Browser::new(&s.url);
+    copy.cookie = first.cookie.clone();
     first.call("logout", &[]).await;
     assert_eq!(first.session().await, "Anonymous");
+    assert_eq!(copy.session().await, "Anonymous");
+}
+
+#[tokio::test]
+async fn wrong_current_password_counts_as_failed_attempt() {
+    let s = setup(true, |_| {}).await;
+    let mut b = Browser::new(&s.url);
+    b.call("login", &[("password", "admin")]).await;
+    for _ in 0..5 {
+        assert_ne!(
+            change(&mut b, "geraten", "ein langes Passwort")
+                .await
+                .status(),
+            200
+        );
+    }
+    let resp = change(&mut b, "admin", "ein langes Passwort").await;
+    assert!(resp.text().await.unwrap().contains("Zu viele Fehlversuche"));
 }
 
 async fn proxy_on(dir: &std::path::Path) -> String {

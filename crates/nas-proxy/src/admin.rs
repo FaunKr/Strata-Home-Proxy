@@ -36,12 +36,22 @@ impl Backend for UiBackend {
             .map_err(|e| e.to_string())
     }
 
-    fn change_password(&self, token: &str, current: &str, new: &str) -> Result<String, String> {
-        let result = self.0.auth.change_password(token, current, new);
+    fn change_password(
+        &self,
+        token: &str,
+        current: &str,
+        new: &str,
+        client: IpAddr,
+    ) -> Result<String, String> {
+        let result = self.0.auth.change_password(token, current, new, client);
         if result.is_ok() {
             self.0.events.record(EventKind::PasswordChanged, None);
         }
         result.map_err(|e: AuthError| e.to_string())
+    }
+
+    fn logout(&self, token: &str) {
+        self.0.auth.logout(token);
     }
 
     fn settings(&self) -> SettingsView {

@@ -30,7 +30,15 @@ pub trait Backend: Send + Sync + 'static {
     /// A session token, or a message for the user.
     fn login(&self, password: &str, client: IpAddr) -> Result<String, String>;
     /// A new session token, or a message for the user.
-    fn change_password(&self, token: &str, current: &str, new: &str) -> Result<String, String>;
+    fn change_password(
+        &self,
+        token: &str,
+        current: &str,
+        new: &str,
+        client: IpAddr,
+    ) -> Result<String, String>;
+    /// Ends the session of this token, also for copies of the cookie.
+    fn logout(&self, token: &str);
     fn settings(&self) -> SettingsView;
     /// Saves one value; a message for the user if it is invalid.
     fn save_setting(&self, key: &str, value: &str) -> Result<(), String>;

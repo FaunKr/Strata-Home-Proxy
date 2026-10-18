@@ -99,3 +99,13 @@ async fn saved_values_are_seen_by_a_second_proxy() {
     assert_eq!(wake.value.as_deref(), Some("77"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[tokio::test]
+async fn changed_wol_addr_goes_into_the_next_magic_packet() {
+    let s = setup(false, |c| c.wol_addr = "127.0.0.1:9".parse().unwrap()).await;
+    let wol = wol_listener(s.pc.clone()).await;
+    s.state.settings.set("WOL_ADDR", &wol.to_string()).unwrap();
+    let resp = post_json(&s.url, "/v1/messages", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    assert!(s.pc.wol_packets.load(Ordering::SeqCst) >= 1);
+}

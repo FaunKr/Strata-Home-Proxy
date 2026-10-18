@@ -22,15 +22,19 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
+use crate::files::write_private;
+
 pub const DEFAULT_PASSWORD: &str = "admin";
 pub const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 3600);
 pub const MIN_PASSWORD_LEN: usize = 8;
 /// Failed logins from one address before it has to wait.
 const MAX_FAILURES: u32 = 5;
 const LOCKOUT: Duration = Duration::from_secs(60);
+const MAX_TRACKED_CLIENTS: usize = 1000;
 
 const PASSWORD_FILE: &str = "admin-password.json";
 const KEY_FILE: &str = "session-key";
+const REVOKED_FILE: &str = "revoked-sessions.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionState {
@@ -47,6 +51,8 @@ pub enum AuthError {
     Throttled(Duration),
     NotLoggedIn,
     WeakPassword,
+    /// The new password could not be written to `DATA_DIR`.
+    NotSaved,
 }
 
 impl std::fmt::Display for AuthError {
@@ -59,6 +65,10 @@ impl std::fmt::Display for AuthError {
                 wait.as_secs().max(1)
             ),
             Self::NotLoggedIn => write!(f, "Nicht angemeldet."),
+            Self::NotSaved => write!(
+                f,
+                "Das neue Passwort konnte nicht gespeichert werden. Das alte gilt weiter."
+            ),
             Self::WeakPassword => write!(
                 f,
                 "Das neue Passwort braucht mindestens {MIN_PASSWORD_LEN} Zeichen und darf nicht das Standardpasswort sein."
@@ -77,6 +87,9 @@ struct Stored {
 struct Inner {
     stored: Option<Stored>,
     failures: HashMap<IpAddr, (u32, Option<Instant>)>,
+    /// Logged-out tokens with their expiry (Unix seconds), so a copied cookie
+    /// stops working too.
+    revoked: HashMap<String, u64>,
 }
 
 pub struct Auth {
@@ -99,10 +112,19 @@ impl Auth {
                 }
             }
         });
-        let key = data_dir
-            .as_deref()
-            .map(load_or_create_key)
-            .unwrap_or_else(random_key);
+        // Without an own password (first start, or the file was deleted to
+        // reset it) a new key ends every old session; otherwise a cookie from
+        // before the reset could come back once the generation count repeats.
+        let key = match (&data_dir, &stored) {
+            (Some(dir), Some(_)) => load_or_create_key(dir),
+            (Some(dir), None) => new_key(dir),
+            (None, _) => random_key(),
+        };
+        let revoked = data_dir
+            .as_ref()
+            .and_then(|dir| std::fs::read_to_string(dir.join(REVOKED_FILE)).ok())
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
         Self {
             dir: data_dir,
             default_password: ui_password
@@ -112,6 +134,7 @@ impl Auth {
             inner: Mutex::new(Inner {
                 stored,
                 failures: HashMap::new(),
+                revoked,
             }),
         }
     }
@@ -119,7 +142,7 @@ impl Auth {
     pub fn session_state(&self, token: Option<&str>) -> SessionState {
         let inner = self.inner.lock().unwrap();
         let generation = inner.stored.as_ref().map_or(0, |s| s.generation);
-        match token.and_then(|t| self.verify_token(t)) {
+        match token.and_then(|t| self.valid_generation(&inner, t)) {
             Some(g) if g == generation && inner.stored.is_some() => SessionState::Ready,
             Some(g) if g == generation => SessionState::MustChange,
             _ => SessionState::Anonymous,
@@ -129,28 +152,7 @@ impl Auth {
     /// Checks the password and returns a session token.
     pub fn login(&self, password: &str, client: IpAddr) -> Result<String, AuthError> {
         let mut inner = self.inner.lock().unwrap();
-        let now = Instant::now();
-        if let Some((_, Some(until))) = inner.failures.get(&client)
-            && *until > now
-        {
-            return Err(AuthError::Throttled(*until - now));
-        }
-        let ok = match &inner.stored {
-            Some(stored) => verify_hash(&stored.hash, password),
-            None => constant_time_eq(password.as_bytes(), self.default_password.as_bytes()),
-        };
-        if !ok {
-            let entry = inner.failures.entry(client).or_insert((0, None));
-            if entry.1.is_some_and(|until| until <= now) {
-                *entry = (0, None);
-            }
-            entry.0 += 1;
-            if entry.0 >= MAX_FAILURES {
-                entry.1 = Some(now + LOCKOUT);
-            }
-            return Err(AuthError::WrongPassword);
-        }
-        inner.failures.remove(&client);
+        self.check_password(&mut inner, password, client)?;
         let generation = inner.stored.as_ref().map_or(0, |s| s.generation);
         Ok(self.issue_token(generation))
     }
@@ -162,8 +164,11 @@ impl Auth {
         token: &str,
         current: &str,
         new: &str,
+        client: IpAddr,
     ) -> Result<String, AuthError> {
-        if self.session_state(Some(token)) == SessionState::Anonymous {
+        let mut inner = self.inner.lock().unwrap();
+        let generation = inner.stored.as_ref().map_or(0, |s| s.generation);
+        if self.valid_generation(&inner, token) != Some(generation) {
             return Err(AuthError::NotLoggedIn);
         }
         if new.chars().count() < MIN_PASSWORD_LEN
@@ -172,49 +177,116 @@ impl Auth {
         {
             return Err(AuthError::WeakPassword);
         }
-        let mut inner = self.inner.lock().unwrap();
-        let ok = match &inner.stored {
-            Some(stored) => verify_hash(&stored.hash, current),
-            None => constant_time_eq(current.as_bytes(), self.default_password.as_bytes()),
-        };
-        if !ok {
-            return Err(AuthError::WrongPassword);
-        }
+        // Counts towards the same limit as logins: a stolen cookie must not
+        // allow guessing the password either.
+        self.check_password(&mut inner, current, client)?;
         let salt = SaltString::generate(&mut OsRng);
         let hash = Argon2::default()
             .hash_password(new.as_bytes(), &salt)
             .expect("hashing works")
             .to_string();
-        let generation = inner.stored.as_ref().map_or(0, |s| s.generation) + 1;
-        let stored = Stored { hash, generation };
+        let stored = Stored {
+            hash,
+            generation: generation + 1,
+        };
         if let Some(dir) = &self.dir {
             let text = serde_json::to_string(&stored).expect("serializes");
-            if let Err(e) = write_private(dir, PASSWORD_FILE, text.as_bytes()) {
+            write_private(dir, PASSWORD_FILE, text.as_bytes()).map_err(|e| {
                 tracing::warn!("Passwort nicht gespeichert: {e}");
-            }
+                AuthError::NotSaved
+            })?;
         }
         inner.stored = Some(stored);
-        Ok(self.issue_token(generation))
+        Ok(self.issue_token(generation + 1))
     }
 
-    /// Token: `expires.generation.signature`, signed with the session key.
+    /// Compares with the own password, or the default one while none is
+    /// saved, and slows down repeated failures from one address.
+    fn check_password(
+        &self,
+        inner: &mut Inner,
+        password: &str,
+        client: IpAddr,
+    ) -> Result<(), AuthError> {
+        let now = Instant::now();
+        if let Some((_, Some(until))) = inner.failures.get(&client)
+            && *until > now
+        {
+            return Err(AuthError::Throttled(*until - now));
+        }
+        let ok = match &inner.stored {
+            Some(stored) => verify_hash(&stored.hash, password),
+            None => constant_time_eq(password.as_bytes(), self.default_password.as_bytes()),
+        };
+        if ok {
+            inner.failures.remove(&client);
+            return Ok(());
+        }
+        if inner.failures.len() >= MAX_TRACKED_CLIENTS {
+            // Forget addresses that are not locked out, so the map stays small.
+            inner
+                .failures
+                .retain(|_, (_, until)| until.is_some_and(|u| u > now));
+        }
+        let entry = inner.failures.entry(client).or_insert((0, None));
+        if entry.1.is_some_and(|until| until <= now) {
+            *entry = (0, None);
+        }
+        entry.0 += 1;
+        if entry.0 >= MAX_FAILURES {
+            entry.1 = Some(now + LOCKOUT);
+        }
+        Err(AuthError::WrongPassword)
+    }
+
+    /// Ends one session, also for copies of its cookie.
+    pub fn logout(&self, token: &str) {
+        let Some((expires, _)) = self.verify_token(token) else {
+            return;
+        };
+        let mut inner = self.inner.lock().unwrap();
+        let now = unix_now();
+        inner.revoked.retain(|_, exp| *exp >= now);
+        inner.revoked.insert(token.to_string(), expires);
+        if let Some(dir) = &self.dir {
+            let text = serde_json::to_string(&inner.revoked).expect("serializes");
+            if let Err(e) = write_private(dir, REVOKED_FILE, text.as_bytes()) {
+                tracing::warn!("Abmeldung nicht gespeichert: {e}");
+            }
+        }
+    }
+
+    /// The generation of a token that is valid and not logged out.
+    fn valid_generation(&self, inner: &Inner, token: &str) -> Option<u64> {
+        if inner.revoked.contains_key(token) {
+            return None;
+        }
+        self.verify_token(token).map(|(_, generation)| generation)
+    }
+
+    /// Token: `expires.generation.nonce.signature`, signed with the session
+    /// key. The nonce tells sessions apart, so one can be logged out alone.
     fn issue_token(&self, generation: u64) -> String {
         let expires = unix_now() + SESSION_LIFETIME.as_secs();
-        let payload = format!("{expires}.{generation}");
+        let mut nonce = [0u8; 8];
+        OsRng.fill_bytes(&mut nonce);
+        let payload = format!("{expires}.{generation}.{}", hex(&nonce));
         format!("{payload}.{}", hex(&self.sign(&payload)))
     }
 
-    /// The generation of a valid, unexpired token.
-    fn verify_token(&self, token: &str) -> Option<u64> {
+    /// Expiry and generation of a correctly signed, unexpired token.
+    fn verify_token(&self, token: &str) -> Option<(u64, u64)> {
         let (payload, signature) = token.rsplit_once('.')?;
         let mut mac = self.mac();
         mac.update(payload.as_bytes());
         mac.verify_slice(&unhex(signature)?).ok()?;
-        let (expires, generation) = payload.split_once('.')?;
-        if expires.parse::<u64>().ok()? < unix_now() {
+        let mut parts = payload.split('.');
+        let (expires, generation) = (parts.next()?, parts.next()?);
+        let expires = expires.parse::<u64>().ok()?;
+        if expires < unix_now() {
             return None;
         }
-        generation.parse().ok()
+        Some((expires, generation.parse().ok()?))
     }
 
     fn mac(&self) -> Hmac<Sha256> {
@@ -246,13 +318,7 @@ fn random_key() -> [u8; 32] {
     key
 }
 
-/// The session key survives restarts, so logins do too.
-fn load_or_create_key(dir: &Path) -> [u8; 32] {
-    if let Ok(bytes) = std::fs::read(dir.join(KEY_FILE))
-        && let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice())
-    {
-        return key;
-    }
+fn new_key(dir: &Path) -> [u8; 32] {
     let key = random_key();
     if let Err(e) = write_private(dir, KEY_FILE, &key) {
         tracing::warn!("Sitzungsschlüssel nicht gespeichert: {e}");
@@ -260,16 +326,14 @@ fn load_or_create_key(dir: &Path) -> [u8; 32] {
     key
 }
 
-fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!("{name}.tmp"));
-    std::fs::write(&tmp, bytes)?;
-    #[cfg(unix)]
+/// The session key survives restarts, so logins do too.
+fn load_or_create_key(dir: &Path) -> [u8; 32] {
+    if let Ok(bytes) = std::fs::read(dir.join(KEY_FILE))
+        && let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice())
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        return key;
     }
-    std::fs::rename(&tmp, dir.join(name))
+    new_key(dir)
 }
 
 fn unix_now() -> u64 {
@@ -306,11 +370,11 @@ mod tests {
         let token = auth.login("admin", IP).unwrap();
         assert_eq!(auth.session_state(Some(&token)), SessionState::MustChange);
         assert_eq!(
-            auth.change_password(&token, "admin", "kurz"),
+            auth.change_password(&token, "admin", "kurz", IP),
             Err(AuthError::WeakPassword)
         );
         let token = auth
-            .change_password(&token, "admin", "ein langes Passwort")
+            .change_password(&token, "admin", "ein langes Passwort", IP)
             .unwrap();
         assert_eq!(auth.session_state(Some(&token)), SessionState::Ready);
         assert_eq!(auth.login("admin", IP), Err(AuthError::WrongPassword));
@@ -340,5 +404,22 @@ mod tests {
         ));
         let other: IpAddr = "10.0.0.2".parse().unwrap();
         assert!(auth.login("admin", other).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod logout_tests {
+    use super::*;
+
+    const IP: IpAddr = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+
+    #[test]
+    fn logout_ends_copies_of_the_cookie() {
+        let auth = Auth::new(None, None);
+        let token = auth.login("admin", IP).unwrap();
+        let other = auth.login("admin", IP).unwrap();
+        auth.logout(&token);
+        assert_eq!(auth.session_state(Some(&token)), SessionState::Anonymous);
+        assert_eq!(auth.session_state(Some(&other)), SessionState::MustChange);
     }
 }

@@ -5,14 +5,17 @@
 
 use std::{
     collections::{BTreeMap, HashSet},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, RwLock},
 };
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Config, FIELDS, Field, find_field, format_mac, parse_mac};
+use crate::{
+    config::{Config, FIELDS, Field, find_field, format_mac, parse_mac},
+    files::write_private,
+};
 
 const SETTINGS_FILE: &str = "settings.json";
 const REPORTED_MAC_FILE: &str = "pc-mac";
@@ -114,19 +117,20 @@ impl Settings {
         let mut check = self.current().as_ref().clone();
         check.apply(key, raw)?;
         let mut inner = self.inner.write().unwrap();
-        inner.saved.insert(key.to_string(), raw.to_string());
-        self.commit(&mut inner);
-        Ok(())
+        let mut saved = inner.saved.clone();
+        saved.insert(key.to_string(), raw.to_string());
+        self.commit(&mut inner, saved)
     }
 
     /// Drops a saved value, so the environment or default applies again.
     pub fn reset(&self, key: &str) -> Result<()> {
         find_field(key).ok_or_else(|| anyhow::anyhow!("unbekannte Einstellung {key}"))?;
         let mut inner = self.inner.write().unwrap();
-        if inner.saved.remove(key).is_some() {
-            self.commit(&mut inner);
+        let mut saved = inner.saved.clone();
+        if saved.remove(key).is_none() {
+            return Ok(());
         }
-        Ok(())
+        self.commit(&mut inner, saved)
     }
 
     /// Takes the MAC the PC service reported. Returns true if it is new.
@@ -136,8 +140,10 @@ impl Settings {
             return false;
         }
         inner.reported_mac = Some(mac);
-        if let Some(dir) = &self.base.data_dir {
-            write_file(dir, REPORTED_MAC_FILE, &format_mac(mac));
+        if let Some(dir) = &self.base.data_dir
+            && let Err(e) = write_private(dir, REPORTED_MAC_FILE, format_mac(mac).as_bytes())
+        {
+            tracing::warn!("Gemeldete MAC nicht gespeichert: {e}");
         }
         inner.current = Arc::new(resolve(&self.base, &inner.saved, inner.reported_mac));
         true
@@ -175,15 +181,20 @@ impl Settings {
             .collect()
     }
 
-    fn commit(&self, inner: &mut Inner) {
-        inner.current = Arc::new(resolve(&self.base, &inner.saved, inner.reported_mac));
+    /// Writes `saved` to disk first and takes it over only if that worked, so
+    /// the page never reports a value as saved that a restart would lose.
+    fn commit(&self, inner: &mut Inner, saved: BTreeMap<String, String>) -> Result<()> {
         if let Some(dir) = &self.base.data_dir {
             let stored = Stored {
-                values: inner.saved.clone(),
+                values: saved.clone(),
             };
             let text = serde_json::to_string_pretty(&stored).expect("settings serialize");
-            write_file(dir, SETTINGS_FILE, &text);
+            write_private(dir, SETTINGS_FILE, text.as_bytes())
+                .map_err(|e| anyhow::anyhow!("nicht gespeichert: {e}"))?;
         }
+        inner.current = Arc::new(resolve(&self.base, &saved, inner.reported_mac));
+        inner.saved = saved;
+        Ok(())
     }
 }
 
@@ -207,20 +218,10 @@ fn read_file(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-/// Writes via a temporary file, so a crash never leaves half a file behind.
-fn write_file(dir: &Path, name: &str, text: &str) {
-    let result = std::fs::create_dir_all(dir).and_then(|()| {
-        let tmp: PathBuf = dir.join(format!("{name}.tmp"));
-        std::fs::write(&tmp, text)?;
-        std::fs::rename(&tmp, dir.join(name))
-    });
-    if let Err(e) = result {
-        tracing::warn!("{name} nicht gespeichert: {e}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     fn base(dir: Option<PathBuf>) -> Config {

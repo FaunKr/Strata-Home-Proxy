@@ -11,6 +11,10 @@ pub fn label(key: &str) -> Label {
             "Strata-Adresse",
             "Basis-URL von Strata auf dem PC, z. B. http://192.168.1.50:8080.",
         ),
+        "STRATA_API_KEY" => (
+            "API-Key von Strata",
+            "Nur damit die Übersicht /metrics lesen kann (laufende und wartende Anfragen, Token/s). Wird nie angezeigt.",
+        ),
         "PC_MAC" => (
             "MAC-Adresse des PCs",
             "Netzwerkkarte, die das Weckpaket empfängt. Meldet der PC-Dienst seine MAC, gilt diese.",
@@ -76,5 +80,25 @@ pub fn label(key: &str) -> Label {
     Label {
         title: if title.is_empty() { "Unbekannt" } else { title },
         help,
+    }
+}
+
+/// How the overview names an event from the history.
+pub fn event_label(kind: &str) -> &'static str {
+    match kind {
+        "wake_sent" => "Weckpaket gesendet",
+        "awake" => "Aufgewacht",
+        "wake_timeout" => "Nicht rechtzeitig aufgewacht",
+        "sleep_accepted" => "Schlafen angenommen",
+        "sleep_refused" => "Schlafen abgelehnt",
+        "gaming_rejected" => "Anfrage abgewiesen: Gaming-Modus",
+        "mac_learned" => "MAC-Adresse gemeldet",
+        "wake_requested" => "Wecken angefordert",
+        "sleep_requested" => "Schlafen angefordert",
+        "gaming_on" => "Gaming an",
+        "gaming_off" => "Gaming aus",
+        "keep_awake_set" => "Wach halten",
+        "keep_awake_ended" => "Wach halten beendet",
+        _ => "Ereignis",
     }
 }

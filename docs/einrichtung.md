@@ -90,6 +90,8 @@ Erst wenn der Proxy auf dem NAS läuft (siehe README):
 
 - [ ] `http://<NAS-IP>:8080/admin/` öffnen, mit `admin` (oder `UI_PASSWORD`) anmelden und ein eigenes Passwort festlegen
 - [ ] Unter *Einstellungen* prüfen, dass Strata-Adresse, MAC und PC-Dienst stimmen
+- [ ] Unter *Einstellungen* den API-Key von Strata eintragen, damit die Übersicht laufende und wartende Anfragen und Token/s zeigt
+- [ ] Die *Übersicht* zeigt PC und Strata richtig an; *Jetzt schlafen legen* und *Jetzt wecken* wirken
 
 Was die Weboberfläche speichert, liegt in `/data` und gilt sofort. Es geht vor
 den Umgebungsvariablen, die wiederum vor den eingebauten Standardwerten gelten.

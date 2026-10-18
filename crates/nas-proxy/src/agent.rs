@@ -69,6 +69,21 @@ impl AgentClient {
         resp.json().await.ok()
     }
 
+    /// Switches gaming mode: on ends Strata and blocks sleep, off starts it again.
+    pub async fn set_gaming(&self, enabled: bool) -> anyhow::Result<()> {
+        let req = self
+            .request(reqwest::Method::POST, "/gaming")
+            .ok_or_else(|| anyhow::anyhow!("PC_AGENT_URL ist nicht gesetzt"))?;
+        let resp = req
+            .json(&serde_json::json!({ "enabled": enabled }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("Der PC-Dienst hat abgelehnt (HTTP {}).", resp.status());
+        }
+        Ok(())
+    }
+
     pub async fn request_sleep(&self) -> anyhow::Result<SleepAnswer> {
         let req = self
             .request(reqwest::Method::POST, "/sleep")

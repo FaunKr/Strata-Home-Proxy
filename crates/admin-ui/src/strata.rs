@@ -339,7 +339,14 @@ fn ModelChoice(
     let projection = format!("{kind:?}-speed-projection");
     view! {
         <label for=picker.clone()>"Modell"</label>
-        <select id=picker on:change=move |ev| choice.set(event_target_value(&ev))>
+        <select
+            id=picker
+            on:change=move |ev| {
+                choice.set(event_target_value(&ev));
+                // A tick counts only for the model it was given for.
+                speed_projection.set(false);
+            }
+        >
             {options}
         </select>
         <label for=ctx.clone()>"Kontext"</label>

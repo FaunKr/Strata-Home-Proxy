@@ -138,6 +138,38 @@ async fn another_model_can_get_the_experimental_speed_projection() {
 }
 
 #[tokio::test]
+async fn another_model_without_the_tick_gets_the_speed_projection_off() {
+    let s = setup("models-add-esp-off").await;
+    installed(&s);
+    let done = job(
+        &s,
+        json!({"kind": "add_model", "family": "qwen", "size": "Q2_0", "context": 65536}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+    assert!(
+        args.ends_with(&["--experimental-speed-projection".into(), "off".into()]),
+        "{args:?}"
+    );
+}
+
+#[tokio::test]
+async fn another_model_of_another_family_refuses_the_speed_projection() {
+    let s = setup("models-add-esp-swift").await;
+    installed(&s);
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "add_model", "family": "swift", "size": "IQ2_XS", "context": 65536,
+            "experimental_speed_projection": true}),
+    )
+    .await;
+    assert_eq!(code, 400, "{answer}");
+    assert!(s.fake.runs_of("START-HERE.bat").is_empty());
+}
+
+#[tokio::test]
 async fn activating_waits_for_a_running_request_and_switches_the_start_script() {
     let s = setup("models-activate").await;
     installed(&s);

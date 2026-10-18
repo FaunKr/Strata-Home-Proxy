@@ -103,7 +103,7 @@ pub enum JobRequest {
         size: String,
         context: u32,
         api_key: String,
-        /// Strata's experimental speed projection; only for qwen and coder.
+        /// Strata's experimental speed projection; only for families whose catalog entry offers it.
         #[serde(default)]
         experimental_speed_projection: bool,
     },
@@ -114,7 +114,7 @@ pub enum JobRequest {
         /// The key the proxy uses; without it the service's own.
         #[serde(default)]
         api_key: Option<String>,
-        /// Strata's experimental speed projection; only for qwen and coder.
+        /// Strata's experimental speed projection; only for families whose catalog entry offers it.
         #[serde(default)]
         experimental_speed_projection: bool,
     },
@@ -339,8 +339,14 @@ pub fn start(agent: &Arc<Agent>, request: JobRequest) -> Result<Job, Refusal> {
 /// Strata's experimental speed projection, only where setup offers it.
 fn check_speed_projection(size: &Size, wanted: bool) -> Result<bool, Refusal> {
     if wanted && !takes_speed_projection(size) {
+        let offered: Vec<_> = catalog::FAMILIES
+            .iter()
+            .filter(|f| f.speed_projection)
+            .map(|f| f.title)
+            .collect();
         return Err(Refusal::BadRequest(format!(
-            "Die experimentelle Speed-Projection gibt es nur für Qwen und Coder, nicht für {}",
+            "Die experimentelle Speed-Projection gibt es nur für {}, nicht für {}",
+            offered.join(" und "),
             size.id()
         )));
     }

@@ -173,7 +173,10 @@ async fn the_speed_projection_is_refused_for_other_families() {
         "api_key": KEY, "experimental_speed_projection": true});
     let (code, answer) = post(&s, "/strata/jobs", body).await;
     assert_eq!(code, 400, "{answer}");
-    assert!(answer.to_string().contains("Qwen und Coder"), "{answer}");
+    assert!(
+        answer.to_string().contains("nicht für swift-IQ2_XS"),
+        "{answer}"
+    );
     assert!(s.fake.ran.lock().unwrap().is_empty());
 }
 

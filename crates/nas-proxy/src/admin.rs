@@ -9,8 +9,8 @@ use std::{
 use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
     api::{
-        ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, Session, SettingEntry,
-        SettingsView, Source, StrataJobForm, StrataPage,
+        ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, PcSetupCommand, Session,
+        SettingEntry, SettingsView, Source, StrataJobForm, StrataPage,
     },
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
@@ -255,6 +255,10 @@ impl Backend for UiBackend {
     fn cancel_strata_job(&self) -> BoxFuture<'static, Result<(), String>> {
         let state = Arc::clone(&self.0);
         async move { crate::strata::cancel(&state).await }.boxed()
+    }
+
+    fn pc_setup_command(&self, host: &str) -> Result<PcSetupCommand, String> {
+        self.0.pc_setup.command(host)
     }
 }
 

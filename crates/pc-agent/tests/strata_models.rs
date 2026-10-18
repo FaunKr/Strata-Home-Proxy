@@ -444,7 +444,7 @@ async fn jobs_on_strata_need_an_installed_strata() {
 /// Strata set up by hand: start script and key only in the TOML.
 async fn set_up_by_hand(name: &str) -> Setup {
     let s = setup_with(name, |c| {
-        c.strata_start = c.strata_dir.join("run-iq3_xxs.bat");
+        c.strata_start = Some(c.strata_dir.join("run-iq3_xxs.bat"));
         c.strata_api_key = Some(OLD_KEY.into());
     })
     .await;
@@ -529,7 +529,7 @@ async fn a_damaged_model_config_stops_the_key_change() {
 #[tokio::test]
 async fn with_strata_started_by_start_here_the_model_used_last_is_active() {
     let s = setup_with("models-start-here", |c| {
-        c.strata_start = c.strata_dir.join("START-HERE.bat");
+        c.strata_start = Some(c.strata_dir.join("START-HERE.bat"));
     })
     .await;
     installed(&s);

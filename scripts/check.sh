@@ -14,4 +14,9 @@ if rustup target list --installed 2>/dev/null | grep -qx x86_64-pc-windows-gnu; 
 else
   echo "WARNUNG: Windows-Prüfung des PC-Dienstes übersprungen (rustup target add x86_64-pc-windows-gnu)" >&2
 fi
+# install.ps1 parses, as the CI job `windows` checks it; only where PowerShell
+# is installed.
+if command -v pwsh >/dev/null; then
+  pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("deploy/windows/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
+fi
 cargo test

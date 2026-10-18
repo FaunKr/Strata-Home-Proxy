@@ -51,11 +51,12 @@ impl Managed {
             .with_context(|| format!("{MANAGED_FILE} nicht gespeichert"))
     }
 
-    /// What starts Strata, and with which arguments.
-    pub fn start<'a>(&'a self, cfg: &'a Config) -> (&'a Path, &'a [String]) {
-        match &self.strata_start {
-            Some(start) => (start, &self.strata_args),
-            None => (&cfg.strata_start, &cfg.strata_args),
+    /// What starts Strata, and with which arguments; none until one is set.
+    pub fn start<'a>(&'a self, cfg: &'a Config) -> Option<(&'a Path, &'a [String])> {
+        match (&self.strata_start, &cfg.strata_start) {
+            (Some(start), _) => Some((start, &self.strata_args)),
+            (None, Some(start)) => Some((start, &cfg.strata_args)),
+            (None, None) => None,
         }
     }
 

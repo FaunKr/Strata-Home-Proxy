@@ -253,3 +253,84 @@ pub async fn post_json(url: &str, path: &str, body: Value) -> reqwest::Response 
 pub fn kinds(state: &AppState) -> Vec<EventKind> {
     state.events.recent().into_iter().map(|e| e.kind).collect()
 }
+
+/// A browser with one cookie jar.
+pub struct Browser {
+    pub base: String,
+    pub cookie: Option<String>,
+}
+
+impl Browser {
+    pub fn new(base: &str) -> Self {
+        Self {
+            base: base.to_string(),
+            cookie: None,
+        }
+    }
+
+    /// Calls a server function with form fields; keeps the session cookie.
+    pub async fn call(&mut self, name: &str, fields: &[(&str, &str)]) -> reqwest::Response {
+        let body = fields
+            .iter()
+            .map(|(k, v)| format!("{k}={}", encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let mut req = reqwest::Client::new()
+            .post(format!("{}/admin/api/{name}", self.base))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body);
+        if let Some(c) = &self.cookie {
+            req = req.header("cookie", c);
+        }
+        let resp = req.send().await.unwrap();
+        if let Some(set) = resp.headers().get("set-cookie") {
+            let pair = set.to_str().unwrap().split(';').next().unwrap().to_string();
+            self.cookie = (!pair.ends_with('=')).then_some(pair);
+        }
+        resp
+    }
+
+    pub async fn session(&mut self) -> String {
+        let resp = self.call("session", &[]).await;
+        assert_eq!(resp.status(), 200);
+        resp.json::<String>().await.unwrap()
+    }
+
+    pub async fn page(&self, path: &str) -> String {
+        let mut req = reqwest::Client::new().get(format!("{}{path}", self.base));
+        if let Some(c) = &self.cookie {
+            req = req.header("cookie", c);
+        }
+        req.send().await.unwrap().text().await.unwrap()
+    }
+}
+
+pub fn encode(v: &str) -> String {
+    v.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+pub async fn change(b: &mut Browser, current: &str, new: &str) -> reqwest::Response {
+    b.call(
+        "change-password",
+        &[("current", current), ("new", new), ("repeat", new)],
+    )
+    .await
+}
+
+/// A browser logged in with an own password.
+pub async fn logged_in(base: &str) -> Browser {
+    let mut b = Browser::new(base);
+    b.call("login", &[("password", "admin")]).await;
+    assert_eq!(
+        change(&mut b, "admin", "ein eigenes Passwort")
+            .await
+            .status(),
+        200
+    );
+    b
+}

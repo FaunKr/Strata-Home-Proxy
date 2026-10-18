@@ -3,6 +3,7 @@
 
 pub mod api;
 pub mod app;
+pub mod labels;
 #[cfg(feature = "ssr")]
 pub mod server;
 

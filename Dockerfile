@@ -1,6 +1,9 @@
 # NAS-Proxy für Strata (x86_64), mit Weboberfläche unter /admin/
 FROM rust:1.97-slim-trixie AS build
-RUN rustup target add wasm32-unknown-unknown \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add wasm32-unknown-unknown \
     && cargo install cargo-leptos --locked --version 0.3.11
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./

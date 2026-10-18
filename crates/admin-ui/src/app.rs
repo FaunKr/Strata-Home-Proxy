@@ -7,7 +7,13 @@ use leptos_router::{
     path,
 };
 
-use crate::api::{ChangePassword, Login, Logout, Session, error_text, get_session};
+use crate::{
+    api::{
+        ChangePassword, Login, Logout, Session, SettingEntry, Source, error_text, get_session,
+        get_settings,
+    },
+    labels::label,
+};
 
 /// The HTML page around the app.
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -73,6 +79,10 @@ pub fn App() -> impl IntoView {
                     <Route path=path!("/admin") view=|| view! { <Protected><Home /></Protected> } />
                     <Route path=path!("/admin/") view=|| view! { <Protected><Home /></Protected> } />
                     <Route
+                        path=path!("/admin/settings")
+                        view=|| view! { <Protected><SettingsPage /></Protected> }
+                    />
+                    <Route
                         path=path!("/admin/password")
                         view=|| view! { <Protected><PasswordPage /></Protected> }
                     />
@@ -88,6 +98,7 @@ fn Nav() -> impl IntoView {
     view! {
         <nav>
             <A href="/admin/">"Übersicht"</A>
+            <A href="/admin/settings">"Einstellungen"</A>
             <A href="/admin/password">"Passwort"</A>
         </nav>
         <ActionForm action=logout>
@@ -230,5 +241,83 @@ fn PasswordPage() -> impl IntoView {
                 <button type="submit">"Passwort speichern"</button>
             </ActionForm>
         </div>
+    }
+}
+
+fn source_text(entry: &SettingEntry) -> &'static str {
+    match entry.source {
+        Source::Reported => "vom PC gemeldet",
+        Source::Saved => "auf dieser Seite gespeichert",
+        Source::Env => "aus Umgebungsvariable",
+        Source::Default => "Vorgabe",
+    }
+}
+
+#[component]
+fn SettingsPage() -> impl IntoView {
+    let settings = Resource::new(|| (), |_| get_settings());
+    view! {
+        <h1>"Einstellungen"</h1>
+        <Transition fallback=|| view! { <p>"Lädt …"</p> }>
+            {move || Suspend::new(async move {
+                match settings.await {
+                    Ok(view) => {
+                        view! {
+                            {(!view.configured)
+                                .then(|| {
+                                    view! {
+                                        <p class="warning" role="status">
+                                            "Der Proxy ist noch nicht eingerichtet: die Strata-Adresse fehlt. Bis dahin beantwortet er API-Anfragen mit 503."
+                                        </p>
+                                    }
+                                })}
+                            {(!view.persistent)
+                                .then(|| {
+                                    view! {
+                                        <p class="warning" role="status">
+                                            "DATA_DIR ist nicht gesetzt: Änderungen gehen beim nächsten Neustart verloren."
+                                        </p>
+                                    }
+                                })}
+                            {view
+                                .entries
+                                .into_iter()
+                                .map(|entry| view! { <SettingRow entry /> })
+                                .collect_view()}
+                        }
+                            .into_any()
+                    }
+                    Err(e) => view! { <p class="error">{error_text(&e)}</p> }.into_any(),
+                }
+            })}
+        </Transition>
+    }
+}
+
+#[component]
+fn SettingRow(entry: SettingEntry) -> impl IntoView {
+    let text = label(&entry.key);
+    let shown = entry
+        .value
+        .clone()
+        .unwrap_or_else(|| "nicht gesetzt".to_string());
+    let source = source_text(&entry);
+    let fallback = (entry.source == Source::Reported)
+        .then(|| entry.saved.clone())
+        .flatten()
+        .map(|saved| view! { <p class="hint">"Eingetragener Ersatzwert: " {saved}</p> });
+    view! {
+        <section class="panel setting" id=entry.key.clone()>
+            <h2>{text.title}</h2>
+            <p class="hint">{text.help}</p>
+            <p class="current">
+                <code>{shown}</code>
+                " "
+                <span class="source">{source}</span>
+            </p>
+            {fallback}
+            {entry.restart.then(|| view! { <p class="hint">"Gilt nach Neustart."</p> })}
+            <p class="hint key">{entry.key.clone()}</p>
+        </section>
     }
 }

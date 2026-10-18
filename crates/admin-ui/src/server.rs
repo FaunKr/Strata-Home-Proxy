@@ -16,7 +16,7 @@ use leptos::prelude::*;
 use leptos_axum::{LeptosRoutes, ResponseOptions, generate_route_list};
 
 use crate::{
-    api::Session,
+    api::{Session, SettingsView},
     app::{App, shell},
 };
 
@@ -31,6 +31,11 @@ pub trait Backend: Send + Sync + 'static {
     fn login(&self, password: &str, client: IpAddr) -> Result<String, String>;
     /// A new session token, or a message for the user.
     fn change_password(&self, token: &str, current: &str, new: &str) -> Result<String, String>;
+    fn settings(&self) -> SettingsView;
+    /// Saves one value; a message for the user if it is invalid.
+    fn save_setting(&self, key: &str, value: &str) -> Result<(), String>;
+    /// Drops a saved value, so the environment or default applies again.
+    fn reset_setting(&self, key: &str) -> Result<(), String>;
 }
 
 pub type SharedBackend = Arc<dyn Backend>;

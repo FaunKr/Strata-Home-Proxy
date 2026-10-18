@@ -169,10 +169,10 @@ impl Config {
         }
         let text = (!raw.is_empty()).then(|| raw.to_string());
         match key {
-            "LISTEN_ADDR" => self.listen_addr = parse(raw)?,
+            "LISTEN_ADDR" => self.listen_addr = address(raw)?,
             "STRATA_URL" => self.strata_url = text.map(|u| url(&u)).transpose()?,
             "PC_MAC" => self.pc_mac = text.map(|m| parse_mac(&m)).transpose()?,
-            "WOL_ADDR" => self.wol_addr = parse(raw)?,
+            "WOL_ADDR" => self.wol_addr = address(raw)?,
             "PC_AGENT_URL" => self.pc_agent_url = text.map(|u| url(&u)).transpose()?,
             "PC_AGENT_TOKEN" => self.pc_agent_token = text,
             "IDLE_TIMEOUT_SECS" => self.idle_timeout = secs(raw)?,
@@ -184,7 +184,7 @@ impl Config {
             "SLEEP_RETRY_SECS" => self.sleep_retry = secs(raw)?,
             "SLEEP_SETTLE_SECS" => self.sleep_settle = secs(raw)?,
             "PROBE_TIMEOUT_MS" => self.probe_timeout = positive(millis(raw)?)?,
-            "MAX_BODY_BYTES" => self.max_body_bytes = parse(raw)?,
+            "MAX_BODY_BYTES" => self.max_body_bytes = number(raw, "Bytes")?,
             _ => unreachable!("every field in FIELDS is handled"),
         }
         Ok(())
@@ -220,20 +220,22 @@ fn env_value(key: &str) -> Option<String> {
     env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
-fn parse<T>(raw: &str) -> Result<T>
-where
-    T: std::str::FromStr,
-    T::Err: std::fmt::Display,
-{
-    raw.parse().map_err(|e| anyhow::anyhow!("{e}"))
+fn number<T: std::str::FromStr>(raw: &str, unit: &str) -> Result<T> {
+    raw.parse()
+        .map_err(|_| anyhow::anyhow!("erwartet eine ganze Zahl ({unit})"))
+}
+
+fn address(raw: &str) -> Result<SocketAddr> {
+    raw.parse()
+        .map_err(|_| anyhow::anyhow!("erwartet IP-Adresse mit Port, z. B. 192.168.1.255:9"))
 }
 
 fn secs(raw: &str) -> Result<Duration> {
-    Ok(Duration::from_secs(parse(raw)?))
+    Ok(Duration::from_secs(number(raw, "Sekunden")?))
 }
 
 fn millis(raw: &str) -> Result<Duration> {
-    Ok(Duration::from_millis(parse(raw)?))
+    Ok(Duration::from_millis(number(raw, "Millisekunden")?))
 }
 
 fn positive(d: Duration) -> Result<Duration> {

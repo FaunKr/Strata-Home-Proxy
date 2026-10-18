@@ -28,7 +28,7 @@ use crate::{
     config::{Config, format_mac, parse_mac},
     managed::Managed,
     platform::Platform,
-    strata::{self, JobRequest, Jobs, Refusal},
+    strata::{self, JobRequest, Jobs, Refusal, UpdateCheck},
 };
 
 /// Delay between answering a sleep request and going to standby, so the
@@ -69,6 +69,7 @@ pub struct Agent {
     macs: Mutex<HashMap<IpAddr, CachedMac>>,
     managed: Mutex<Managed>,
     pub(crate) jobs: Jobs,
+    pub(crate) updates: UpdateCheck,
 }
 
 struct Watchdog {
@@ -123,6 +124,7 @@ impl Agent {
             macs: Mutex::new(HashMap::new()),
             managed: Mutex::new(managed),
             jobs,
+            updates: UpdateCheck::default(),
         })
     }
 
@@ -153,13 +155,13 @@ impl Agent {
         }
     }
 
-    async fn strata_healthy(&self) -> bool {
+    pub(crate) async fn strata_healthy(&self) -> bool {
         matches!(self.strata_get("/health").send().await, Ok(r) if r.status().is_success())
     }
 
     /// True if Strata reports a slot at work. Strata builds without `/slots`
     /// count as idle; the NAS proxy also tracks open answers itself.
-    async fn strata_busy(&self) -> bool {
+    pub(crate) async fn strata_busy(&self) -> bool {
         let Ok(resp) = self.strata_get("/slots").send().await else {
             return false;
         };
@@ -396,6 +398,7 @@ async fn gaming(State(agent): State<Arc<Agent>>, Json(req): Json<GamingRequest>)
 }
 
 async fn strata_view(State(agent): State<Arc<Agent>>) -> Json<strata::StrataView> {
+    strata::check_for_update(&agent);
     let view = tokio::task::spawn_blocking(move || strata::view(&agent))
         .await
         .expect("view task");

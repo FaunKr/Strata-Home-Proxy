@@ -295,3 +295,27 @@ async fn the_page_lists_installed_models_without_waking() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn shows_the_last_benchmark_with_its_local_time() {
+    let s = setup(true, |_| {}).await;
+    let mut info = strata_info(true);
+    info["update_available"] = json!(true);
+    info["benchmark"] =
+        json!({"model": "IQ3_XXS", "result": "38.5 Token/s", "at": 1_760_000_000u64});
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut b = logged_in(&s.url).await;
+    let v = page(&mut b).await;
+    assert_eq!(v["info"]["update_available"], true);
+    assert_eq!(v["info"]["benchmark"]["result"], "38.5 Token/s");
+    assert!(
+        !v["info"]["benchmark"]["at_text"]
+            .as_str()
+            .unwrap()
+            .is_empty(),
+        "{v}"
+    );
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("38.5 Token/s mit IQ3_XXS"), "{html}");
+    assert!(html.contains("neuere Version"), "{html}");
+}

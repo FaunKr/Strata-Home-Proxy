@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::{sync::atomic::Ordering, time::Duration};
+use std::sync::atomic::Ordering;
 
 use common::*;
 use serde_json::{Value, json};
@@ -59,49 +59,6 @@ fn installable(s: &Setup) {
 
 fn install() -> Value {
     json!({"kind": "install", "family": "qwen", "size": "IQ3_XXS", "context": 65536, "api_key": KEY})
-}
-
-async fn post(s: &Setup, path: &str, body: Value) -> (u16, Value) {
-    let resp = client()
-        .post(format!("{}{path}", s.url))
-        .bearer_auth("geheim")
-        .json(&body)
-        .send()
-        .await
-        .unwrap();
-    (
-        resp.status().as_u16(),
-        resp.json().await.unwrap_or(Value::Null),
-    )
-}
-
-async fn get(s: &Setup, path: &str) -> Value {
-    client()
-        .get(format!("{}{path}", s.url))
-        .bearer_auth("geheim")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap()
-}
-
-/// The job once `done` holds for it.
-async fn job_until(s: &Setup, what: &str, done: impl Fn(&Value) -> bool) -> Value {
-    let mut last = Value::Null;
-    for _ in 0..200 {
-        last = get(s, "/strata/job").await;
-        if done(&last) {
-            return last;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("{what} nicht erreicht, zuletzt: {last}");
-}
-
-async fn finished(s: &Setup) -> Value {
-    job_until(s, "Ende des Vorgangs", |j| j["state"] != "running").await
 }
 
 #[tokio::test]

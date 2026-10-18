@@ -16,7 +16,7 @@ use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::get,
+    routing,
 };
 use serde_json::{Value, json};
 #[allow(unused_imports)]
@@ -38,7 +38,7 @@ pub struct FakeCommand {
     pub exit: Option<i32>,
     /// Keeps running after its lines until cancelled.
     pub hang: bool,
-    /// Files (path, content) it leaves behind when it succeeds.
+    /// Files (path, content) it leaves behind when it succeeds, unless they exist.
     pub creates: Vec<(PathBuf, String)>,
 }
 
@@ -169,6 +169,10 @@ impl Platform for FakePlatform {
             let code = command.exit.unwrap_or(0);
             if code == 0 {
                 for (path, content) in command.creates {
+                    // Another run of the same program leaves what is there.
+                    if path.exists() {
+                        continue;
+                    }
                     if let Some(dir) = path.parent() {
                         std::fs::create_dir_all(dir).unwrap();
                     }
@@ -292,8 +296,8 @@ pub async fn setup_with(name: &str, tweak: impl FnOnce(&mut Config)) -> Setup {
     *fake.disk_free.lock().unwrap() = Some(500_000_000_000);
     let strata = serve(
         Router::new()
-            .route("/health", get(health))
-            .route("/slots", get(slots))
+            .route("/health", routing::get(health))
+            .route("/slots", routing::get(slots))
             .with_state(fake.clone()),
     )
     .await;
@@ -325,4 +329,47 @@ pub async fn sleep_answer(s: &Setup) -> (u16, Value) {
         .await
         .unwrap();
     (resp.status().as_u16(), resp.json().await.unwrap())
+}
+
+pub async fn post(s: &Setup, path: &str, body: Value) -> (u16, Value) {
+    let resp = client()
+        .post(format!("{}{path}", s.url))
+        .bearer_auth("geheim")
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    (
+        resp.status().as_u16(),
+        resp.json().await.unwrap_or(Value::Null),
+    )
+}
+
+pub async fn get(s: &Setup, path: &str) -> Value {
+    client()
+        .get(format!("{}{path}", s.url))
+        .bearer_auth("geheim")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+/// The job once `done` holds for it.
+pub async fn job_until(s: &Setup, what: &str, done: impl Fn(&Value) -> bool) -> Value {
+    let mut last = Value::Null;
+    for _ in 0..200 {
+        last = get(s, "/strata/job").await;
+        if done(&last) {
+            return last;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("{what} nicht erreicht, zuletzt: {last}");
+}
+
+pub async fn finished(s: &Setup) -> Value {
+    job_until(s, "Ende des Vorgangs", |j| j["state"] != "running").await
 }

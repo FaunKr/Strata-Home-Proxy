@@ -5,6 +5,7 @@
 
 use std::{
     collections::VecDeque,
+    future::Future,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -20,6 +21,13 @@ use crate::{
 };
 
 const JOB_FILE: &str = "strata-job.json";
+const BENCH_FILE: &str = "strata-benchmark.json";
+/// How often the page's visits ask Git whether Strata has a newer version.
+const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
+/// How often a job looks again while it waits for Strata.
+const POLL: Duration = Duration::from_millis(250);
+/// How long a benchmark waits for Strata to load its model.
+const READY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// Lines of output a job keeps, for the page to show after a failure.
 const KEPT_LINES: usize = 20;
 /// Strata's port and network access, as the proxy expects them.
@@ -130,6 +138,19 @@ enum Plan {
         size: &'static Size,
         context: u32,
     },
+    Activate {
+        id: String,
+    },
+    Delete {
+        id: String,
+    },
+    Update,
+    Benchmark {
+        id: String,
+    },
+    SetKey {
+        api_key: String,
+    },
 }
 
 impl Plan {
@@ -137,12 +158,21 @@ impl Plan {
         match self {
             Self::Install { .. } => JobKind::Install,
             Self::AddModel { .. } => JobKind::AddModel,
+            Self::Activate { .. } => JobKind::Activate,
+            Self::Delete { .. } => JobKind::Delete,
+            Self::Update => JobKind::Update,
+            Self::Benchmark { .. } => JobKind::Benchmark,
+            Self::SetKey { .. } => JobKind::SetKey,
         }
     }
 
     fn model(&self) -> Option<String> {
         match self {
             Self::Install { size, .. } | Self::AddModel { size, .. } => Some(size.id()),
+            Self::Activate { id } | Self::Delete { id } | Self::Benchmark { id } => {
+                Some(id.clone())
+            }
+            Self::Update | Self::SetKey { .. } => None,
         }
     }
 }
@@ -224,15 +254,13 @@ impl Jobs {
 
 /// Starts a job, or says why not.
 pub fn start(agent: &Arc<Agent>, request: JobRequest) -> Result<Job, Refusal> {
-    let plan = check(request)?;
+    let plan = check(agent, request)?;
     if agent.gaming() {
         return Err(Refusal::Conflict(
             "Gaming-Modus ist an: erst Gaming ausschalten".into(),
         ));
     }
-    if let Some(size) = match &plan {
-        Plan::Install { size, .. } | Plan::AddModel { size, .. } => Some(*size),
-    } {
+    if let Plan::Install { size, .. } | Plan::AddModel { size, .. } = &plan {
         check_space(agent, size)?;
     }
     let job = {
@@ -281,7 +309,8 @@ pub fn start(agent: &Arc<Agent>, request: JobRequest) -> Result<Job, Refusal> {
     Ok(job)
 }
 
-fn check(request: JobRequest) -> Result<Plan, Refusal> {
+fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
+    let dir = &agent.cfg.strata_dir;
     let size = |family: &str, size: &str| {
         catalog::find(family, size)
             .ok_or_else(|| Refusal::BadRequest(format!("{family} {size} gibt es nicht im Katalog")))
@@ -314,10 +343,75 @@ fn check(request: JobRequest) -> Result<Plan, Refusal> {
             size: size(&family, &s)?,
             context: context(c)?,
         }),
-        _ => Err(Refusal::BadRequest(
-            "Diese Art Vorgang gibt es noch nicht".into(),
-        )),
+        JobRequest::Activate { model } => {
+            let id = installed_model(dir, &model)?;
+            if active_model(agent).as_deref() == Some(id.as_str()) {
+                return Err(Refusal::Conflict(format!("{id} ist schon aktiv")));
+            }
+            Ok(Plan::Activate { id })
+        }
+        JobRequest::Delete { model } => {
+            let id = installed_model(dir, &model)?;
+            if active_model(agent).as_deref() == Some(id.as_str()) {
+                return Err(Refusal::Conflict(format!(
+                    "{id} ist aktiv und lässt sich nicht löschen; erst ein anderes Modell aktivieren"
+                )));
+            }
+            Ok(Plan::Delete { id })
+        }
+        JobRequest::Update => {
+            strata_installed(dir)?;
+            if !dir.join(".git").exists() {
+                return Err(Refusal::Conflict(format!(
+                    "{} ist kein Git-Klon und lässt sich nur von Hand aktualisieren",
+                    dir.display()
+                )));
+            }
+            Ok(Plan::Update)
+        }
+        JobRequest::Benchmark => {
+            strata_installed(dir)?;
+            let id = active_model(agent).ok_or_else(|| {
+                Refusal::Conflict("Kein aktives Modell bekannt; erst ein Modell aktivieren".into())
+            })?;
+            Ok(Plan::Benchmark { id })
+        }
+        JobRequest::SetKey { api_key } => {
+            let api_key = check_key(api_key)?;
+            strata_installed(dir)?;
+            Ok(Plan::SetKey { api_key })
+        }
     }
+}
+
+fn strata_installed(dir: &Path) -> Result<(), Refusal> {
+    if dir.join("setup.py").is_file() {
+        Ok(())
+    } else {
+        Err(Refusal::Conflict(
+            "Strata ist noch nicht eingerichtet".into(),
+        ))
+    }
+}
+
+/// The catalog id of an installed model, in the catalog's letter case.
+fn installed_model(dir: &Path, model: &str) -> Result<String, Refusal> {
+    let id = catalog::by_id(model)
+        .ok_or_else(|| Refusal::BadRequest(format!("{model} gibt es nicht im Katalog")))?
+        .id();
+    if !installed_models(dir).any(|m| m.eq_ignore_ascii_case(&id)) {
+        return Err(Refusal::Conflict(format!("{id} ist nicht installiert")));
+    }
+    Ok(id)
+}
+
+/// The model the managed start script starts, in the catalog's letter case.
+fn active_model(agent: &Agent) -> Option<String> {
+    let start = agent.managed().strata_start?;
+    let script = start.file_name()?.to_string_lossy().to_lowercase();
+    installed_models(&agent.cfg.strata_dir)
+        .find(|id| run_script(id) == script)
+        .map(|id| catalog::by_id(&id).map_or(id, Size::id))
 }
 
 /// Keys go into a command line and an HTTP header: printable ASCII only.
@@ -379,6 +473,11 @@ async fn run(agent: &Arc<Agent>, plan: Plan) -> Outcome {
             api_key,
         } => install(agent, size, context, api_key).await,
         Plan::AddModel { size, context } => add_model(agent, size, context).await,
+        Plan::Activate { id } => activate(agent, &id).await,
+        Plan::Delete { id } => delete(agent, &id).await,
+        Plan::Update => update(agent).await,
+        Plan::Benchmark { id } => benchmark(agent, &id).await,
+        Plan::SetKey { api_key } => set_key(agent, api_key).await,
     };
     match result {
         Ok(result) => Outcome::Done(result),
@@ -455,6 +554,344 @@ async fn add_model(agent: &Arc<Agent>, size: &Size, context: u32) -> Result<Opti
     Ok(None)
 }
 
+/// Waits until Strata has no request at work, so a restart cuts none off.
+async fn wait_idle(agent: &Agent) -> Result<(), Step> {
+    wait_for(
+        agent,
+        "Warten, bis Strata die laufende Anfrage beendet hat",
+        None,
+        || async { !agent.strata_busy().await },
+    )
+    .await
+}
+
+/// Waits until `ready` holds, showing `step` while it does not; ends on
+/// cancel and after `limit`.
+async fn wait_for<F, Fut>(
+    agent: &Agent,
+    step: &str,
+    limit: Option<Duration>,
+    mut ready: F,
+) -> Result<(), Step>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let started = Instant::now();
+    let mut shown = false;
+    loop {
+        if agent.jobs.inner.lock().unwrap().cancelled {
+            return Err(Step::Cancelled);
+        }
+        if ready().await {
+            return Ok(());
+        }
+        if !shown {
+            set_step(agent, step);
+            shown = true;
+        }
+        if limit.is_some_and(|l| started.elapsed() >= l) {
+            return Err(format!(
+                "{step}: nach {} min aufgegeben",
+                started.elapsed().as_secs() / 60
+            )
+            .into());
+        }
+        tokio::time::sleep(POLL).await;
+    }
+}
+
+/// Starts Strata again after a job ended it, unless gaming mode is on.
+fn restart_strata(agent: &Agent) {
+    if !agent.gaming() {
+        agent.start_strata();
+    }
+}
+
+async fn activate(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
+    wait_idle(agent).await?;
+    set_step(agent, "Strata mit dem neuen Modell starten");
+    agent.stop_strata();
+    let dir = &agent.cfg.strata_dir;
+    let mut managed = agent.managed();
+    managed.strata_start = Some(dir.join(run_script(id)));
+    managed.strata_args = Vec::new();
+    managed
+        .strata_processes
+        .get_or_insert_with(|| vec![folder_entry(dir)]);
+    let saved = agent
+        .set_managed(managed)
+        .map_err(|e| Step::Failed(e.to_string()));
+    // Also when saving failed: Strata runs again, with the old model then.
+    restart_strata(agent);
+    saved?;
+    Ok(None)
+}
+
+/// What setup leaves behind for a model: its folders in the data folder,
+/// then its config, start script and log in the Strata folder. Files other
+/// models share (`mtp`) stay.
+fn model_paths(cfg: &crate::Config, id: &str) -> Vec<PathBuf> {
+    let lower = id.to_lowercase();
+    let data = &cfg.strata_data_dir;
+    let dir = &cfg.strata_dir;
+    vec![
+        data.join("models").join(id),
+        data.join("packs").join(&lower),
+        dir.join(format!("strata-{lower}.log")),
+        dir.join(run_script(id)),
+        // The config last: until it is gone, the model is listed and can be deleted again.
+        dir.join(format!("strata-{lower}.json")),
+    ]
+}
+
+async fn delete(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
+    set_step(agent, "Dateien löschen");
+    let paths = model_paths(&agent.cfg, id);
+    tokio::task::spawn_blocking(move || {
+        paths.iter().try_for_each(|path| {
+            let removed = if path.is_dir() {
+                std::fs::remove_dir_all(path)
+            } else {
+                std::fs::remove_file(path)
+            };
+            match removed {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    Err(format!("{} nicht gelöscht: {e}", path.display()))
+                }
+                _ => Ok(()),
+            }
+        })
+    })
+    .await
+    .map_err(|e| Step::Failed(e.to_string()))??;
+    Ok(None)
+}
+
+/// Like Strata's `UPDATE.bat`: the newest code, then setup's `--update`
+/// with Strata ended, so the engine can be replaced. Model files stay.
+async fn update(agent: &Arc<Agent>) -> Result<Option<String>, Step> {
+    let dir = agent.cfg.strata_dir.clone();
+    let git = git(agent).await?;
+    set_step(agent, "Neue Version holen");
+    let pull = CommandSpec {
+        program: git,
+        args: vec!["pull".into(), "--ff-only".into()],
+        dir: Some(dir.clone()),
+    };
+    command(agent, pull, false).await?;
+    wait_idle(agent).await?;
+    agent.stop_strata();
+    let spec = CommandSpec {
+        program: dir.join("START-HERE.bat"),
+        args: vec!["--update".into()],
+        dir: Some(dir),
+    };
+    let updated = command(agent, spec, true).await;
+    restart_strata(agent);
+    updated?;
+    agent.updates.found(Some(false));
+    Ok(None)
+}
+
+/// The last benchmark run.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Benchmark {
+    pub model: String,
+    /// Tokens per second while answering, e.g. `38.5 Token/s`.
+    pub result: String,
+    /// Unix seconds.
+    pub at: u64,
+}
+
+/// Runs Strata's `BENCH.bat` against the running Strata and keeps its chat
+/// decode speed.
+async fn benchmark(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
+    if !agent.strata_healthy().await {
+        restart_strata(agent);
+    }
+    wait_for(
+        agent,
+        "Warten, bis Strata bereit ist",
+        Some(READY_TIMEOUT),
+        || agent.strata_healthy(),
+    )
+    .await?;
+    set_step(agent, "Benchmark läuft (etwa 10 min)");
+    let dir = agent.cfg.strata_dir.clone();
+    let config = dir.join(format!("strata-{}.json", id.to_lowercase()));
+    let spec = CommandSpec {
+        program: dir.join("BENCH.bat"),
+        args: vec!["--config".into(), config.display().to_string()],
+        dir: Some(dir),
+    };
+    command(agent, spec, false).await?;
+    let lines = agent.jobs.current().map(|j| j.lines).unwrap_or_default();
+    let tps = lines
+        .iter()
+        .find_map(|l| parse_bench(l))
+        .ok_or_else(|| "Der Benchmark hat keine Tokens/s gemeldet".to_string())?;
+    let result = format!("{} Token/s", (tps * 10.0).round() / 10.0);
+    let record = Benchmark {
+        model: id.to_string(),
+        result: result.clone(),
+        at: unix_now(),
+    };
+    let path = agent.cfg.state_dir().join(BENCH_FILE);
+    let text = serde_json::to_string_pretty(&record).expect("benchmark serializes");
+    if let Err(e) = write_replacing(&path, &text) {
+        tracing::warn!("{BENCH_FILE} nicht gespeichert: {e}");
+    }
+    Ok(Some(result))
+}
+
+/// `  chat decode tok/s     38.50   (37.10 - 39.20, n=3)` → 38.5, from the
+/// short table `tools/strata_bench.py` prints at the end.
+fn parse_bench(line: &str) -> Option<f64> {
+    line.trim()
+        .strip_prefix("chat decode tok/s")?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+fn load_benchmark(agent: &Agent) -> Option<Benchmark> {
+    let text = std::fs::read_to_string(agent.cfg.state_dir().join(BENCH_FILE)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Puts the key into every model's config and restarts Strata with it.
+async fn set_key(agent: &Arc<Agent>, api_key: String) -> Result<Option<String>, Step> {
+    wait_idle(agent).await?;
+    set_step(agent, "Key eintragen");
+    let dir = agent.cfg.strata_dir.clone();
+    let key = api_key.clone();
+    tokio::task::spawn_blocking(move || write_key(&dir, &key))
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))??;
+    let mut managed = agent.managed();
+    managed.strata_api_key = Some(api_key);
+    agent
+        .set_managed(managed)
+        .map_err(|e| Step::Failed(e.to_string()))?;
+    set_step(agent, "Strata neu starten");
+    agent.stop_strata();
+    restart_strata(agent);
+    Ok(None)
+}
+
+/// Sets `api_key` in each model config (`strata-*.json` with `exe` and
+/// `args`, as Strata's own tools tell them apart), keeping everything else.
+fn write_key(dir: &Path, key: &str) -> Result<(), String> {
+    for id in installed_models(dir) {
+        let path = dir.join(format!("strata-{id}.json"));
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("{} nicht lesbar: {e}", path.display()))?;
+        let Ok(mut cfg) =
+            serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
+        else {
+            continue;
+        };
+        let Some(fields) = cfg.as_object_mut() else {
+            continue;
+        };
+        if !fields.contains_key("exe") || !fields.get("args").is_some_and(|a| a.is_array()) {
+            continue;
+        }
+        fields.insert("api_key".into(), key.into());
+        // As Strata writes it (`json.dumps(cfg, indent=1)`).
+        let mut out = Vec::new();
+        let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+        let mut ser = serde_json::Serializer::with_formatter(&mut out, formatter);
+        serde::Serialize::serialize(&cfg, &mut ser).expect("config serializes");
+        write_replacing(&path, &String::from_utf8(out).expect("JSON is UTF-8"))
+            .map_err(|e| format!("{} nicht geschrieben: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Writes via a temporary file, so a crash never leaves half a file behind.
+fn write_replacing(path: &Path, text: &str) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path))
+}
+
+/// Whether Strata's Git source has commits this folder lacks; asked in the
+/// background at most once an hour, when the page is looked at.
+#[derive(Default)]
+pub struct UpdateCheck {
+    inner: Mutex<UpdateState>,
+}
+
+#[derive(Default)]
+struct UpdateState {
+    checked: Option<Instant>,
+    asking: bool,
+    available: Option<bool>,
+}
+
+impl UpdateCheck {
+    pub fn available(&self) -> Option<bool> {
+        self.inner.lock().unwrap().available
+    }
+
+    /// Claims the next check, if one is due.
+    fn claim(&self) -> bool {
+        let mut state = self.inner.lock().unwrap();
+        if state.asking
+            || state
+                .checked
+                .is_some_and(|t| t.elapsed() < UPDATE_CHECK_EVERY)
+        {
+            return false;
+        }
+        state.asking = true;
+        true
+    }
+
+    fn found(&self, available: Option<bool>) {
+        let mut state = self.inner.lock().unwrap();
+        state.asking = false;
+        state.checked = Some(Instant::now());
+        state.available = available;
+    }
+}
+
+/// Asks Git in the background whether an update is available, if it is
+/// time to; the page shows the answer at its next visit.
+pub fn check_for_update(agent: &Arc<Agent>) {
+    if !agent.cfg.strata_dir.join(".git").exists() || agent.jobs.running() || !agent.updates.claim()
+    {
+        return;
+    }
+    let agent = Arc::clone(agent);
+    tokio::spawn(async move {
+        let available = commits_behind(&agent).await.map(|n| n > 0);
+        agent.updates.found(available);
+    });
+}
+
+async fn commits_behind(agent: &Agent) -> Option<u64> {
+    let git = find_git(agent).await?;
+    let dir = agent.cfg.strata_dir.clone();
+    let run = |args: &[&str]| CommandSpec {
+        program: git.clone(),
+        args: args.iter().map(|a| a.to_string()).collect(),
+        dir: Some(dir.clone()),
+    };
+    let (code, _) = output(agent, &run(&["fetch", "--quiet"])).await?;
+    if code != 0 {
+        return None;
+    }
+    let (code, lines) = output(agent, &run(&["rev-list", "--count", "HEAD..@{u}"])).await?;
+    if code != 0 {
+        return None;
+    }
+    lines.iter().find_map(|l| l.trim().parse().ok())
+}
+
 /// Runs Strata's setup without questions, with the fixed values and the key.
 async fn setup(agent: &Arc<Agent>, size: &Size, context: u32, api_key: &str) -> Result<(), Step> {
     let dir = &agent.cfg.strata_dir;
@@ -498,8 +935,8 @@ async fn setup(agent: &Arc<Agent>, size: &Size, context: u32, api_key: &str) -> 
 
 /// Git, installed with winget for this user if it is missing.
 async fn git(agent: &Arc<Agent>) -> Result<PathBuf, Step> {
-    if works(agent, "git".into()).await {
-        return Ok("git".into());
+    if let Some(git) = find_git(agent).await {
+        return Ok(git);
     }
     set_step(agent, "Git installieren");
     let winget = CommandSpec {
@@ -526,7 +963,16 @@ async fn git(agent: &Arc<Agent>) -> Result<PathBuf, Step> {
         )),
         cancelled => cancelled,
     })?;
-    // The new Git is not on this process's PATH yet.
+    find_git(agent).await.ok_or_else(|| {
+        "Git wurde installiert, ist aber nicht zu finden; bitte den PC-Dienst neu starten"
+            .to_string()
+            .into()
+    })
+}
+
+/// Git on PATH, or where winget puts it: a Git just installed is not on
+/// this process's PATH yet.
+async fn find_git(agent: &Agent) -> Option<PathBuf> {
     let mut candidates = vec![PathBuf::from("git")];
     for var in ["LOCALAPPDATA", "ProgramFiles"] {
         if let Some(base) = std::env::var_os(var) {
@@ -541,29 +987,30 @@ async fn git(agent: &Arc<Agent>) -> Result<PathBuf, Step> {
         }
     }
     for candidate in candidates {
-        if works(agent, candidate.clone()).await {
-            return Ok(candidate);
+        let version = CommandSpec {
+            program: candidate.clone(),
+            args: vec!["--version".into()],
+            dir: None,
+        };
+        if output(agent, &version)
+            .await
+            .is_some_and(|(code, _)| code == 0)
+        {
+            return Some(candidate);
         }
     }
-    Err(
-        "Git wurde installiert, ist aber nicht zu finden; bitte den PC-Dienst neu starten"
-            .to_string()
-            .into(),
-    )
+    None
 }
 
-/// Whether `program --version` runs and succeeds.
-async fn works(agent: &Agent, program: PathBuf) -> bool {
-    let spec = CommandSpec {
-        program,
-        args: vec!["--version".into()],
-        dir: None,
-    };
-    let Ok(mut run) = agent.platform().run(&spec) else {
-        return false;
-    };
-    while run.next_line().await.is_some() {}
-    run.wait().await == Some(0)
+/// Runs a command outside a job: its exit code and output, `None` if it
+/// could not run or was ended.
+async fn output(agent: &Agent, spec: &CommandSpec) -> Option<(i32, Vec<String>)> {
+    let mut run = agent.platform().run(spec).ok()?;
+    let mut lines = Vec::new();
+    while let Some(line) = run.next_line().await {
+        lines.push(line);
+    }
+    Some((run.wait().await?, lines))
 }
 
 /// Runs one command of a job: keeps its output, reads setup's progress
@@ -674,12 +1121,8 @@ fn save_job(agent: &Agent) {
     let Some(job) = agent.jobs.current() else {
         return;
     };
-    let dir = agent.cfg.state_dir();
-    let tmp = dir.join(format!("{JOB_FILE}.tmp"));
     let text = serde_json::to_string_pretty(&job).expect("job serializes");
-    if let Err(e) =
-        std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, dir.join(JOB_FILE)))
-    {
+    if let Err(e) = write_replacing(&agent.cfg.state_dir().join(JOB_FILE), &text) {
         tracing::warn!("{JOB_FILE} nicht gespeichert: {e}");
     }
 }
@@ -757,7 +1200,8 @@ pub fn installed_models(dir: &Path) -> impl Iterator<Item = String> {
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let id = name.strip_prefix("strata-")?.strip_suffix(".json")?;
-            (!id.is_empty()).then(|| id.to_string())
+            // `strata-<model>.shared-settings.json` belongs to a model.
+            (!id.is_empty() && !id.contains('.')).then(|| id.to_string())
         })
 }
 
@@ -799,6 +1243,8 @@ pub struct StrataView {
     pub installed: bool,
     /// Short commit of the Strata folder.
     pub version: Option<String>,
+    /// Whether Strata's source has newer commits; `None` until known.
+    pub update_available: Option<bool>,
     pub models: Vec<InstalledModel>,
     pub families: Vec<FamilyView>,
     pub catalog: Vec<CatalogEntry>,
@@ -808,6 +1254,7 @@ pub struct StrataView {
     pub ram_gb: f64,
     pub disk_free_gb: Option<f64>,
     pub data_dir: String,
+    pub benchmark: Option<Benchmark>,
     pub job: Option<Job>,
 }
 
@@ -844,19 +1291,14 @@ pub fn view(agent: &Agent) -> StrataView {
     let cfg = &agent.cfg;
     let dir = &cfg.strata_dir;
     let ram_gb = agent.platform().ram_bytes() as f64 / (1u64 << 30) as f64;
-    let managed = agent.managed();
-    let active = managed
-        .strata_start
-        .as_deref()
-        .and_then(Path::file_name)
-        .map(|n| n.to_string_lossy().to_lowercase());
+    let active = active_model(agent);
     let mut models: Vec<InstalledModel> = installed_models(dir)
         .map(|id| {
             let size = catalog::by_id(&id);
             let id = size.map_or(id, |s| s.id());
             InstalledModel {
-                disk_bytes: dir_size(&cfg.strata_data_dir.join("models").join(&id)),
-                active: active.as_deref() == Some(run_script(&id).as_str()),
+                disk_bytes: model_paths(cfg, &id)[..2].iter().map(|p| dir_size(p)).sum(),
+                active: active.as_deref() == Some(id.as_str()),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,
@@ -867,6 +1309,7 @@ pub fn view(agent: &Agent) -> StrataView {
     StrataView {
         installed: dir.join("setup.py").is_file(),
         version: git_commit(dir),
+        update_available: agent.updates.available(),
         models,
         families: catalog::FAMILIES
             .iter()
@@ -896,6 +1339,7 @@ pub fn view(agent: &Agent) -> StrataView {
             .disk_free(&cfg.strata_data_dir)
             .map(|b| b as f64 / 1e9),
         data_dir: cfg.strata_data_dir.display().to_string(),
+        benchmark: load_benchmark(agent),
         job: agent.jobs.current(),
     }
 }

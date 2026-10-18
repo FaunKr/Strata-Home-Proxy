@@ -29,6 +29,8 @@ if scripts/check-exe-version.sh "$sample" aaaaaaa3827f6f68bb56ea7e3e91c7654e0023
   echo "check-exe-version.sh nimmt eine falsche Build-ID an" >&2
   exit 1
 fi
+# Das Update-Skript für TrueNAS, gegen nachgebildete docker, midclt und curl.
+scripts/test-truenas-auto-update.sh
 # Erst bauen, dann mit Zeitlimit testen: ein hängender Test bricht ab, statt
 # den Lauf endlos zu blockieren. Welcher hängt, steht in der Ausgabe
 # ("has been running for over 60 seconds").

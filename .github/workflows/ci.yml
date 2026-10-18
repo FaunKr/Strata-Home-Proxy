@@ -101,6 +101,8 @@ jobs:
           tags: |
             ghcr.io/faunkr/strata-home-proxy:latest
             ghcr.io/faunkr/strata-home-proxy:${{ github.sha }}
+          # The NAS update script logs it (deploy/truenas-auto-update.sh).
+          labels: org.opencontainers.image.revision=${{ github.sha }}
           # The same as in the image job, so every layer comes from its cache.
           build-args: STRATA_BUILD_ID=${{ github.sha }}
           cache-from: type=gha

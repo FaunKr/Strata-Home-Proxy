@@ -6,6 +6,7 @@
 services:
   strata-proxy:
     image: ghcr.io/faunkr/strata-home-proxy:latest
+    # missing: nur so kann deploy/truenas-auto-update.sh auf das alte Image zurückrollen.
     pull_policy: missing
     restart: unless-stopped
     # Nötig, damit das Weckpaket (Broadcast) ins Heimnetz kommt.

@@ -9,8 +9,9 @@ use crate::{
         CancelStrataJob, StartStrataJob, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
         StrataModel, StrataPage, StrataSize, error_text, get_strata,
     },
-    labels::strata_job_label,
+    labels::{STRATA_CONNECTION, strata_job_label},
     overview::Live,
+    settings::SettingsSections,
 };
 
 #[derive(Clone, Copy)]
@@ -43,7 +44,7 @@ impl Actions {
 
 #[component]
 pub fn StrataPage() -> impl IntoView {
-    let live = Live::follow();
+    let live = expect_context::<Live>();
     let actions = Actions {
         start: ServerAction::new(),
         cancel: ServerAction::new(),
@@ -83,6 +84,7 @@ pub fn StrataPage() -> impl IntoView {
                 }
             })}
         </Transition>
+        <SettingsSections sections=&[&STRATA_CONNECTION] />
     }
 }
 

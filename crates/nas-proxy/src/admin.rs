@@ -10,7 +10,8 @@ use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
     api::{
         ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, OutputMessage, Overview,
-        PcSetupCommand, Session, SettingEntry, SettingsView, Source, StrataJobForm, StrataPage,
+        PcSetupCommand, Session, SettingEntry, SettingValue, SettingsView, Source, StrataJobForm,
+        StrataPage,
     },
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
@@ -97,11 +98,22 @@ impl Backend for UiBackend {
         }
     }
 
-    fn save_setting(&self, key: &str, value: &str) -> Result<(), String> {
-        self.0.settings.set(key, value).map_err(|e| e.to_string())?;
+    fn save_settings(&self, values: &[SettingValue]) -> Result<(), (Option<String>, String)> {
+        let secret = |key: &str| crate::config::find_field(key).is_some_and(|f| f.secret);
+        let values: Vec<(&str, &str)> = values
+            .iter()
+            .filter(|v| !(secret(&v.key) && v.value.trim().is_empty()))
+            .map(|v| (v.key.as_str(), v.value.as_str()))
+            .collect();
         self.0
-            .events
-            .record(EventKind::SettingSaved, Some(key.to_string()));
+            .settings
+            .set_many(&values)
+            .map_err(|(key, e)| (key, e.to_string()))?;
+        for (key, _) in values {
+            self.0
+                .events
+                .record(EventKind::SettingSaved, Some(key.to_string()));
+        }
         Ok(())
     }
 

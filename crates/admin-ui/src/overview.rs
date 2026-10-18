@@ -46,7 +46,7 @@ impl Live {
 
 #[component]
 pub fn OverviewPage() -> impl IntoView {
-    let live = Live::follow();
+    let live = expect_context::<Live>();
     let actions = Actions {
         wake: ServerAction::new(),
         sleep: ServerAction::new(),
@@ -55,7 +55,9 @@ pub fn OverviewPage() -> impl IntoView {
         update: ServerAction::new(),
     };
     view! {
-        <h1>"Übersicht"</h1>
+        <div class="page-head">
+            <h1>"Overview"</h1>
+        </div>
         {move || match live.overview.get() {
             None if live.lost.get() => {
                 view! { <p class="warning" role="status">"Verbindung zum Proxy unterbrochen, verbinde neu …"</p> }
@@ -87,7 +89,7 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
         view! {
             <p class="warning" role="status">
                 "Noch kein API-Key angelegt: jeder Client bekommt 401. "
-                <a href="/admin/api-keys">"Key anlegen"</a>
+                <a href="/admin/access">"Key anlegen"</a>
             </p>
         }
     });
@@ -122,7 +124,7 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
             <div>
                 <h2>"Strata"</h2>
                 <p class="state">{strata_text(&overview.strata)}</p>
-                <a class="button secondary" href="/admin/strata-log">"Strata-Ausgabe"</a>
+                <a class="button secondary" href="/admin/strata/output">"Strata-Ausgabe"</a>
             </div>
             <div>
                 <h2>"Letzte Anfrage"</h2>

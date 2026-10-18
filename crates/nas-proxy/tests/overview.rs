@@ -242,12 +242,7 @@ async fn counts_down_to_sleep_and_follows_the_setting() {
     let left = countdown(&v).unwrap();
     assert!((3590..=3600).contains(&left), "{left}");
 
-    let resp = b
-        .call(
-            "save-setting",
-            &[("key", "IDLE_TIMEOUT_SECS"), ("value", "600")],
-        )
-        .await;
+    let resp = save_settings(&mut b, &[("IDLE_TIMEOUT_SECS", "600")]).await;
     assert_eq!(resp.status(), 200);
     let v = live
         .until("kürzerer Countdown", |v| {

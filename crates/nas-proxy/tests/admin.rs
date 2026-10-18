@@ -23,7 +23,7 @@ async fn admin_page_is_html() {
             .starts_with("text/html")
     );
     let html = resp.text().await.unwrap();
-    assert!(html.contains("Strata-Proxy"), "{html}");
+    assert!(html.contains("Strata Proxy"), "{html}");
     assert!(html.contains("/admin/pkg/admin-ui.js"), "{html}");
 }
 
@@ -34,16 +34,29 @@ async fn admin_does_not_wake_the_pc() {
         "/admin",
         "/admin/",
         "/admin/gibt-es-nicht",
-        "/admin/api-keys",
-        "/admin/strata-log",
+        "/admin/pc",
+        "/admin/strata",
+        "/admin/strata/output",
+        "/admin/access",
+        "/admin/system",
         "/admin/api/strata-output-stream",
         "/admin/pkg/admin-ui.js",
     ] {
         let resp = get(&format!("{}{path}", s.url)).await;
         assert_ne!(resp.status(), 502, "{path}");
     }
-    let resp = get(&format!("{}/admin/gibt-es-nicht", s.url)).await;
-    assert_eq!(resp.status(), 404);
+    // The paths before the areas are gone.
+    for path in [
+        "/admin/gibt-es-nicht",
+        "/admin/settings",
+        "/admin/api-keys",
+        "/admin/password",
+        "/admin/pc-dienst",
+        "/admin/strata-log",
+    ] {
+        let resp = get(&format!("{}{path}", s.url)).await;
+        assert_eq!(resp.status(), 404, "{path}");
+    }
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 0);
@@ -106,4 +119,30 @@ async fn admin_does_not_postpone_sleep() {
     }
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
     assert_eq!(s.state.in_flight(), 0);
+}
+
+#[tokio::test]
+async fn every_area_shows_the_frame_with_the_state_badges() {
+    let s = setup(true, |_| {}).await;
+    let anonymous = Browser::new(&s.url);
+    let html = anonymous.page("/admin/pc").await;
+    assert!(html.contains("Sign in"), "{html}");
+    assert!(!html.contains("class=\"badges\""), "{html}");
+
+    let b = logged_in(&s.url).await;
+    for (path, heading) in [
+        ("/admin/", "Overview"),
+        ("/admin/pc", "PC"),
+        ("/admin/strata", "Strata"),
+        ("/admin/strata/output", "Strata"),
+        ("/admin/access", "Access"),
+        ("/admin/system", "System"),
+    ] {
+        let html = b.page(path).await;
+        assert!(html.contains("class=\"badges\""), "{path}: {html}");
+        assert!(html.contains("PC · "), "{path}: {html}");
+        assert!(html.contains("Strata · "), "{path}: {html}");
+        assert!(html.contains("aria-label=\"Main\""), "{path}: {html}");
+        assert!(html.contains(&format!("<h1>{heading}")), "{path}: {html}");
+    }
 }

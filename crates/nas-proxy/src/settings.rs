@@ -122,6 +122,24 @@ impl Settings {
         self.commit(&mut inner, saved)
     }
 
+    /// Saves several values together: all take effect at once, or, if one is
+    /// invalid, none does. The error names the invalid value's key, or none
+    /// if saving itself failed.
+    pub fn set_many(&self, values: &[(&str, &str)]) -> Result<(), (Option<String>, anyhow::Error)> {
+        let mut check = self.current().as_ref().clone();
+        for (key, raw) in values {
+            check
+                .apply(key, raw.trim())
+                .map_err(|e| (Some(key.to_string()), e))?;
+        }
+        let mut inner = self.inner.write().unwrap();
+        let mut saved = inner.saved.clone();
+        for (key, raw) in values {
+            saved.insert(key.to_string(), raw.trim().to_string());
+        }
+        self.commit(&mut inner, saved).map_err(|e| (None, e))
+    }
+
     /// Drops a saved value, so the environment or default applies again.
     pub fn reset(&self, key: &str) -> Result<()> {
         find_field(key).ok_or_else(|| anyhow::anyhow!("unbekannte Einstellung {key}"))?;

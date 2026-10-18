@@ -102,10 +102,36 @@ pub async fn get_settings() -> Result<SettingsView, ServerFnError> {
     Ok(backend().settings())
 }
 
-#[server(prefix = "/admin/api", endpoint = "save-setting")]
-pub async fn save_setting(key: String, value: String) -> Result<(), ServerFnError> {
+/// One value of a settings section, as the page sends it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingValue {
+    pub key: String,
+    pub value: String,
+}
+
+/// Saves the changed values of a section together: all or none. An empty
+/// secret stays as it is. An invalid value's error reads "KEY: message".
+#[server(prefix = "/admin/api", endpoint = "save-settings", input = server_fn::codec::Json)]
+pub async fn save_settings(values: Vec<SettingValue>) -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().save_setting(&key, &value).map_err(bad_request)
+    backend()
+        .save_settings(&values)
+        .map_err(|(key, message)| match key {
+            Some(key) => bad_request(format!("{key}: {message}")),
+            None => bad_request(message),
+        })
+}
+
+/// Splits a save error into the key it names and its message.
+pub fn setting_error(text: &str) -> (Option<&str>, &str) {
+    match text.split_once(": ") {
+        Some((key, message))
+            if !key.is_empty() && key.bytes().all(|b| b.is_ascii_uppercase() || b == b'_') =>
+        {
+            (Some(key), message)
+        }
+        _ => (None, text),
+    }
 }
 
 #[server(prefix = "/admin/api", endpoint = "reset-setting")]

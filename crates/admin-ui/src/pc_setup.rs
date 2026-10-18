@@ -2,10 +2,14 @@
 
 use leptos::prelude::*;
 
-use crate::api::{NewPcSetupCommand, error_text};
+use crate::{
+    api::{NewPcSetupCommand, error_text},
+    labels::{PC_CONNECTION, PC_WAKE_SLEEP},
+    settings::SettingsSections,
+};
 
 #[component]
-pub fn PcSetupPage() -> impl IntoView {
+pub fn PcPage() -> impl IntoView {
     let create = ServerAction::<NewPcSetupCommand>::new();
     let shown = move || {
         create.value().get().map(|result| match result {
@@ -29,7 +33,10 @@ pub fn PcSetupPage() -> impl IntoView {
         })
     };
     view! {
-        <h1>"PC-Dienst einrichten"</h1>
+        <div class="page-head">
+            <h1>"PC"</h1>
+        </div>
+        <h2>"PC-Dienst einrichten"</h2>
         <p class="hint">
             "Der PC-Dienst legt den PC schlafen, schaltet den Gaming-Modus und startet Strata. Der Befehl lädt ihn vom NAS, richtet ihn ein und meldet ihn hier an. Läuft er schon, tauscht ein neuer Befehl das Programm aus und meldet den PC neu an."
         </p>
@@ -40,5 +47,6 @@ pub fn PcSetupPage() -> impl IntoView {
             </ActionForm>
             <p class="hint">"Ein neuer Befehl macht den vorigen ungültig."</p>
         </section>
+        <SettingsSections sections=&[&PC_CONNECTION, &PC_WAKE_SLEEP] />
     }
 }

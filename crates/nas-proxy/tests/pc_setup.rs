@@ -220,7 +220,7 @@ async fn registering_does_not_wake_the_pc() {
 async fn setup_page_offers_the_command() {
     let s = setup(false, |_| {}).await;
     let b = logged_in(&s.url).await;
-    let html = b.page("/admin/pc-dienst").await;
+    let html = b.page("/admin/pc").await;
     assert!(html.contains("PC-Dienst einrichten"), "{html}");
     assert!(html.contains("Befehl erzeugen"), "{html}");
 }

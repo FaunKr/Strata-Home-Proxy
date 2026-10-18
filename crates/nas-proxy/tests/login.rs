@@ -12,8 +12,8 @@ async fn without_login_only_the_login_page_is_shown() {
     let s = setup(true, |_| {}).await;
     let mut b = Browser::new(&s.url);
     let html = b.page("/admin/").await;
-    assert!(html.contains("Anmelden"), "{html}");
-    assert!(!html.contains("Hier zeigt der Proxy"), "{html}");
+    assert!(html.contains("Sign in"), "{html}");
+    assert!(!html.contains("class=\"badges\""), "{html}");
     assert_eq!(b.session().await, "Anonymous");
     let resp = change(&mut b, "admin", "ein langes Passwort").await;
     assert_eq!(resp.status(), 401);
@@ -32,7 +32,7 @@ async fn first_login_forces_a_new_password() {
     );
     assert_eq!(b.session().await, "MustChange");
     let html = b.page("/admin/").await;
-    assert!(html.contains("Neues Passwort festlegen"), "{html}");
+    assert!(html.contains("Set a new password"), "{html}");
 
     let resp = change(&mut b, "admin", "kurz").await;
     assert_ne!(resp.status(), 200);
@@ -44,8 +44,8 @@ async fn first_login_forces_a_new_password() {
     );
     assert_eq!(b.session().await, "Ready");
     let html = b.page("/admin/").await;
-    assert!(html.contains("<h1>Übersicht</h1>"), "{html}");
-    assert!(!html.contains("Neues Passwort festlegen"), "{html}");
+    assert!(html.contains("<h1>Overview</h1>"), "{html}");
+    assert!(!html.contains("Set a new password"), "{html}");
     assert!(kinds(&s.state).contains(&strata_nas_proxy::events::EventKind::PasswordChanged));
 
     // The default password is gone.

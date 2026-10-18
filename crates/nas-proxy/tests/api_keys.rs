@@ -165,8 +165,8 @@ async fn key_management_needs_a_login() {
     let mut b = Browser::new(&s.url);
     assert_eq!(b.call("api-keys", &[]).await.status(), 401);
     assert_eq!(create(&mut b, "Fremd").await.status(), 401);
-    let html = b.page("/admin/api-keys").await;
-    assert!(html.contains("Anmelden"), "{html}");
+    let html = b.page("/admin/access").await;
+    assert!(html.contains("Sign in"), "{html}");
 }
 
 #[tokio::test]

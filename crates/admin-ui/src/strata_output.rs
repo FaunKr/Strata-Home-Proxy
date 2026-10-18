@@ -49,7 +49,6 @@ pub fn StrataOutputPage() -> impl IntoView {
     };
     view! {
         <h1>"Strata-Ausgabe"</h1>
-        <p><a href="/admin/">"Zurück zur Übersicht"</a></p>
         {move || lost.get().then(|| view! {
             <p class="warning" role="status">"Verbindung unterbrochen, verbinde neu …"</p>
         })}

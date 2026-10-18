@@ -587,6 +587,17 @@ impl Browser {
         resp
     }
 
+    /// Calls a server function that takes JSON, like the settings sections.
+    pub async fn call_json(&mut self, name: &str, body: Value) -> reqwest::Response {
+        let mut req = reqwest::Client::new()
+            .post(format!("{}/admin/api/{name}", self.base))
+            .json(&body);
+        if let Some(c) = &self.cookie {
+            req = req.header("cookie", c);
+        }
+        req.send().await.unwrap()
+    }
+
     pub async fn session(&mut self) -> String {
         let resp = self.call("session", &[]).await;
         assert_eq!(resp.status(), 200);
@@ -600,6 +611,16 @@ impl Browser {
         }
         req.send().await.unwrap().text().await.unwrap()
     }
+}
+
+/// Saves several settings at once, as a section of the web UI does.
+pub async fn save_settings(b: &mut Browser, values: &[(&str, &str)]) -> reqwest::Response {
+    let values: Vec<Value> = values
+        .iter()
+        .map(|(key, value)| serde_json::json!({ "key": key, "value": value }))
+        .collect();
+    b.call_json("save-settings", serde_json::json!({ "values": values }))
+        .await
 }
 
 pub fn encode(v: &str) -> String {

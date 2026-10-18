@@ -795,10 +795,11 @@ fn ContextSwitch(
         .iter()
         .map(|&c| {
             let mut text = format!("{}K tokens", c / 1024);
-            if c == current {
-                text.push_str(" (current)");
-            } else if c == default_context {
-                text.push_str(" (recommended)");
+            match (c == current, c == default_context) {
+                (true, true) => text.push_str(" (current, recommended)"),
+                (true, false) => text.push_str(" (current)"),
+                (false, true) => text.push_str(" (recommended)"),
+                (false, false) => {}
             }
             view! {
                 <option value=c.to_string() selected=move || choice.get() == c>

@@ -1180,16 +1180,28 @@ fn active_at_512k(s: &Setup, lines: &[&str], hang: bool) -> Value {
     args_of(s, "iq3_xxs")
 }
 
+/// The job's end, for jobs that wait out `context_start_secs` and two
+/// restarts, longer than `finished` waits.
+async fn finished_slowly(s: &Setup) -> Value {
+    for _ in 0..80 {
+        let job = get(s, "/strata/job").await;
+        if job["state"] != "running" {
+            return job;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!("Ende des Vorgangs nicht erreicht");
+}
+
 #[tokio::test]
 async fn a_context_strata_never_answers_with_goes_back() {
-    let s = setup("models-context-no-answer").await;
+    // The limit well behind the fake Strata's first line.
+    let s = setup_with("models-context-no-answer", |c| c.context_start_secs = 3).await;
     let before = active_at_512k(&s, &["lade Modell"], true);
     s.fake.strata_stays_down.store(true, Ordering::SeqCst);
-    let done = job(
-        &s,
-        json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144}),
-    )
-    .await;
+    let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144});
+    assert_eq!(post(&s, "/strata/jobs", body).await.0, 202);
+    let done = finished_slowly(&s).await;
     assert_eq!(done["state"], "failed", "{done}");
     assert!(
         done["lines"].to_string().contains("lade Modell"),
@@ -1236,4 +1248,22 @@ async fn a_context_strata_answers_with_after_a_while_stays() {
         json!(["--native", "a.gguf", "--max-context", "262144"])
     );
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn cancelling_the_wait_for_the_new_context_brings_the_old_one_back() {
+    let s = setup_with("models-context-cancel", |c| c.context_start_secs = 600).await;
+    let before = active_at_512k(&s, &[], true);
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144});
+    assert_eq!(post(&s, "/strata/jobs", body).await.0, 202);
+    job_until(&s, "Warten auf Strata", |j| {
+        j["step"].as_str().is_some_and(|t| t.contains("bereit"))
+    })
+    .await;
+    let (code, _) = post(&s, "/strata/job/cancel", json!({})).await;
+    assert_eq!(code, 202);
+    assert_eq!(finished_slowly(&s).await["state"], "cancelled");
+    assert_eq!(args_of(&s, "iq3_xxs"), before, "the old args");
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 2, "started again");
 }

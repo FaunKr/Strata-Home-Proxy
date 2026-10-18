@@ -163,7 +163,8 @@ Beim aktiven Modell wartet der Vorgang nach dem Neustart, bis Strata auf
 `/health` antwortet. Endet Strata vorher oder antwortet es nicht innerhalb
 von `context_start_secs` (Standard 600), schreibt er die alten `args` zurück,
 startet Strata damit neu und scheitert; die letzten Zeilen der
-Strata-Ausgabe stehen dann in `lines` des Vorgangs. Im Gaming-Modus startet
+Strata-Ausgabe stehen dann in `lines` des Vorgangs. Wird das Warten
+abgebrochen, kommen die alten `args` ebenso zurück. Im Gaming-Modus startet
 Strata nicht neu, und es wird nicht gewartet.
 
 ### `GET /strata/job`

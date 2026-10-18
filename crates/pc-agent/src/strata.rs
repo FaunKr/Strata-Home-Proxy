@@ -1022,7 +1022,12 @@ async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Optio
     set_step(agent, "Strata neu starten");
     agent.stop_strata();
     restart_strata(agent).await;
-    if agent.gaming() || started_with_new_args(agent).await? {
+    let started = if agent.gaming() {
+        Ok(true)
+    } else {
+        started_with_new_args(agent).await
+    };
+    if let Ok(true) = started {
         return Ok(None);
     }
     let output = agent.output.last_lines(KEPT_LINES);
@@ -1033,6 +1038,8 @@ async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Optio
     if let Some(job) = agent.jobs.inner.lock().unwrap().current.as_mut() {
         job.lines = output;
     }
+    // A cancelled wait also leaves the old context, not an unproven one.
+    started?;
     Err(Step::Failed(format!(
         "Strata ist mit {}K Kontext nicht angelaufen; der alte Kontext gilt wieder",
         context / 1024
@@ -1088,8 +1095,9 @@ fn with_context(args: &mut Vec<serde_json::Value>, context: u32) {
             drop_value = true;
         } else if arg == CONTEXT_FLAG {
             drop_value = true;
-            if !std::mem::replace(&mut set, true) {
+            if !set {
                 kept.extend([arg, context.to_string().into()]);
+                set = true;
             }
         } else {
             kept.push(arg);

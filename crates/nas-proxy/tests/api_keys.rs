@@ -201,9 +201,14 @@ fn key_entry(view: &Value, name: &str) -> Option<Value> {
         .cloned()
 }
 
-async fn revoke(b: &mut Browser, name: &str) -> reqwest::Response {
-    b.call("revoke-api-key", &[("name", name)]).await
+/// The page sends the name and the start of the key, so a stale page never
+/// revokes a newer key of the same name.
+async fn revoke(b: &mut Browser, name: &str, prefix: &str) -> reqwest::Response {
+    b.call("revoke-api-key", &[("name", name), ("prefix", prefix)])
+        .await
 }
+
+const NO_PREFIX: &str = "shp_00000000";
 
 #[tokio::test]
 async fn a_revoked_key_stops_working_at_once() {
@@ -211,13 +216,14 @@ async fn a_revoked_key_stops_working_at_once() {
     let mut b = logged_in(&s.url).await;
     let created: Value = create(&mut b, "Laptop").await.json().await.unwrap();
     let key = created["key"].as_str().unwrap().to_string();
+    let prefix = created["info"]["prefix"].as_str().unwrap();
     assert_eq!(
         send(&s.url, "/v1/messages", &[("x-api-key", &key)], json!({}))
             .await
             .status(),
         200
     );
-    assert_eq!(revoke(&mut b, "Laptop").await.status(), 200);
+    assert_eq!(revoke(&mut b, "Laptop", prefix).await.status(), 200);
     assert_eq!(
         send(&s.url, "/v1/messages", &[("x-api-key", &key)], json!({}))
             .await
@@ -233,14 +239,36 @@ async fn a_revoked_key_stops_working_at_once() {
 async fn revoking_an_unknown_key_is_an_error() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
-    assert_eq!(revoke(&mut b, "Gibt es nicht").await.status(), 400);
+    assert_eq!(
+        revoke(&mut b, "Gibt es nicht", NO_PREFIX).await.status(),
+        400
+    );
+}
+
+#[tokio::test]
+async fn a_stale_page_does_not_revoke_a_newer_key_of_the_same_name() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let old: Value = create(&mut b, "Laptop").await.json().await.unwrap();
+    let old_prefix = old["info"]["prefix"].as_str().unwrap();
+    assert_eq!(revoke(&mut b, "Laptop", old_prefix).await.status(), 200);
+    let new: Value = create(&mut b, "Laptop").await.json().await.unwrap();
+    // The page still showing the old key sends its revoke again.
+    assert_eq!(revoke(&mut b, "Laptop", old_prefix).await.status(), 400);
+    let key = new["key"].as_str().unwrap();
+    assert_eq!(
+        send(&s.url, "/v1/messages", &[("x-api-key", key)], json!({}))
+            .await
+            .status(),
+        200
+    );
 }
 
 #[tokio::test]
 async fn revoking_needs_a_login() {
     let s = setup(true, |_| {}).await;
     let mut b = Browser::new(&s.url);
-    assert_eq!(revoke(&mut b, "Test").await.status(), 401);
+    assert_eq!(revoke(&mut b, "Test", NO_PREFIX).await.status(), 401);
     assert_eq!(post_json(&s, "/v1/messages", json!({})).await.status(), 200);
 }
 
@@ -277,8 +305,13 @@ async fn last_use_is_shown_and_survives_a_restart() {
 async fn creating_and_revoking_go_into_the_history() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
-    create(&mut b, "Laptop").await;
-    revoke(&mut b, "Laptop").await;
+    let created: Value = create(&mut b, "Laptop").await.json().await.unwrap();
+    revoke(
+        &mut b,
+        "Laptop",
+        created["info"]["prefix"].as_str().unwrap(),
+    )
+    .await;
     let events: Vec<(EventKind, Option<String>)> = s
         .state
         .events
@@ -319,4 +352,27 @@ async fn strata_refusing_the_strata_key_is_told_apart() {
     );
     s.state.settings.set("STRATA_API_KEY", "richtig").unwrap();
     assert_eq!(post_json(&s, "/v1/messages", json!({})).await.status(), 200);
+}
+
+#[tokio::test]
+async fn strata_refusing_the_strata_key_after_waking_is_told_apart() {
+    let s = setup(false, |_| {}).await;
+    *s.pc.strata_key.lock().unwrap() = Some("richtig".into());
+    s.state.settings.set("STRATA_API_KEY", "falsch").unwrap();
+    let resp = post_json(&s, "/v1/messages", json!({"stream": true})).await;
+    // The status line went out before Strata answered; the error comes as an event.
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("STRATA_API_KEY"), "{text}");
+}
+
+#[tokio::test]
+async fn strata_asking_for_a_key_the_proxy_lacks_is_told_apart() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_key.lock().unwrap() = Some("richtig".into());
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
+    assert_eq!(resp.status(), 401);
+    assert_eq!(
+        resp.headers()["x-strata-proxy-status"],
+        "strata_unauthorized"
+    );
 }

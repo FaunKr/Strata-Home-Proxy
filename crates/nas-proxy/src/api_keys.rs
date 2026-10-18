@@ -89,6 +89,10 @@ pub struct ApiKeys {
     /// Why the key file could not be read. Nothing is written then, so a
     /// damaged file is never replaced by one without the keys it holds.
     broken: Option<String>,
+    /// Held for every write, taken before `inner`. One writer at a time, so a
+    /// flush never writes an older list over a create or revoke, and two
+    /// writes never share the temp file.
+    saving: Mutex<()>,
     inner: Mutex<Inner>,
 }
 
@@ -108,6 +112,7 @@ impl ApiKeys {
         Self {
             dir: data_dir,
             broken,
+            saving: Mutex::new(()),
             inner: Mutex::new(Inner {
                 keys,
                 last_used_written: 0,
@@ -130,6 +135,7 @@ impl ApiKeys {
         if name.chars().count() > MAX_NAME_CHARS {
             return Err(KeyError::NameTooLong);
         }
+        let _saving = self.saving.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         let lower = name.to_lowercase();
         if inner.keys.iter().any(|k| k.name.to_lowercase() == lower) {
@@ -151,13 +157,15 @@ impl ApiKeys {
     }
 
     /// Removes a key; requests with it fail from now on. Names match as on
-    /// creation: trimmed and regardless of case.
-    pub fn revoke(&self, name: &str) -> Result<(), KeyError> {
+    /// creation: trimmed and regardless of case. The prefix must match too,
+    /// so a page shown before a key was replaced never revokes the new one.
+    pub fn revoke(&self, name: &str, prefix: &str) -> Result<(), KeyError> {
         let lower = name.trim().to_lowercase();
+        let _saving = self.saving.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         let mut next = inner.keys.clone();
         let before = next.len();
-        next.retain(|k| k.name.to_lowercase() != lower);
+        next.retain(|k| k.name.to_lowercase() != lower || k.prefix != prefix);
         if next.len() == before {
             return Err(KeyError::UnknownKey);
         }
@@ -196,9 +204,10 @@ impl ApiKeys {
 
     /// Writes pending last uses once the interval has passed. Called by the
     /// idle loop, so the last use before a quiet spell is not lost. The file
-    /// is written outside the lock; requests checking keys never wait for it.
+    /// is written outside the key lock; requests checking keys never wait for it.
     pub fn flush_last_used(&self) {
         let now = unix_now();
+        let _saving = self.saving.lock().unwrap();
         let keys = {
             let mut inner = self.inner.lock().unwrap();
             if !inner.last_used_dirty
@@ -320,8 +329,8 @@ mod tests {
     #[test]
     fn revoking_matches_names_like_creating() {
         let keys = ApiKeys::new(None);
-        let (key, _) = keys.create("Laptop").unwrap();
-        keys.revoke("  laptop ").unwrap();
+        let (key, info) = keys.create("Laptop").unwrap();
+        keys.revoke("  laptop ", &info.prefix).unwrap();
         assert_eq!(keys.check(&key), None);
     }
 }

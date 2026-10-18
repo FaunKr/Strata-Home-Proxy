@@ -411,10 +411,11 @@ fn ApiKeysPage() -> impl IntoView {
     // The new key stays visible until the next revoke, so it does not linger
     // for a key that no longer exists.
     let shown = RwSignal::<Option<CreatedKey>>::new(None);
-    Effect::new(move |_| {
-        if let Some(Ok(c)) = create.value().get() {
-            shown.set(Some(c));
-        }
+    // A failed create hides the previous key, so it does not sit next to the error.
+    Effect::new(move |_| match create.value().get() {
+        Some(Ok(c)) => shown.set(Some(c)),
+        Some(Err(_)) => shown.set(None),
+        None => {}
     });
     Effect::new(move |_| {
         if revoke.version().get() > 0 {
@@ -520,6 +521,7 @@ fn ApiKeyRow(key: ApiKeyInfo) -> impl IntoView {
             <p class="hint">{format!("Angelegt {}, {used}", key.created_text)}</p>
             <ActionForm action=revoke attr:class="revoke">
                 <input type="hidden" name="name" value=key.name />
+                <input type="hidden" name="prefix" value=key.prefix.clone() />
                 <input id=confirm_id.clone() type="checkbox" required />
                 <label for=confirm_id class="inline">
                     "Ja, widerrufen: dieser Client bekommt danach 401"

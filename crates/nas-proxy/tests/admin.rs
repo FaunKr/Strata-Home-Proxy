@@ -51,13 +51,18 @@ async fn admin_does_not_wake_the_pc() {
 async fn managing_api_keys_does_not_wake_the_pc() {
     let s = setup(false, |_| {}).await;
     let mut b = logged_in(&s.url).await;
-    for (call, args) in [
-        ("api-keys", &[][..]),
-        ("create-api-key", &[("name", "Laptop")][..]),
-        ("revoke-api-key", &[("name", "Laptop")][..]),
-    ] {
-        assert_eq!(b.call(call, args).await.status(), 200, "{call}");
-    }
+    assert_eq!(b.call("api-keys", &[]).await.status(), 200);
+    let created: serde_json::Value = b
+        .call("create-api-key", &[("name", "Laptop")])
+        .await
+        .json()
+        .await
+        .unwrap();
+    let prefix = created["info"]["prefix"].as_str().unwrap();
+    let resp = b
+        .call("revoke-api-key", &[("name", "Laptop"), ("prefix", prefix)])
+        .await;
+    assert_eq!(resp.status(), 200);
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 0);

@@ -154,9 +154,11 @@ pub async fn create_api_key(name: String) -> Result<CreatedKey, ServerFnError> {
 }
 
 #[server(prefix = "/admin/api", endpoint = "revoke-api-key")]
-pub async fn revoke_api_key(name: String) -> Result<(), ServerFnError> {
+pub async fn revoke_api_key(name: String, prefix: String) -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().revoke_api_key(&name).map_err(bad_request)
+    backend()
+        .revoke_api_key(&name, &prefix)
+        .map_err(bad_request)
 }
 
 #[cfg(feature = "ssr")]

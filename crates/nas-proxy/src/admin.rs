@@ -229,8 +229,11 @@ impl Backend for UiBackend {
         })
     }
 
-    fn revoke_api_key(&self, name: &str) -> Result<(), String> {
-        self.0.api_keys.revoke(name).map_err(|e| e.to_string())?;
+    fn revoke_api_key(&self, name: &str, prefix: &str) -> Result<(), String> {
+        self.0
+            .api_keys
+            .revoke(name, prefix)
+            .map_err(|e| e.to_string())?;
         self.0
             .events
             .record(EventKind::ApiKeyRevoked, Some(name.to_string()));

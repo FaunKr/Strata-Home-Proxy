@@ -305,13 +305,25 @@ async fn forward(
     *out.headers_mut() = headers;
     if status == StatusCode::UNAUTHORIZED {
         // The client's key was fine; Strata refused the proxy's own key.
-        tracing::warn!("Strata lehnt den Strata-Key ab: STRATA_API_KEY prüfen");
+        strata_refused(&st);
         out.headers_mut().insert(
             HeaderName::from_static(STATUS_HEADER),
             HeaderValue::from_static("strata_unauthorized"),
         );
     }
     out
+}
+
+/// Logs that Strata refused the proxy's key, or that it lacks one, and
+/// returns the same text for the client.
+fn strata_refused(st: &AppState) -> &'static str {
+    let message = if st.cfg().strata_api_key.is_some() {
+        "Strata lehnt den Strata-Key ab: STRATA_API_KEY prüfen."
+    } else {
+        "Strata verlangt einen Key: STRATA_API_KEY in den Einstellungen setzen."
+    };
+    tracing::warn!("{message}");
+    message
 }
 
 /// Holds the activity guard until the body stream ends or is dropped.
@@ -372,6 +384,11 @@ fn wake_then_stream(
                 return;
             }
         };
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            let message = strata_refused(&st);
+            let _ = tx.send(flavor.error_event("api_error", message)).await;
+            return;
+        }
         if !resp.status().is_success() || !is_event_stream(resp.headers()) {
             // The status line is already sent; pass the error on as an event.
             let status = resp.status();

@@ -55,6 +55,8 @@ RUN cargo chef cook --recipe-path recipe.json --locked --release \
         --target x86_64-pc-windows-gnu -p strata-pc-agent
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# Der Proxy liefert das Installationsskript des PC-Dienstes aus (include_str!).
+COPY deploy/windows/install.ps1 ./deploy/windows/
 RUN cargo leptos build --release --project admin-ui
 RUN cargo build --locked --release --target x86_64-pc-windows-gnu -p strata-pc-agent
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests scripts/ci-select.sh: a few fixed cases, then every input the repo
 # itself declares: each crate, each path dependency, each file a crate embeds
-# from outside its own directory, and each file the Dockerfile copies.
+# from outside its own directory, each file the Dockerfile copies, and each
+# file check.sh (or a script it runs) uses.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -58,7 +59,8 @@ done
 # Every file a crate embeds from outside its directory selects that crate.
 while IFS=: read -r source embedded; do
   crate=$(cut -d/ -f1-2 <<<"$source")
-  target=$(realpath -m --relative-to=. "$(dirname "$source")/$embedded")
+  target=$(cd "$(dirname "$source")/$(dirname "$embedded")" && pwd -P)/$(basename "$embedded")
+  target=${target#"$PWD"/}
   [[ $target == "$crate"/* ]] && continue
   expect_selects "$target" packages "$(package_of "$crate")"
 done < <(grep -roE --include='*.rs' 'include_(str|bytes)!\(\s*"[^"]+"' crates |
@@ -68,15 +70,24 @@ done < <(grep -roE --include='*.rs' 'include_(str|bytes)!\(\s*"[^"]+"' crates |
 while read -r -a words; do
   sources=()
   for word in "${words[@]:1}"; do
-    [[ $word == --* || $word == *://* ]] && continue 2
-    sources+=("$word")
+    [[ $word == --from=* || $word == *://* ]] && continue 2
+    [[ $word == --* ]] || sources+=("$word")
   done
-  unset 'sources[-1]'
+  unset "sources[$((${#sources[@]} - 1))]"
   for src in "${sources[@]}"; do
     [[ -d $src ]] && src=$src/x
     expect_selects "$src" image true
   done
-done < <(grep -E '^(COPY|ADD) ' Dockerfile)
+done < <(sed -e ':a' -e '/\\$/N' -e 's/\\\n//' -e 'ta' Dockerfile | grep -E '^(COPY|ADD) ')
+
+# Every file check.sh uses, and every file the scripts it runs use, runs the
+# test job.
+used_by() { grep -oE '(scripts|deploy)/[A-Za-z0-9._/-]+' "$1" | sort -u; }
+for script in scripts/check.sh $(used_by scripts/check.sh | grep '^scripts/.*\.sh$' | grep -v ci-select); do
+  for path in $(used_by "$script"); do
+    [[ -e $path ]] && expect_selects "$path" test true
+  done
+done
 
 if ((failures)); then
   echo "ci-select: $failures Fehler; die Zuordnung steht in scripts/ci-select.sh" >&2

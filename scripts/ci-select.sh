@@ -19,8 +19,9 @@ windows=false
 image=false
 while IFS= read -r path; do
   case $path in
-    # Shared: whatever changes here can break any job.
-    Cargo.toml | Cargo.lock | rust-toolchain* | .github/workflows/* | scripts/check.sh | scripts/ci-select*.sh)
+    # Shared: whatever changes here can break any job. check.sh also runs the
+    # scripts' own tests, which only an unscoped run covers.
+    Cargo.toml | Cargo.lock | rust-toolchain* | .cargo/* | .github/workflows/* | scripts/* | deploy/truenas-auto-update.sh)
       all
       exit 0
       ;;
@@ -32,11 +33,11 @@ while IFS= read -r path; do
     crates/*) image=true ;;
     # The proxy embeds the install script (include_str!), the image copies it.
     deploy/windows/*) packages+=(strata-nas-proxy) windows=true image=true ;;
-    Dockerfile | .dockerignore | scripts/check-exe-version.sh) image=true ;;
+    Dockerfile | .dockerignore) image=true ;;
   esac
 done
 
-packages=$(printf '%s\n' "${packages[@]}" | sort -u | xargs)
+packages=$(printf '%s\n' ${packages[@]+"${packages[@]}"} | sort -u | xargs)
 echo "test=$([[ -n $packages ]] && echo true || echo false)"
 echo "packages=$packages"
 echo "windows=$windows"

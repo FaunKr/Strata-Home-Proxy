@@ -69,6 +69,25 @@ dem Befehl von der Seite PC-Dienst neu einzurichten.
 
 An: Strata beenden, Schlafen sperren. Aus: Strata starten, Schlafen erlauben.
 
+## `GET /strata-log` (für die Seite „Strata-Ausgabe“)
+
+Die Strata-Ausgabe als Server-Sent Events: was ein vom Dienst gestartetes
+Strata auf seine Konsole schreibt. Zuerst kommen die gemerkten Zeilen (höchstens
+500, Trennzeilen eingeschlossen), dann jede neue, dazu jeder Wechsel des
+Hinweises. Jede Nachricht ist ein JSON-Objekt in `data:`:
+
+| `kind` | Felder | Bedeutung |
+| --- | --- | --- |
+| `started` | `at` (Unix-Sekunden) | Der Dienst hat Strata gestartet; die Zeilen davor bleiben |
+| `line` | `text` | eine neue Zeile |
+| `replace` | `text` | ersetzt die letzte Zeile (Fortschritt, der in der Konsole dieselbe Zeile mit `\r` überschreibt) |
+| `notice` | `reason`: `running`, `gaming`, `not_running`, `not_started_by_agent` | ob es Ausgabe gibt und warum nicht; `not_started_by_agent`: Strata antwortet, wurde aber nicht vom Dienst gestartet |
+
+Farbcodes und andere Steuerzeichen sind entfernt. Kommt der Abrufer nicht
+hinterher, endet der Strom; beim nächsten Verbinden kommen die gemerkten
+Zeilen neu. Der Proxy öffnet den Strom nur, solange jemand die Seite offen hat
+und der PC ohnehin wach ist.
+
 ## Strata verwalten (für die Seite „Strata“)
 
 Der Dienst richtet Strata selbst ein und verwaltet es. Jeder Vorgang ruft

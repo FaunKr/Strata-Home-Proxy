@@ -6,6 +6,7 @@ pub mod catalog;
 pub mod command;
 pub mod config;
 pub mod managed;
+pub mod output;
 pub mod platform;
 pub mod strata;
 pub mod update;

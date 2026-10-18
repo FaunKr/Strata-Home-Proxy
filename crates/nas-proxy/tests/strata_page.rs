@@ -9,16 +9,6 @@ use common::*;
 use serde_json::{Value, json};
 use strata_nas_proxy::events::EventKind;
 
-async fn eventually(what: &str, check: impl Fn() -> bool) {
-    for _ in 0..100 {
-        if check() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("{what} ist nicht eingetreten");
-}
-
 async fn page(b: &mut Browser) -> Value {
     let resp = b.call("strata", &[]).await;
     assert_eq!(resp.status(), 200);

@@ -77,6 +77,12 @@ pub struct FakePc {
     pub no_update: AtomicBool,
     /// The version the PC service reports after an accepted update.
     pub update_to: Mutex<Option<String>>,
+    /// What the PC service's `GET /strata-log` sends, in order; messages
+    /// added later follow live.
+    pub strata_log: Mutex<Vec<Value>>,
+    pub strata_log_requests: AtomicUsize,
+    /// The PC service refuses `GET /strata-log` (wrong token, other address).
+    pub refuse_log: AtomicBool,
 }
 
 /// Credential headers as Strata saw them.
@@ -378,6 +384,35 @@ pub async fn agent_cancel_job(State(pc): State<Pc>) -> Response {
     StatusCode::ACCEPTED.into_response()
 }
 
+/// Like the PC service: the Strata-Ausgabe kept so far, then each new message.
+pub async fn agent_strata_log(State(pc): State<Pc>) -> Response {
+    if !pc.up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    pc.strata_log_requests.fetch_add(1, Ordering::SeqCst);
+    if pc.refuse_log.load(Ordering::SeqCst) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let s = stream::unfold((pc, 0usize), |(pc, sent)| async move {
+        loop {
+            // A PC that went to sleep drops the connection.
+            if !pc.up() {
+                return None;
+            }
+            let next = pc.strata_log.lock().unwrap().get(sent).cloned();
+            if let Some(msg) = next {
+                let event = Bytes::from(format!("data: {msg}\n\n"));
+                return Some((Ok::<_, std::convert::Infallible>(event), (pc, sent + 1)));
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+    Response::builder()
+        .header("content-type", "text/event-stream")
+        .body(Body::from_stream(s))
+        .unwrap()
+}
+
 pub async fn serve(router: Router) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -451,6 +486,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
             .route("/strata/job", get(agent_job))
             .route("/strata/job/cancel", post(agent_cancel_job))
             .route("/update", post(agent_update))
+            .route("/strata-log", get(agent_strata_log))
             .with_state(pc.clone()),
     )
     .await;
@@ -488,6 +524,17 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         url: format!("http://{proxy}"),
         key,
     }
+}
+
+/// Waits up to 5 s until `check` holds; panics naming `what` otherwise.
+pub async fn eventually(what: &str, check: impl Fn() -> bool) {
+    for _ in 0..100 {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{what} ist nicht eingetreten");
 }
 
 pub async fn post_json(s: &Setup, path: &str, body: Value) -> reqwest::Response {
@@ -605,7 +652,12 @@ pub struct Live {
 impl Live {
     /// Opens the stream; panics unless it answers 200.
     pub async fn open(b: &Browser) -> Self {
-        let resp = Self::request(b).await;
+        Self::open_at(b, "/admin/api/overview-stream").await
+    }
+
+    /// Opens another stream of the web UI, e.g. the Strata-Ausgabe.
+    pub async fn open_at(b: &Browser, path: &str) -> Self {
+        let resp = Self::request_at(b, path).await;
         assert_eq!(resp.status(), 200);
         Self {
             body: Box::pin(resp.bytes_stream()),
@@ -614,7 +666,11 @@ impl Live {
     }
 
     pub async fn request(b: &Browser) -> reqwest::Response {
-        let mut req = reqwest::Client::new().get(format!("{}/admin/api/overview-stream", b.base));
+        Self::request_at(b, "/admin/api/overview-stream").await
+    }
+
+    pub async fn request_at(b: &Browser, path: &str) -> reqwest::Response {
+        let mut req = reqwest::Client::new().get(format!("{}{path}", b.base));
         if let Some(c) = &b.cookie {
             req = req.header("cookie", c);
         }
@@ -637,7 +693,7 @@ impl Live {
         }
     }
 
-    /// Waits up to 5 s for an overview that matches; panics with the last one.
+    /// Waits up to 5 s for a message that matches; panics with the last one.
     pub async fn until(&mut self, what: &str, check: impl Fn(&Value) -> bool) -> Value {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         let mut last = Value::Null;

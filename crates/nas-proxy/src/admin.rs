@@ -9,8 +9,8 @@ use std::{
 use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
     api::{
-        ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, PcSetupCommand, Session,
-        SettingEntry, SettingsView, Source, StrataJobForm, StrataPage,
+        ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, OutputMessage, Overview,
+        PcSetupCommand, Session, SettingEntry, SettingsView, Source, StrataJobForm, StrataPage,
     },
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
@@ -115,6 +115,10 @@ impl Backend for UiBackend {
 
     fn overview(&self) -> BoxStream<'static, Overview> {
         overview::watch(&self.0)
+    }
+
+    fn strata_output(&self) -> BoxStream<'static, OutputMessage> {
+        crate::strata_output::watch(&self.0)
     }
 
     fn wake(&self) -> Result<(), String> {

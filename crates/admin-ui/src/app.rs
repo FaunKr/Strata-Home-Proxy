@@ -17,6 +17,7 @@ use crate::{
     overview::OverviewPage,
     pc_setup::PcSetupPage,
     strata::StrataPage,
+    strata_output::StrataOutputPage,
 };
 
 /// The HTML page around the app.
@@ -85,6 +86,10 @@ pub fn App() -> impl IntoView {
                     <Route
                         path=path!("/admin/strata")
                         view=|| view! { <Protected><StrataPage /></Protected> }
+                    />
+                    <Route
+                        path=path!("/admin/strata-log")
+                        view=|| view! { <Protected><StrataOutputPage /></Protected> }
                     />
                     <Route
                         path=path!("/admin/pc-dienst")

@@ -24,16 +24,6 @@ fn countdown(v: &Value) -> Option<i64> {
     Some(at as i64 - v["now"].as_u64().unwrap() as i64)
 }
 
-async fn eventually(what: &str, check: impl Fn() -> bool) {
-    for _ in 0..100 {
-        if check() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("{what} ist nicht eingetreten");
-}
-
 // --- Live stream (#15) ---
 
 #[tokio::test]

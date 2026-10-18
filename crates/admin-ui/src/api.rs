@@ -245,6 +245,40 @@ pub struct PcServiceView {
     pub update_error: Option<String>,
 }
 
+/// One message of the Strata-Ausgabe stream (`/admin/api/strata-output-stream`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OutputMessage {
+    /// The kept lines come again from here on; the page drops what it has.
+    Reset,
+    Line {
+        text: String,
+    },
+    /// Takes the place of the last line, as a progress bar does in a console.
+    Replace {
+        text: String,
+    },
+    Notice {
+        notice: OutputNotice,
+    },
+}
+
+/// Why the Strata-Ausgabe stands still, or `Running` when it does not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputNotice {
+    Running,
+    Asleep,
+    NoAgent,
+    /// The PC service is too old for the Strata-Ausgabe.
+    TooOld,
+    /// The PC service refuses the proxy: token or allowed addresses.
+    Refused,
+    Gaming,
+    NotRunning,
+    NotStartedByAgent,
+}
+
 /// Kinds of events in the history; their snake_case names are what
 /// `events.jsonl` stores.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

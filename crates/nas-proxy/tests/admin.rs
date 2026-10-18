@@ -35,6 +35,8 @@ async fn admin_does_not_wake_the_pc() {
         "/admin/",
         "/admin/gibt-es-nicht",
         "/admin/api-keys",
+        "/admin/strata-log",
+        "/admin/api/strata-output-stream",
         "/admin/pkg/admin-ui.js",
     ] {
         let resp = get(&format!("{}{path}", s.url)).await;

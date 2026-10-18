@@ -9,6 +9,7 @@ pub mod config;
 pub mod events;
 pub mod files;
 pub mod overview;
+pub mod pc_setup;
 pub mod proxy;
 pub mod settings;
 pub mod state;
@@ -35,6 +36,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
     let admin = strata_admin_ui::server::router(options, admin::backend(&state));
     Router::new()
         .merge(admin)
+        .merge(pc_setup::router())
         .fallback(fallback)
         .with_state(state)
 }

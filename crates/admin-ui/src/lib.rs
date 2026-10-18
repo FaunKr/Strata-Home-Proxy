@@ -5,6 +5,7 @@ pub mod api;
 pub mod app;
 pub mod labels;
 pub mod overview;
+pub mod pc_setup;
 #[cfg(feature = "ssr")]
 pub mod server;
 pub mod strata;

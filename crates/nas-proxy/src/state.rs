@@ -206,6 +206,8 @@ pub struct AppState {
     pub overview: Monitor,
     /// Strata jobs on the PC and the Strata key.
     pub strata: crate::strata::StrataState,
+    /// Setting up the PC service from the NAS.
+    pub pc_setup: crate::pc_setup::PcSetup,
     in_flight: AtomicUsize,
     inner: Mutex<Inner>,
     wake_lock: tokio::sync::Mutex<()>,
@@ -249,6 +251,7 @@ impl AppState {
             upstream,
             overview: Monitor::default(),
             strata: crate::strata::StrataState::new(cfg.data_dir.clone()),
+            pc_setup: crate::pc_setup::PcSetup::default(),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
             inner: Mutex::new(Inner {

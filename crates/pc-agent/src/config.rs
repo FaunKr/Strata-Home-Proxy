@@ -111,7 +111,8 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("Konfiguration {} nicht lesbar", path.display()))?;
-        let mut cfg: Self = toml::from_str(&raw)
+        // Set-Content -Encoding UTF8 in Windows PowerShell writes a BOM.
+        let mut cfg: Self = toml::from_str(raw.trim_start_matches('\u{feff}'))
             .with_context(|| format!("Konfiguration {} ist fehlerhaft", path.display()))?;
         cfg.strata_url = cfg.strata_url.trim_end_matches('/').to_string();
         if let Some(mac) = &cfg.mac {
@@ -209,7 +210,9 @@ mod tests {
                 "fresh_strata_after_standby = true",
                 "strata_api_key = \"strata-geheim\"",
             ]
-            .join("\r\n"),
+            .join("\r\n")
+            // As Windows PowerShell's Set-Content -Encoding UTF8 writes it.
+            .replacen("", "\u{feff}", 1),
         )
         .unwrap();
         let cfg = Config::load(&path).unwrap();

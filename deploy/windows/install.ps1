@@ -70,15 +70,28 @@ if (-not $NasUrl -and -not $NasIp) {
 
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
 $update = Test-Path $config
-Stop-Agent
+
+if ($NasUrl -and -not $update) {
+    # Vor der Anmeldung, damit ein Fehler hier den Code nicht verbraucht.
+    $nasHost = ([Uri]$NasUrl).Host.Trim("[]")
+    $NasIp = [System.Net.Dns]::GetHostAddresses($nasHost) |
+        Where-Object AddressFamily -eq "InterNetwork" |
+        Select-Object -First 1 -ExpandProperty IPAddressToString
+    if (-not $NasIp) {
+        throw "Keine IPv4-Adresse fuer $nasHost gefunden. Die Weboberflaeche ueber die IP des NAS oeffnen und einen neuen Befehl erzeugen."
+    }
+}
 
 if ($NasUrl) {
-    # Erst laden, dann anmelden: ein abgebrochener Download verbraucht den Code nicht.
+    # Erst laden, dann den laufenden Dienst beenden: scheitert der Download,
+    # laeuft der alte weiter. Ein abgebrochener Download verbraucht auch den Code nicht.
     $download = "$exe.neu"
     Invoke-WebRequest -UseBasicParsing "$NasUrl/admin/agent/strata-pc-agent.exe" -OutFile $download
+    Stop-Agent
     Move-Item $download $exe -Force
 } else {
     $here = Split-Path -Parent $PSCommandPath
+    Stop-Agent
     Copy-Item "$here\strata-pc-agent.exe" $exe -Force
 }
 
@@ -89,12 +102,8 @@ if ($update) {
     try {
         $reg = Invoke-RestMethod -Method Post "$NasUrl/admin/agent/register" -ContentType "application/json" -Body $body
     } catch {
-        throw "Anmeldung beim NAS fehlgeschlagen. Der Code gilt nur einmal und 15 Minuten: auf der Seite PC-Dienst einen neuen Befehl erzeugen. ($_)"
+        throw "Anmeldung beim NAS fehlgeschlagen. Der Code gilt nur einmal und kurz: auf der Seite PC-Dienst einen neuen Befehl erzeugen. ($_)"
     }
-    $nasHost = ([Uri]$reg.nas_url).Host
-    $NasIp = [System.Net.Dns]::GetHostAddresses($nasHost) |
-        Where-Object AddressFamily -eq "InterNetwork" |
-        Select-Object -First 1 -ExpandProperty IPAddressToString
     $lines = @(
         "# Konfiguration des PC-Dienstes, angelegt bei der Einrichtung vom NAS."
         "# Startskript und Strata-Programme setzt die Seite Strata der Weboberflaeche."
@@ -106,7 +115,9 @@ if ($update) {
         "fresh_strata_after_standby = true"
     )
     if ($reg.strata_api_key) {
-        $lines += "strata_api_key = `"$($reg.strata_api_key)`""
+        # TOML-Zeichenkette: \ und " escapen.
+        $key = $reg.strata_api_key -replace '\\', '\\' -replace '"', '\"'
+        $lines += "strata_api_key = `"$key`""
     }
     # Ohne BOM, sonst liest der Dienst die erste Zeile nicht.
     [IO.File]::WriteAllLines($config, $lines)

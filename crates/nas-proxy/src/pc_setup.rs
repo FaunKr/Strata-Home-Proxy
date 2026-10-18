@@ -95,8 +95,8 @@ impl PcSetup {
         })
     }
 
-    /// Whether `code` is the current code and still valid.
-    fn valid(&self, code: &str) -> bool {
+    /// Whether `code` is the current code and still valid, without using it up.
+    fn is_current(&self, code: &str) -> bool {
         Self::matches(self.code.lock().unwrap().as_ref(), code)
     }
 
@@ -176,13 +176,15 @@ async fn install_script(
     let host = host(&headers);
     let uninstall = query.contains_key("uninstall");
     let code = query.get("code").map(String::as_str).unwrap_or_default();
-    if !valid_host(host) || (!uninstall && !state.pc_setup.valid(code)) {
-        // Windows PowerShell shows no body for an error status, so the
-        // explanation comes as a script that prints it.
-        return powershell(
-            "Write-Host 'Der Code gilt nicht (mehr). Auf der Seite PC-Dienst der Weboberflaeche einen neuen Befehl erzeugen.' -ForegroundColor Red"
-                .to_string(),
+    // Windows PowerShell shows no body for an error status, so an
+    // explanation comes as a script that prints it.
+    if !valid_host(host) {
+        return explain(
+            "Die Adresse des NAS im Befehl taugt nicht. Die Weboberflaeche ueber die IP des NAS oeffnen und einen neuen Befehl erzeugen.",
         );
+    }
+    if !uninstall && !state.pc_setup.is_current(code) {
+        return explain(CODE_INVALID);
     }
     let code = if uninstall { "" } else { code.trim() };
     let mut script = INSTALL_SCRIPT
@@ -200,6 +202,12 @@ async fn install_script(
         script = script.replacen("[switch]$Uninstall,", "[switch]$Uninstall = $true,", 1);
     }
     powershell(script)
+}
+
+const CODE_INVALID: &str = "Der Code gilt nicht (mehr). Auf der Seite PC-Dienst der Weboberflaeche einen neuen Befehl erzeugen.";
+
+fn explain(message: &str) -> Response {
+    powershell(format!("Write-Host '{message}' -ForegroundColor Red"))
 }
 
 fn powershell(script: String) -> Response {
@@ -244,14 +252,9 @@ async fn register(
     Json(reg): Json<Registration>,
 ) -> Response {
     if !state.pc_setup.redeem(&reg.code) {
-        return refused(
-            "Der Code gilt nicht (mehr). Auf der Seite „PC-Dienst einrichten“ einen neuen Befehl erzeugen.",
-        );
+        return refused(CODE_INVALID);
     }
-    let token: String = crate::auth::random_key()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    let token = crate::auth::hex(&crate::auth::random_key());
     let agent = SocketAddr::new(peer.ip().to_canonical(), reg.port);
     let url = format!("http://{agent}");
     let entered = state

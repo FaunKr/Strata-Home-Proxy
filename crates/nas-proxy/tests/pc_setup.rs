@@ -50,13 +50,15 @@ async fn missing_program_is_not_found() {
 }
 
 #[tokio::test]
-async fn download_does_not_postpone_sleep() {
+async fn setup_calls_do_not_postpone_sleep() {
     let s = setup(true, |c| c.idle_timeout = Duration::from_millis(600)).await;
     s.state.pc_setup.set_program(fake_exe("idle"));
     for _ in 0..8 {
         reqwest::get(format!("{}/admin/agent/strata-pc-agent.exe", s.url))
             .await
             .unwrap();
+        script(&s, "?code=FALSCH").await;
+        register(&s, "FALSCH", 8091).await;
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);

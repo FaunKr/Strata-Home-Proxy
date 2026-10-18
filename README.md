@@ -46,7 +46,7 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 
 **Andere NAS mit Docker Compose:**
 
-Das Image baut die CI bei jedem Push: `ghcr.io/faunkr/strata-home-proxy:latest`.
+Das Image baut die CI bei jedem Push auf main: `ghcr.io/faunkr/strata-home-proxy:latest`.
 
 ```sh
 mkdir -p strata-proxy && cd strata-proxy

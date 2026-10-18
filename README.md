@@ -93,7 +93,9 @@ Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
   nie angezeigt.
 - **API-Keys:** Einen Key pro Client anlegen. Er wird nur direkt nach dem
   Anlegen vollständig angezeigt und nur als Hash in `/data/api-keys.json`
-  gespeichert. Solange kein Key existiert, bekommt jeder Client `401`.
+  gespeichert. Die Liste zeigt Anfang, Erstellung und letzte Nutzung; ein
+  widerrufener Key gilt sofort nicht mehr. Solange kein Key existiert, bekommt
+  jeder Client `401`.
 - Nach 5 Fehlversuchen von derselben Adresse ist die Anmeldung 1 min gesperrt.
   `/admin/` ist überall erreichbar, wo die API erreichbar ist; das Passwort ist
   der einzige Schutz.

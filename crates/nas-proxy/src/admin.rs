@@ -108,10 +108,21 @@ impl Backend for UiBackend {
 
     fn create_api_key(&self, name: &str) -> Result<CreatedKey, String> {
         let (key, info) = self.0.api_keys.create(name).map_err(|e| e.to_string())?;
+        self.0
+            .events
+            .record(EventKind::ApiKeyCreated, Some(info.name.clone()));
         Ok(CreatedKey {
             key,
             info: key_info(info),
         })
+    }
+
+    fn revoke_api_key(&self, name: &str) -> Result<(), String> {
+        self.0.api_keys.revoke(name).map_err(|e| e.to_string())?;
+        self.0
+            .events
+            .record(EventKind::ApiKeyRevoked, Some(name.to_string()));
+        Ok(())
     }
 }
 
@@ -120,5 +131,6 @@ fn key_info(k: KeyInfo) -> ApiKeyInfo {
         name: k.name,
         prefix: k.prefix,
         created: k.created,
+        last_used: k.last_used,
     }
 }

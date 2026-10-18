@@ -27,6 +27,9 @@ pub enum EventKind {
     SettingReset,
     /// The PC service reported a new MAC address (detail: the address).
     MacLearned,
+    /// Detail: the key's name, never the key.
+    ApiKeyCreated,
+    ApiKeyRevoked,
 }
 
 #[derive(Clone, Debug, Serialize)]

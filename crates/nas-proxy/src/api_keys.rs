@@ -19,6 +19,9 @@ use crate::{
 const KEYS_FILE: &str = "api-keys.json";
 /// Marks the proxy's keys, so they can be found in client configurations.
 pub const KEY_PREFIX: &str = "shp_";
+/// The last use is written to disk at most this often, so busy clients do
+/// not rewrite the file with every request. A restart loses at most this much.
+const LAST_USED_WRITE_SECS: u64 = 60;
 /// How much of a key the list shows: the prefix and eight more characters.
 const SHOWN_LEN: usize = KEY_PREFIX.len() + 8;
 const MAX_NAME_CHARS: usize = 64;
@@ -31,6 +34,8 @@ pub struct KeyInfo {
     pub prefix: String,
     /// Unix time in seconds.
     pub created: u64,
+    /// Unix time in seconds of the last request with this key.
+    pub last_used: Option<u64>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -38,6 +43,7 @@ pub enum KeyError {
     EmptyName,
     NameTooLong,
     DuplicateName,
+    UnknownKey,
     NotSaved(String),
 }
 
@@ -50,6 +56,7 @@ impl std::fmt::Display for KeyError {
                 "Der Name ist zu lang (höchstens {MAX_NAME_CHARS} Zeichen)."
             ),
             Self::DuplicateName => write!(f, "Es gibt schon einen Key mit diesem Namen."),
+            Self::UnknownKey => write!(f, "Diesen Key gibt es nicht (mehr)."),
             Self::NotSaved(e) => write!(f, "Key nicht gespeichert: {e}"),
         }
     }
@@ -63,6 +70,8 @@ struct Stored {
     /// hash is enough; a slow password hash would only slow down requests.
     hash: String,
     created: u64,
+    #[serde(default)]
+    last_used: Option<u64>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -71,9 +80,15 @@ struct StoredFile {
     keys: Vec<Stored>,
 }
 
+struct Inner {
+    keys: Vec<Stored>,
+    /// When the last use was last written; 0 until the first write.
+    last_used_written: u64,
+}
+
 pub struct ApiKeys {
     dir: Option<PathBuf>,
-    keys: Mutex<Vec<Stored>>,
+    inner: Mutex<Inner>,
 }
 
 impl ApiKeys {
@@ -92,7 +107,10 @@ impl ApiKeys {
             .unwrap_or_default();
         Self {
             dir: data_dir,
-            keys: Mutex::new(keys),
+            inner: Mutex::new(Inner {
+                keys,
+                last_used_written: 0,
+            }),
         }
     }
 
@@ -110,9 +128,9 @@ impl ApiKeys {
         if name.chars().count() > MAX_NAME_CHARS {
             return Err(KeyError::NameTooLong);
         }
-        let mut keys = self.keys.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         let lower = name.to_lowercase();
-        if keys.iter().any(|k| k.name.to_lowercase() == lower) {
+        if inner.keys.iter().any(|k| k.name.to_lowercase() == lower) {
             return Err(KeyError::DuplicateName);
         }
         let key = format!("{KEY_PREFIX}{}", hex(&random_bytes()));
@@ -121,31 +139,55 @@ impl ApiKeys {
             prefix: key[..SHOWN_LEN].to_string(),
             hash: hash(&key),
             created: unix_now(),
+            last_used: None,
         };
-        let mut next = keys.clone();
+        let mut next = inner.keys.clone();
         next.push(stored.clone());
         self.save(&next)?;
-        *keys = next;
+        inner.keys = next;
         Ok((key, info(&stored)))
+    }
+
+    /// Removes a key; requests with it fail from now on.
+    pub fn revoke(&self, name: &str) -> Result<(), KeyError> {
+        let mut inner = self.inner.lock().unwrap();
+        let mut next = inner.keys.clone();
+        let before = next.len();
+        next.retain(|k| k.name != name);
+        if next.len() == before {
+            return Err(KeyError::UnknownKey);
+        }
+        self.save(&next)?;
+        inner.keys = next;
+        Ok(())
     }
 
     /// All keys, oldest first.
     pub fn list(&self) -> Vec<KeyInfo> {
-        self.keys.lock().unwrap().iter().map(info).collect()
+        self.inner.lock().unwrap().keys.iter().map(info).collect()
     }
 
-    /// The name of the key `raw`, if it is one.
+    /// The name of the key `raw`, if it is one, and notes its use.
     pub fn check(&self, raw: &str) -> Option<String> {
         let hash = hash(raw);
-        let keys = self.keys.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         // Compares every hash in constant time, so timing reveals nothing.
         let mut found = None;
-        for k in keys.iter() {
+        for (i, k) in inner.keys.iter().enumerate() {
             if constant_time_eq(k.hash.as_bytes(), hash.as_bytes()) {
-                found = Some(k.name.clone());
+                found = Some(i);
             }
         }
-        found
+        let i = found?;
+        let now = unix_now();
+        inner.keys[i].last_used = Some(now);
+        if now.saturating_sub(inner.last_used_written) >= LAST_USED_WRITE_SECS {
+            inner.last_used_written = now;
+            if let Err(e) = self.save(&inner.keys) {
+                tracing::warn!("Letzte Nutzung der API-Keys nicht gespeichert: {e}");
+            }
+        }
+        Some(inner.keys[i].name.clone())
     }
 
     /// Writes `keys` to disk; without `DATA_DIR` there is nothing to write.
@@ -167,6 +209,7 @@ fn info(k: &Stored) -> KeyInfo {
         name: k.name.clone(),
         prefix: k.prefix.clone(),
         created: k.created,
+        last_used: k.last_used,
     }
 }
 

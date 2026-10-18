@@ -120,6 +120,8 @@ pub struct ApiKeyInfo {
     pub prefix: String,
     /// Unix time in seconds.
     pub created: u64,
+    /// Unix time in seconds of the last request with this key.
+    pub last_used: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,6 +148,12 @@ pub async fn get_api_keys() -> Result<ApiKeysView, ServerFnError> {
 pub async fn create_api_key(name: String) -> Result<CreatedKey, ServerFnError> {
     require_login(false).await?;
     backend().create_api_key(&name).map_err(bad_request)
+}
+
+#[server(prefix = "/admin/api", endpoint = "revoke-api-key")]
+pub async fn revoke_api_key(name: String) -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend().revoke_api_key(&name).map_err(bad_request)
 }
 
 #[cfg(feature = "ssr")]

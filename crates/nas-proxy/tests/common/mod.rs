@@ -374,3 +374,14 @@ pub async fn logged_in(base: &str) -> Browser {
     );
     b
 }
+
+/// A browser logged in with the password `logged_in` set before, e.g. after
+/// a restart with the same `DATA_DIR`.
+pub async fn logged_in_again(base: &str) -> Browser {
+    let mut b = Browser::new(base);
+    let resp = b
+        .call("login", &[("password", "ein eigenes Passwort")])
+        .await;
+    assert_eq!(resp.status(), 200);
+    b
+}

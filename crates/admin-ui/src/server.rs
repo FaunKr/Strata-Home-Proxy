@@ -49,6 +49,8 @@ pub trait Backend: Send + Sync + 'static {
     fn api_keys(&self) -> ApiKeysView;
     /// Creates a client key; a message for the user if the name is invalid.
     fn create_api_key(&self, name: &str) -> Result<CreatedKey, String>;
+    /// Removes a client key; a message for the user if there is none.
+    fn revoke_api_key(&self, name: &str) -> Result<(), String>;
 }
 
 pub type SharedBackend = Arc<dyn Backend>;

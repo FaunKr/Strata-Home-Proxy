@@ -108,6 +108,8 @@ button.secondary { background: transparent; color: var(--accent); }
 .edit { display: flex; gap: 8px; margin-top: 12px; }
 .edit input { flex: 1; min-width: 0; }
 .reset { margin-top: 8px; }
+.revoke { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+label.inline { display: inline; font-weight: normal; margin: 0; }
 .visually-hidden {
   position: absolute;
   width: 1px;

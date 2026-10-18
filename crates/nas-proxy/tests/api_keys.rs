@@ -6,7 +6,7 @@ use std::{sync::atomic::Ordering, time::Duration};
 
 use common::*;
 use serde_json::{Value, json};
-use strata_nas_proxy::{AppState, Config, api_router};
+use strata_nas_proxy::{AppState, Config, api_router, events::EventKind};
 
 /// A request with the given headers and no others.
 async fn send(url: &str, path: &str, headers: &[(&str, &str)], body: Value) -> reqwest::Response {
@@ -190,4 +190,101 @@ async fn keys_survive_a_restart() {
     let resp = send(&url, "/v1/messages", &[("x-api-key", "falsch")], json!({})).await;
     assert_eq!(resp.status(), 401);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn key_entry(view: &Value, name: &str) -> Option<Value> {
+    view["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["name"] == name)
+        .cloned()
+}
+
+async fn revoke(b: &mut Browser, name: &str) -> reqwest::Response {
+    b.call("revoke-api-key", &[("name", name)]).await
+}
+
+#[tokio::test]
+async fn a_revoked_key_stops_working_at_once() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let created: Value = create(&mut b, "Laptop").await.json().await.unwrap();
+    let key = created["key"].as_str().unwrap().to_string();
+    assert_eq!(
+        send(&s.url, "/v1/messages", &[("x-api-key", &key)], json!({}))
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(revoke(&mut b, "Laptop").await.status(), 200);
+    assert_eq!(
+        send(&s.url, "/v1/messages", &[("x-api-key", &key)], json!({}))
+            .await
+            .status(),
+        401
+    );
+    assert!(key_entry(&list(&mut b).await, "Laptop").is_none());
+    // Other keys keep working.
+    assert_eq!(post_json(&s, "/v1/messages", json!({})).await.status(), 200);
+}
+
+#[tokio::test]
+async fn revoking_an_unknown_key_is_an_error() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(revoke(&mut b, "Gibt es nicht").await.status(), 400);
+}
+
+#[tokio::test]
+async fn revoking_needs_a_login() {
+    let s = setup(true, |_| {}).await;
+    let mut b = Browser::new(&s.url);
+    assert_eq!(revoke(&mut b, "Test").await.status(), 401);
+    assert_eq!(post_json(&s, "/v1/messages", json!({})).await.status(), 200);
+}
+
+#[tokio::test]
+async fn last_use_is_shown_and_survives_a_restart() {
+    let dir = std::env::temp_dir().join(format!("strata-keys-used-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let base = Config {
+        data_dir: Some(dir.clone()),
+        strata_url: Some("http://127.0.0.1:9".into()),
+        ..Config::default()
+    };
+    let first = AppState::new(base.clone());
+    let url = format!("http://{}", serve(api_router(first)).await);
+    let mut b = logged_in(&url).await;
+    let created: Value = create(&mut b, "Laptop").await.json().await.unwrap();
+    let key = created["key"].as_str().unwrap().to_string();
+    assert!(key_entry(&list(&mut b).await, "Laptop").unwrap()["last_used"].is_null());
+
+    // Strata is not reachable here; the key is still used.
+    send(&url, "/v1/messages", &[("x-api-key", &key)], json!({})).await;
+    let used = key_entry(&list(&mut b).await, "Laptop").unwrap()["last_used"].clone();
+    assert!(used.as_u64().unwrap() > 0, "{used}");
+
+    let second = AppState::new(base);
+    let mut b = logged_in_again(&format!("http://{}", serve(api_router(second)).await)).await;
+    let again = key_entry(&list(&mut b).await, "Laptop").unwrap()["last_used"].clone();
+    assert_eq!(again, used);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn creating_and_revoking_go_into_the_history() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    create(&mut b, "Laptop").await;
+    revoke(&mut b, "Laptop").await;
+    let events: Vec<(EventKind, Option<String>)> = s
+        .state
+        .events
+        .recent()
+        .into_iter()
+        .map(|e| (e.kind, e.detail))
+        .collect();
+    assert!(events.contains(&(EventKind::ApiKeyCreated, Some("Laptop".into()))));
+    assert!(events.contains(&(EventKind::ApiKeyRevoked, Some("Laptop".into()))));
 }

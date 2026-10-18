@@ -9,8 +9,9 @@ use leptos_router::{
 
 use crate::{
     api::{
-        ApiKeyInfo, ChangePassword, CreateApiKey, Login, Logout, ResetSetting, SaveSetting,
-        Session, SettingEntry, Source, error_text, get_api_keys, get_session, get_settings,
+        ApiKeyInfo, ChangePassword, CreateApiKey, Login, Logout, ResetSetting, RevokeApiKey,
+        SaveSetting, Session, SettingEntry, Source, error_text, get_api_keys, get_session,
+        get_settings,
     },
     labels::label,
 };
@@ -423,7 +424,12 @@ fn date(unix: u64) -> String {
 #[component]
 fn ApiKeysPage() -> impl IntoView {
     let create = ServerAction::<CreateApiKey>::new();
-    let keys = Resource::new(move || create.version().get(), |_| get_api_keys());
+    let revoke = ServerAction::<RevokeApiKey>::new();
+    provide_context(revoke);
+    let keys = Resource::new(
+        move || (create.version().get(), revoke.version().get()),
+        |_| get_api_keys(),
+    );
     let created = move || {
         create.value().get().and_then(|r| r.ok()).map(|c| {
             view! {
@@ -468,6 +474,7 @@ fn ApiKeysPage() -> impl IntoView {
             </ActionForm>
             {create_error}
         </section>
+        {action_error(revoke.value())}
         <Transition fallback=|| view! { <p>"Lädt …"</p> }>
             {move || Suspend::new(async move {
                 match keys.await {
@@ -507,13 +514,27 @@ fn ApiKeysPage() -> impl IntoView {
 
 #[component]
 fn ApiKeyRow(key: ApiKeyInfo) -> impl IntoView {
+    let revoke = expect_context::<ServerAction<RevokeApiKey>>();
+    let used = key.last_used.map_or_else(
+        || "noch nie benutzt".to_string(),
+        |t| format!("zuletzt benutzt am {}", date(t)),
+    );
+    let confirm_id = format!("confirm-{}", key.prefix);
     view! {
         <section class="panel api-key">
-            <h2>{key.name}</h2>
+            <h2>{key.name.clone()}</h2>
             <p class="current">
                 <code>{format!("{}…", key.prefix)}</code>
             </p>
-            <p class="hint">{format!("Angelegt am {}", date(key.created))}</p>
+            <p class="hint">{format!("Angelegt am {}, {used}", date(key.created))}</p>
+            <ActionForm action=revoke attr:class="revoke">
+                <input type="hidden" name="name" value=key.name />
+                <input id=confirm_id.clone() type="checkbox" required />
+                <label for=confirm_id class="inline">
+                    "Ja, widerrufen: dieser Client bekommt danach 401"
+                </label>
+                <button type="submit" class="secondary">"Widerrufen"</button>
+            </ActionForm>
         </section>
     }
 }

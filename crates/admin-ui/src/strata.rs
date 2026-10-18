@@ -30,6 +30,7 @@ impl Actions {
             size: None,
             context: None,
             model: None,
+            speed_projection: None,
         });
     }
 
@@ -40,6 +41,7 @@ impl Actions {
             size: None,
             context: None,
             model: Some(model),
+            speed_projection: None,
         });
     }
 }
@@ -395,6 +397,20 @@ fn ModelChoice(
         .unwrap_or_else(|| sizes[0].id.clone());
     let choice = RwSignal::new(first);
     let context = RwSignal::new(info.default_context);
+    let speed_projection = RwSignal::new(false);
+    let takes_projection = {
+        let sizes = sizes.clone();
+        let families = info.families.clone();
+        Memo::new(move |_| {
+            choice.with(|id| {
+                sizes.iter().filter(|s| &s.id == id).any(|s| {
+                    families
+                        .iter()
+                        .any(|f| f.id == s.family && f.speed_projection)
+                })
+            })
+        })
+    };
     let family_title = |id: &str| {
         info.families
             .iter()
@@ -459,15 +475,24 @@ fn ModelChoice(
             size: Some(size.size.clone()),
             context: Some(context.get()),
             model: None,
+            speed_projection: Some(takes_projection.get() && speed_projection.get()),
         });
     };
     let picker = format!("{kind:?}-size");
     let ctx = format!("{kind:?}-context");
+    let projection = format!("{kind:?}-speed-projection");
     view! {
         <div class="stack">
             <div>
                 <label for=picker.clone()>"Model"</label>
-                <select id=picker on:change=move |ev| choice.set(event_target_value(&ev))>
+                <select
+                    id=picker
+                    on:change=move |ev| {
+                        choice.set(event_target_value(&ev));
+                        // A tick counts only for the model it was given for.
+                        speed_projection.set(false);
+                    }
+                >
                     {options}
                 </select>
             </div>
@@ -485,6 +510,24 @@ fn ModelChoice(
                 </select>
                 <p class="hint">{room}{disk}</p>
             </div>
+            <Show when=move || takes_projection.get()>
+                <div>
+                    <input
+                        id=projection.clone()
+                        type="checkbox"
+                        prop:checked=move || speed_projection.get()
+                        on:change=move |ev| speed_projection.set(event_target_checked(&ev))
+                    />
+                    <label for=projection.clone() class="inline">
+                        " Experimental speed projection"
+                    </label>
+                    <p class="hint">
+                        "Experimental, and despite the name not faster: Strata removes the model's refusal direction, so it hardly refuses requests any more. Clients can switch it off per request with "
+                        <code>"\"experimental_speed_projection\": false"</code>
+                        "."
+                    </p>
+                </div>
+            </Show>
             <div>
                 <button type="button" disabled=move || blocked.get() on:click=start>
                     {button}

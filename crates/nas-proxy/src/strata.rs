@@ -198,6 +198,10 @@ fn body(form: &StrataJobForm, key: Option<&str>) -> serde_json::Value {
             put("family", json!(form.family));
             put("size", json!(form.size));
             put("context", json!(form.context));
+            // Only when ticked: an older PC service refuses fields it does not know.
+            if form.speed_projection {
+                put("experimental_speed_projection", json!(true));
+            }
         }
         StrataJobKind::Activate | StrataJobKind::Delete => put("model", json!(form.model)),
         StrataJobKind::Update | StrataJobKind::Benchmark | StrataJobKind::SetKey => {}

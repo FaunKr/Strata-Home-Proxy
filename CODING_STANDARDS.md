@@ -37,6 +37,13 @@ Schon entschiedene Fragen: `docs/adr/`.
   Werte nur aus `catalog.rs` und prüft Modell-IDs gegen den Katalog, bevor sie
   in einen Pfad gehen. Der Strata-Key steht in keiner Antwort an die
   Weboberfläche und in keinem gespeicherten Vorgang.
+- **Clients für Dienste auf demselben Rechner setzen ein kurzes
+  `connect_timeout`** (wie `STRATA_CONNECT_TIMEOUT` in `pc-agent/src/agent.rs`).
+  Windows wiederholt eine abgewiesene Verbindung zu localhost rund 2 s lang;
+  ohne Grenze wartet jede Abfrage eines gestoppten Strata so lange.
+- **Wird ein Feld optional, geht das Review jeden Leser durch.** Wer bisher
+  einen Wert voraussetzte, braucht einen Weg für „fehlt“, der zum Zustand
+  passt (fehlendes Startskript heißt nicht „PC schläft“).
 
 ## Installationsskript (`deploy/windows/install.ps1`)
 

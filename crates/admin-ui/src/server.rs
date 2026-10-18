@@ -4,7 +4,7 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use axum::{
@@ -20,7 +20,8 @@ use axum::{
 use futures::{StreamExt, future::BoxFuture, stream::BoxStream};
 use leptos::prelude::*;
 use leptos_axum::{
-    LeptosRoutes, ResponseOptions, generate_route_list_with_exclusions_and_ssg_and_context,
+    AxumRouteListing, LeptosRoutes, ResponseOptions,
+    generate_route_list_with_exclusions_and_ssg_and_context,
 };
 
 use crate::{
@@ -218,9 +219,16 @@ where
     let output_backend = Arc::clone(&backend);
     let context = move || provide_context(Arc::clone(&backend));
     // Listing the routes renders the app once, which starts the session
-    // resource; without the backend in context that call panics.
-    let routes =
-        generate_route_list_with_exclusions_and_ssg_and_context(App, None, context.clone()).0;
+    // resource; without the backend in context that call panics. Meanwhile
+    // Leptos holds back the resources of every page the process serves (a
+    // global flag), so the list is made once per process: tests build a
+    // router each while other tests' pages render (#69).
+    static ROUTES: OnceLock<Vec<AxumRouteListing>> = OnceLock::new();
+    let routes = ROUTES
+        .get_or_init(|| {
+            generate_route_list_with_exclusions_and_ssg_and_context(App, None, context.clone()).0
+        })
+        .clone();
     Router::new()
         // The overview lives at `/admin`; the router knows no trailing slash.
         .route(

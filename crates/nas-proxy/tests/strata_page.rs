@@ -213,6 +213,7 @@ async fn only_fields_of_the_job_reach_the_pc_service() {
                 ("kind", "activate"),
                 ("model", "coder-IQ1_M"),
                 ("size", "x"),
+                ("speed_projection", "true"),
             ],
         )
         .await;
@@ -405,6 +406,34 @@ async fn each_tab_has_its_own_path() {
 }
 
 #[tokio::test]
+async fn the_speed_projection_reaches_the_pc_service_when_ticked() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(install(&mut b).await.status(), 200);
+    assert_eq!(last_body(&s).get("experimental_speed_projection"), None);
+    for kind in ["install", "add_model"] {
+        let resp = b
+            .call(
+                "strata-job",
+                &[
+                    ("kind", kind),
+                    ("family", "qwen"),
+                    ("size", "IQ3_XXS"),
+                    ("context", "65536"),
+                    ("speed_projection", "true"),
+                ],
+            )
+            .await;
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            last_body(&s)["experimental_speed_projection"],
+            true,
+            "{kind}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn connection_tab_holds_exactly_the_strata_settings() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
@@ -442,4 +471,14 @@ async fn a_running_job_shows_and_locks_the_buttons_in_every_tab() {
         let tag = &html[html[..at].rfind("<button").unwrap()..at];
         assert!(tag.contains("disabled"), "{path}: {tag}");
     }
+}
+
+#[tokio::test]
+async fn the_setup_offers_the_speed_projection_with_what_it_does() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(false));
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("Experimental speed projection"), "{html}");
+    assert!(html.contains("refusal direction"), "{html}");
 }

@@ -19,4 +19,8 @@ fi
 if command -v pwsh >/dev/null; then
   pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("deploy/windows/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
 fi
-cargo test
+# Erst bauen, dann mit Zeitlimit testen: ein hängender Test bricht ab, statt
+# den Lauf endlos zu blockieren. Welcher hängt, steht in der Ausgabe
+# ("has been running for over 60 seconds").
+cargo test --no-run
+timeout 10m cargo test

@@ -113,8 +113,8 @@ geht (Gaming an, ein Vorgang läuft, zu wenig Platz, aktives Modell löschen).
 
 | `kind` | Felder | Was passiert |
 | --- | --- | --- |
-| `install` | `family`, `size`, `context`, `api_key` | Git (per winget, falls nötig), `git clone`, Setup ohne Fragen, startet Strata |
-| `add_model` | `family`, `size`, `context`, optional `api_key` | Setup mit `--setup` und dem Key des Proxys (sonst dem eigenen), das aktive Modell bleibt aktiv |
+| `install` | `family`, `size`, `context`, `api_key`, optional `experimental_speed_projection` | Git (per winget, falls nötig), `git clone`, Setup ohne Fragen, startet Strata |
+| `add_model` | `family`, `size`, `context`, optional `api_key` und `experimental_speed_projection` | Setup mit `--setup` und dem Key des Proxys (sonst dem eigenen), das aktive Modell bleibt aktiv |
 | `activate` | `model` | wartet, bis Strata keine Anfrage bearbeitet, startet mit dem anderen Startskript neu |
 | `delete` | `model` | löscht Modellordner, Pack, Konfiguration, Startskript und Log dieses Modells |
 | `update` | – | `git pull --ff-only`, dann `START-HERE.bat --update` bei beendetem Strata, startet neu |
@@ -124,6 +124,11 @@ geht (Gaming an, ein Vorgang läuft, zu wenig Platz, aktives Modell löschen).
 Den Strata-Key erzeugt der Proxy. Er gilt erst, wenn der Vorgang fertig ist
 (auch über einen Neustart des Proxys); scheitert er, bleibt der alte. In der
 Ausgabe des Vorgangs steht statt des Keys `***`.
+
+`experimental_speed_projection` (ohne Angabe `false`) gibt Setup bei Qwen und
+Coder `--experimental-speed-projection on` statt `off` mit. Bei anderen
+Familien ist `true` ein `400`. Der Proxy schickt das Feld nur, wenn es
+angehakt ist, denn ein älterer PC-Dienst lehnt unbekannte Felder ab.
 
 ### `GET /strata/job`
 

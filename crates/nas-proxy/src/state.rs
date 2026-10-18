@@ -180,8 +180,8 @@ impl AppState {
             return false;
         };
         let mut req = self.probe(&cfg).get(format!("{strata}/health"));
-        if let Some(key) = &cfg.strata_api_key {
-            req = req.bearer_auth(key);
+        if let Some(auth) = cfg.strata_authorization() {
+            req = req.header(reqwest::header::AUTHORIZATION, auth);
         }
         let ok = matches!(req.send().await, Ok(r) if r.status().is_success());
         if ok {
@@ -353,6 +353,7 @@ impl AppState {
                 // Read each round, so a changed IDLE_CHECK_SECS applies at once.
                 tokio::time::sleep(state.cfg().idle_check).await;
                 state.idle_tick().await;
+                state.api_keys.flush_last_used();
             }
         });
     }

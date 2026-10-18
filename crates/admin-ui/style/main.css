@@ -90,7 +90,7 @@ button.secondary { background: transparent; color: var(--accent); }
 .warning { background: var(--warn-bg); border-radius: 6px; padding: 10px 12px; margin-bottom: 16px; }
 .stack > * + * { margin-top: 12px; }
 
-.setting h2, .api-key h2, .created h2 { font-size: 1.05rem; margin: 0 0 2px; }
+.api-key h2, .created h2 { font-size: 1.05rem; margin: 0 0 2px; }
 .api-key .current { margin: 8px 0 0; }
 .api-key code, .created input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .setting h2 { font-size: 1.05rem; margin: 0 0 2px; }

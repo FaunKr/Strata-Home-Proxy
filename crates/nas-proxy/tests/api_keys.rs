@@ -55,7 +55,7 @@ async fn wrong_key_gets_an_openai_error_for_openai_paths() {
     .await;
     assert_eq!(resp.status(), 401);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["error"]["type"], "authentication_error");
+    assert_eq!(body["error"]["code"], "invalid_api_key");
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 0);
 }
 
@@ -102,7 +102,7 @@ async fn valid_key_works_as_bearer_and_as_x_api_key() {
     assert_eq!(resp.status(), 200);
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 2);
     let seen = s.pc.api_auth.lock().unwrap().clone().unwrap();
-    assert_eq!(seen, Auth::default());
+    assert_eq!(seen, SeenCredentials::default());
 }
 
 #[tokio::test]

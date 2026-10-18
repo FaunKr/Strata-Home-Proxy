@@ -41,7 +41,7 @@ async fn without_strata_key_no_key_reaches_strata() {
     let resp = post_json(&s, "/v1/chat/completions", json!({})).await;
     assert_eq!(resp.status(), 200);
     let seen = s.pc.api_auth.lock().unwrap().clone().unwrap();
-    assert_eq!(seen, Auth::default());
+    assert_eq!(seen, SeenCredentials::default());
 }
 
 #[tokio::test]

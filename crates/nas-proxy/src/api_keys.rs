@@ -1,18 +1,13 @@
 //! API keys of the clients. Every request to Strata needs one; the proxy keeps
 //! only a hash of each key in `DATA_DIR`.
 
-use std::{
-    path::PathBuf,
-    sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{path::PathBuf, sync::Mutex};
 
-use argon2::password_hash::rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    auth::{constant_time_eq, hex},
+    auth::{constant_time_eq, hex, random_key, unix_now},
     files::write_private,
 };
 
@@ -84,6 +79,8 @@ struct Inner {
     keys: Vec<Stored>,
     /// When the last use was last written; 0 until the first write.
     last_used_written: u64,
+    /// A last use changed since then.
+    last_used_dirty: bool,
 }
 
 pub struct ApiKeys {
@@ -110,6 +107,7 @@ impl ApiKeys {
             inner: Mutex::new(Inner {
                 keys,
                 last_used_written: 0,
+                last_used_dirty: false,
             }),
         }
     }
@@ -133,7 +131,7 @@ impl ApiKeys {
         if inner.keys.iter().any(|k| k.name.to_lowercase() == lower) {
             return Err(KeyError::DuplicateName);
         }
-        let key = format!("{KEY_PREFIX}{}", hex(&random_bytes()));
+        let key = format!("{KEY_PREFIX}{}", hex(&random_key()));
         let stored = Stored {
             name: name.to_string(),
             prefix: key[..SHOWN_LEN].to_string(),
@@ -145,7 +143,7 @@ impl ApiKeys {
         next.push(stored.clone());
         self.save(&next)?;
         inner.keys = next;
-        Ok((key, info(&stored)))
+        Ok((key, to_info(&stored)))
     }
 
     /// Removes a key; requests with it fail from now on.
@@ -164,7 +162,13 @@ impl ApiKeys {
 
     /// All keys, oldest first.
     pub fn list(&self) -> Vec<KeyInfo> {
-        self.inner.lock().unwrap().keys.iter().map(info).collect()
+        self.inner
+            .lock()
+            .unwrap()
+            .keys
+            .iter()
+            .map(to_info)
+            .collect()
     }
 
     /// The name of the key `raw`, if it is one, and notes its use.
@@ -181,13 +185,30 @@ impl ApiKeys {
         let i = found?;
         let now = unix_now();
         inner.keys[i].last_used = Some(now);
-        if now.saturating_sub(inner.last_used_written) >= LAST_USED_WRITE_SECS {
-            inner.last_used_written = now;
-            if let Err(e) = self.save(&inner.keys) {
-                tracing::warn!("Letzte Nutzung der API-Keys nicht gespeichert: {e}");
-            }
+        inner.last_used_dirty = true;
+        let name = inner.keys[i].name.clone();
+        self.write_last_used(&mut inner, now);
+        Some(name)
+    }
+
+    /// Writes pending last uses once the interval has passed. Called
+    /// regularly, so the last use before a quiet spell is not lost.
+    pub fn flush_last_used(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        self.write_last_used(&mut inner, unix_now());
+    }
+
+    fn write_last_used(&self, inner: &mut Inner, now: u64) {
+        if !inner.last_used_dirty
+            || now.saturating_sub(inner.last_used_written) < LAST_USED_WRITE_SECS
+        {
+            return;
         }
-        Some(inner.keys[i].name.clone())
+        inner.last_used_written = now;
+        inner.last_used_dirty = false;
+        if let Err(e) = self.save(&inner.keys) {
+            tracing::warn!("Letzte Nutzung der API-Keys nicht gespeichert: {e}");
+        }
     }
 
     /// Writes `keys` to disk; without `DATA_DIR` there is nothing to write.
@@ -204,7 +225,7 @@ impl ApiKeys {
     }
 }
 
-fn info(k: &Stored) -> KeyInfo {
+fn to_info(k: &Stored) -> KeyInfo {
     KeyInfo {
         name: k.name.clone(),
         prefix: k.prefix.clone(),
@@ -217,15 +238,37 @@ fn hash(key: &str) -> String {
     hex(&Sha256::digest(key.as_bytes()))
 }
 
-fn random_bytes() -> [u8; 32] {
-    let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    bytes
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default()
+    fn dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("strata-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn a_later_use_is_written_by_the_next_flush() {
+        let dir = dir("keys-flush");
+        let keys = ApiKeys::new(Some(dir.clone()));
+        let (key, _) = keys.create("Laptop").unwrap();
+        keys.check(&key);
+        let first = keys.list()[0].last_used;
+        // A second use inside the interval stays in memory first.
+        {
+            let mut inner = keys.inner.lock().unwrap();
+            inner.keys[0].last_used = Some(42);
+            inner.last_used_dirty = true;
+        }
+        keys.flush_last_used();
+        let reloaded = ApiKeys::new(Some(dir.clone()));
+        assert_eq!(reloaded.list()[0].last_used, first);
+
+        keys.inner.lock().unwrap().last_used_written -= LAST_USED_WRITE_SECS;
+        keys.flush_last_used();
+        let reloaded = ApiKeys::new(Some(dir.clone()));
+        assert_eq!(reloaded.list()[0].last_used, Some(42));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

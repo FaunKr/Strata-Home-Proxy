@@ -98,13 +98,12 @@ const CLIENT_CREDENTIALS: [&str; 2] = ["authorization", "x-api-key"];
 
 /// The request headers for Strata: the client's, minus hop-by-hop headers and
 /// its credentials, plus the Strata key if one is set.
-fn upstream_headers(from: &HeaderMap, strata_key: Option<&str>) -> HeaderMap {
+fn upstream_headers(from: &HeaderMap, strata_auth: Option<HeaderValue>) -> HeaderMap {
     let mut out = copy_headers(from, true);
     for name in CLIENT_CREDENTIALS {
         out.remove(name);
     }
-    if let Some(value) = strata_key.and_then(|k| HeaderValue::from_str(&format!("Bearer {k}")).ok())
-    {
+    if let Some(value) = strata_auth {
         out.insert(header::AUTHORIZATION, value);
     }
     out
@@ -172,10 +171,15 @@ fn client_key(headers: &HeaderMap) -> Option<&str> {
 /// Answer for a missing or unknown API key. It comes before anything else, so
 /// such a request never wakes the PC or counts as activity.
 fn unauthorized(flavor: Flavor) -> Response {
-    let body = flavor.error_json(
-        "authentication_error",
-        "Kein gültiger API-Key. Keys gibt es in der Weboberfläche des Proxys unter API-Keys.",
-    );
+    const MESSAGE: &str =
+        "Kein gültiger API-Key. Keys gibt es in der Weboberfläche des Proxys unter API-Keys.";
+    let body = match flavor {
+        Flavor::Anthropic => flavor.error_json("authentication_error", MESSAGE),
+        // What OpenAI itself answers for a wrong key.
+        Flavor::OpenAi => json!({
+            "error": { "type": "invalid_request_error", "message": MESSAGE, "code": "invalid_api_key" },
+        }),
+    };
     let mut resp = (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response();
     resp.headers_mut().insert(
         HeaderName::from_static(STATUS_HEADER),
@@ -220,10 +224,7 @@ async fn send_upstream(st: &AppState, req: &Incoming) -> reqwest::Result<reqwest
             req.method.clone(),
             format!("{strata}{}", req.path_and_query),
         )
-        .headers(upstream_headers(
-            &req.headers,
-            cfg.strata_api_key.as_deref(),
-        ))
+        .headers(upstream_headers(&req.headers, cfg.strata_authorization()))
         .body(req.body.clone())
         .send()
         .await

@@ -43,19 +43,19 @@ pub struct FakePc {
     /// MAC the fake PC service reports in `/status`.
     pub report_mac: Mutex<Option<String>>,
     /// `authorization` and `x-api-key` of the last API request Strata got.
-    pub api_auth: Mutex<Option<Auth>>,
+    pub api_auth: Mutex<Option<SeenCredentials>>,
     /// The same for the last `/health` call.
-    pub health_auth: Mutex<Option<Auth>>,
+    pub health_auth: Mutex<Option<SeenCredentials>>,
 }
 
 /// Credential headers as Strata saw them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Auth {
+pub struct SeenCredentials {
     pub authorization: Option<String>,
     pub x_api_key: Option<String>,
 }
 
-impl Auth {
+impl SeenCredentials {
     fn of(headers: &HeaderMap) -> Self {
         let get = |name: &str| headers.get(name).map(|v| v.to_str().unwrap().to_string());
         Self {
@@ -77,7 +77,7 @@ impl FakePc {
 pub type Pc = Arc<FakePc>;
 
 pub async fn health(State(pc): State<Pc>, headers: HeaderMap) -> StatusCode {
-    *pc.health_auth.lock().unwrap() = Some(Auth::of(&headers));
+    *pc.health_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
     if pc.strata_up() {
         StatusCode::OK
     } else {
@@ -114,7 +114,7 @@ pub async fn messages(
     if !pc.strata_up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    *pc.api_auth.lock().unwrap() = Some(Auth::of(&headers));
+    *pc.api_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
     pc.api_requests.fetch_add(1, Ordering::SeqCst);
     let pause = Duration::from_millis(body["pause_ms"].as_u64().unwrap_or(0));
     if body["stream"].as_bool() == Some(true) {
@@ -134,7 +134,7 @@ pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Val
     if !pc.strata_up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    *pc.api_auth.lock().unwrap() = Some(Auth::of(&headers));
+    *pc.api_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
     pc.api_requests.fetch_add(1, Ordering::SeqCst);
     if body["stream"].as_bool() == Some(true) {
         return sse(

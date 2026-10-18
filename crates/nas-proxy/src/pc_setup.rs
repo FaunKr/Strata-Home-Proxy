@@ -251,6 +251,10 @@ async fn register(
     headers: HeaderMap,
     Json(reg): Json<Registration>,
 ) -> Response {
+    let host = host(&headers);
+    if !valid_host(host) {
+        return refused("Die Adresse des NAS taugt nicht; die IP des NAS verwenden.");
+    }
     if !state.pc_setup.redeem(&reg.code) {
         return refused(CODE_INVALID);
     }
@@ -276,7 +280,7 @@ async fn register(
     tracing::info!("PC-Dienst unter {url} eingerichtet");
     Json(Registered {
         token,
-        nas_url: format!("http://{}", host(&headers)),
+        nas_url: format!("http://{host}"),
         strata_api_key: state.cfg().strata_api_key.clone(),
     })
     .into_response()

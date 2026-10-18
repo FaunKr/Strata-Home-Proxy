@@ -31,7 +31,7 @@ pub fn PcSetupPage() -> impl IntoView {
     view! {
         <h1>"PC-Dienst einrichten"</h1>
         <p class="hint">
-            "Der PC-Dienst legt den PC schlafen, schaltet den Gaming-Modus und startet Strata. Der Befehl lädt ihn vom NAS, richtet ihn ein und meldet ihn hier an. Läuft er schon, aktualisiert derselbe Befehl nur das Programm."
+            "Der PC-Dienst legt den PC schlafen, schaltet den Gaming-Modus und startet Strata. Der Befehl lädt ihn vom NAS, richtet ihn ein und meldet ihn hier an. Läuft er schon, tauscht ein neuer Befehl das Programm aus und meldet den PC neu an."
         </p>
         {shown}
         <section class="panel">

@@ -29,8 +29,10 @@ anmeldest. Er
    läuft der Dienst, startet Strata aber nicht selbst.
 
 Der Code im Befehl gilt 15 Minuten und für einen PC; ein neuer Befehl macht
-den alten ungültig. Läuft der Dienst schon, tauscht derselbe Befehl nur die
-.exe aus und lässt Konfiguration und Token stehen.
+den alten ungültig. Auf einem PC, auf dem der Dienst schon läuft, tauscht ein
+neuer Befehl die .exe aus und meldet den PC neu an (neues Token, z. B. nachdem
+auf dem NAS Token oder Adresse zurückgesetzt wurden); die übrige Konfiguration
+bleibt.
 
 **Entfernen:** Die Seite zeigt nach *Befehl erzeugen* auch den Befehl dazu
 (`irm http://<NAS>:<Port>/admin/agent/install.ps1?uninstall | iex`). Er entfernt

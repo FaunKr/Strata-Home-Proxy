@@ -500,11 +500,6 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
                 )));
             }
             let id = installed_model(dir, &model)?;
-            if active_model(agent).as_deref() == Some(id.as_str()) {
-                return Err(Refusal::Conflict(format!(
-                    "{id} ist aktiv; den Kontext erst ändern, wenn ein anderes Modell aktiv ist"
-                )));
-            }
             Ok(Plan::SetContext { id, context })
         }
     }
@@ -1013,7 +1008,8 @@ fn write_speed_projection(dir: &Path, id: &str, on: bool) -> Result<(), String> 
 }
 
 /// Sets a model's context in its config, without setup; the settings setup
-/// derived from the old one stay.
+/// derived from the old one stay. The active model restarts with it once
+/// Strata has no request at work.
 async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Option<String>, Step> {
     set_step(agent, "Konfiguration ändern");
     let dir = agent.cfg.strata_dir.clone();
@@ -1023,6 +1019,12 @@ async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Optio
     })
     .await
     .map_err(|e| Step::Failed(e.to_string()))??;
+    if active_model(agent).as_deref() == Some(id) {
+        wait_idle(agent).await?;
+        set_step(agent, "Strata neu starten");
+        agent.stop_strata();
+        restart_strata(agent).await;
+    }
     Ok(None)
 }
 

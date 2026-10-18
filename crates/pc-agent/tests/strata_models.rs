@@ -1112,3 +1112,38 @@ async fn switching_the_context_needs_an_installed_strata() {
     let (code, answer) = post(&s, "/strata/jobs", body).await;
     assert_eq!(code, 409, "{answer}");
 }
+
+// --- #103 the context of the active model ---
+
+#[tokio::test]
+async fn switching_the_active_models_context_restarts_strata_after_the_running_request() {
+    let s = setup("models-context-active").await;
+    installed(&s);
+    config_with_args(
+        &s,
+        "iq3_xxs",
+        json!(["--native", "a.gguf", "--max-context", "65536"]),
+    );
+    s.fake.strata_busy.store(true, Ordering::SeqCst);
+    let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 131072});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 202, "{answer}");
+    job_until(&s, "Warten auf die Anfrage", |j| {
+        j["step"].as_str().is_some_and(|t| t.contains("Anfrage"))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(
+        s.fake.stops.load(Ordering::SeqCst),
+        0,
+        "stopped mid-request"
+    );
+
+    s.fake.strata_busy.store(false, Ordering::SeqCst);
+    assert_eq!(finished(&s).await["state"], "done");
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "IQ3_XXS")["context"], 131072, "{view}");
+    assert_eq!(model(&view, "IQ3_XXS")["active"], true, "{view}");
+}

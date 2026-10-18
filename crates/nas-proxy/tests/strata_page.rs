@@ -654,3 +654,18 @@ async fn without_a_known_context_there_is_nothing_to_change() {
     let html = b.page("/admin/strata").await;
     assert!(!html.contains("Change context"), "{html}");
 }
+
+// --- #103 the context of the active model ---
+
+#[tokio::test]
+async fn the_active_model_offers_to_change_its_context_too() {
+    let s = setup(true, |_| {}).await;
+    let mut info = with_two_models(None);
+    info["models"][0]["context"] = json!(65536);
+    info["models"][1]["context"] = json!(65536);
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(html.matches("Change context").count(), 2, "{html}");
+}

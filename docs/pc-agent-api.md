@@ -129,7 +129,7 @@ geht (Gaming an, ein Vorgang läuft, zu wenig Platz, aktives Modell löschen).
 | `benchmark` | – | `BENCH.bat --config <aktives Modell>`, behält Tokens/s mit Modell und Datum |
 | `set_key` | `api_key` | trägt den Key in alle Modell-Konfigurationen ein und startet Strata neu |
 | `set_speed_projection` | `model`, `on` | schaltet die Speed-Projection in der Konfiguration dieses Modells ein oder aus, ohne Setup; beim aktiven Modell wartet er, bis Strata keine Anfrage bearbeitet, und startet es neu |
-| `set_context` | `model`, `context` | setzt den Kontext in der Konfiguration dieses Modells, ohne Setup |
+| `set_context` | `model`, `context` | setzt den Kontext in der Konfiguration dieses Modells, ohne Setup; beim aktiven Modell wartet er, bis Strata keine Anfrage bearbeitet, und startet es neu |
 
 Den Strata-Key erzeugt der Proxy. Er gilt erst, wenn der Vorgang fertig ist
 (auch über einen Neustart des Proxys); scheitert er, bleibt der alte. In der
@@ -157,8 +157,7 @@ trainierten Länge: darüber braucht das Modell Rope-Scaling, das nur Setup
 einrichtet (`400`). Was Setup aus dem alten Kontext abgeleitet hat
 (KV-Streaming mit `--kv-resident`, `--kv`, parallele Slots, Kalibrierung),
 bleibt. Ein Modell aus dem Katalog, das nicht installiert ist, ist ein
-`409`, das aktive Modell vorerst auch. Die Änderungszeit bleibt wie bei
-`set_speed_projection`.
+`409`. Die Änderungszeit bleibt wie bei `set_speed_projection`.
 
 ### `GET /strata/job`
 

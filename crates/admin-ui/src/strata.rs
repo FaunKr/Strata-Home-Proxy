@@ -635,10 +635,11 @@ fn ModelRow(
 ) -> impl IntoView {
     let size = bytes_gb(model.disk_bytes);
     // Only with word from the PC service on the context: an older one does not say.
-    let switch = model.context.filter(|_| !model.active).map(|current| {
+    let switch = model.context.map(|current| {
         view! {
             <ContextSwitch
                 id=model.id.clone()
+                active=model.active
                 current
                 contexts
                 default_context
@@ -772,6 +773,8 @@ const MAX_SWITCHED_CONTEXT: u32 = 262_144;
 #[component]
 fn ContextSwitch(
     id: String,
+    /// Strata restarts with it: that is asked first.
+    active: bool,
     current: u32,
     contexts: Vec<u32>,
     default_context: u32,
@@ -805,7 +808,22 @@ fn ContextSwitch(
         })
         .collect_view();
     let picker = format!("{id}-new-context");
-    let change = move |_| actions.set_context(id.clone(), choice.get());
+    let confirm = expect_context::<Confirm>();
+    let change = move |_| {
+        let (id, context) = (id.clone(), choice.get());
+        if !active {
+            actions.set_context(id, context);
+            return;
+        }
+        let question = Question {
+            title: format!("Change the context of {id} to {}K tokens?", context / 1024),
+            text: "Strata restarts with it once no request is running. Requests wait meanwhile."
+                .into(),
+            confirm: "Change context",
+            danger: false,
+        };
+        confirm.ask(question, move || actions.set_context(id.clone(), context));
+    };
     view! {
         <div class="row-form">
             <label for=picker.clone() class="visually-hidden">

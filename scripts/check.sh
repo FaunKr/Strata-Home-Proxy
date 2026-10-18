@@ -25,6 +25,8 @@ fi
 selected() { [[ $packages == all || $packages == *" $1 "* ]]; }
 
 cargo fmt --check
+# Which jobs CI runs for a pull request, checked against the workspace.
+scripts/ci-select.test.sh
 cargo clippy "${package_args[@]}" --all-targets -- -D warnings
 # The browser half of the web UI, which the Docker image builds with cargo-leptos.
 if selected strata-admin-ui; then

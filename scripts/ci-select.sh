@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Decides which CI jobs a pull request needs, from the paths it changes.
+#
+# Usage: <changed paths, one per line> | scripts/ci-select.sh
+#        scripts/ci-select.sh --all
+# Prints test=, packages=, windows= and image= for $GITHUB_OUTPUT. An empty
+# package list means the whole workspace (scripts/check.sh without arguments).
+# scripts/ci-select.test.sh checks this mapping against the workspace.
+set -euo pipefail
+
+all() { printf '%s\n' test=true packages= windows=true image=true; }
+if [[ ${1:-} == --all ]]; then
+  all
+  exit 0
+fi
+
+packages=()
+windows=false
+image=false
+while IFS= read -r path; do
+  case $path in
+    # Shared: whatever changes here can break any job.
+    Cargo.toml | Cargo.lock | rust-toolchain* | .github/workflows/* | scripts/check.sh | scripts/ci-select*.sh)
+      all
+      exit 0
+      ;;
+    # The NAS proxy links the web UI.
+    crates/admin-ui/*) packages+=(strata-admin-ui strata-nas-proxy) image=true ;;
+    crates/nas-proxy/*) packages+=(strata-nas-proxy) image=true ;;
+    crates/pc-agent/*) packages+=(strata-pc-agent) windows=true image=true ;;
+    # The image builds every crate.
+    crates/*) image=true ;;
+    # The proxy embeds the install script (include_str!), the image copies it.
+    deploy/windows/*) packages+=(strata-nas-proxy) windows=true image=true ;;
+    Dockerfile | .dockerignore | scripts/check-exe-version.sh) image=true ;;
+  esac
+done
+
+packages=$(printf '%s\n' "${packages[@]}" | sort -u | xargs)
+echo "test=$([[ -n $packages ]] && echo true || echo false)"
+echo "packages=$packages"
+echo "windows=$windows"
+echo "image=$image"

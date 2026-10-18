@@ -107,3 +107,44 @@ async fn admin_does_not_postpone_sleep() {
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
     assert_eq!(s.state.in_flight(), 0);
 }
+
+/// Building a router lists the pages by rendering the app once, and Leptos
+/// holds back every resource in the process while it does (#69). A page
+/// served meanwhile must still finish: tests build their own routers in
+/// parallel.
+#[tokio::test]
+async fn a_page_finishes_while_another_router_is_built() {
+    use std::sync::{Arc, atomic::AtomicBool};
+    let s = setup(true, |_| {}).await;
+    // Stops the builder also when an assert below fails.
+    struct Stop(Arc<AtomicBool>);
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let stop = Stop(Arc::new(AtomicBool::new(false)));
+    let builder = {
+        let (stop, state) = (stop.0.clone(), s.state.clone());
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let _rt = rt.enter();
+            while !stop.load(Ordering::SeqCst) {
+                drop(strata_nas_proxy::api_router(state.clone()));
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    };
+    let b = Browser::new(&s.url);
+    for _ in 0..20 {
+        let html = tokio::time::timeout(Duration::from_secs(5), b.page("/admin/"))
+            .await
+            .expect("Seite hängt");
+        assert!(html.contains("Anmelden"), "{html}");
+    }
+    drop(stop);
+    builder.join().unwrap();
+}

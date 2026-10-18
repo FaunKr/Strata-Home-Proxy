@@ -306,7 +306,7 @@ mod tests {
         let dir = dir("keys-broken");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join(KEYS_FILE);
-        std::fs::write(&file, "{\"keys\": [ kaputt").unwrap();
+        write_private(&dir, KEYS_FILE, b"{\"keys\": [ kaputt").unwrap();
         let keys = ApiKeys::new(Some(dir.clone()));
         assert!(keys.list().is_empty());
         assert!(matches!(keys.create("Neu"), Err(KeyError::NotSaved(_))));

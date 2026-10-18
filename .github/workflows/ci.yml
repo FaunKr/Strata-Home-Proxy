@@ -1,7 +1,23 @@
 name: CI
 on:
+  # Branches get CI through their pull request; pushes only run on main, where
+  # the image is published. Without this filter every commit on a PR branch was
+  # built twice (push and pull_request).
   push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+# A new push to a PR cancels the run for the commit before it; runs on main are
+# never cancelled, so every commit there gets its image.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -19,7 +35,7 @@ jobs:
       - run: cargo test
   windows:
     # Builds the PC service and offers it as a download (strata-pc-agent-windows).
-    needs: test
+    # Runs alongside test: it lints and tests the agent on its own.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,9 +57,24 @@ jobs:
           name: strata-pc-agent-windows
           path: dist/
   image:
-    # Builds the NAS image; on pushes to the default branch it is published to
-    # ghcr.io/faunkr/strata-home-proxy:latest so the NAS can pull it.
-    needs: test
+    # Builds the NAS image alongside test and fills the layer cache. Dependencies
+    # sit in their own layers (cargo-chef), so a code change only rebuilds our crates.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  publish:
+    # On pushes to the default branch, once tests pass, publishes the image to
+    # ghcr.io/faunkr/strata-home-proxy:latest so the NAS can pull it. Every layer
+    # comes from the cache the image job just wrote, so this only uploads.
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    needs: [test, image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,8 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -61,9 +91,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
+          push: true
           tags: |
             ghcr.io/faunkr/strata-home-proxy:latest
             ghcr.io/faunkr/strata-home-proxy:${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max

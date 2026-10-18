@@ -52,6 +52,8 @@ der alte Dienst, der neue wartet so lange auf den Port und löscht dann die
 `.alt`.
 
 - `202 {"accepted": true}`: die neue .exe läuft gleich.
+  Ab dem Download bis zum Ende lehnt der Dienst Strata-Vorgänge und Schlafen
+  ab.
 - `409 {"reason": …}`: nicht jetzt (Strata bearbeitet eine Anfrage, ein
   Strata-Vorgang oder ein Update läuft) oder ohne `nas_url` eingerichtet.
 - `500 {"reason": …}`: Download oder Austausch gescheitert; der alte Dienst

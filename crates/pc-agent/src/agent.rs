@@ -247,6 +247,9 @@ impl Agent {
         if self.jobs.running() {
             return Err("Strata-Einrichtung läuft".into());
         }
+        if self.updating.load(Ordering::SeqCst) {
+            return Err("Der PC-Dienst wird aktualisiert".into());
+        }
         let idle = self.platform.user_idle();
         if idle < self.cfg.user_idle() {
             return Err(format!(

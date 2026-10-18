@@ -163,3 +163,42 @@ async fn without_the_nas_address_there_is_no_update() {
     );
     unchanged(&s);
 }
+
+/// A NAS that takes a while to send the program.
+async fn slow_nas() -> SocketAddr {
+    async fn slow() -> impl IntoResponse {
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        PROGRAM.to_vec()
+    }
+    serve(Router::new().route("/admin/agent/strata-pc-agent.exe", routing::get(slow))).await
+}
+
+#[tokio::test]
+async fn no_job_starts_and_no_sleep_while_an_update_loads() {
+    let addr = slow_nas().await;
+    let s = setup_with("update-slow", |c| {
+        c.nas_url = Some(format!("http://{addr}"))
+    })
+    .await;
+    let url = s.url.clone();
+    let update = tokio::spawn(async move {
+        client()
+            .post(format!("{url}/update"))
+            .bearer_auth("geheim")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (code, body) = post(&s, "/strata/jobs", serde_json::json!({"kind": "benchmark"})).await;
+    assert_eq!(code, 409, "{body}");
+    assert!(
+        body["reason"].as_str().unwrap().contains("aktualisiert"),
+        "{body}"
+    );
+    let (code, body) = sleep_answer(&s).await;
+    assert_eq!(code, 409, "{body}");
+    assert_eq!(update.await.unwrap(), 202);
+}

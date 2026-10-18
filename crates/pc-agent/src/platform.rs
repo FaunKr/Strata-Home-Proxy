@@ -223,9 +223,14 @@ fn replaced_path(program: &Path) -> PathBuf {
 /// Removes what an update left of the program before; Windows keeps a
 /// running program's file, so the new program does this once the old one
 /// has ended.
-pub fn remove_replaced_program() {
-    if let Ok(program) = std::env::current_exe() {
-        let _ = std::fs::remove_file(replaced_path(&program));
+/// True once it is gone, or there was none.
+pub fn remove_replaced_program() -> bool {
+    let Ok(program) = std::env::current_exe() else {
+        return true;
+    };
+    match std::fs::remove_file(replaced_path(&program)) {
+        Ok(()) => true,
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
     }
 }
 

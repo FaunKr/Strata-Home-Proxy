@@ -34,18 +34,22 @@ pub async fn update(agent: &Arc<Agent>) -> Result<(), UpdateError> {
                 .into(),
         ));
     };
-    // A restart of the service can take Strata down with it (its output runs
-    // through the service); Strata then restarts, which only hurts mid-work.
-    if agent.jobs.running() {
-        return Err(UpdateError::Refused("Ein Strata-Vorgang läuft".into()));
-    }
-    if agent.strata_busy().await {
-        return Err(UpdateError::Refused(
-            "Strata bearbeitet eine Anfrage".into(),
-        ));
-    }
     if agent.updating.swap(true, Ordering::SeqCst) {
         return Err(UpdateError::Refused("Ein Update läuft schon".into()));
+    }
+    // Set first, so no job starts between this check and the restart.
+    // A restart of the service can take Strata down with it (its output runs
+    // through the service); Strata then restarts, which only hurts mid-work.
+    let busy = if agent.jobs.running() {
+        Some("Ein Strata-Vorgang läuft")
+    } else if agent.strata_busy().await {
+        Some("Strata bearbeitet eine Anfrage")
+    } else {
+        None
+    };
+    if let Some(reason) = busy {
+        agent.updating.store(false, Ordering::SeqCst);
+        return Err(UpdateError::Refused(reason.into()));
     }
     let result = download_and_replace(agent, &nas).await;
     match &result {
@@ -88,15 +92,18 @@ async fn download_and_replace(agent: &Arc<Agent>, nas: &str) -> Result<(), Updat
         return Err(failed("Der NAS lieferte kein Windows-Programm".into()));
     }
     let file = agent.cfg.state_dir().join(DOWNLOAD_FILE);
-    std::fs::write(&file, &bytes)
-        .map_err(|e| failed(format!("{} nicht speicherbar: {e}", file.display())))?;
     let platform_agent = Arc::clone(agent);
     let downloaded = file.clone();
-    let replaced =
-        tokio::task::spawn_blocking(move || platform_agent.platform().replace_program(&downloaded))
-            .await
-            .map_err(anyhow::Error::from)
-            .and_then(|r| r);
+    // A few MB to disk, then the swap: off the async workers, so `/status`
+    // keeps answering.
+    let replaced = tokio::task::spawn_blocking(move || {
+        std::fs::write(&downloaded, &bytes)
+            .map_err(|e| anyhow::anyhow!("{} nicht speicherbar: {e}", downloaded.display()))?;
+        platform_agent.platform().replace_program(&downloaded)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
     if let Err(e) = replaced {
         let _ = std::fs::remove_file(&file);
         return Err(failed(format!("Neues Programm nicht eingesetzt: {e:#}")));

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use strata_admin_ui::api::{PcServiceView, PcSetupCommand};
 
-use crate::{events::EventKind, state::AppState};
+use crate::{agent::UpdateAnswer, events::EventKind, state::AppState};
 
 /// Where the image puts `strata-pc-agent.exe`, unless `PC_AGENT_EXE` says otherwise.
 const DEFAULT_PROGRAM: &str = "/usr/local/share/strata-proxy/strata-pc-agent.exe";
@@ -35,8 +35,10 @@ const CODE_LEN: usize = 8;
 const INSTALL_SCRIPT: &str = include_str!("../../../deploy/windows/install.ps1");
 /// Text the program carries in front of its version (see `pc-agent/src/lib.rs`).
 const VERSION_MARKER: &[u8] = b"strata-pc-agent-version:";
-/// An accepted update that has not reported its new version after this long failed.
-const UPDATE_TIMEOUT: Duration = Duration::from_secs(180);
+/// An update that has not reported its new version this long after the
+/// button failed; the service may take 5 min for the download alone.
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(420);
+const UPDATE_TIMED_OUT: &str = "Der PC-Dienst hat nach dem Update keine neue Version gemeldet. Läuft er noch? Sonst den Befehl von der Seite PC-Dienst auf dem PC ausführen.";
 
 pub struct PcSetup {
     program: Mutex<PathBuf>,
@@ -55,7 +57,8 @@ struct UpdateState {
     /// The version in the last status; `Some(None)` from a service too old
     /// to report one.
     reported: Option<Option<String>>,
-    /// When the service accepted an update; until it reports the new version.
+    /// When the button asked for an update; until the service reports the
+    /// new version, refuses or the update times out.
     running_since: Option<Instant>,
     error: Option<String>,
 }
@@ -126,27 +129,32 @@ impl PcSetup {
         let available = self.program_version();
         let mut update = self.update.lock().unwrap();
         update.reported = Some(version.map(String::from));
-        let arrived =
-            update.running_since.is_some() && version.is_some() && version == available.as_deref();
-        if arrived {
-            update.running_since = None;
+        let current = version.is_some() && version == available.as_deref();
+        if !current {
+            return false;
         }
-        arrived
+        // Up to date, however it got there: an old failure no longer matters.
+        update.error = None;
+        update.running_since.take().is_some()
+    }
+
+    /// Ends an update that took too long; its reason if it did.
+    fn expire(&self, update: &mut UpdateState) -> Option<String> {
+        let timeout = *self.update_timeout.lock().unwrap();
+        if !update.running_since.is_some_and(|t| t.elapsed() >= timeout) {
+            return None;
+        }
+        update.running_since = None;
+        update.error = Some(UPDATE_TIMED_OUT.to_string());
+        Some(UPDATE_TIMED_OUT.to_string())
     }
 
     /// What the overview shows; `None` until the service answered once.
-    /// Ends an update that took too long.
+    /// Also the reason when an update just timed out.
     pub fn view(&self) -> (Option<PcServiceView>, Option<String>) {
         let available = self.program_version();
-        let timeout = *self.update_timeout.lock().unwrap();
         let mut update = self.update.lock().unwrap();
-        let mut timed_out = None;
-        if update.running_since.is_some_and(|t| t.elapsed() >= timeout) {
-            update.running_since = None;
-            let reason = "Der PC-Dienst hat nach dem Update keine neue Version gemeldet. Läuft er noch? Sonst den Befehl von der Seite PC-Dienst auf dem PC ausführen.".to_string();
-            update.error = Some(reason.clone());
-            timed_out = Some(reason);
-        }
+        let timed_out = self.expire(&mut update);
         let view = update.reported.clone().map(|version| PcServiceView {
             update_available: available.is_some() && version != available,
             version,
@@ -157,10 +165,24 @@ impl PcSetup {
         (view, timed_out)
     }
 
-    fn update_started(&self) {
+    /// Marks an update as asked for, unless one runs or the service already
+    /// runs `available`.
+    fn begin_update(&self, available: &str) -> Result<(), String> {
         let mut update = self.update.lock().unwrap();
+        self.expire(&mut update);
+        if update.running_since.is_some() {
+            return Err("Ein Update läuft schon.".into());
+        }
+        if update
+            .reported
+            .as_ref()
+            .is_some_and(|v| v.as_deref() == Some(available))
+        {
+            return Err("Der PC-Dienst ist schon auf dem Stand des NAS.".into());
+        }
         update.running_since = Some(Instant::now());
         update.error = None;
+        Ok(())
     }
 
     fn update_failed(&self, reason: &str) {
@@ -212,17 +234,22 @@ impl PcSetup {
     }
 }
 
-/// The version text after the marker, up to the line end.
+/// The version text after the marker, up to the line end. The prefix may
+/// also stand elsewhere in the program on its own; only a match followed by a
+/// plain version and a line end counts.
 fn version_in(program: &[u8]) -> Option<String> {
-    let start = program
+    program
         .windows(VERSION_MARKER.len())
-        .position(|w| w == VERSION_MARKER)?
-        + VERSION_MARKER.len();
-    let rest = &program[start..program.len().min(start + 64)];
-    let end = rest.iter().position(|b| *b == b'\n')?;
-    let version = std::str::from_utf8(&rest[..end]).ok()?;
-    (!version.is_empty() && version.bytes().all(|b| b.is_ascii_graphic()))
-        .then(|| version.to_string())
+        .enumerate()
+        .filter(|(_, w)| *w == VERSION_MARKER)
+        .find_map(|(at, _)| {
+            let start = at + VERSION_MARKER.len();
+            let rest = &program[start..program.len().min(start + 64)];
+            let end = rest.iter().position(|b| *b == b'\n')?;
+            let version = std::str::from_utf8(&rest[..end]).ok()?;
+            (!version.is_empty() && version.bytes().all(|b| b.is_ascii_graphic()))
+                .then(|| version.to_string())
+        })
 }
 
 /// The update button: asks the awake PC's service to load the program from
@@ -238,21 +265,23 @@ pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
     if state.pc_status(&agent).await.is_none() {
         return Err("Der PC schläft; ein Update geht nur bei wachem PC.".into());
     }
+    state.pc_setup.begin_update(&available)?;
     state
         .events
         .record(EventKind::PcServiceUpdateRequested, Some(by.to_string()));
-    let result = agent.update().await;
-    match &result {
-        Ok(()) => {
-            tracing::info!("PC-Dienst wird auf {available} aktualisiert");
-            state.pc_setup.update_started();
+    state.overview.refresh_now();
+    match agent.update().await {
+        UpdateAnswer::Accepted => tracing::info!("PC-Dienst wird auf {available} aktualisiert"),
+        // It may still finish; the new version or the timeout tells.
+        UpdateAnswer::NoAnswer => {
+            tracing::warn!("PC-Dienst antwortet nicht auf das Update, warte auf die neue Version")
         }
-        Err(reason) => {
+        UpdateAnswer::Refused(reason) => {
             tracing::warn!("Update des PC-Dienstes: {reason}");
-            state.pc_setup.update_failed(reason);
+            state.pc_setup.update_failed(&reason);
             state
                 .events
-                .record(EventKind::PcServiceUpdateFailed, Some(reason.clone()));
+                .record(EventKind::PcServiceUpdateFailed, Some(reason));
         }
     }
     state.overview.refresh_now();

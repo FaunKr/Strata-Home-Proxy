@@ -2,22 +2,25 @@
 //! idle timer that sends the PC to sleep.
 
 use std::{
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     agent::{AgentClient, PcStatus, SleepAnswer},
     api_keys::ApiKeys,
     auth::Auth,
+    clock,
     config::{Config, format_mac, parse_mac},
     events::{EventKind, EventLog},
+    overview::Monitor,
     settings::Settings,
     wol,
 };
@@ -48,13 +51,76 @@ pub enum WakeError {
     NoMac,
 }
 
+/// Strata's answer on `/health`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Health {
+    /// Answers; `loaded` is false while the model is not in memory (Strata
+    /// loads it with the next request).
+    Up {
+        loaded: bool,
+    },
+    Down,
+}
+
+#[derive(Deserialize)]
+struct HealthBody {
+    #[serde(default = "loaded_default")]
+    loaded: bool,
+}
+
+fn loaded_default() -> bool {
+    true
+}
+
 struct Inner {
     pc: PcState,
     last_activity: Instant,
+    /// `last_activity` as wall-clock time, for the countdown on the overview.
+    last_activity_at: SystemTime,
+    /// Start or end of the last forwarded request.
+    last_request: Option<SystemTime>,
     last_healthy: Option<Instant>,
     sleep_accepted_at: Option<Instant>,
     next_sleep_attempt: Option<Instant>,
-    keep_awake_until: Option<Instant>,
+    /// Why the PC service last refused to sleep and when it is asked again.
+    refused: Option<(String, SystemTime)>,
+    /// Wall-clock time, so it can be saved and survive a restart.
+    keep_awake_until: Option<SystemTime>,
+}
+
+impl Inner {
+    /// Starts the idle time again from now.
+    fn touch(&mut self) {
+        self.last_activity = Instant::now();
+        self.last_activity_at = SystemTime::now();
+        self.refused = None;
+    }
+
+    /// A forwarded request started or ended.
+    fn note_request(&mut self) {
+        self.touch();
+        self.last_request = Some(SystemTime::now());
+    }
+
+    fn kept_awake(&self) -> bool {
+        self.keep_awake_until.is_some_and(|t| t > SystemTime::now())
+    }
+}
+
+/// What the overview needs from the shared state.
+pub struct Snapshot {
+    pub pc: PcState,
+    pub in_flight: usize,
+    pub last_activity_at: SystemTime,
+    pub last_request: Option<SystemTime>,
+    pub refused: Option<(String, SystemTime)>,
+    pub keep_awake_until: Option<SystemTime>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct KeepAwakeFile {
+    /// Unix seconds.
+    until: u64,
 }
 
 pub struct AppState {
@@ -68,6 +134,8 @@ pub struct AppState {
     /// For `/health` and the PC service, rebuilt when `PROBE_TIMEOUT_MS` changes.
     probe: Mutex<(Duration, Client)>,
     pub events: EventLog,
+    /// Live state for the overview page.
+    pub overview: Monitor,
     in_flight: AtomicUsize,
     inner: Mutex<Inner>,
     wake_lock: tokio::sync::Mutex<()>,
@@ -99,20 +167,29 @@ impl AppState {
             .connect_timeout(Duration::from_secs(5))
             .build()
             .expect("HTTP client");
+        let keep_awake_until = keep_awake_file(&cfg.data_dir)
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|text| serde_json::from_str::<KeepAwakeFile>(&text).ok())
+            .map(|f| SystemTime::UNIX_EPOCH + Duration::from_secs(f.until))
+            .filter(|t| *t > SystemTime::now());
         Arc::new(Self {
             auth: Auth::new(cfg.data_dir.clone(), cfg.ui_password.clone()),
             api_keys: ApiKeys::new(cfg.data_dir.clone()),
             events: EventLog::new(cfg.data_dir.clone()),
             upstream,
+            overview: Monitor::default(),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
             inner: Mutex::new(Inner {
                 pc: PcState::Unknown,
                 last_activity: Instant::now(),
+                last_activity_at: SystemTime::now(),
+                last_request: None,
                 last_healthy: None,
                 sleep_accepted_at: None,
                 next_sleep_attempt: None,
-                keep_awake_until: None,
+                refused: None,
+                keep_awake_until,
             }),
             wake_lock: tokio::sync::Mutex::new(()),
             settings,
@@ -131,6 +208,11 @@ impl AppState {
             *probe = (cfg.probe_timeout, probe_client(cfg.probe_timeout));
         }
         probe.1.clone()
+    }
+
+    /// Client for `/health`, `/metrics` and the PC service.
+    pub fn probe_client(&self) -> Client {
+        self.probe(&self.cfg())
     }
 
     /// Asks the PC service for its status and takes over a reported MAC.
@@ -160,11 +242,52 @@ impl AppState {
     }
 
     pub fn keep_awake_for(&self, duration: Duration) {
-        self.inner.lock().unwrap().keep_awake_until = Some(Instant::now() + duration);
+        self.set_keep_awake(Some(SystemTime::now() + duration));
+    }
+
+    /// Keeps the PC awake until `until`, or ends that with `None`; saved in
+    /// `DATA_DIR` so a restart does not end it.
+    pub fn set_keep_awake(&self, until: Option<SystemTime>) {
+        self.inner.lock().unwrap().keep_awake_until = until;
+        let Some(path) = keep_awake_file(&self.cfg().data_dir) else {
+            return;
+        };
+        let written = match until {
+            Some(t) => {
+                let file = KeepAwakeFile {
+                    until: clock::unix(t),
+                };
+                std::fs::write(&path, serde_json::to_string(&file).expect("serializes"))
+            }
+            None => match std::fs::remove_file(&path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                other => other,
+            },
+        };
+        if let Err(e) = written {
+            tracing::warn!("Wach halten nicht gespeichert: {e}");
+        }
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        let inner = self.inner.lock().unwrap();
+        Snapshot {
+            pc: inner.pc,
+            in_flight: self.in_flight(),
+            last_activity_at: inner.last_activity_at,
+            last_request: inner.last_request,
+            refused: inner.refused.clone(),
+            keep_awake_until: inner.keep_awake_until.filter(|t| *t > SystemTime::now()),
+        }
     }
 
     fn set_pc(&self, pc: PcState) {
         self.inner.lock().unwrap().pc = pc;
+    }
+
+    /// Starts the idle time again from now, e.g. after waking by hand.
+    pub fn touch(&self) {
+        self.inner.lock().unwrap().touch();
     }
 
     /// True while a PC that just accepted a sleep request may still answer.
@@ -175,28 +298,67 @@ impl AppState {
     }
 
     async fn strata_healthy(&self) -> bool {
+        matches!(self.strata_health().await, Health::Up { .. })
+    }
+
+    /// Asks Strata's `/health`. A ready answer marks the PC awake, except
+    /// while a PC that accepted sleep may still answer.
+    pub async fn strata_health(&self) -> Health {
         let cfg = self.cfg();
         let Some(strata) = &cfg.strata_url else {
-            return false;
+            return Health::Down;
         };
         let mut req = self.probe(&cfg).get(format!("{strata}/health"));
         if let Some(auth) = cfg.strata_authorization() {
             req = req.header(reqwest::header::AUTHORIZATION, auth);
         }
-        let ok = matches!(req.send().await, Ok(r) if r.status().is_success());
-        if ok {
-            let mut inner = self.inner.lock().unwrap();
-            if !Self::settling(&inner, cfg.sleep_settle) {
-                inner.last_healthy = Some(Instant::now());
-                if inner.pc != PcState::Awake {
-                    inner.pc = PcState::Awake;
-                    // Count idle time from the moment the PC is known to be up.
-                    inner.last_activity = Instant::now();
-                }
-                return true;
+        let health = match req.send().await {
+            Ok(r) if r.status().is_success() => Health::Up {
+                // Strata says `{"status": "ok", "loaded": ...}`; other builds may not.
+                loaded: r.json::<HealthBody>().await.map_or(true, |b| b.loaded),
+            },
+            _ => Health::Down,
+        };
+        let mut inner = self.inner.lock().unwrap();
+        if Self::settling(&inner, cfg.sleep_settle) {
+            return Health::Down;
+        }
+        if matches!(health, Health::Up { .. }) {
+            inner.last_healthy = Some(Instant::now());
+            if inner.pc != PcState::Awake {
+                inner.pc = PcState::Awake;
+                // Count idle time from the moment the PC is known to be up.
+                inner.touch();
             }
         }
-        false
+        health
+    }
+
+    /// Asks the PC service for its status for the overview, and notes gaming
+    /// mode or a sleeping PC like the idle check does.
+    pub async fn check_pc(&self, strata_answers: bool) -> Option<PcStatus> {
+        let agent = self.agent();
+        if !agent.configured() {
+            return None;
+        }
+        let status = self.pc_status(&agent).await;
+        let mut inner = self.inner.lock().unwrap();
+        match &status {
+            Some(s) if s.gaming_mode => inner.pc = PcState::Gaming,
+            Some(_)
+                if matches!(
+                    inner.pc,
+                    PcState::Asleep | PcState::Unknown | PcState::Gaming
+                ) =>
+            {
+                // Woken by hand or gaming just ended: start counting now.
+                inner.pc = PcState::Awake;
+                inner.touch();
+            }
+            None if !strata_answers && inner.pc != PcState::Waking => inner.pc = PcState::Asleep,
+            _ => {}
+        }
+        status
     }
 
     pub async fn readiness(&self) -> Readiness {
@@ -313,37 +475,121 @@ impl AppState {
                     ) {
                         // Woken by hand or gaming just ended: start counting now.
                         inner.pc = PcState::Awake;
-                        inner.last_activity = now;
+                        inner.touch();
                     }
                 }
             }
             if self.in_flight.load(Ordering::SeqCst) > 0
                 || inner.last_activity.elapsed() < cfg.idle_timeout
-                || inner.keep_awake_until.is_some_and(|t| t > now)
+                || inner.kept_awake()
                 || inner.next_sleep_attempt.is_some_and(|t| t > now)
             {
                 return;
             }
         }
-        match agent.request_sleep().await {
+        if let Err(e) = self.request_sleep(&agent).await {
+            tracing::warn!("Schlafen-Anfrage fehlgeschlagen: {e}");
+        }
+    }
+
+    /// Asks the PC service to sleep and notes the answer. A refusal or an
+    /// error postpones the next automatic attempt by `SLEEP_RETRY_SECS`.
+    pub async fn request_sleep(&self, agent: &AgentClient) -> anyhow::Result<SleepAnswer> {
+        let retry = self.cfg().sleep_retry;
+        let answer = agent.request_sleep().await;
+        let mut inner = self.inner.lock().unwrap();
+        match &answer {
             Ok(SleepAnswer::Accepted) => {
-                let mut inner = self.inner.lock().unwrap();
                 inner.pc = PcState::Asleep;
                 inner.sleep_accepted_at = Some(Instant::now());
                 inner.last_healthy = None;
                 inner.next_sleep_attempt = None;
+                inner.refused = None;
                 drop(inner);
                 self.events.record(EventKind::SleepAccepted, None);
             }
             Ok(SleepAnswer::Refused(reason)) => {
-                self.inner.lock().unwrap().next_sleep_attempt = Some(now + cfg.sleep_retry);
-                self.events.record(EventKind::SleepRefused, Some(reason));
+                inner.next_sleep_attempt = Some(Instant::now() + retry);
+                inner.refused = Some((reason.clone(), SystemTime::now() + retry));
+                drop(inner);
+                self.events
+                    .record(EventKind::SleepRefused, Some(reason.clone()));
             }
-            Err(e) => {
-                tracing::warn!("Schlafen-Anfrage fehlgeschlagen: {e}");
-                self.inner.lock().unwrap().next_sleep_attempt = Some(now + cfg.sleep_retry);
-            }
+            Err(_) => inner.next_sleep_attempt = Some(Instant::now() + retry),
         }
+        answer
+    }
+
+    /// Sends magic packets until the PC service answers (not Strata), for
+    /// switching gaming mode on a sleeping PC.
+    /// Shares the wake lock with `ensure_awake`, so only one wake-up runs.
+    pub async fn wake_until_agent(&self) -> Result<(), WakeError> {
+        let _lock = self.wake_lock.lock().await;
+        let started = Instant::now();
+        let mut last_wol: Option<Instant> = None;
+        loop {
+            let cfg = self.cfg();
+            // A PC that just accepted sleep may still answer: not awake yet.
+            let settling = Self::settling(&self.inner.lock().unwrap(), cfg.sleep_settle);
+            if !settling && self.pc_status(&self.agent()).await.is_some() {
+                self.set_pc(PcState::Awake);
+                if last_wol.is_some() {
+                    self.events.record(
+                        EventKind::Awake,
+                        Some(format!("nach {:.1} s", started.elapsed().as_secs_f64())),
+                    );
+                }
+                return Ok(());
+            }
+            if last_wol.is_none_or(|t| t.elapsed() >= cfg.wol_resend) {
+                let Some(mac) = cfg.pc_mac else {
+                    return Err(WakeError::NoMac);
+                };
+                if last_wol.is_none() {
+                    self.set_pc(PcState::Waking);
+                    self.events.record(EventKind::WakeSent, None);
+                }
+                if let Err(e) = wol::send(mac, cfg.wol_addr).await {
+                    tracing::warn!("Weckpaket nicht gesendet: {e}");
+                }
+                last_wol = Some(Instant::now());
+            }
+            if started.elapsed() >= cfg.wake_timeout {
+                self.set_pc(PcState::Unknown);
+                self.events.record(EventKind::WakeTimeout, None);
+                return Err(WakeError::Timeout);
+            }
+            tokio::time::sleep(cfg.health_poll).await;
+        }
+    }
+
+    /// Switches gaming mode on the PC, waking it first if needed. Switching
+    /// it off starts the idle time again, so the PC sleeps after the session.
+    pub async fn set_gaming(&self, enabled: bool) -> anyhow::Result<()> {
+        let agent = self.agent();
+        if !agent.configured() {
+            anyhow::bail!("Kein PC-Dienst eingerichtet (PC_AGENT_URL).");
+        }
+        if self.pc_status(&agent).await.is_none() {
+            if !enabled {
+                anyhow::bail!("Der PC schläft, der Gaming-Modus ist also schon aus.");
+            }
+            self.wake_until_agent().await.map_err(|e| match e {
+                WakeError::NoMac => {
+                    anyhow::anyhow!("Keine MAC-Adresse bekannt, der PC kann nicht geweckt werden.")
+                }
+                _ => anyhow::anyhow!("Der PC ist nicht rechtzeitig aufgewacht."),
+            })?;
+        }
+        agent.set_gaming(enabled).await?;
+        let mut inner = self.inner.lock().unwrap();
+        if enabled {
+            inner.pc = PcState::Gaming;
+        } else {
+            inner.pc = PcState::Awake;
+            inner.touch();
+        }
+        Ok(())
     }
 
     pub fn spawn_idle_loop(self: &Arc<Self>) {
@@ -366,14 +612,18 @@ pub struct ActivityGuard(Arc<AppState>);
 impl ActivityGuard {
     pub fn new(state: &Arc<AppState>) -> Self {
         state.in_flight.fetch_add(1, Ordering::SeqCst);
-        state.inner.lock().unwrap().last_activity = Instant::now();
+        state.inner.lock().unwrap().note_request();
         Self(Arc::clone(state))
     }
 }
 
 impl Drop for ActivityGuard {
     fn drop(&mut self) {
-        self.0.inner.lock().unwrap().last_activity = Instant::now();
+        self.0.inner.lock().unwrap().note_request();
         self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+fn keep_awake_file(data_dir: &Option<PathBuf>) -> Option<PathBuf> {
+    data_dir.as_ref().map(|dir| dir.join("keep-awake.json"))
 }

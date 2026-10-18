@@ -14,7 +14,7 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 | 1. Einmalige Einrichtung | Anleitung: [docs/einrichtung.md](docs/einrichtung.md) |
 | 2. NAS-Proxy | gebaut, gegen nachgebautes Strata getestet |
 | 3. PC-Dienst und Gaming-Schalter | gebaut, gegen nachgebauten PC getestet: [docs/pc-dienst.md](docs/pc-dienst.md) |
-| 4. Weboberfläche | offen |
+| 4. Weboberfläche | Anmeldung, Einstellungen und Übersicht gebaut; Verlauf mit Stromschätzung offen |
 | 5. Abnahme auf echter Hardware | offen |
 
 ## Was der NAS-Proxy tut
@@ -75,6 +75,24 @@ Nur ein Weckpaket senden, zum Testen: `docker compose run --rm strata-proxy wake
 Unter `http://<NAS-IP>:8080/admin/`, also auf demselben Port wie die API.
 Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
 
+- **Übersicht:** zeigt live, ob der PC schläft, aufwacht, wach oder im
+  Gaming-Modus ist, ob Strata bereit ist, lädt, Anfragen bearbeitet (mit
+  wartenden Anfragen und Token/s) oder offline ist, die letzte Anfrage, einen
+  Countdown bis zum Schlafen (oder warum nicht geschlafen wird) und die letzten
+  zehn PC-Ereignisse. Solange eine Übersicht offen ist, fragt der Proxy alle
+  5 s den PC-Dienst, `/health` und `/metrics/prometheus` von Strata ab; das
+  weckt den PC nicht und hält ihn nicht wach. Für die Zahlen aus
+  `/metrics/prometheus` braucht der Proxy den API-Key von Strata
+  (`STRATA_API_KEY`).
+- **Knöpfe:** *Jetzt wecken* (die 15 min Leerlauf zählen ab dem Aufwachen),
+  *Jetzt schlafen legen* (lehnt der PC-Dienst ab, steht der Grund da),
+  *Gaming an/aus* (weckt einen schlafenden PC vorher; nach *aus* zählt der
+  Leerlauf neu) und *Wach halten* für 1 h, 4 h, 8 h oder bis morgen 8 Uhr.
+  Wach halten übersteht einen Neustart (`/data/keep-awake.json`). „Morgen
+  8 Uhr“ richtet sich nach der Zeitzone in `TZ` (z. B. `Europe/Berlin`), ohne
+  `TZ` nach UTC. Läuft gerade eine Anfrage, fragen *schlafen legen* und
+  *Gaming an* vorher nach. Jeder Knopf landet im Verlauf mit „über
+  Weboberfläche“.
 - **Erste Anmeldung:** Passwort `admin`, oder der Wert von `UI_PASSWORD`, falls
   gesetzt. Danach muss ein eigenes Passwort (mindestens 8 Zeichen) festgelegt
   werden, vorher geht nichts anderes. Es liegt als Hash in

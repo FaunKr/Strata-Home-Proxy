@@ -11,14 +11,20 @@ use axum::{
     Router,
     extract::ConnectInfo,
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
+    routing::get,
 };
+use futures::{StreamExt, future::BoxFuture, stream::BoxStream};
 use leptos::prelude::*;
 use leptos_axum::{
     LeptosRoutes, ResponseOptions, generate_route_list_with_exclusions_and_ssg_and_context,
 };
 
 use crate::{
-    api::{ApiKeysView, CreatedKey, Session, SettingsView},
+    api::{ApiKeysView, CreatedKey, Overview, Session, SettingsView},
     app::{App, shell},
 };
 
@@ -46,6 +52,17 @@ pub trait Backend: Send + Sync + 'static {
     fn save_setting(&self, key: &str, value: &str) -> Result<(), String>;
     /// Drops a saved value, so the environment or default applies again.
     fn reset_setting(&self, key: &str) -> Result<(), String>;
+    /// The overview now and after every change, for as long as it is held.
+    /// While anyone holds one, the proxy checks on the PC and Strata.
+    fn overview(&self) -> BoxStream<'static, Overview>;
+    /// Starts waking the PC; a message for the user if it cannot be woken.
+    fn wake(&self) -> Result<(), String>;
+    /// Asks the PC service to sleep; its reason if it refuses.
+    fn sleep_now(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// Switches gaming mode, waking the PC first if needed.
+    fn set_gaming(&self, enabled: bool) -> BoxFuture<'static, Result<(), String>>;
+    /// `1h`, `4h`, `8h`, `morning` or `off`.
+    fn keep_awake(&self, choice: &str) -> Result<(), String>;
     fn api_keys(&self) -> ApiKeysView;
     /// Creates a client key; a message for the user if the name is invalid.
     fn create_api_key(&self, name: &str) -> Result<CreatedKey, String>;
@@ -62,6 +79,10 @@ pub fn backend() -> SharedBackend {
 /// The session token from the request's cookie.
 pub async fn token() -> Option<String> {
     let headers: HeaderMap = leptos_axum::extract().await.ok()?;
+    cookie_token(&headers)
+}
+
+fn cookie_token(headers: &HeaderMap) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -116,6 +137,23 @@ fn insert_cookie(value: &str) {
     }
 }
 
+/// The overview as server-sent events, only for a logged-in user.
+async fn overview_stream(backend: SharedBackend, headers: HeaderMap) -> Response {
+    match backend.session(cookie_token(&headers).as_deref()) {
+        Session::Ready => {}
+        Session::MustChange => return StatusCode::FORBIDDEN.into_response(),
+        Session::Anonymous => return StatusCode::UNAUTHORIZED.into_response(),
+    }
+    let events = backend.overview().map(|overview| {
+        Event::default()
+            .json_data(overview)
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    });
+    Sse::new(events)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
 /// Where the built browser files live (`LEPTOS_SITE_ROOT`, set in the Docker
 /// image); `target/site` when developing with cargo-leptos.
 pub fn site_root() -> PathBuf {
@@ -138,12 +176,17 @@ where
     S: Clone + Send + Sync + 'static,
 {
     let pkg = PathBuf::from(options.site_root.as_ref()).join(options.site_pkg_dir.as_ref());
+    let stream_backend = Arc::clone(&backend);
     let context = move || provide_context(Arc::clone(&backend));
     // Listing the routes renders the app once, which starts the session
     // resource; without the backend in context that call panics.
     let routes =
         generate_route_list_with_exclusions_and_ssg_and_context(App, None, context.clone()).0;
     Router::new()
+        .route(
+            "/admin/api/overview-stream",
+            get(move |headers: HeaderMap| overview_stream(Arc::clone(&stream_backend), headers)),
+        )
         .leptos_routes_with_context(&options, routes, context, {
             let options = options.clone();
             move || shell(options.clone())

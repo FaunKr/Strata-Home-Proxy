@@ -12,8 +12,9 @@ pub struct Config {
     /// Base URL of Strata on the PC, e.g. `http://192.168.1.50:8080` (`STRATA_URL`).
     /// Without it the proxy is not set up yet and answers API requests with 503.
     pub strata_url: Option<String>,
-    /// API key of Strata (`STRATA_API_KEY`). The proxy sends it with every call
-    /// to Strata; clients never see it and use their own keys instead.
+    /// Strata's API key (`STRATA_API_KEY`). The proxy sends it with every call
+    /// to Strata, forwarded or its own; clients never see it and use their own
+    /// keys instead.
     pub strata_api_key: Option<String>,
     /// MAC address of the PC's network card (`PC_MAC`). Without it the PC
     /// cannot be woken.
@@ -307,7 +308,7 @@ mod tests {
         cfg.apply("PC_MAC", "aa-bb-cc-01-02-03").unwrap();
         cfg.apply("PC_AGENT_URL", "http://pc:8091").unwrap();
         cfg.apply("PC_AGENT_TOKEN", "geheim").unwrap();
-        cfg.apply("STRATA_API_KEY", "strata").unwrap();
+        cfg.apply("STRATA_API_KEY", "auch-geheim").unwrap();
         for f in FIELDS {
             let text = cfg
                 .value(f.key)

@@ -13,7 +13,7 @@ pub fn label(key: &str) -> Label {
         ),
         "STRATA_API_KEY" => (
             "API-Key von Strata",
-            "Setzt der Proxy bei jeder Anfrage an Strata ein; Clients nutzen ihre eigenen API-Keys. Wird nie angezeigt.",
+            "Derselbe Key wie in Strata. Der Proxy setzt ihn bei jeder Anfrage an Strata ein und nutzt ihn für seine eigenen Aufrufe (z. B. die Übersicht); Clients nutzen ihre eigenen API-Keys. Wird nie angezeigt.",
         ),
         "PC_MAC" => (
             "MAC-Adresse des PCs",
@@ -80,5 +80,25 @@ pub fn label(key: &str) -> Label {
     Label {
         title: if title.is_empty() { "Unbekannt" } else { title },
         help,
+    }
+}
+
+/// How the overview names an event from the history.
+pub fn event_label(kind: &str) -> &'static str {
+    match kind {
+        "wake_sent" => "Weckpaket gesendet",
+        "awake" => "Aufgewacht",
+        "wake_timeout" => "Nicht rechtzeitig aufgewacht",
+        "sleep_accepted" => "Schlafen angenommen",
+        "sleep_refused" => "Schlafen abgelehnt",
+        "gaming_rejected" => "Anfrage abgewiesen: Gaming-Modus",
+        "mac_learned" => "MAC-Adresse gemeldet",
+        "wake_requested" => "Wecken angefordert",
+        "sleep_requested" => "Schlafen angefordert",
+        "gaming_on" => "Gaming an",
+        "gaming_off" => "Gaming aus",
+        "keep_awake_set" => "Wach halten",
+        "keep_awake_ended" => "Wach halten beendet",
+        _ => "Ereignis",
     }
 }

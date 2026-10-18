@@ -30,6 +30,37 @@ pub enum EventKind {
     /// Detail: the key's name, never the key.
     ApiKeyCreated,
     ApiKeyRevoked,
+    // Buttons on the overview. Wake and sleep are recorded when pressed, their
+    // outcome as above; the others once they took effect.
+    WakeRequested,
+    SleepRequested,
+    GamingOn,
+    GamingOff,
+    /// Detail: until when.
+    KeepAwakeSet,
+    KeepAwakeEnded,
+}
+
+impl EventKind {
+    /// About the web UI itself rather than the PC; left out of the overview.
+    pub fn is_admin(self) -> bool {
+        matches!(
+            self,
+            Self::PasswordChanged
+                | Self::SettingSaved
+                | Self::SettingReset
+                | Self::ApiKeyCreated
+                | Self::ApiKeyRevoked
+        )
+    }
+
+    /// The name in `events.jsonl`, e.g. `wake_sent`.
+    pub fn name(self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -88,5 +119,18 @@ impl EventLog {
 
     pub fn recent(&self) -> Vec<Event> {
         self.recent.lock().unwrap().iter().cloned().collect()
+    }
+
+    /// The latest `n` events about the PC, newest first.
+    pub fn latest_pc(&self, n: usize) -> Vec<Event> {
+        self.recent
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .filter(|e| !e.kind.is_admin())
+            .take(n)
+            .cloned()
+            .collect()
     }
 }

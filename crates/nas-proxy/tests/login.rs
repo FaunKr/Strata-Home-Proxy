@@ -44,7 +44,8 @@ async fn first_login_forces_a_new_password() {
     );
     assert_eq!(b.session().await, "Ready");
     let html = b.page("/admin/").await;
-    assert!(html.contains("Hier zeigt der Proxy"), "{html}");
+    assert!(html.contains("<h1>Übersicht</h1>"), "{html}");
+    assert!(!html.contains("Neues Passwort festlegen"), "{html}");
     assert!(kinds(&s.state).contains(&strata_nas_proxy::events::EventKind::PasswordChanged));
 
     // The default password is gone.

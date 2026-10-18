@@ -46,6 +46,15 @@ pub struct FakePc {
     pub api_auth: Mutex<Option<SeenCredentials>>,
     /// The same for the last `/health` call.
     pub health_auth: Mutex<Option<SeenCredentials>>,
+    /// Strata's process runs but does not answer yet (starting).
+    pub starting: AtomicBool,
+    /// Strata answers, but its model is not in memory (`"loaded": false`).
+    pub unloaded: AtomicBool,
+    /// Body of Strata's `/metrics/prometheus`; 404 (an older build) if unset.
+    pub metrics: Mutex<Option<String>>,
+    pub metrics_requests: AtomicUsize,
+    /// `Authorization` header of the last metrics request.
+    pub metrics_auth: Mutex<Option<String>>,
 }
 
 /// Credential headers as Strata saw them.
@@ -69,19 +78,26 @@ impl FakePc {
     pub fn up(&self) -> bool {
         self.awake.load(Ordering::SeqCst)
     }
-    pub fn strata_up(&self) -> bool {
+    /// Strata's process runs (gaming mode ends it).
+    pub fn strata_running(&self) -> bool {
         self.up() && !self.gaming.load(Ordering::SeqCst)
+    }
+    /// Strata answers.
+    pub fn strata_up(&self) -> bool {
+        self.strata_running() && !self.starting.load(Ordering::SeqCst)
     }
 }
 
 pub type Pc = Arc<FakePc>;
 
-pub async fn health(State(pc): State<Pc>, headers: HeaderMap) -> StatusCode {
+/// Like Strata: 200 with `loaded`; a stand-in 503 when it would not answer.
+pub async fn health(State(pc): State<Pc>, headers: HeaderMap) -> Response {
     *pc.health_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
     if pc.strata_up() {
-        StatusCode::OK
+        let loaded = !pc.unloaded.load(Ordering::SeqCst);
+        Json(json!({"status": "ok", "loaded": loaded, "service": "strata"})).into_response()
     } else {
-        StatusCode::SERVICE_UNAVAILABLE
+        StatusCode::SERVICE_UNAVAILABLE.into_response()
     }
 }
 
@@ -155,12 +171,46 @@ pub async fn agent_status(State(pc): State<Pc>) -> Response {
     }
     let mut status = json!({
         "gaming_mode": pc.gaming.load(Ordering::SeqCst),
-        "strata_running": pc.strata_up(),
+        "strata_running": pc.strata_running(),
     });
     if let Some(mac) = pc.report_mac.lock().unwrap().clone() {
         status["mac"] = json!(mac);
     }
     Json(status).into_response()
+}
+
+/// Strata's `/metrics/prometheus`, with the values set in `metrics`.
+pub async fn metrics(State(pc): State<Pc>, headers: axum::http::HeaderMap) -> Response {
+    if !pc.strata_up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    pc.metrics_requests.fetch_add(1, Ordering::SeqCst);
+    *pc.metrics_auth.lock().unwrap() = headers
+        .get("authorization")
+        .map(|v| v.to_str().unwrap().to_string());
+    match pc.metrics.lock().unwrap().clone() {
+        Some(body) => body.into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Text of `/metrics/prometheus` with these numbers.
+pub fn metrics_text(processing: u32, deferred: u32, tokens_per_sec: f64) -> String {
+    format!(
+        "# TYPE llamacpp:requests_processing gauge\n\
+         llamacpp:requests_processing {processing}\n\
+         llamacpp:requests_deferred {deferred}\n\
+         llamacpp:predicted_tokens_seconds {tokens_per_sec}\n"
+    )
+}
+
+pub async fn agent_gaming(State(pc): State<Pc>, Json(body): Json<Value>) -> Response {
+    if !pc.up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    pc.gaming
+        .store(body["enabled"].as_bool().unwrap(), Ordering::SeqCst);
+    Json(json!({"gaming_mode": pc.gaming.load(Ordering::SeqCst)})).into_response()
 }
 
 pub async fn agent_sleep(State(pc): State<Pc>) -> Response {
@@ -218,6 +268,7 @@ pub async fn serve_strata(pc: Pc) -> SocketAddr {
     serve(
         Router::new()
             .route("/health", get(health))
+            .route("/metrics/prometheus", get(metrics))
             .route("/v1/messages", post(messages))
             .route("/v1/chat/completions", post(chat))
             .with_state(pc),
@@ -242,6 +293,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         Router::new()
             .route("/status", get(agent_status))
             .route("/sleep", post(agent_sleep))
+            .route("/gaming", post(agent_gaming))
             .with_state(pc.clone()),
     )
     .await;
@@ -269,6 +321,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     };
     tweak(&mut cfg);
     let state = AppState::new(cfg);
+    state.overview.set_poll(Duration::from_millis(100));
     let (key, _) = state.api_keys.create("Test").unwrap();
     state.spawn_idle_loop();
     let proxy = serve(api_router(state.clone())).await;
@@ -384,4 +437,59 @@ pub async fn logged_in_again(base: &str) -> Browser {
         .await;
     assert_eq!(resp.status(), 200);
     b
+}
+
+/// The overview's live stream, read like a browser's EventSource does.
+pub struct Live {
+    body: std::pin::Pin<Box<dyn futures_util::Stream<Item = reqwest::Result<Bytes>> + Send>>,
+    buf: String,
+}
+
+impl Live {
+    /// Opens the stream; panics unless it answers 200.
+    pub async fn open(b: &Browser) -> Self {
+        let resp = Self::request(b).await;
+        assert_eq!(resp.status(), 200);
+        Self {
+            body: Box::pin(resp.bytes_stream()),
+            buf: String::new(),
+        }
+    }
+
+    pub async fn request(b: &Browser) -> reqwest::Response {
+        let mut req = reqwest::Client::new().get(format!("{}/admin/api/overview-stream", b.base));
+        if let Some(c) = &b.cookie {
+            req = req.header("cookie", c);
+        }
+        req.send().await.unwrap()
+    }
+
+    /// The next overview sent.
+    pub async fn next(&mut self) -> Value {
+        use futures_util::StreamExt;
+        loop {
+            if let Some(end) = self.buf.find("\n\n") {
+                let event: String = self.buf.drain(..end + 2).collect();
+                if let Some(data) = event.lines().find_map(|l| l.strip_prefix("data:")) {
+                    return serde_json::from_str(data.trim()).unwrap();
+                }
+                continue;
+            }
+            let chunk = self.body.next().await.expect("stream ended").unwrap();
+            self.buf.push_str(&String::from_utf8_lossy(&chunk));
+        }
+    }
+
+    /// Waits up to 5 s for an overview that matches; panics with the last one.
+    pub async fn until(&mut self, what: &str, check: impl Fn(&Value) -> bool) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut last = Value::Null;
+        loop {
+            match tokio::time::timeout_at(deadline, self.next()).await {
+                Ok(v) if check(&v) => return v,
+                Ok(v) => last = v,
+                Err(_) => panic!("kein Stand mit {what}, zuletzt: {last}"),
+            }
+        }
+    }
 }

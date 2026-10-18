@@ -14,6 +14,7 @@ use crate::{
         get_settings,
     },
     labels::label,
+    overview::OverviewPage,
 };
 
 /// The HTML page around the app.
@@ -77,8 +78,8 @@ pub fn App() -> impl IntoView {
             </header>
             <main>
                 <Routes fallback=NotFound>
-                    <Route path=path!("/admin") view=|| view! { <Protected><Home /></Protected> } />
-                    <Route path=path!("/admin/") view=|| view! { <Protected><Home /></Protected> } />
+                    <Route path=path!("/admin") view=|| view! { <Protected><OverviewPage /></Protected> } />
+                    <Route path=path!("/admin/") view=|| view! { <Protected><OverviewPage /></Protected> } />
                     <Route
                         path=path!("/admin/settings")
                         view=|| view! { <Protected><SettingsPage /></Protected> }
@@ -134,14 +135,6 @@ fn Protected(children: ChildrenFn) -> impl IntoView {
                 }
             })}
         </Transition>
-    }
-}
-
-#[component]
-fn Home() -> impl IntoView {
-    view! {
-        <h1>"Übersicht"</h1>
-        <p>"Hier zeigt der Proxy bald den Zustand von PC und Strata."</p>
     }
 }
 

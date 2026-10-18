@@ -19,6 +19,8 @@ services:
       # Ab Schritt 3, wenn der PC-Dienst läuft:
       # PC_AGENT_URL: http://192.168.1.50:8091
       # PC_AGENT_TOKEN: dasselbe-geheimnis-wie-in-strata-pc-agent.toml
+      # Für Uhrzeiten auf der Übersicht und "Wach halten bis morgen 8 Uhr".
+      TZ: Europe/Berlin
       IDLE_TIMEOUT_SECS: "900"
       WAKE_TIMEOUT_SECS: "240"
       # Startpasswort der Weboberfläche (sonst "admin"), beim ersten Login ändern.

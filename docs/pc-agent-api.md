@@ -124,6 +124,7 @@ geht (Gaming an, ein Vorgang läuft, zu wenig Platz, aktives Modell löschen).
 | `update` | – | `git pull --ff-only`, dann `START-HERE.bat --update` bei beendetem Strata, startet neu |
 | `benchmark` | – | `BENCH.bat --config <aktives Modell>`, behält Tokens/s mit Modell und Datum |
 | `set_key` | `api_key` | trägt den Key in alle Modell-Konfigurationen ein und startet Strata neu |
+| `set_speed_projection` | `model`, `on` | schaltet die Speed-Projection in der Konfiguration dieses Modells ein oder aus, ohne Setup |
 
 Den Strata-Key erzeugt der Proxy. Er gilt erst, wenn der Vorgang fertig ist
 (auch über einen Neustart des Proxys); scheitert er, bleibt der alte. In der
@@ -133,6 +134,13 @@ Ausgabe des Vorgangs steht statt des Keys `***`.
 Coder `--experimental-speed-projection on` statt `off` mit. Bei anderen
 Familien ist `true` ein `400`. Der Proxy schickt das Feld nur, wenn es
 angehakt ist, denn ein älterer PC-Dienst lehnt unbekannte Felder ab.
+
+`set_speed_projection` ändert nur `args` in `strata-<id>.json`. `on: true`
+nimmt Setups Flags heraus und hängt sie neu an, mit Stratas Vektor aus dem
+Strata-Ordner (siehe [strata-api.md](strata-api.md)); fehlt der Vektor,
+scheitert der Vorgang und die Konfiguration bleibt. `on: false` nimmt die
+vier Flags mit ihren Werten heraus, auch einen eigenen Vektor. Andere
+Familien als Qwen und Coder sind ein `400`.
 
 ### `GET /strata/job`
 

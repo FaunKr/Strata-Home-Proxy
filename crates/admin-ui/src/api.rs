@@ -514,6 +514,7 @@ pub enum StrataJobKind {
     Update,
     Benchmark,
     SetKey,
+    SetSpeedProjection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -695,6 +696,7 @@ pub struct StrataJobForm {
     pub size: Option<String>,
     pub context: Option<u32>,
     pub model: Option<String>,
-    /// Strata's experimental speed projection, for setup and another model.
+    /// Strata's experimental speed projection, for setup and another model;
+    /// on or off for an installed one.
     pub speed_projection: bool,
 }

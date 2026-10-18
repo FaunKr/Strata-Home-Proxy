@@ -525,3 +525,52 @@ async fn without_word_from_the_pc_service_no_speed_projection_shows() {
     assert!(html.contains("IQ3_XXS"), "{html}");
     assert!(!html.contains("Speed projection on"), "{html}");
 }
+
+#[tokio::test]
+async fn switching_the_speed_projection_sends_only_its_fields() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = b
+        .call(
+            "strata-job",
+            &[
+                ("kind", "set_speed_projection"),
+                ("model", "IQ3_XXS"),
+                ("speed_projection", "false"),
+                ("family", "qwen"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        last_body(&s),
+        json!({"kind": "set_speed_projection", "model": "IQ3_XXS", "on": false})
+    );
+}
+
+#[tokio::test]
+async fn only_models_that_take_it_offer_to_switch_the_speed_projection() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_two_models(Some(true)));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(
+        html.matches("Switch speed projection off").count(),
+        1,
+        "{html}"
+    );
+    assert!(!html.contains("Switch speed projection on"), "{html}");
+    *s.pc.strata_info.lock().unwrap() = Some(with_two_models(Some(false)));
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(
+        html.matches("Switch speed projection on").count(),
+        1,
+        "{html}"
+    );
+    *s.pc.strata_info.lock().unwrap() = Some(with_two_models(None));
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(!html.contains("Switch speed projection"), "{html}");
+}

@@ -38,6 +38,12 @@ const STRATA_PORT: &str = "8080";
 const STRATA_HOST: &str = "0.0.0.0";
 /// The engine flag setup loads the speed projection's control vector with.
 const ESP_VECTOR_FLAG: &str = "--control-vector-scaled";
+/// Strata's vector for it, in the Strata folder.
+const ESP_VECTOR: [&str; 3] = [
+    "data",
+    "experimental-speed-projection",
+    "Qwen3.8-Flash-Next-experimental-speed-projection.gguf",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,6 +55,7 @@ pub enum JobKind {
     Update,
     Benchmark,
     SetKey,
+    SetSpeedProjection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +138,10 @@ pub enum JobRequest {
     SetKey {
         api_key: String,
     },
+    SetSpeedProjection {
+        model: String,
+        on: bool,
+    },
 }
 
 /// Why a job was not started: a value outside the catalog (400), or a state
@@ -168,6 +179,10 @@ enum Plan {
     SetKey {
         api_key: String,
     },
+    SetSpeedProjection {
+        id: String,
+        on: bool,
+    },
 }
 
 impl Plan {
@@ -180,15 +195,17 @@ impl Plan {
             Self::Update => JobKind::Update,
             Self::Benchmark { .. } => JobKind::Benchmark,
             Self::SetKey { .. } => JobKind::SetKey,
+            Self::SetSpeedProjection { .. } => JobKind::SetSpeedProjection,
         }
     }
 
     fn model(&self) -> Option<String> {
         match self {
             Self::Install { size, .. } | Self::AddModel { size, .. } => Some(size.id()),
-            Self::Activate { id } | Self::Delete { id } | Self::Benchmark { id } => {
-                Some(id.clone())
-            }
+            Self::Activate { id }
+            | Self::Delete { id }
+            | Self::Benchmark { id }
+            | Self::SetSpeedProjection { id, .. } => Some(id.clone()),
             Self::Update | Self::SetKey { .. } => None,
         }
     }
@@ -445,6 +462,12 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             strata_installed(dir)?;
             Ok(Plan::SetKey { api_key })
         }
+        JobRequest::SetSpeedProjection { model, on } => {
+            let id = installed_model(dir, &model)?;
+            let size = catalog::by_id(&id).expect("installed_model checks the catalog");
+            check_speed_projection(size, true)?;
+            Ok(Plan::SetSpeedProjection { id, on })
+        }
     }
 }
 
@@ -562,6 +585,7 @@ async fn run(agent: &Arc<Agent>, plan: Plan) -> Outcome {
         Plan::Update => update(agent).await,
         Plan::Benchmark { id } => benchmark(agent, &id).await,
         Plan::SetKey { api_key } => set_key(agent, api_key).await,
+        Plan::SetSpeedProjection { id, on } => set_speed_projection(agent, &id, on).await,
     };
     match result {
         Ok(result) => Outcome::Done(result),
@@ -899,6 +923,84 @@ fn write_key(dir: &Path, key: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Switches the speed projection in a model's config, with the flags setup
+/// writes for it; everything else in the config stays.
+async fn set_speed_projection(
+    agent: &Arc<Agent>,
+    id: &str,
+    on: bool,
+) -> Result<Option<String>, Step> {
+    set_step(agent, "Konfiguration ändern");
+    let dir = agent.cfg.strata_dir.clone();
+    let id = id.to_string();
+    tokio::task::spawn_blocking(move || write_speed_projection(&dir, &id, on))
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))??;
+    Ok(None)
+}
+
+fn write_speed_projection(dir: &Path, id: &str, on: bool) -> Result<(), String> {
+    let path = dir.join(format!("strata-{}.json", id.to_lowercase()));
+    let (_, mut cfg) = read_config(&path)?
+        .ok_or_else(|| format!("{} ist keine Modell-Konfiguration", path.display()))?;
+    let vector: PathBuf = ESP_VECTOR
+        .iter()
+        .fold(dir.to_path_buf(), |p, part| p.join(part));
+    if on && !vector.is_file() {
+        return Err(format!(
+            "Der Steuervektor der Speed-Projection fehlt: {}",
+            vector.display()
+        ));
+    }
+    let args = cfg["args"].as_array_mut().expect("read_config checks args");
+    without_speed_projection(args);
+    if on {
+        args.extend(
+            [
+                ESP_VECTOR_FLAG.to_string(),
+                format!("{}:1.0", vector.display()),
+                "--control-vector-layer-range".into(),
+                "4".into(),
+                "44".into(),
+                "--cvec-mode".into(),
+                "project".into(),
+                "--cvec-dir".into(),
+                "per-layer".into(),
+            ]
+            .map(serde_json::Value::from),
+        );
+    }
+    crate::write_replacing(&path, &config_text(cfg))
+        .map_err(|e| format!("{} nicht geschrieben: {e}", path.display()))
+}
+
+/// Takes setup's speed projection flags out of `args`, each with its values,
+/// whatever they are.
+fn without_speed_projection(args: &mut Vec<serde_json::Value>) {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut values = 0;
+    for arg in args.drain(..) {
+        if let Some(n) = arg.as_str().and_then(esp_flag_values) {
+            values = n;
+        } else if values > 0 && !arg.as_str().is_some_and(|a| a.starts_with("--")) {
+            values -= 1;
+        } else {
+            values = 0;
+            kept.push(arg);
+        }
+    }
+    *args = kept;
+}
+
+/// How many values one of setup's speed projection flags takes.
+fn esp_flag_values(flag: &str) -> Option<usize> {
+    match flag {
+        ESP_VECTOR_FLAG | "--cvec-mode" | "--cvec-dir" => Some(1),
+        "--control-vector-layer-range" => Some(2),
+        _ => None,
+    }
 }
 
 /// A model config with its text as read, or `None` for a `strata-*.json`
@@ -1356,6 +1458,7 @@ fn kind_text(kind: JobKind) -> &'static str {
         JobKind::Update => "Update",
         JobKind::Benchmark => "Benchmark",
         JobKind::SetKey => "Strata-Key setzen",
+        JobKind::SetSpeedProjection => "Speed-Projection umschalten",
     }
 }
 

@@ -718,3 +718,157 @@ async fn the_page_shows_whether_a_model_has_the_speed_projection() {
     );
     assert_eq!(model(&view, "IQ3_XXS")["speed_projection"], false, "{view}");
 }
+
+/// Strata's own vector, where setup expects it; its path as setup writes it.
+fn vector(s: &Setup) -> String {
+    let path = s
+        .agent
+        .cfg
+        .strata_dir
+        .join("data")
+        .join("experimental-speed-projection")
+        .join("Qwen3.8-Flash-Next-experimental-speed-projection.gguf");
+    write(path.clone(), "vector");
+    format!("{}:1.0", path.display())
+}
+
+fn args_of(s: &Setup, id: &str) -> Value {
+    let text =
+        std::fs::read_to_string(s.agent.cfg.strata_dir.join(format!("strata-{id}.json"))).unwrap();
+    let cfg: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(cfg["api_key"], OLD_KEY, "other values stay: {cfg}");
+    assert_eq!(cfg["port"], 8080, "other values stay: {cfg}");
+    cfg["args"].clone()
+}
+
+#[tokio::test]
+async fn switching_the_speed_projection_on_writes_setups_flags() {
+    let s = setup("models-esp-on").await;
+    installed(&s);
+    let vector = vector(&s);
+    let done = job(
+        &s,
+        json!({"kind": "set_speed_projection", "model": "coder-IQ1_M", "on": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let mut expected = vec![json!("--native"), json!("b.gguf")];
+    expected.extend([json!("--control-vector-scaled"), json!(vector)]);
+    expected.extend(ESP_FLAGS.map(|f| json!(f)));
+    assert_eq!(args_of(&s, "coder-iq1_m"), json!(expected));
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0, "an inactive model");
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0, "an inactive model");
+}
+
+#[tokio::test]
+async fn switching_the_speed_projection_off_removes_it_whatever_its_values() {
+    let s = setup("models-esp-off").await;
+    installed(&s);
+    let args = json!([
+        "--native",
+        "b.gguf",
+        "--control-vector-scaled",
+        "D:/eigen/vektor.gguf:0.5",
+        "--cvec-mode",
+        "add",
+        "--threads",
+        "8",
+        "--control-vector-layer-range",
+        "2",
+        "30",
+        "--cvec-dir",
+        "per-layer"
+    ]);
+    config_with_args(&s, "coder-iq1_m", args);
+    let done = job(
+        &s,
+        json!({"kind": "set_speed_projection", "model": "coder-IQ1_M", "on": false}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(
+        args_of(&s, "coder-iq1_m"),
+        json!(["--native", "b.gguf", "--threads", "8"])
+    );
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "coder-IQ1_M")["speed_projection"], false);
+}
+
+#[tokio::test]
+async fn switching_on_twice_keeps_one_set_of_flags() {
+    let s = setup("models-esp-twice").await;
+    installed(&s);
+    vector(&s);
+    for _ in 0..2 {
+        let body = json!({"kind": "set_speed_projection", "model": "IQ3_XXS", "on": true});
+        let (code, answer) = post(&s, "/strata/jobs", body).await;
+        assert_eq!(code, 202, "{answer}");
+        finished(&s).await;
+    }
+    let args = args_of(&s, "iq3_xxs");
+    let flags = args
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| *a == "--control-vector-scaled");
+    assert_eq!(flags.count(), 1, "{args}");
+}
+
+#[tokio::test]
+async fn switching_the_speed_projection_is_refused_where_it_does_not_fit() {
+    let s = setup("models-esp-refused").await;
+    installed(&s);
+    write(
+        s.agent.cfg.strata_dir.join("strata-swift-iq2_xs.json"),
+        &config_json("c.gguf"),
+    );
+    for (body, status) in [
+        (
+            json!({"kind": "set_speed_projection", "model": "swift-IQ2_XS", "on": true}),
+            400,
+        ),
+        (
+            json!({"kind": "set_speed_projection", "model": "swift-IQ2_XS", "on": false}),
+            400,
+        ),
+        (
+            json!({"kind": "set_speed_projection", "model": "Q2_0", "on": true}),
+            409,
+        ),
+        (
+            json!({"kind": "set_speed_projection", "model": "nichts", "on": true}),
+            400,
+        ),
+    ] {
+        let (code, answer) = post(&s, "/strata/jobs", body.clone()).await;
+        assert_eq!(code, status, "{body}: {answer}");
+    }
+    s.agent.set_gaming(true);
+    let body = json!({"kind": "set_speed_projection", "model": "IQ3_XXS", "on": true});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 409, "Gaming: {answer}");
+}
+
+#[tokio::test]
+async fn without_strata_s_vector_switching_on_fails_and_changes_nothing() {
+    let s = setup("models-esp-no-vector").await;
+    installed(&s);
+    let before =
+        std::fs::read_to_string(s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json")).unwrap();
+    let done = job(
+        &s,
+        json!({"kind": "set_speed_projection", "model": "coder-IQ1_M", "on": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(
+        done["error"]
+            .as_str()
+            .unwrap()
+            .contains("experimental-speed-projection"),
+        "{done}"
+    );
+    let after =
+        std::fs::read_to_string(s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json")).unwrap();
+    assert_eq!(before, after);
+}

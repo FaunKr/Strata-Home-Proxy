@@ -112,6 +112,42 @@ pub async fn reset_setting(key: String) -> Result<(), ServerFnError> {
     backend().reset_setting(&key).map_err(bad_request)
 }
 
+/// A client's API key, without the secret.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiKeyInfo {
+    pub name: String,
+    /// The start of the key, to match it with a client's configuration.
+    pub prefix: String,
+    /// Unix time in seconds.
+    pub created: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiKeysView {
+    /// False without `DATA_DIR`: keys are lost on restart.
+    pub persistent: bool,
+    pub keys: Vec<ApiKeyInfo>,
+}
+
+/// A new key; the only time it is shown in full.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreatedKey {
+    pub key: String,
+    pub info: ApiKeyInfo,
+}
+
+#[server(prefix = "/admin/api", endpoint = "api-keys")]
+pub async fn get_api_keys() -> Result<ApiKeysView, ServerFnError> {
+    require_login(false).await?;
+    Ok(backend().api_keys())
+}
+
+#[server(prefix = "/admin/api", endpoint = "create-api-key")]
+pub async fn create_api_key(name: String) -> Result<CreatedKey, ServerFnError> {
+    require_login(false).await?;
+    backend().create_api_key(&name).map_err(bad_request)
+}
+
 #[cfg(feature = "ssr")]
 fn bad_request(message: String) -> ServerFnError {
     expect_context::<leptos_axum::ResponseOptions>()

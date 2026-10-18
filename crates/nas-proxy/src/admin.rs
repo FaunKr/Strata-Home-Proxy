@@ -3,11 +3,12 @@
 use std::{net::IpAddr, sync::Arc};
 
 use strata_admin_ui::{
-    api::{Session, SettingEntry, SettingsView, Source},
+    api::{ApiKeyInfo, ApiKeysView, CreatedKey, Session, SettingEntry, SettingsView, Source},
     server::{Backend, SharedBackend},
 };
 
 use crate::{
+    api_keys::KeyInfo,
     auth::{AuthError, SessionState},
     events::EventKind,
     settings,
@@ -96,5 +97,28 @@ impl Backend for UiBackend {
             .events
             .record(EventKind::SettingReset, Some(key.to_string()));
         Ok(())
+    }
+
+    fn api_keys(&self) -> ApiKeysView {
+        ApiKeysView {
+            persistent: self.0.api_keys.persistent(),
+            keys: self.0.api_keys.list().into_iter().map(key_info).collect(),
+        }
+    }
+
+    fn create_api_key(&self, name: &str) -> Result<CreatedKey, String> {
+        let (key, info) = self.0.api_keys.create(name).map_err(|e| e.to_string())?;
+        Ok(CreatedKey {
+            key,
+            info: key_info(info),
+        })
+    }
+}
+
+fn key_info(k: KeyInfo) -> ApiKeyInfo {
+    ApiKeyInfo {
+        name: k.name,
+        prefix: k.prefix,
+        created: k.created,
     }
 }

@@ -230,6 +230,8 @@ pub struct Setup {
     pub pc: Pc,
     pub state: Arc<AppState>,
     pub url: String,
+    /// An API key the proxy accepts; `post_json` sends it.
+    pub key: String,
 }
 
 pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
@@ -267,18 +269,21 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     };
     tweak(&mut cfg);
     let state = AppState::new(cfg);
+    let (key, _) = state.api_keys.create("Test").unwrap();
     state.spawn_idle_loop();
     let proxy = serve(api_router(state.clone())).await;
     Setup {
         pc,
         state,
         url: format!("http://{proxy}"),
+        key,
     }
 }
 
 pub async fn post_json(s: &Setup, path: &str, body: Value) -> reqwest::Response {
     reqwest::Client::new()
         .post(format!("{}{path}", s.url))
+        .bearer_auth(&s.key)
         .json(&body)
         .send()
         .await

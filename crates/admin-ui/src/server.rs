@@ -18,7 +18,7 @@ use leptos_axum::{
 };
 
 use crate::{
-    api::{Session, SettingsView},
+    api::{ApiKeysView, CreatedKey, Session, SettingsView},
     app::{App, shell},
 };
 
@@ -46,6 +46,9 @@ pub trait Backend: Send + Sync + 'static {
     fn save_setting(&self, key: &str, value: &str) -> Result<(), String>;
     /// Drops a saved value, so the environment or default applies again.
     fn reset_setting(&self, key: &str) -> Result<(), String>;
+    fn api_keys(&self) -> ApiKeysView;
+    /// Creates a client key; a message for the user if the name is invalid.
+    fn create_api_key(&self, name: &str) -> Result<CreatedKey, String>;
 }
 
 pub type SharedBackend = Arc<dyn Backend>;

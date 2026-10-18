@@ -9,8 +9,8 @@ use leptos_router::{
 
 use crate::{
     api::{
-        ChangePassword, Login, Logout, ResetSetting, SaveSetting, Session, SettingEntry, Source,
-        error_text, get_session, get_settings,
+        ApiKeyInfo, ChangePassword, CreateApiKey, Login, Logout, ResetSetting, SaveSetting,
+        Session, SettingEntry, Source, error_text, get_api_keys, get_session, get_settings,
     },
     labels::label,
 };
@@ -83,6 +83,10 @@ pub fn App() -> impl IntoView {
                         view=|| view! { <Protected><SettingsPage /></Protected> }
                     />
                     <Route
+                        path=path!("/admin/api-keys")
+                        view=|| view! { <Protected><ApiKeysPage /></Protected> }
+                    />
+                    <Route
                         path=path!("/admin/password")
                         view=|| view! { <Protected><PasswordPage /></Protected> }
                     />
@@ -99,6 +103,7 @@ fn Nav() -> impl IntoView {
         <nav>
             <A href="/admin/">"Übersicht"</A>
             <A href="/admin/settings">"Einstellungen"</A>
+            <A href="/admin/api-keys">"API-Keys"</A>
             <A href="/admin/password">"Passwort"</A>
         </nav>
         <ActionForm action=logout>
@@ -397,5 +402,130 @@ fn SettingRow(entry: SettingEntry) -> impl IntoView {
             {action_error(reset.value())}
             <p class="hint key">{key}</p>
         </section>
+    }
+}
+
+/// A Unix time as a date, e.g. `18.10.2026` (UTC, so server and browser agree).
+fn date(unix: u64) -> String {
+    // Days to civil date, after Howard Hinnant's algorithm.
+    let z = (unix / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{day:02}.{month:02}.{year}")
+}
+
+#[component]
+fn ApiKeysPage() -> impl IntoView {
+    let create = ServerAction::<CreateApiKey>::new();
+    let keys = Resource::new(move || create.version().get(), |_| get_api_keys());
+    let created = move || {
+        create.value().get().and_then(|r| r.ok()).map(|c| {
+            view! {
+                <section class="panel created" role="status">
+                    <h2>{format!("Neuer Key für „{}“", c.info.name)}</h2>
+                    <label for="new-key">"Key"</label>
+                    <input id="new-key" type="text" readonly value=c.key />
+                    <p class="hint">
+                        "Jetzt kopieren und im Client eintragen. Der Key wird nicht wieder angezeigt."
+                    </p>
+                </section>
+            }
+        })
+    };
+    let create_error = move || {
+        create
+            .value()
+            .get()
+            .and_then(|r| r.err())
+            .map(|e| view! { <p class="error" role="alert">{error_text(&e)}</p> })
+    };
+    view! {
+        <h1>"API-Keys"</h1>
+        <p class="hint">
+            "Jeder Client (Claude Code, Open WebUI, …) bekommt einen eigenen Key und schickt ihn als „Authorization: Bearer …“ oder „x-api-key“. Ohne gültigen Key antwortet der Proxy mit 401 und weckt den PC nicht."
+        </p>
+        {created}
+        <section class="panel">
+            <h2>"Neuer Key"</h2>
+            <ActionForm action=create attr:class="edit">
+                <label for="key-name" class="visually-hidden">"Name des Clients"</label>
+                <input
+                    id="key-name"
+                    type="text"
+                    name="name"
+                    placeholder="z. B. Claude Code Laptop"
+                    maxlength="64"
+                    autocomplete="off"
+                    required
+                />
+                <button type="submit">"Anlegen"</button>
+            </ActionForm>
+            {create_error}
+        </section>
+        <Transition fallback=|| view! { <p>"Lädt …"</p> }>
+            {move || Suspend::new(async move {
+                match keys.await {
+                    Ok(view) => {
+                        let empty = view.keys.is_empty();
+                        view! {
+                            {(!view.persistent)
+                                .then(|| {
+                                    view! {
+                                        <p class="warning" role="status">
+                                            "DATA_DIR ist nicht gesetzt: Keys gehen beim nächsten Neustart verloren."
+                                        </p>
+                                    }
+                                })}
+                            {empty
+                                .then(|| {
+                                    view! {
+                                        <p class="warning" role="status">
+                                            "Noch kein Key angelegt: bis dahin bekommt jeder Client 401."
+                                        </p>
+                                    }
+                                })}
+                            {view
+                                .keys
+                                .into_iter()
+                                .map(|key| view! { <ApiKeyRow key /> })
+                                .collect_view()}
+                        }
+                            .into_any()
+                    }
+                    Err(e) => view! { <p class="error">{error_text(&e)}</p> }.into_any(),
+                }
+            })}
+        </Transition>
+    }
+}
+
+#[component]
+fn ApiKeyRow(key: ApiKeyInfo) -> impl IntoView {
+    view! {
+        <section class="panel api-key">
+            <h2>{key.name}</h2>
+            <p class="current">
+                <code>{format!("{}…", key.prefix)}</code>
+            </p>
+            <p class="hint">{format!("Angelegt am {}", date(key.created))}</p>
+        </section>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::date;
+
+    #[test]
+    fn formats_dates() {
+        assert_eq!(date(0), "01.01.1970");
+        assert_eq!(date(1_792_281_600), "18.10.2026");
+        assert_eq!(date(951_782_400), "29.02.2000");
     }
 }

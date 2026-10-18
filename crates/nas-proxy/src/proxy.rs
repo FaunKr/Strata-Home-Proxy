@@ -18,7 +18,8 @@ use crate::{
 };
 
 /// Header that tells clients (e.g. the `local-agent` skill) why Strata is not
-/// available: `gaming`, `wake_timeout`, `no_mac` or `not_configured`.
+/// available: `gaming`, `wake_timeout`, `no_mac`, `not_configured`, or
+/// `unauthorized` for a missing or wrong API key.
 pub const STATUS_HEADER: &str = "x-strata-proxy-status";
 
 /// Which API format a request uses; decides how pings and errors are written.
@@ -154,6 +155,32 @@ fn tagged(mut resp: Response, tag: &'static str) -> Response {
         HeaderValue::from_static(tag),
     );
     headers.insert(header::RETRY_AFTER, HeaderValue::from_static("300"));
+    resp
+}
+
+/// The API key a client sent: `x-api-key` (Anthropic) or a bearer token in
+/// `authorization` (OpenAI).
+fn client_key(headers: &HeaderMap) -> Option<&str> {
+    if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
+        return Some(key.trim());
+    }
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.trim().split_once(' ')?;
+    scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
+}
+
+/// Answer for a missing or unknown API key. It comes before anything else, so
+/// such a request never wakes the PC or counts as activity.
+fn unauthorized(flavor: Flavor) -> Response {
+    let body = flavor.error_json(
+        "authentication_error",
+        "Kein gültiger API-Key. Keys gibt es in der Weboberfläche des Proxys unter API-Keys.",
+    );
+    let mut resp = (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response();
+    resp.headers_mut().insert(
+        HeaderName::from_static(STATUS_HEADER),
+        HeaderValue::from_static("unauthorized"),
+    );
     resp
 }
 
@@ -368,6 +395,12 @@ fn wake_then_stream(
 pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
     let (parts, body) = req.into_parts();
     let flavor = Flavor::from_path(parts.uri.path());
+    if client_key(&parts.headers)
+        .and_then(|key| st.api_keys.check(key))
+        .is_none()
+    {
+        return unauthorized(flavor);
+    }
     let cfg = st.cfg();
     if cfg.strata_url.is_none() {
         return not_configured(flavor);

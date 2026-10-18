@@ -21,6 +21,11 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 
 - Leitet alle Pfade an Strata weiter (OpenAI- und Anthropic-Format), Antworten
   werden live durchgereicht.
+- **API-Keys:** Jeder Client braucht einen eigenen Key aus der Weboberfläche
+  (Seite *API-Keys*), als `Authorization: Bearer …` oder `x-api-key`. Ohne
+  gültigen Key kommt sofort `401` mit `x-strata-proxy-status: unauthorized`;
+  der PC wird dafür nicht geweckt. Strata bekommt nie den Key des Clients,
+  sondern den Strata-Key (`STRATA_API_KEY`), den nur der Proxy kennt.
 - **PC schläft:** Weckpaket senden (alle 10 s wiederholt), warten bis Strata
   auf `/health` antwortet, dann weiterleiten. Mehrere gleichzeitige Anfragen
   teilen sich ein Aufwachen.
@@ -86,6 +91,9 @@ Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
   Gespeichert wird in `/data/settings.json`; ohne `DATA_DIR` warnt die Seite,
   dass Änderungen beim Neustart verloren gehen. Das Token des PC-Dienstes wird
   nie angezeigt.
+- **API-Keys:** Einen Key pro Client anlegen. Er wird nur direkt nach dem
+  Anlegen vollständig angezeigt und nur als Hash in `/data/api-keys.json`
+  gespeichert. Solange kein Key existiert, bekommt jeder Client `401`.
 - Nach 5 Fehlversuchen von derselben Adresse ist die Anmeldung 1 min gesperrt.
   `/admin/` ist überall erreichbar, wo die API erreichbar ist; das Passwort ist
   der einzige Schutz.

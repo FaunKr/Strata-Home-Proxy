@@ -336,7 +336,7 @@ fn load_or_create_key(dir: &Path) -> [u8; 32] {
     new_key(dir)
 }
 
-pub(crate) fn unix_now() -> u64 {
+fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

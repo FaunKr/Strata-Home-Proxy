@@ -60,6 +60,11 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     if current.pc_agent_url.is_none() {
         tracing::warn!("PC_AGENT_URL fehlt: kein Gaming-Modus und kein automatisches Schlafen");
     }
+    if current.strata_api_key.is_none() {
+        tracing::warn!(
+            "STRATA_API_KEY fehlt: Anfragen gehen ohne Key an Strata; verlangt Strata einen, antwortet es mit 401"
+        );
+    }
     state.spawn_idle_loop();
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!("API-Proxy hört auf {listen}");

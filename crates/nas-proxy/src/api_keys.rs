@@ -7,15 +7,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    auth::{constant_time_eq, hex, random_key, unix_now},
+    auth::{constant_time_eq, hex, random_key},
+    clock::unix_now,
     files::write_private,
 };
 
 const KEYS_FILE: &str = "api-keys.json";
 /// Marks the proxy's keys, so they can be found in client configurations.
 pub const KEY_PREFIX: &str = "shp_";
-/// The last use is written to disk at most this often, so busy clients do
-/// not rewrite the file with every request. A restart loses at most this much.
+/// The last use is written to disk at most this often, by the idle loop, so
+/// requests never wait for the disk. A restart loses at most about this much.
 const LAST_USED_WRITE_SECS: u64 = 60;
 /// How much of a key the list shows: the prefix and eight more characters.
 const SHOWN_LEN: usize = KEY_PREFIX.len() + 8;
@@ -85,25 +86,28 @@ struct Inner {
 
 pub struct ApiKeys {
     dir: Option<PathBuf>,
+    /// Why the key file could not be read. Nothing is written then, so a
+    /// damaged file is never replaced by one without the keys it holds.
+    broken: Option<String>,
     inner: Mutex<Inner>,
 }
 
 impl ApiKeys {
     /// Loads the keys from `data_dir`; in memory only without it.
     pub fn new(data_dir: Option<PathBuf>) -> Self {
-        let keys = data_dir
-            .as_ref()
-            .and_then(|dir| std::fs::read_to_string(dir.join(KEYS_FILE)).ok())
-            .and_then(|text| match serde_json::from_str::<StoredFile>(&text) {
-                Ok(file) => Some(file.keys),
-                Err(e) => {
-                    tracing::warn!("{KEYS_FILE} nicht lesbar, wird ignoriert: {e}");
-                    None
-                }
-            })
-            .unwrap_or_default();
+        let (keys, broken) = match data_dir.as_ref().map(|dir| load(&dir.join(KEYS_FILE))) {
+            None | Some(Ok(None)) => (Vec::new(), None),
+            Some(Ok(Some(keys))) => (keys, None),
+            Some(Err(e)) => {
+                tracing::error!(
+                    "{KEYS_FILE} nicht lesbar ({e}); bis zur Reparatur gilt kein Key und es wird nichts gespeichert"
+                );
+                (Vec::new(), Some(e))
+            }
+        };
         Self {
             dir: data_dir,
+            broken,
             inner: Mutex::new(Inner {
                 keys,
                 last_used_written: 0,
@@ -146,12 +150,14 @@ impl ApiKeys {
         Ok((key, to_info(&stored)))
     }
 
-    /// Removes a key; requests with it fail from now on.
+    /// Removes a key; requests with it fail from now on. Names match as on
+    /// creation: trimmed and regardless of case.
     pub fn revoke(&self, name: &str) -> Result<(), KeyError> {
+        let lower = name.trim().to_lowercase();
         let mut inner = self.inner.lock().unwrap();
         let mut next = inner.keys.clone();
         let before = next.len();
-        next.retain(|k| k.name != name);
+        next.retain(|k| k.name.to_lowercase() != lower);
         if next.len() == before {
             return Err(KeyError::UnknownKey);
         }
@@ -183,31 +189,31 @@ impl ApiKeys {
             }
         }
         let i = found?;
-        let now = unix_now();
-        inner.keys[i].last_used = Some(now);
+        inner.keys[i].last_used = Some(unix_now());
         inner.last_used_dirty = true;
-        let name = inner.keys[i].name.clone();
-        self.write_last_used(&mut inner, now);
-        Some(name)
+        Some(inner.keys[i].name.clone())
     }
 
-    /// Writes pending last uses once the interval has passed. Called
-    /// regularly, so the last use before a quiet spell is not lost.
+    /// Writes pending last uses once the interval has passed. Called by the
+    /// idle loop, so the last use before a quiet spell is not lost. The file
+    /// is written outside the lock; requests checking keys never wait for it.
     pub fn flush_last_used(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        self.write_last_used(&mut inner, unix_now());
-    }
-
-    fn write_last_used(&self, inner: &mut Inner, now: u64) {
-        if !inner.last_used_dirty
-            || now.saturating_sub(inner.last_used_written) < LAST_USED_WRITE_SECS
-        {
-            return;
-        }
-        inner.last_used_written = now;
-        inner.last_used_dirty = false;
-        if let Err(e) = self.save(&inner.keys) {
+        let now = unix_now();
+        let keys = {
+            let mut inner = self.inner.lock().unwrap();
+            if !inner.last_used_dirty
+                || now.saturating_sub(inner.last_used_written) < LAST_USED_WRITE_SECS
+            {
+                return;
+            }
+            inner.last_used_written = now;
+            inner.last_used_dirty = false;
+            inner.keys.clone()
+        };
+        if let Err(e) = self.save(&keys) {
             tracing::warn!("Letzte Nutzung der API-Keys nicht gespeichert: {e}");
+            // Try again with the next flush.
+            self.inner.lock().unwrap().last_used_dirty = true;
         }
     }
 
@@ -216,6 +222,11 @@ impl ApiKeys {
         let Some(dir) = &self.dir else {
             return Ok(());
         };
+        if let Some(e) = &self.broken {
+            return Err(KeyError::NotSaved(format!(
+                "{KEYS_FILE} ist beschädigt ({e}). Bitte reparieren oder löschen und den Proxy neu starten."
+            )));
+        }
         let file = StoredFile {
             keys: keys.to_vec(),
         };
@@ -223,6 +234,18 @@ impl ApiKeys {
         write_private(dir, KEYS_FILE, text.as_bytes())
             .map_err(|e| KeyError::NotSaved(e.to_string()))
     }
+}
+
+/// The keys in `path`; `None` if there is no such file yet.
+fn load(path: &std::path::Path) -> Result<Option<Vec<Stored>>, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    serde_json::from_str::<StoredFile>(&text)
+        .map(|file| Some(file.keys))
+        .map_err(|e| e.to_string())
 }
 
 fn to_info(k: &Stored) -> KeyInfo {
@@ -249,26 +272,56 @@ mod tests {
     }
 
     #[test]
-    fn a_later_use_is_written_by_the_next_flush() {
+    fn uses_are_written_by_the_flush_not_by_the_request() {
         let dir = dir("keys-flush");
         let keys = ApiKeys::new(Some(dir.clone()));
         let (key, _) = keys.create("Laptop").unwrap();
         keys.check(&key);
-        let first = keys.list()[0].last_used;
-        // A second use inside the interval stays in memory first.
+        let used = keys.list()[0].last_used;
+        assert!(used.is_some());
+        assert_eq!(ApiKeys::new(Some(dir.clone())).list()[0].last_used, None);
+
+        keys.flush_last_used();
+        assert_eq!(ApiKeys::new(Some(dir.clone())).list()[0].last_used, used);
+
+        // A later use inside the interval waits for the next due flush.
         {
             let mut inner = keys.inner.lock().unwrap();
             inner.keys[0].last_used = Some(42);
             inner.last_used_dirty = true;
         }
         keys.flush_last_used();
-        let reloaded = ApiKeys::new(Some(dir.clone()));
-        assert_eq!(reloaded.list()[0].last_used, first);
-
+        assert_eq!(ApiKeys::new(Some(dir.clone())).list()[0].last_used, used);
         keys.inner.lock().unwrap().last_used_written -= LAST_USED_WRITE_SECS;
         keys.flush_last_used();
-        let reloaded = ApiKeys::new(Some(dir.clone()));
-        assert_eq!(reloaded.list()[0].last_used, Some(42));
+        assert_eq!(
+            ApiKeys::new(Some(dir.clone())).list()[0].last_used,
+            Some(42)
+        );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_damaged_file_is_never_overwritten() {
+        let dir = dir("keys-broken");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(KEYS_FILE);
+        std::fs::write(&file, "{\"keys\": [ kaputt").unwrap();
+        let keys = ApiKeys::new(Some(dir.clone()));
+        assert!(keys.list().is_empty());
+        assert!(matches!(keys.create("Neu"), Err(KeyError::NotSaved(_))));
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "{\"keys\": [ kaputt"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn revoking_matches_names_like_creating() {
+        let keys = ApiKeys::new(None);
+        let (key, _) = keys.create("Laptop").unwrap();
+        keys.revoke("  laptop ").unwrap();
+        assert_eq!(keys.check(&key), None);
     }
 }

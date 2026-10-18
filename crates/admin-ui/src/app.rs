@@ -9,9 +9,9 @@ use leptos_router::{
 
 use crate::{
     api::{
-        ApiKeyInfo, ChangePassword, CreateApiKey, Login, Logout, ResetSetting, RevokeApiKey,
-        SaveSetting, Session, SettingEntry, Source, error_text, get_api_keys, get_session,
-        get_settings,
+        ApiKeyInfo, ChangePassword, CreateApiKey, CreatedKey, Login, Logout, ResetSetting,
+        RevokeApiKey, SaveSetting, Session, SettingEntry, Source, error_text, get_api_keys,
+        get_session, get_settings,
     },
     labels::label,
     overview::OverviewPage,
@@ -399,21 +399,6 @@ fn SettingRow(entry: SettingEntry) -> impl IntoView {
     }
 }
 
-/// A Unix time as a date, e.g. `18.10.2026` (UTC, so server and browser agree).
-fn date(unix: u64) -> String {
-    // Days to civil date, after Howard Hinnant's algorithm.
-    let z = (unix / 86_400) as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{day:02}.{month:02}.{year}")
-}
-
 #[component]
 fn ApiKeysPage() -> impl IntoView {
     let create = ServerAction::<CreateApiKey>::new();
@@ -423,8 +408,21 @@ fn ApiKeysPage() -> impl IntoView {
         move || (create.version().get(), revoke.version().get()),
         |_| get_api_keys(),
     );
+    // The new key stays visible until the next revoke, so it does not linger
+    // for a key that no longer exists.
+    let shown = RwSignal::<Option<CreatedKey>>::new(None);
+    Effect::new(move |_| {
+        if let Some(Ok(c)) = create.value().get() {
+            shown.set(Some(c));
+        }
+    });
+    Effect::new(move |_| {
+        if revoke.version().get() > 0 {
+            shown.set(None);
+        }
+    });
     let created = move || {
-        create.value().get().and_then(|r| r.ok()).map(|c| {
+        shown.get().map(|c| {
             view! {
                 <section class="panel created" role="status">
                     <h2>{format!("Neuer Key für „{}“", c.info.name)}</h2>
@@ -508,9 +506,9 @@ fn ApiKeysPage() -> impl IntoView {
 #[component]
 fn ApiKeyRow(key: ApiKeyInfo) -> impl IntoView {
     let revoke = expect_context::<ServerAction<RevokeApiKey>>();
-    let used = key.last_used.map_or_else(
+    let used = key.last_used_text.as_deref().map_or_else(
         || "noch nie benutzt".to_string(),
-        |t| format!("zuletzt benutzt am {}", date(t)),
+        |t| format!("zuletzt benutzt {t}"),
     );
     let confirm_id = format!("confirm-{}", key.prefix);
     view! {
@@ -519,7 +517,7 @@ fn ApiKeyRow(key: ApiKeyInfo) -> impl IntoView {
             <p class="current">
                 <code>{format!("{}…", key.prefix)}</code>
             </p>
-            <p class="hint">{format!("Angelegt am {}, {used}", date(key.created))}</p>
+            <p class="hint">{format!("Angelegt {}, {used}", key.created_text)}</p>
             <ActionForm action=revoke attr:class="revoke">
                 <input type="hidden" name="name" value=key.name />
                 <input id=confirm_id.clone() type="checkbox" required />
@@ -529,17 +527,5 @@ fn ApiKeyRow(key: ApiKeyInfo) -> impl IntoView {
                 <button type="submit" class="secondary">"Widerrufen"</button>
             </ActionForm>
         </section>
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::date;
-
-    #[test]
-    fn formats_dates() {
-        assert_eq!(date(0), "01.01.1970");
-        assert_eq!(date(1_792_281_600), "18.10.2026");
-        assert_eq!(date(951_782_400), "29.02.2000");
     }
 }

@@ -254,7 +254,7 @@ async fn last_use_is_shown_and_survives_a_restart() {
         ..Config::default()
     };
     let first = AppState::new(base.clone());
-    let url = format!("http://{}", serve(api_router(first)).await);
+    let url = format!("http://{}", serve(api_router(first.clone())).await);
     let mut b = logged_in(&url).await;
     let created: Value = create(&mut b, "Laptop").await.json().await.unwrap();
     let key = created["key"].as_str().unwrap().to_string();
@@ -262,6 +262,7 @@ async fn last_use_is_shown_and_survives_a_restart() {
 
     // Strata is not reachable here; the key is still used.
     send(&url, "/v1/messages", &[("x-api-key", &key)], json!({})).await;
+    first.api_keys.flush_last_used();
     let used = key_entry(&list(&mut b).await, "Laptop").unwrap()["last_used"].clone();
     assert!(used.as_u64().unwrap() > 0, "{used}");
 
@@ -287,4 +288,35 @@ async fn creating_and_revoking_go_into_the_history() {
         .collect();
     assert!(events.contains(&(EventKind::ApiKeyCreated, Some("Laptop".into()))));
     assert!(events.contains(&(EventKind::ApiKeyRevoked, Some("Laptop".into()))));
+}
+
+#[tokio::test]
+async fn a_valid_bearer_counts_even_next_to_a_stale_x_api_key() {
+    let s = setup(true, |_| {}).await;
+    let bearer = format!("Bearer {}", s.key);
+    for stale in ["", "alter-strata-key"] {
+        let resp = send(
+            &s.url,
+            "/v1/messages",
+            &[("x-api-key", stale), ("authorization", &bearer)],
+            json!({}),
+        )
+        .await;
+        assert_eq!(resp.status(), 200, "x-api-key {stale:?}");
+    }
+}
+
+#[tokio::test]
+async fn strata_refusing_the_strata_key_is_told_apart() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_key.lock().unwrap() = Some("richtig".into());
+    s.state.settings.set("STRATA_API_KEY", "falsch").unwrap();
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
+    assert_eq!(resp.status(), 401);
+    assert_eq!(
+        resp.headers()["x-strata-proxy-status"],
+        "strata_unauthorized"
+    );
+    s.state.settings.set("STRATA_API_KEY", "richtig").unwrap();
+    assert_eq!(post_json(&s, "/v1/messages", json!({})).await.status(), 200);
 }

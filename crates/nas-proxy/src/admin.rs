@@ -244,5 +244,7 @@ fn key_info(k: KeyInfo) -> ApiKeyInfo {
         prefix: k.prefix,
         created: k.created,
         last_used: k.last_used,
+        created_text: clock::local_text(k.created),
+        last_used_text: k.last_used.map(clock::local_text),
     }
 }

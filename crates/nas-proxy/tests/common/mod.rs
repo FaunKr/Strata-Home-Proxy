@@ -46,6 +46,8 @@ pub struct FakePc {
     pub api_auth: Mutex<Option<SeenCredentials>>,
     /// The same for the last `/health` call.
     pub health_auth: Mutex<Option<SeenCredentials>>,
+    /// Strata answers API requests with 401 unless they carry this key.
+    pub strata_key: Mutex<Option<String>>,
     /// Strata's process runs but does not answer yet (starting).
     pub starting: AtomicBool,
     /// Strata answers, but its model is not in memory (`"loaded": false`).
@@ -131,6 +133,11 @@ pub async fn messages(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     *pc.api_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
+    if let Some(key) = pc.strata_key.lock().unwrap().clone()
+        && SeenCredentials::of(&headers).authorization != Some(format!("Bearer {key}"))
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     pc.api_requests.fetch_add(1, Ordering::SeqCst);
     let pause = Duration::from_millis(body["pause_ms"].as_u64().unwrap_or(0));
     if body["stream"].as_bool() == Some(true) {
@@ -151,6 +158,11 @@ pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Val
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     *pc.api_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
+    if let Some(key) = pc.strata_key.lock().unwrap().clone()
+        && SeenCredentials::of(&headers).authorization != Some(format!("Bearer {key}"))
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     pc.api_requests.fetch_add(1, Ordering::SeqCst);
     if body["stream"].as_bool() == Some(true) {
         return sse(

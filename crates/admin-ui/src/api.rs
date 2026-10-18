@@ -122,6 +122,9 @@ pub struct ApiKeyInfo {
     pub created: u64,
     /// Unix time in seconds of the last request with this key.
     pub last_used: Option<u64>,
+    /// `created` as the NAS shows times, e.g. `17.10. 14:03`.
+    pub created_text: String,
+    pub last_used_text: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

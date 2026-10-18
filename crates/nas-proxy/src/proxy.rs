@@ -19,7 +19,8 @@ use crate::{
 
 /// Header that tells clients (e.g. the `local-agent` skill) why Strata is not
 /// available: `gaming`, `wake_timeout`, `no_mac`, `not_configured`, or
-/// `unauthorized` for a missing or wrong API key.
+/// `unauthorized` for a missing or wrong API key, or `strata_unauthorized`
+/// when Strata refuses the proxy's Strata key.
 pub const STATUS_HEADER: &str = "x-strata-proxy-status";
 
 /// Which API format a request uses; decides how pings and errors are written.
@@ -157,15 +158,23 @@ fn tagged(mut resp: Response, tag: &'static str) -> Response {
     resp
 }
 
-/// The API key a client sent: `x-api-key` (Anthropic) or a bearer token in
-/// `authorization` (OpenAI).
-fn client_key(headers: &HeaderMap) -> Option<&str> {
-    if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
-        return Some(key.trim());
-    }
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, token) = value.trim().split_once(' ')?;
-    scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
+/// The API keys a client sent: `x-api-key` (Anthropic) and a bearer token in
+/// `authorization` (OpenAI). Some clients send both, one of them stale, so
+/// either may hold the valid key.
+fn client_keys(headers: &HeaderMap) -> impl Iterator<Item = &str> {
+    let x_api_key = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim);
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().split_once(' '))
+        .and_then(|(scheme, token)| scheme.eq_ignore_ascii_case("bearer").then(|| token.trim()));
+    [x_api_key, bearer]
+        .into_iter()
+        .flatten()
+        .filter(|k| !k.is_empty())
 }
 
 /// Answer for a missing or unknown API key. It comes before anything else, so
@@ -294,6 +303,14 @@ async fn forward(
     let mut out = Response::new(body);
     *out.status_mut() = status;
     *out.headers_mut() = headers;
+    if status == StatusCode::UNAUTHORIZED {
+        // The client's key was fine; Strata refused the proxy's own key.
+        tracing::warn!("Strata lehnt den Strata-Key ab: STRATA_API_KEY prüfen");
+        out.headers_mut().insert(
+            HeaderName::from_static(STATUS_HEADER),
+            HeaderValue::from_static("strata_unauthorized"),
+        );
+    }
     out
 }
 
@@ -396,10 +413,7 @@ fn wake_then_stream(
 pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
     let (parts, body) = req.into_parts();
     let flavor = Flavor::from_path(parts.uri.path());
-    if client_key(&parts.headers)
-        .and_then(|key| st.api_keys.check(key))
-        .is_none()
-    {
+    if !client_keys(&parts.headers).any(|key| st.api_keys.check(key).is_some()) {
         return unauthorized(flavor);
     }
     let cfg = st.cfg();

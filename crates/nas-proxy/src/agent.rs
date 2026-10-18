@@ -1,6 +1,8 @@
 //! Client for the service on the PC (see `docs/pc-agent-api.md`).
 
-use reqwest::Client;
+use std::time::Duration;
+
+use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use strata_admin_ui::api::{StrataInfo, StrataJob};
 
@@ -20,6 +22,9 @@ pub struct PcStatus {
     /// A Strata job (setup, download, update, benchmark) runs.
     #[serde(default)]
     pub strata_job: bool,
+    /// The service's version; missing from services before the update button.
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -44,6 +49,11 @@ async fn reason(resp: reqwest::Response) -> String {
         .and_then(|b| b.reason)
         .unwrap_or_else(|| format!("Der PC-Dienst hat abgelehnt (HTTP {status})."))
 }
+
+/// The service loads the new program from the NAS before it answers.
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(330);
+
+pub const TOO_OLD_FOR_UPDATE: &str = "Dieser PC-Dienst ist zu alt für ein Update über die Weboberfläche. Einmal mit dem Befehl von der Seite PC-Dienst neu einrichten.";
 
 pub struct AgentClient {
     base: Option<String>,
@@ -197,6 +207,26 @@ impl AgentClient {
             .send()
             .await
             .map_err(|_| "Der PC-Dienst antwortet nicht.".to_string())?;
+        if !resp.status().is_success() {
+            return Err(reason(resp).await);
+        }
+        Ok(())
+    }
+
+    /// Asks the service to put the program the NAS carries in place of its
+    /// own and restart; `Err` carries why it did not.
+    pub async fn update(&self) -> Result<(), String> {
+        let req = self
+            .request(reqwest::Method::POST, "/update")
+            .ok_or_else(|| "PC_AGENT_URL ist nicht gesetzt".to_string())?;
+        let resp = req
+            .timeout(UPDATE_TIMEOUT)
+            .send()
+            .await
+            .map_err(|_| "Der PC-Dienst antwortet nicht.".to_string())?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Err(TOO_OLD_FOR_UPDATE.to_string());
+        }
         if !resp.status().is_success() {
             return Err(reason(resp).await);
         }

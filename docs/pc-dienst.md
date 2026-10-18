@@ -34,6 +34,17 @@ neuer Befehl die .exe aus und meldet den PC neu an (neues Token, z. B. nachdem
 auf dem NAS Token oder Adresse zurückgesetzt wurden); die übrige Konfiguration
 bleibt.
 
+**Aktualisieren:** Die Übersicht zeigt die Version des PC-Dienstes und
+**Update verfügbar**, sobald das Image des NAS eine andere enthält (nach einem
+neuen Image). Der Knopf **Update** geht nur bei wachem PC und weckt ihn nie.
+Der Dienst lädt die .exe vom NAS, legt sie an dieselbe Stelle (Aufgabe und
+Verknüpfung bleiben gültig), startet sie und beendet sich. Solange Strata eine
+Anfrage bearbeitet oder ein Strata-Vorgang läuft, lehnt er ab; Strata kann
+beim Neustart des Dienstes mit beendet werden und startet dann neu. Schlägt
+das Update fehl, läuft der alte Dienst weiter und die Übersicht nennt den
+Grund. Ein Dienst, der vor dem Update-Knopf eingerichtet wurde, braucht
+einmal den Befehl von oben.
+
 **Entfernen:** Die Seite zeigt nach *Befehl erzeugen* auch den Befehl dazu
 (`irm http://<NAS>:<Port>/admin/agent/install.ps1?uninstall | iex`). Er entfernt
 Aufgabe, Firewall-Regel, Verknüpfung und Ordner. Auf dem NAS danach unter

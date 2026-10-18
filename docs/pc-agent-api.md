@@ -10,10 +10,17 @@ NAS) und von 127.0.0.1 an.
 ## `GET /status`
 
 ```json
-{ "gaming_mode": false, "strata_running": true, "user_idle_secs": 1840, "mac": "AA:BB:CC:DD:EE:FF", "strata_job": false }
+{ "gaming_mode": false, "strata_running": true, "user_idle_secs": 1840, "mac": "AA:BB:CC:DD:EE:FF", "strata_job": false, "version": "0.1.0+558db97" }
 ```
 
 `strata_job` ist `true`, solange ein Strata-Vorgang läuft (siehe unten).
+
+`version` ist die Crate-Version plus der Commit des Baus (`STRATA_BUILD_ID`
+beim Bauen, sonst `dev`). Dieselbe Angabe steht als Text
+`strata-pc-agent-version:<version>` in der .exe; so liest der Proxy die
+Version der .exe in seinem Image, ohne sie auszuführen. Weicht sie ab oder
+fehlt `version` (Dienst von vor dem Update-Knopf), zeigt die Übersicht
+„Update verfügbar“.
 
 `mac` ist die MAC-Adresse der Netzwerkkarte, über die die Anfrage kam (also
 die, die das Weckpaket empfangen muss), oder der Wert `mac` aus der
@@ -34,6 +41,25 @@ Die Antwort kommt zuerst, Standby folgt 2 s später.
 - `200 {"accepted": true}`: Standby wird ausgelöst.
 - `409 {"accepted": false, "reason": "Benutzer aktiv"}`: abgelehnt. Der
   Proxy fragt nach `SLEEP_RETRY_SECS` erneut.
+
+## `POST /update` (für die Weboberfläche)
+
+Lädt `strata-pc-agent.exe` von `nas_url` aus der Konfiguration
+(`/admin/agent/strata-pc-agent.exe`), benennt die laufende .exe in
+`strata-pc-agent.exe.alt` um, legt die neue an ihre Stelle und startet sie
+mit denselben Argumenten. Die Antwort kommt danach; 1 s später beendet sich
+der alte Dienst, der neue wartet so lange auf den Port und löscht dann die
+`.alt`.
+
+- `202 {"accepted": true}`: die neue .exe läuft gleich.
+- `409 {"reason": …}`: nicht jetzt (Strata bearbeitet eine Anfrage, ein
+  Strata-Vorgang oder ein Update läuft) oder ohne `nas_url` eingerichtet.
+- `500 {"reason": …}`: Download oder Austausch gescheitert; der alte Dienst
+  läuft weiter, nichts ist verändert.
+
+Der Proxy schickt das nur bei wachem PC und weckt ihn dafür nie. Ein Dienst
+ohne diesen Endpunkt antwortet 404; die Übersicht sagt dann, ihn einmal mit
+dem Befehl von der Seite PC-Dienst neu einzurichten.
 
 ## `POST /gaming` (für die Weboberfläche)
 

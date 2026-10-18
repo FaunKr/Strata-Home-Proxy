@@ -69,6 +69,12 @@ pub struct Fake {
     pub strata_cancel: Mutex<Option<strata_pc_agent::command::Cancel>>,
     /// The Authorization header of the last `/health` call.
     pub health_auth: Mutex<Option<String>>,
+    /// Content of the program the last update put in place.
+    pub replaced: Mutex<Option<Vec<u8>>>,
+    /// Putting the new program in place fails with this.
+    pub replace_fails: Mutex<Option<String>>,
+    /// Times the service ended itself after an update.
+    pub exits: AtomicUsize,
 }
 
 impl Fake {
@@ -221,6 +227,17 @@ impl Platform for FakePlatform {
     fn mac_for(&self, _local: std::net::IpAddr) -> Option<[u8; 6]> {
         self.0.mac_lookups.fetch_add(1, Ordering::SeqCst);
         *self.0.mac.lock().unwrap()
+    }
+    fn replace_program(&self, downloaded: &Path) -> anyhow::Result<()> {
+        if let Some(e) = self.0.replace_fails.lock().unwrap().clone() {
+            anyhow::bail!(e);
+        }
+        *self.0.replaced.lock().unwrap() = Some(std::fs::read(downloaded)?);
+        std::fs::remove_file(downloaded)?;
+        Ok(())
+    }
+    fn exit(&self) {
+        self.0.exits.fetch_add(1, Ordering::SeqCst);
     }
 }
 

@@ -224,6 +224,25 @@ pub struct Overview {
     pub events: Vec<EventView>,
     /// A Strata job running on the PC, with its progress.
     pub strata_job: Option<StrataJob>,
+    /// The PC service's version and updates; `None` until it answered once
+    /// since the proxy started.
+    pub pc_service: Option<PcServiceView>,
+}
+
+/// The PC service's version against the one the NAS carries.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PcServiceView {
+    /// The version it reported last, also while the PC sleeps; `None` for a
+    /// service too old to report one.
+    pub version: Option<String>,
+    /// The version of the program in the image; `None` if it carries none.
+    pub available: Option<String>,
+    /// The image carries another version than the PC runs.
+    pub update_available: bool,
+    /// An update was accepted and the new version has not reported yet.
+    pub updating: bool,
+    /// Why the last update failed.
+    pub update_error: Option<String>,
 }
 
 /// One message of the Strata-Ausgabe stream (`/admin/api/strata-output-stream`).
@@ -298,6 +317,10 @@ pub enum EventKind {
     StrataKeyChanged,
     /// A PC signed up with a one-time code (detail: the PC service's address).
     PcServiceRegistered,
+    /// The update button (detail: who); then the new version or why it failed.
+    PcServiceUpdateRequested,
+    PcServiceUpdated,
+    PcServiceUpdateFailed,
 }
 
 impl EventKind {
@@ -403,6 +426,14 @@ pub async fn sleep_now() -> Result<(), ServerFnError> {
 pub async fn set_gaming(enabled: bool) -> Result<(), ServerFnError> {
     require_login(false).await?;
     backend().set_gaming(enabled).await.map_err(bad_request)
+}
+
+/// Updates the PC service to the program the NAS carries; only while the PC
+/// is awake, never wakes it.
+#[server(prefix = "/admin/api", endpoint = "pc-service-update")]
+pub async fn update_pc_service() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend().update_pc_service().await.map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "keep-awake")]

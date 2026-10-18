@@ -264,6 +264,11 @@ impl Backend for UiBackend {
     fn pc_setup_command(&self, host: &str) -> Result<PcSetupCommand, String> {
         self.0.pc_setup.command(host)
     }
+
+    fn update_pc_service(&self) -> BoxFuture<'static, Result<(), String>> {
+        let state = Arc::clone(&self.0);
+        async move { crate::pc_setup::update(&state, BY_UI).await }.boxed()
+    }
 }
 
 fn key_info(k: KeyInfo) -> ApiKeyInfo {

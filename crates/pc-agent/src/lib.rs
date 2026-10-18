@@ -9,11 +9,35 @@ pub mod managed;
 pub mod output;
 pub mod platform;
 pub mod strata;
+pub mod update;
 
 use std::{sync::Arc, time::Duration};
 
 pub use agent::{Agent, Peer, Status};
 pub use config::Config;
+
+/// Crate version plus build, e.g. `0.1.0+558db97`; see `build.rs`.
+pub const VERSION: &str = env!("STRATA_PC_AGENT_VERSION");
+
+const MARKER_PREFIX: &str = "strata-pc-agent-version:";
+/// The version as plain text in the program, so the NAS reads it from the
+/// .exe it serves without running it (see `nas-proxy/src/pc_setup.rs`).
+static VERSION_MARKER: &str = concat!(
+    "strata-pc-agent-version:",
+    env!("STRATA_PC_AGENT_VERSION"),
+    "\n"
+);
+
+/// The version as `/status` reports it. Read from the marker at run time,
+/// so no linker drops the marker from the program (`#[used]` alone does not
+/// keep it with MSVC).
+pub fn version() -> &'static str {
+    let marker: &'static str = std::hint::black_box(VERSION_MARKER);
+    marker
+        .strip_prefix(MARKER_PREFIX)
+        .and_then(|v| v.strip_suffix('\n'))
+        .unwrap_or(VERSION)
+}
 
 /// Writes via a temporary file, so a crash never leaves half a file behind.
 pub(crate) fn write_replacing(path: &std::path::Path, text: &str) -> std::io::Result<()> {
@@ -23,17 +47,36 @@ pub(crate) fn write_replacing(path: &std::path::Path, text: &str) -> std::io::Re
 }
 
 const WATCHDOG_EVERY: Duration = Duration::from_secs(5);
+/// After an update the new program starts while the old one still answers;
+/// it waits this long in all for the port.
+const BIND_ATTEMPTS: u32 = 60;
+const BIND_PAUSE: Duration = Duration::from_millis(500);
 
 pub async fn run(agent: Arc<Agent>) -> anyhow::Result<()> {
+    let listener = bind(agent.cfg.listen).await?;
+    // The old program has ended once the port is free.
+    platform::remove_replaced_program();
     agent.spawn_watchdog(WATCHDOG_EVERY);
-    let listener = tokio::net::TcpListener::bind(agent.cfg.listen).await?;
-    tracing::info!("PC-Dienst hört auf {}", agent.cfg.listen);
+    tracing::info!("PC-Dienst {VERSION} hört auf {}", agent.cfg.listen);
     axum::serve(
         listener,
         agent::router(agent).into_make_service_with_connect_info::<Peer>(),
     )
     .await?;
     Ok(())
+}
+
+async fn bind(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+    let mut attempt = 1;
+    loop {
+        match tokio::net::TcpListener::bind(addr).await {
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && attempt < BIND_ATTEMPTS => {
+                attempt += 1;
+                tokio::time::sleep(BIND_PAUSE).await;
+            }
+            other => return other,
+        }
+    }
 }
 
 /// For the desktop shortcut: switches gaming mode through the running service.

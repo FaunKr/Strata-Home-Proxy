@@ -20,7 +20,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use strata_admin_ui::api::PcSetupCommand;
+use strata_admin_ui::api::{PcServiceView, PcSetupCommand};
 
 use crate::{events::EventKind, state::AppState};
 
@@ -33,11 +33,31 @@ const CODE_LEN: usize = 8;
 /// Installs, updates and removes the PC service; also used on its own, next
 /// to the program from the CI download.
 const INSTALL_SCRIPT: &str = include_str!("../../../deploy/windows/install.ps1");
+/// Text the program carries in front of its version (see `pc-agent/src/lib.rs`).
+const VERSION_MARKER: &[u8] = b"strata-pc-agent-version:";
+/// An accepted update that has not reported its new version after this long failed.
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub struct PcSetup {
     program: Mutex<PathBuf>,
     code: Mutex<Option<Code>>,
     lifetime: Mutex<Duration>,
+    /// The program's version, with the file's size and time it was read from.
+    program_version: Mutex<Option<(FileStamp, Option<String>)>>,
+    update: Mutex<UpdateState>,
+    update_timeout: Mutex<Duration>,
+}
+
+type FileStamp = (u64, Option<std::time::SystemTime>);
+
+#[derive(Default)]
+struct UpdateState {
+    /// The version in the last status; `Some(None)` from a service too old
+    /// to report one.
+    reported: Option<Option<String>>,
+    /// When the service accepted an update; until it reports the new version.
+    running_since: Option<Instant>,
+    error: Option<String>,
 }
 
 struct Code {
@@ -54,6 +74,9 @@ impl Default for PcSetup {
             program: Mutex::new(program),
             code: Mutex::new(None),
             lifetime: Mutex::new(CODE_LIFETIME),
+            program_version: Mutex::new(None),
+            update: Mutex::new(UpdateState::default()),
+            update_timeout: Mutex::new(UPDATE_TIMEOUT),
         }
     }
 }
@@ -71,6 +94,79 @@ impl PcSetup {
 
     fn program(&self) -> PathBuf {
         self.program.lock().unwrap().clone()
+    }
+
+    /// How long an accepted update may take to report back; shorter in tests.
+    pub fn set_update_timeout(&self, timeout: Duration) {
+        *self.update_timeout.lock().unwrap() = timeout;
+    }
+
+    /// The version of the program the NAS serves, read from the file and
+    /// read again only when it changes; `None` without a program.
+    pub fn program_version(&self) -> Option<String> {
+        let path = self.program();
+        let meta = std::fs::metadata(&path).ok()?;
+        let stamp = (meta.len(), meta.modified().ok());
+        let mut cached = self.program_version.lock().unwrap();
+        if let Some((s, version)) = cached.as_ref()
+            && *s == stamp
+        {
+            return version.clone();
+        }
+        let version = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| version_in(&bytes));
+        *cached = Some((stamp, version.clone()));
+        version
+    }
+
+    /// Takes note of the version in a status. True once an update arrived:
+    /// the service runs the program the NAS carries.
+    pub fn note_version(&self, version: Option<&str>) -> bool {
+        let available = self.program_version();
+        let mut update = self.update.lock().unwrap();
+        update.reported = Some(version.map(String::from));
+        let arrived =
+            update.running_since.is_some() && version.is_some() && version == available.as_deref();
+        if arrived {
+            update.running_since = None;
+        }
+        arrived
+    }
+
+    /// What the overview shows; `None` until the service answered once.
+    /// Ends an update that took too long.
+    pub fn view(&self) -> (Option<PcServiceView>, Option<String>) {
+        let available = self.program_version();
+        let timeout = *self.update_timeout.lock().unwrap();
+        let mut update = self.update.lock().unwrap();
+        let mut timed_out = None;
+        if update.running_since.is_some_and(|t| t.elapsed() >= timeout) {
+            update.running_since = None;
+            let reason = "Der PC-Dienst hat nach dem Update keine neue Version gemeldet. Läuft er noch? Sonst den Befehl von der Seite PC-Dienst auf dem PC ausführen.".to_string();
+            update.error = Some(reason.clone());
+            timed_out = Some(reason);
+        }
+        let view = update.reported.clone().map(|version| PcServiceView {
+            update_available: available.is_some() && version != available,
+            version,
+            available,
+            updating: update.running_since.is_some(),
+            update_error: update.error.clone(),
+        });
+        (view, timed_out)
+    }
+
+    fn update_started(&self) {
+        let mut update = self.update.lock().unwrap();
+        update.running_since = Some(Instant::now());
+        update.error = None;
+    }
+
+    fn update_failed(&self, reason: &str) {
+        let mut update = self.update.lock().unwrap();
+        update.running_since = None;
+        update.error = Some(reason.to_string());
     }
 
     /// A new code and the command around it; the previous code stops working.
@@ -114,6 +210,54 @@ impl PcSetup {
         current
             .is_some_and(|c| c.value.eq_ignore_ascii_case(code.trim()) && Instant::now() < c.until)
     }
+}
+
+/// The version text after the marker, up to the line end.
+fn version_in(program: &[u8]) -> Option<String> {
+    let start = program
+        .windows(VERSION_MARKER.len())
+        .position(|w| w == VERSION_MARKER)?
+        + VERSION_MARKER.len();
+    let rest = &program[start..program.len().min(start + 64)];
+    let end = rest.iter().position(|b| *b == b'\n')?;
+    let version = std::str::from_utf8(&rest[..end]).ok()?;
+    (!version.is_empty() && version.bytes().all(|b| b.is_ascii_graphic()))
+        .then(|| version.to_string())
+}
+
+/// The update button: asks the awake PC's service to load the program from
+/// the NAS. Never wakes the PC.
+pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
+    let agent = state.agent();
+    if !agent.configured() {
+        return Err(strata_admin_ui::labels::NO_AGENT.into());
+    }
+    let Some(available) = state.pc_setup.program_version() else {
+        return Err("Dieses Image enthält keinen PC-Dienst zum Aktualisieren.".into());
+    };
+    if state.pc_status(&agent).await.is_none() {
+        return Err("Der PC schläft; ein Update geht nur bei wachem PC.".into());
+    }
+    state
+        .events
+        .record(EventKind::PcServiceUpdateRequested, Some(by.to_string()));
+    let result = agent.update().await;
+    match &result {
+        Ok(()) => {
+            tracing::info!("PC-Dienst wird auf {available} aktualisiert");
+            state.pc_setup.update_started();
+        }
+        Err(reason) => {
+            tracing::warn!("Update des PC-Dienstes: {reason}");
+            state.pc_setup.update_failed(reason);
+            state
+                .events
+                .record(EventKind::PcServiceUpdateFailed, Some(reason.clone()));
+        }
+    }
+    state.overview.refresh_now();
+    // The reason shows on the overview, where it stays.
+    Ok(())
 }
 
 fn new_code() -> String {

@@ -1,0 +1,165 @@
+//! Updating the service from the web UI, with a fake NAS serving the program.
+
+mod common;
+
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex, atomic::Ordering},
+    time::Duration,
+};
+
+use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing};
+use common::*;
+
+const PROGRAM: &[u8] = b"MZ neues Programm";
+
+/// What the fake NAS answers for the program: status and body.
+type Served = Arc<Mutex<(StatusCode, Vec<u8>)>>;
+
+async fn program(State(served): State<Served>) -> impl IntoResponse {
+    served.lock().unwrap().clone()
+}
+
+async fn nas(status: StatusCode, body: &[u8]) -> (SocketAddr, Served) {
+    let served: Served = Arc::new(Mutex::new((status, body.to_vec())));
+    let addr = serve(
+        Router::new()
+            .route("/admin/agent/strata-pc-agent.exe", routing::get(program))
+            .with_state(served.clone()),
+    )
+    .await;
+    (addr, served)
+}
+
+async fn with_nas(name: &str, status: StatusCode, body: &[u8]) -> Setup {
+    let (addr, _) = nas(status, body).await;
+    setup_with(name, |c| c.nas_url = Some(format!("http://{addr}"))).await
+}
+
+/// Nothing changed: the old program runs on, no file left behind.
+fn unchanged(s: &Setup) {
+    assert!(s.fake.replaced.lock().unwrap().is_none());
+    assert_eq!(s.fake.exits.load(Ordering::SeqCst), 0);
+    assert!(!s.dir.join("strata-pc-agent.exe.neu").exists());
+}
+
+#[tokio::test]
+async fn status_reports_the_version() {
+    let s = setup("update-version").await;
+    let status = get(&s, "/status").await;
+    assert_eq!(status["version"], strata_pc_agent::VERSION);
+    assert!(strata_pc_agent::VERSION.starts_with(env!("CARGO_PKG_VERSION")));
+}
+
+/// The NAS reads the version from the .exe it serves, without running it.
+#[test]
+fn the_program_carries_its_version_as_text() {
+    let program = std::fs::read(env!("CARGO_BIN_EXE_strata-pc-agent")).unwrap();
+    let marker = format!("strata-pc-agent-version:{}\n", strata_pc_agent::VERSION);
+    assert!(
+        program
+            .windows(marker.len())
+            .any(|w| w == marker.as_bytes()),
+        "{marker:?} fehlt"
+    );
+}
+
+#[tokio::test]
+async fn update_puts_the_program_from_the_nas_in_place_and_ends_the_service() {
+    let s = with_nas("update-ok", StatusCode::OK, PROGRAM).await;
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 202, "{body}");
+    assert_eq!(s.fake.replaced.lock().unwrap().as_deref(), Some(PROGRAM));
+    // The answer goes out first; the service ends a moment later.
+    assert_eq!(s.fake.exits.load(Ordering::SeqCst), 0);
+    tokio::time::sleep(strata_pc_agent::update::EXIT_DELAY + Duration::from_millis(500)).await;
+    assert_eq!(s.fake.exits.load(Ordering::SeqCst), 1);
+    // A second press while the first one hands over does nothing.
+    let (code, _) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 409);
+}
+
+#[tokio::test]
+async fn failed_download_leaves_everything_as_it_was() {
+    let s = with_nas("update-404", StatusCode::NOT_FOUND, b"").await;
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 500);
+    assert!(body["reason"].as_str().unwrap().contains("404"), "{body}");
+    tokio::time::sleep(strata_pc_agent::update::EXIT_DELAY).await;
+    unchanged(&s);
+}
+
+#[tokio::test]
+async fn unreachable_nas_leaves_everything_as_it_was() {
+    let s = setup_with("update-unreachable", |c| {
+        c.nas_url = Some("http://127.0.0.1:9".into())
+    })
+    .await;
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 500);
+    assert!(
+        body["reason"].as_str().unwrap().contains("Download"),
+        "{body}"
+    );
+    unchanged(&s);
+}
+
+#[tokio::test]
+async fn something_other_than_a_windows_program_is_refused() {
+    let s = with_nas("update-html", StatusCode::OK, b"<html>").await;
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 500);
+    assert!(
+        body["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Windows-Programm"),
+        "{body}"
+    );
+    unchanged(&s);
+}
+
+#[tokio::test]
+async fn failing_to_put_the_program_in_place_keeps_the_service_running() {
+    let s = with_nas("update-locked", StatusCode::OK, PROGRAM).await;
+    *s.fake.replace_fails.lock().unwrap() = Some("Zugriff verweigert".into());
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 500);
+    assert!(
+        body["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Zugriff verweigert"),
+        "{body}"
+    );
+    tokio::time::sleep(strata_pc_agent::update::EXIT_DELAY).await;
+    unchanged(&s);
+    // The next try may go ahead.
+    *s.fake.replace_fails.lock().unwrap() = None;
+    assert_eq!(post(&s, "/update", serde_json::json!({})).await.0, 202);
+}
+
+#[tokio::test]
+async fn update_waits_while_strata_works() {
+    let s = with_nas("update-busy", StatusCode::OK, PROGRAM).await;
+    s.fake.strata_busy.store(true, Ordering::SeqCst);
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 409);
+    assert!(
+        body["reason"].as_str().unwrap().contains("Strata"),
+        "{body}"
+    );
+    unchanged(&s);
+}
+
+#[tokio::test]
+async fn without_the_nas_address_there_is_no_update() {
+    let s = setup("update-no-nas").await;
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 409);
+    assert!(
+        body["reason"].as_str().unwrap().contains("neu einrichten"),
+        "{body}"
+    );
+    unchanged(&s);
+}

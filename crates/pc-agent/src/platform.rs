@@ -1,9 +1,14 @@
 //! Everything that touches the operating system, behind a trait so the
 //! service logic can be tested with a fake PC.
 
-use std::{net::IpAddr, path::Path, process::Command, time::Duration};
+use std::{
+    net::IpAddr,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::command::{self, CommandSpec, Running};
 
@@ -31,6 +36,14 @@ pub trait Platform: Send + Sync + 'static {
     fn mac_for(&self, _local: IpAddr) -> Option<[u8; 6]> {
         None
     }
+    /// Update: puts `downloaded` where the running program is, so the
+    /// scheduled task and the desktop shortcut start the new one, and starts
+    /// it with the same arguments. The running program stays next to it as
+    /// `.alt` until the new one has taken over. On an error everything is as
+    /// before.
+    fn replace_program(&self, downloaded: &Path) -> Result<()>;
+    /// Ends this process, so the new program gets the port.
+    fn exit(&self);
 }
 
 pub struct System;
@@ -200,6 +213,50 @@ mod imp {
     }
 }
 
+/// The running program after an update, until the new one has started.
+fn replaced_path(program: &Path) -> PathBuf {
+    let mut old = program.as_os_str().to_owned();
+    old.push(".alt");
+    PathBuf::from(old)
+}
+
+/// Removes what an update left of the program before; Windows keeps a
+/// running program's file, so the new program does this once the old one
+/// has ended.
+pub fn remove_replaced_program() {
+    if let Ok(program) = std::env::current_exe() {
+        let _ = std::fs::remove_file(replaced_path(&program));
+    }
+}
+
+fn replace_program(downloaded: &Path) -> Result<()> {
+    let program = std::env::current_exe().context("Pfad des laufenden Programms unbekannt")?;
+    let old = replaced_path(&program);
+    let _ = std::fs::remove_file(&old);
+    // Windows lets a running program be renamed, not overwritten.
+    std::fs::rename(&program, &old)
+        .with_context(|| format!("{} nicht umbenennbar", program.display()))?;
+    let undo = |e: anyhow::Error| {
+        let _ = std::fs::remove_file(&program);
+        let _ = std::fs::rename(&old, &program);
+        e
+    };
+    std::fs::rename(downloaded, &program)
+        .or_else(|_| std::fs::copy(downloaded, &program).map(drop))
+        .with_context(|| format!("{} nicht anlegbar", program.display()))
+        .map_err(undo)?;
+    let mut cmd = Command::new(&program);
+    cmd.args(std::env::args_os().skip(1));
+    if let Ok(dir) = std::env::current_dir() {
+        cmd.current_dir(dir);
+    }
+    cmd.spawn()
+        .context("Neues Programm startet nicht")
+        .map_err(undo)?;
+    let _ = std::fs::remove_file(downloaded);
+    Ok(())
+}
+
 /// Strata as a command: in the folder of its start script, as a double click
 /// on it would run it.
 fn strata_command(program: &Path, args: &[String]) -> Result<CommandSpec> {
@@ -278,6 +335,12 @@ impl Platform for System {
     #[cfg(windows)]
     fn mac_for(&self, local: IpAddr) -> Option<[u8; 6]> {
         windows_mac_for(local)
+    }
+    fn replace_program(&self, downloaded: &Path) -> Result<()> {
+        replace_program(downloaded)
+    }
+    fn exit(&self) {
+        std::process::exit(0);
     }
 }
 

@@ -93,6 +93,10 @@ Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
   `TZ` nach UTC. Läuft gerade eine Anfrage, fragen *schlafen legen* und
   *Gaming an* vorher nach. Jeder Knopf landet im Verlauf mit „über
   Weboberfläche“.
+- **Version des PC-Dienstes:** steht auf der Übersicht, auch bei schlafendem
+  PC (die zuletzt gemeldete). Enthält das Image eine andere, erscheint
+  *Update*; der Knopf geht nur bei wachem PC und weckt ihn nie. Scheitert das
+  Update, nennt die Übersicht den Grund.
 - **Erste Anmeldung:** Passwort `admin`, oder der Wert von `UI_PASSWORD`, falls
   gesetzt. Danach muss ein eigenes Passwort (mindestens 8 Zeichen) festgelegt
   werden, vorher geht nichts anderes. Es liegt als Hash in

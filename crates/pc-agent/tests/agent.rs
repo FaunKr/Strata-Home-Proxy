@@ -276,3 +276,23 @@ async fn managed_start_script_applies_without_one_in_the_configuration() {
     let (program, _) = s.fake.started.lock().unwrap().clone().unwrap();
     assert_eq!(program, PathBuf::from("C:\\Strata\\run-qwen.bat"));
 }
+
+/// With Strata gone, connecting can hang (Windows retries a refused
+/// connection to localhost for 2 s); `/status` still answers well within the
+/// proxy's 2 s, or the PC looks asleep.
+#[tokio::test]
+async fn status_answers_quickly_while_strata_does_not_take_connections() {
+    let s = setup_with("status-quick", |c| {
+        // Not routable: the connection neither opens nor fails.
+        c.strata_url = "http://10.255.255.1:8080".into();
+    })
+    .await;
+    let started = std::time::Instant::now();
+    let status = status_json(&s).await;
+    assert_eq!(status["strata_running"], false);
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        started.elapsed()
+    );
+}

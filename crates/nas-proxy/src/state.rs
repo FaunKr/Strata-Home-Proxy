@@ -298,6 +298,10 @@ impl AppState {
             self.events
                 .record(EventKind::MacLearned, Some(format_mac(mac)));
         }
+        if self.pc_setup.note_version(status.version.as_deref()) {
+            self.events
+                .record(EventKind::PcServiceUpdated, status.version.clone());
+        }
         crate::strata::note_status(self, agent, &status).await;
         Some(status)
     }

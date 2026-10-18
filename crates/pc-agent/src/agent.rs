@@ -213,9 +213,26 @@ impl Agent {
 
     /// After standby, Strata gets a fresh chance: the unhealthy timer restarts
     /// so a short hiccup while the driver comes back is not counted.
+    ///
+    /// With `fresh_strata_after_standby`, Strata was ended before standby and
+    /// is started again here, so the GPU begins with an empty memory.
     pub fn resumed(&self) {
         tracing::info!("PC ist aus dem Standby zurück");
-        self.watchdog.lock().unwrap().unhealthy_since = None;
+        let just_started = {
+            let mut wd = self.watchdog.lock().unwrap();
+            wd.unhealthy_since = None;
+            wd.last_start.is_some_and(|t| t.elapsed() < RESUME_GAP)
+        };
+        if self.cfg.fresh_strata_after_standby && !self.gaming() && !just_started {
+            self.start_strata();
+        }
+    }
+
+    /// Runs before standby; ends Strata when `fresh_strata_after_standby` is set.
+    fn before_standby(&self) {
+        if self.cfg.fresh_strata_after_standby {
+            self.stop_strata();
+        }
     }
 
     pub fn spawn_watchdog(self: &Arc<Self>, every: Duration) {
@@ -257,13 +274,14 @@ async fn sleep(State(agent): State<Arc<Agent>>) -> Response {
     let agent = Arc::clone(&agent);
     tokio::spawn(async move {
         tokio::time::sleep(SUSPEND_DELAY).await;
+        agent.before_standby();
         let platform_agent = Arc::clone(&agent);
         let result = tokio::task::spawn_blocking(move || platform_agent.platform.suspend()).await;
-        match result {
-            Ok(Ok(())) => agent.resumed(),
-            Ok(Err(e)) => tracing::error!("Standby fehlgeschlagen: {e}"),
-            Err(e) => tracing::error!("Standby fehlgeschlagen: {e}"),
+        if let Err(e) = result.map_err(anyhow::Error::from).and_then(|r| r) {
+            tracing::error!("Standby fehlgeschlagen: {e}");
         }
+        // Also after a failed standby, so a stopped Strata comes back.
+        agent.resumed();
     });
     Json(json!({"accepted": true})).into_response()
 }

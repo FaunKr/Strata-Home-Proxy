@@ -101,6 +101,7 @@ fn config(strata: SocketAddr, dir: &Path) -> Config {
         strata_processes: vec!["llama-server.exe".into()],
         user_idle_minutes: 10,
         auto_start: true,
+        fresh_strata_after_standby: false,
         restart_after_secs: 0,
         load_time_secs: 1,
         state_dir: Some(dir.to_path_buf()),
@@ -184,6 +185,27 @@ async fn sleep_is_accepted_when_nothing_holds_it() {
     assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 0);
     tokio::time::sleep(Duration::from_millis(2500)).await;
     assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn fresh_strata_after_standby_restarts_it_around_sleep() {
+    let mut s = setup("fresh").await;
+    let mut cfg = s.agent.cfg.clone();
+    cfg.fresh_strata_after_standby = true;
+    s.agent = Agent::new(cfg, Box::new(FakePlatform(s.fake.clone())));
+    let addr = serve(router(s.agent.clone())).await;
+    s.url = format!("http://{addr}");
+
+    let (code, _) = sleep_answer(&s).await;
+    assert_eq!(code, 200);
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+
+    // A resume the watchdog notices right after does not start a second copy.
+    s.agent.resumed();
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

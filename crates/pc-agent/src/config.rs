@@ -41,6 +41,11 @@ pub struct Config {
     /// Start Strata on its own when it is not running and gaming mode is off.
     #[serde(default = "default_true")]
     pub auto_start: bool,
+    /// End Strata before standby and start it again after waking. Slower to
+    /// wake (the model loads again, 1–3 min), but the GPU starts clean; for
+    /// drivers that hang on the first request after standby.
+    #[serde(default)]
+    pub fresh_strata_after_standby: bool,
     /// Strata that has not answered `/health` for this long is restarted.
     #[serde(default = "default_unhealthy")]
     pub restart_after_secs: u64,

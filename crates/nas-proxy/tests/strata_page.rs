@@ -317,8 +317,8 @@ async fn the_page_offers_the_setup_with_the_recommendation() {
     *s.pc.strata_info.lock().unwrap() = Some(strata_info(false));
     let b = logged_in(&s.url).await;
     let html = b.page("/admin/strata").await;
-    assert!(html.contains("Strata einrichten"), "{html}");
-    assert!(html.contains("(empfohlen)"), "{html}");
+    assert!(html.contains("Set up Strata"), "{html}");
+    assert!(html.contains("(recommended)"), "{html}");
 }
 
 #[tokio::test]
@@ -329,7 +329,9 @@ async fn the_page_lists_installed_models_without_waking() {
     page(&mut b).await;
     s.pc.awake.store(false, Ordering::SeqCst);
     let html = b.page("/admin/strata").await;
-    assert!(html.contains("IQ3_XXS (81,0 GB)"), "{html}");
+    assert!(html.contains("Installed models"), "{html}");
+    assert!(html.contains("IQ3_XXS"), "{html}");
+    assert!(html.contains("81.0 GB"), "{html}");
     assert!(html.contains("schläft"), "{html}");
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
@@ -354,9 +356,9 @@ async fn shows_the_last_benchmark_with_its_local_time() {
             .is_empty(),
         "{v}"
     );
-    let html = b.page("/admin/strata").await;
-    assert!(html.contains("38.5 Token/s mit IQ3_XXS"), "{html}");
-    assert!(html.contains("neuere Version"), "{html}");
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("38.5 Token/s with IQ3_XXS"), "{html}");
+    assert!(html.contains("Update available"), "{html}");
 }
 
 #[tokio::test]
@@ -380,4 +382,61 @@ async fn another_model_gets_the_strata_key_in_use() {
         .await;
     assert_eq!(resp.status(), 200);
     assert_eq!(last_body(&s)["api_key"], "strata-geheim-0123456789");
+}
+
+#[tokio::test]
+async fn each_tab_has_its_own_path() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    let b = logged_in(&s.url).await;
+    for (path, content) in [
+        ("/admin/strata", "Load another model"),
+        ("/admin/strata/output", "Console output"),
+        ("/admin/strata/version", "Run benchmark"),
+        ("/admin/strata/connection", "Create new Strata key"),
+    ] {
+        let html = b.page(path).await;
+        assert!(html.contains(content), "{path}: {html}");
+        assert!(html.contains("aria-current=\"page\""), "{path}: {html}");
+    }
+}
+
+#[tokio::test]
+async fn connection_tab_holds_exactly_the_strata_settings() {
+    let s = setup(true, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata/connection").await;
+    assert!(html.contains("id=\"setting-STRATA_URL\""), "{html}");
+    assert!(html.contains("id=\"setting-STRATA_API_KEY\""), "{html}");
+    let fields = html.matches("id=\"setting-").count();
+    assert_eq!(fields, 2, "{html}");
+    let models = b.page("/admin/strata").await;
+    assert!(!models.contains("id=\"setting-"), "{models}");
+}
+
+#[tokio::test]
+async fn a_running_job_shows_and_locks_the_buttons_in_every_tab() {
+    let s = setup(true, |_| {}).await;
+    let mut info = strata_info(true);
+    info["models"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "IQ2_M", "disk_bytes": 60_000_000_000u64, "active": false}));
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    *s.pc.strata_job.lock().unwrap() =
+        Some(json!({"kind": "update", "state": "running", "percent": 40}));
+    let b = logged_in(&s.url).await;
+    for (path, button) in [
+        ("/admin/strata", "Make active"),
+        ("/admin/strata/version", "Run benchmark"),
+        ("/admin/strata/connection", "Create new Strata key"),
+    ] {
+        let html = b.page(path).await;
+        assert!(html.contains("40 %"), "{path}: {html}");
+        let at = html
+            .find(&format!(">{button}<"))
+            .unwrap_or_else(|| panic!("{path}: {html}"));
+        let tag = &html[html[..at].rfind("<button").unwrap()..at];
+        assert!(tag.contains("disabled"), "{path}: {tag}");
+    }
 }

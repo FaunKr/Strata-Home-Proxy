@@ -1,8 +1,9 @@
-//! The Strata page: Strata on the PC as its service reports it, and the
-//! jobs that set it up, load and switch models, update and measure it.
+//! The area "Strata": Strata on the PC as its service reports it, in tabs
+//! for the models, the output, version and benchmark, and the connection.
 //! A job's progress comes live with the overview stream.
 
 use leptos::prelude::*;
+use leptos_router::components::{A, Outlet};
 
 use crate::{
     api::{
@@ -42,14 +43,50 @@ impl Actions {
     }
 }
 
+/// What the tabs share: Strata as the PC service reported it, and the
+/// actions that start and cancel jobs.
+#[derive(Clone, Copy)]
+struct Area {
+    page: Resource<Result<StrataPage, ServerFnError>>,
+    actions: Actions,
+    live: Live,
+}
+
+impl Area {
+    /// The running job, live once the stream answers; until then the one
+    /// the page came with.
+    fn job(&self, page: &StrataPage) -> Memo<Option<StrataJob>> {
+        let first = page
+            .info
+            .as_ref()
+            .and_then(|i| i.job.clone())
+            .filter(|j| j.state == StrataJobState::Running);
+        let live = self.live;
+        Memo::new(move |_| match live.overview.get() {
+            Some(o) => o.strata_job,
+            None => first.clone(),
+        })
+    }
+
+    /// Jobs wait while one runs; gaming mode refuses them.
+    fn blocked(&self, page: &StrataPage) -> Signal<bool> {
+        let job = self.job(page);
+        let gaming = page.gaming;
+        let start = self.actions.start;
+        Signal::derive(move || gaming || job.with(Option::is_some) || start.pending().get())
+    }
+}
+
+/// The frame of the area: heading, tabs, notes and a running job; the tab
+/// comes below.
 #[component]
-pub fn StrataPage() -> impl IntoView {
+pub fn StrataArea() -> impl IntoView {
     let live = expect_context::<Live>();
     let actions = Actions {
         start: ServerAction::new(),
         cancel: ServerAction::new(),
     };
-    // The page is asked for again when a job ends, so it shows the result.
+    // Asked for again when a job ends, so the tabs show the result.
     let job_ended = RwSignal::new(0u32);
     let running = Memo::new(move |_| {
         live.overview
@@ -72,19 +109,145 @@ pub fn StrataPage() -> impl IntoView {
         },
         |_| get_strata(),
     );
+    let area = Area {
+        page,
+        actions,
+        live,
+    };
+    provide_context(area);
     view! {
-        <h1>"Strata"</h1>
+        <div class="page-head">
+            <h1>"Strata"</h1>
+            <p class="lead">"The engine on your PC that runs the models."</p>
+        </div>
+        <nav class="tabs" aria-label="Strata">
+            <A href="/admin/strata" exact=true attr:class="tab">
+                "Models"
+            </A>
+            <A href="/admin/strata/output" attr:class="tab">
+                "Output"
+            </A>
+            <A href="/admin/strata/version" attr:class="tab">
+                "Version & benchmark"
+            </A>
+            <A href="/admin/strata/connection" attr:class="tab">
+                "Connection"
+            </A>
+        </nav>
         {action_error(actions.start.value())}
         {action_error(actions.cancel.value())}
-        <Transition fallback=|| view! { <p>"Lädt …"</p> }>
+        <Transition>
             {move || Suspend::new(async move {
-                match page.await {
-                    Ok(p) => view! { <Body page=p live actions /> }.into_any(),
-                    Err(e) => view! { <p class="error">{error_text(&e)}</p> }.into_any(),
-                }
+                page.await
+                    .ok()
+                    .map(|p| {
+                        let job = area.job(&p);
+                        let problem = p
+                            .problem
+                            .clone()
+                            .map(|text| view! { <p class="warning" role="status">{text}</p> });
+                        let stale = p
+                            .stale
+                            .then(|| {
+                                view! {
+                                    <p class="hint">
+                                        "As of the last time the PC service answered."
+                                    </p>
+                                }
+                            });
+                        let gaming = p
+                            .gaming
+                            .then(|| {
+                                view! {
+                                    <p class="warning" role="status">
+                                        "Gaming mode is on: no Strata job starts until it is off."
+                                    </p>
+                                }
+                            });
+                        view! {
+                            {problem}
+                            {stale}
+                            {gaming}
+                            {move || {
+                                job.get().map(|j| view! { <JobCard job=j cancel=actions.cancel /> })
+                            }}
+                        }
+                    })
             })}
         </Transition>
+        <Outlet />
+    }
+}
+
+/// A tab's content once Strata's state has arrived.
+fn with_page<V: IntoView + 'static>(
+    content: impl Fn(Area, StrataPage) -> V + Clone + Send + Sync + 'static,
+) -> impl IntoView {
+    let area = expect_context::<Area>();
+    view! {
+        <Transition fallback=|| view! { <p class="hint">"Loading …"</p> }>
+            {
+                let content = content.clone();
+                move || {
+                    let content = content.clone();
+                    Suspend::new(async move {
+                        match area.page.await {
+                            Ok(p) => content(area, p).into_any(),
+                            Err(e) => view! { <p class="error">{error_text(&e)}</p> }.into_any(),
+                        }
+                    })
+                }
+            }
+        </Transition>
+    }
+}
+
+#[component]
+pub fn ModelsTab() -> impl IntoView {
+    with_page(|area, page| {
+        let blocked = area.blocked(&page);
+        let actions = area.actions;
+        match page.info {
+            None => ().into_any(),
+            Some(info) if !info.installed => view! { <Install info actions blocked /> }.into_any(),
+            Some(info) => view! { <Models info actions blocked /> }.into_any(),
+        }
+    })
+}
+
+#[component]
+pub fn VersionTab() -> impl IntoView {
+    with_page(|area, page| {
+        let blocked = area.blocked(&page);
+        let actions = area.actions;
+        match page.info {
+            None => ().into_any(),
+            Some(info) if !info.installed => not_installed().into_any(),
+            Some(info) => view! { <Version info actions blocked /> }.into_any(),
+        }
+    })
+}
+
+#[component]
+pub fn ConnectionTab() -> impl IntoView {
+    view! {
+        {with_page(|area, page| {
+            let blocked = area.blocked(&page);
+            let actions = area.actions;
+            page.info
+                .filter(|i| i.installed)
+                .map(|_| view! { <StrataKey actions blocked /> })
+        })}
         <SettingsSections sections=&[&STRATA_CONNECTION] />
+    }
+}
+
+fn not_installed() -> impl IntoView {
+    view! {
+        <p class="hint">
+            "Strata is not set up on the PC yet. "
+            <a href="/admin/strata">"Set it up under Models."</a>
+        </p>
     }
 }
 
@@ -99,52 +262,9 @@ fn action_error(
     }
 }
 
-#[component]
-fn Body(page: StrataPage, live: Live, actions: Actions) -> impl IntoView {
-    // Until the stream answers, the job the page came with.
-    let first_job = page
-        .info
-        .as_ref()
-        .and_then(|i| i.job.clone())
-        .filter(|j| j.state == StrataJobState::Running);
-    let job = Memo::new(move |_| match live.overview.get() {
-        Some(o) => o.strata_job,
-        None => first_job.clone(),
-    });
-    let gaming = page.gaming;
-    // Jobs wait while one runs; gaming mode refuses them.
-    let blocked = Signal::derive(move || {
-        gaming || job.with(Option::is_some) || actions.start.pending().get()
-    });
-    let problem = page
-        .problem
-        .clone()
-        .map(|p| view! { <p class="warning" role="status">{p}</p> });
-    let stale = page.stale.then(|| {
-        view! { <p class="hint">"Stand vom letzten Mal, als der PC-Dienst geantwortet hat."</p> }
-    });
-    let gaming_note = gaming.then(|| {
-        view! { <p class="warning" role="status">"Gaming-Modus ist an: bis er aus ist, startet kein Vorgang."</p> }
-    });
-    let content = match page.info {
-        None => None,
-        Some(info) if !info.installed => {
-            Some(view! { <Install info actions blocked /> }.into_any())
-        }
-        Some(info) => Some(view! { <Installed info actions blocked /> }.into_any()),
-    };
-    view! {
-        {problem}
-        {stale}
-        {gaming_note}
-        {move || job.get().map(|j| view! { <JobPanel job=j cancel=actions.cancel /> })}
-        {content}
-    }
-}
-
-/// `81,0 GB`.
+/// `81.0 GB`.
 fn gb(value: f64) -> String {
-    format!("{value:.1} GB").replace('.', ",")
+    format!("{value:.1} GB")
 }
 
 fn bytes_gb(bytes: u64) -> String {
@@ -162,50 +282,53 @@ fn eta_text(secs: u64) -> String {
 }
 
 #[component]
-fn JobPanel(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoView {
+fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoView {
     let title = match &job.model {
         Some(m) => format!("{} {m}", strata_job_label(job.kind)),
         None => strata_job_label(job.kind).to_string(),
     };
     let mut figures = Vec::new();
     if let (Some(done), Some(total)) = (job.done_bytes, job.total_bytes) {
-        figures.push(format!("{} von {}", bytes_gb(done), bytes_gb(total)));
+        figures.push(format!("{} of {}", bytes_gb(done), bytes_gb(total)));
     }
     if let Some(speed) = job.bytes_per_sec {
-        figures.push(format!("{:.1} MB/s", speed as f64 / 1e6).replace('.', ","));
+        figures.push(format!("{:.1} MB/s", speed as f64 / 1e6));
     }
     if let Some(eta) = job.eta_secs {
-        figures.push(format!("noch etwa {}", eta_text(eta)));
+        figures.push(format!("about {} left", eta_text(eta)));
     }
     let lines = job.lines.join("\n");
     view! {
-        <section class="panel job" role="status">
-            <h2>{format!("Läuft: {title}")}</h2>
-            {job.step.map(|s| view! { <p>{format!("Schritt {s}")}</p> })}
+        <section class="card job" role="status">
+            <div class="card-head">
+                <h2>{title}</h2>
+                {job.percent.map(|p| view! { <span class="muted small">{format!("{p} %")}</span> })}
+            </div>
+            {job.step.map(|s| view! { <p>{format!("Step {s}")}</p> })}
             {job
                 .percent
                 .map(|p| {
-                    view! {
-                        <progress max="100" value=p.to_string()>
-                            {format!("{p} %")}
-                        </progress>
-                        <p class="hint">{format!("{p} %")}</p>
-                    }
+                    view! { <progress max="100" value=p.to_string() aria-label="Progress"></progress> }
                 })}
             {(!figures.is_empty()).then(|| view! { <p class="hint">{figures.join(" · ")}</p> })}
             {(!lines.is_empty()).then(|| view! { <pre class="lines">{lines}</pre> })}
-            <p class="hint">"Der PC bleibt wach, bis der Vorgang fertig ist."</p>
+            <p class="muted small">
+                "The PC stays awake and other Strata actions wait until this has finished."
+            </p>
             <div class="actions">
                 <button
+                    type="button"
                     class="secondary"
                     disabled=move || cancel.pending().get()
                     on:click=move |_| {
-                        if confirmed("Vorgang abbrechen? Ein Download macht später an derselben Stelle weiter.") {
+                        if confirmed(
+                            "Cancel the job? A download continues from the same point next time.",
+                        ) {
                             cancel.dispatch(CancelStrataJob {});
                         }
                     }
                 >
-                    "Abbrechen"
+                    "Cancel job"
                 </button>
             </div>
         </section>
@@ -243,7 +366,7 @@ fn ModelChoice(
         .cloned()
         .collect();
     if sizes.is_empty() {
-        return view! { <p class="hint">"Alle Modelle aus Stratas Liste sind schon installiert."</p> }
+        return view! { <p class="hint">"Every model on Strata's list is installed already."</p> }
             .into_any();
     }
     let first = info
@@ -264,20 +387,20 @@ fn ModelChoice(
         .iter()
         .map(|s| {
             let mut text = format!(
-                "{} {}: {} Download, ab {} GB RAM",
+                "{} {} · {} download · needs {} GB RAM",
                 family_title(&s.family),
                 s.size,
                 gb(s.download_gb),
                 s.ram_gb
             );
             if info.recommended.as_deref() == Some(s.id.as_str()) {
-                text.push_str(" (empfohlen)");
+                text.push_str(" (recommended)");
             }
             if !s.fits {
-                text.push_str(" (zu wenig RAM)");
+                text.push_str(" (not enough RAM)");
             }
             if s.partly_downloaded {
-                text.push_str(" (teils geladen)");
+                text.push_str(" (partly downloaded)");
             }
             let id = s.id.clone();
             let selected = move || choice.with(|c| *c == id);
@@ -292,9 +415,9 @@ fn ModelChoice(
         .contexts
         .iter()
         .map(|&c| {
-            let mut text = format!("{}K Token", c / 1024);
+            let mut text = format!("{}K tokens", c / 1024);
             if c == info.default_context {
-                text.push_str(" (empfohlen)");
+                text.push_str(" (recommended)");
             }
             view! {
                 <option value=c.to_string() selected=move || context.get() == c>
@@ -303,9 +426,10 @@ fn ModelChoice(
             }
         })
         .collect_view();
+    let room = format!("The PC has {} RAM.", gb(info.ram_gb));
     let disk = info
         .disk_free_gb
-        .map(|free| format!("Frei auf dem Laufwerk von {}: {}.", info.data_dir, gb(free)));
+        .map(|free| format!(" Free on the drive of {}: {}.", info.data_dir, gb(free)));
     let start = move |_| {
         let id = choice.get();
         let Some(size) = sizes.iter().find(|s| s.id == id) else {
@@ -322,26 +446,32 @@ fn ModelChoice(
     let picker = format!("{kind:?}-size");
     let ctx = format!("{kind:?}-context");
     view! {
-        <label for=picker.clone()>"Modell"</label>
-        <select id=picker on:change=move |ev| choice.set(event_target_value(&ev))>
-            {options}
-        </select>
-        <label for=ctx.clone()>"Kontext"</label>
-        <select
-            id=ctx
-            on:change=move |ev| {
-                if let Ok(c) = event_target_value(&ev).parse() {
-                    context.set(c);
-                }
-            }
-        >
-            {contexts}
-        </select>
-        {disk.map(|d| view! { <p class="hint">{d}</p> })}
-        <div class="actions">
-            <button disabled=move || blocked.get() on:click=start>
-                {button}
-            </button>
+        <div class="stack">
+            <div>
+                <label for=picker.clone()>"Model"</label>
+                <select id=picker on:change=move |ev| choice.set(event_target_value(&ev))>
+                    {options}
+                </select>
+            </div>
+            <div>
+                <label for=ctx.clone()>"Context"</label>
+                <select
+                    id=ctx
+                    on:change=move |ev| {
+                        if let Ok(c) = event_target_value(&ev).parse() {
+                            context.set(c);
+                        }
+                    }
+                >
+                    {contexts}
+                </select>
+                <p class="hint">{room}{disk}</p>
+            </div>
+            <div>
+                <button type="button" disabled=move || blocked.get() on:click=start>
+                    {button}
+                </button>
+            </div>
         </div>
     }
     .into_any()
@@ -349,19 +479,17 @@ fn ModelChoice(
 
 #[component]
 fn Install(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
-    let ram = format!("Der PC hat {} RAM.", gb(info.ram_gb));
     view! {
-        <section class="panel stack">
-            <h2>"Strata einrichten"</h2>
-            <p>
-                "Auf dem PC ist Strata noch nicht eingerichtet. Der PC-Dienst lädt Strata, richtet es mit dem gewählten Modell ein und startet es. Der Strata-Key wird dabei erzeugt und im Proxy eingetragen."
+        <section class="card">
+            <h2>"Set up Strata"</h2>
+            <p class="muted">
+                "Strata is not set up on the PC yet. The PC service downloads Strata, sets it up with the model you choose and starts it. It also creates the Strata key and enters it in the proxy."
             </p>
-            <p class="hint">{ram}</p>
             <ModelChoice
                 info
                 skip=vec![]
                 kind=StrataJobKind::Install
-                button="Strata einrichten"
+                button="Set up Strata"
                 actions
                 blocked
             />
@@ -370,21 +498,8 @@ fn Install(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
 }
 
 #[component]
-fn Installed(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+fn Models(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
     let installed: Vec<String> = info.models.iter().map(|m| m.id.clone()).collect();
-    let version = info
-        .version
-        .clone()
-        .unwrap_or_else(|| "unbekannt".to_string());
-    let update = match info.update_available {
-        Some(true) => "Eine neuere Version ist verfügbar.",
-        Some(false) => "Strata ist aktuell.",
-        None => "Ob es eine neuere Version gibt, ist nicht bekannt.",
-    };
-    let bench = info.benchmark.clone().map_or_else(
-        || "Noch kein Benchmark gelaufen.".to_string(),
-        |b| format!("Zuletzt: {} mit {}, {}.", b.result, b.model, b.at_text),
-    );
     let models = info
         .models
         .iter()
@@ -392,68 +507,20 @@ fn Installed(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl 
         .map(|m| view! { <ModelRow model=m actions blocked /> })
         .collect_view();
     view! {
-        <section class="panel">
-            <h2>"Installierte Modelle"</h2>
-            <ul class="events">{models}</ul>
+        <section class="card">
+            <h2>"Installed models"</h2>
+            <ul class="list">{models}</ul>
         </section>
-        <section class="panel stack">
-            <h2>"Weiteres Modell laden"</h2>
+        <section class="card">
+            <h2>"Load another model"</h2>
             <ModelChoice
                 info
                 skip=installed
                 kind=StrataJobKind::AddModel
-                button="Modell laden"
+                button="Load model"
                 actions
                 blocked
             />
-        </section>
-        <section class="panel">
-            <h2>"Version"</h2>
-            <p>{format!("Stand {version}. {update}")}</p>
-            <div class="actions">
-                <button
-                    disabled=move || blocked.get()
-                    on:click=move |_| {
-                        if confirmed("Strata aktualisieren? Strata ist dabei kurz nicht erreichbar.") {
-                            actions.job(StrataJobKind::Update);
-                        }
-                    }
-                >
-                    "Aktualisieren"
-                </button>
-            </div>
-        </section>
-        <section class="panel">
-            <h2>"Benchmark"</h2>
-            <p>{bench}</p>
-            <p class="hint">"Misst das aktive Modell; Anfragen warten so lange."</p>
-            <div class="actions">
-                <button
-                    disabled=move || blocked.get()
-                    on:click=move |_| actions.job(StrataJobKind::Benchmark)
-                >
-                    "Benchmark starten"
-                </button>
-            </div>
-        </section>
-        <section class="panel">
-            <h2>"Strata-Key"</h2>
-            <p class="hint">
-                "Nur Proxy und Strata kennen ihn. Ein neuer Key gilt, sobald Strata ihn übernommen hat."
-            </p>
-            <div class="actions">
-                <button
-                    class="secondary"
-                    disabled=move || blocked.get()
-                    on:click=move |_| {
-                        if confirmed("Neuen Strata-Key erzeugen? Strata startet dafür neu.") {
-                            actions.job(StrataJobKind::SetKey);
-                        }
-                    }
-                >
-                    "Neu erzeugen"
-                </button>
-            </div>
         </section>
     }
 }
@@ -461,22 +528,27 @@ fn Installed(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl 
 #[component]
 fn ModelRow(model: StrataModel, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
     let size = bytes_gb(model.disk_bytes);
-    let text = format!("{} ({size})", model.id);
+    let meta = match &model.size {
+        Some(quant) if *quant != model.id => format!("{quant} · {size}"),
+        _ => size.clone(),
+    };
     let buttons = (!model.active).then(|| {
         let activate = model.id.clone();
         let delete = model.id.clone();
-        let question = format!("{} löschen? Das gibt {size} frei.", model.id);
+        let question = format!("Delete {}? This frees {size}.", model.id);
         view! {
             <span class="actions inline">
                 <button
+                    type="button"
                     class="secondary"
                     disabled=move || blocked.get()
                     on:click=move |_| actions.model_job(StrataJobKind::Activate, activate.clone())
                 >
-                    "Aktivieren"
+                    "Make active"
                 </button>
                 <button
-                    class="secondary"
+                    type="button"
+                    class="ghost-danger"
                     disabled=move || blocked.get()
                     on:click=move |_| {
                         if confirmed(&question) {
@@ -484,16 +556,114 @@ fn ModelRow(model: StrataModel, actions: Actions, blocked: Signal<bool>) -> impl
                         }
                     }
                 >
-                    "Löschen"
+                    "Delete"
                 </button>
             </span>
         }
     });
     view! {
-        <li class="model">
-            <span>{text}</span>
-            {model.active.then(|| view! { <strong>" aktiv"</strong> })}
+        <li>
+            <div class="grow">
+                <p class="strong">{model.id.clone()}</p>
+                <p class="muted small">{meta}</p>
+            </div>
+            {model
+                .active
+                .then(|| {
+                    view! {
+                        <span class="badge is-ok">
+                            <span class="dot"></span>
+                            "Active"
+                        </span>
+                    }
+                })}
             {buttons}
         </li>
+    }
+}
+
+#[component]
+fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+    let version = info
+        .version
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+    let (badge, class) = match info.update_available {
+        Some(true) => ("Update available", "badge is-warn"),
+        Some(false) => ("Up to date", "badge is-ok"),
+        None => ("Not known", "badge is-idle"),
+    };
+    let bench = info.benchmark.clone().map_or_else(
+        || "No benchmark has run yet.".to_string(),
+        |b| format!("Last: {} with {}, {}.", b.result, b.model, b.at_text),
+    );
+    view! {
+        <section class="card">
+            <div class="card-head">
+                <h2>"Version"</h2>
+                <span class=class>
+                    <span class="dot"></span>
+                    {badge}
+                </span>
+            </div>
+            <dl class="facts">
+                <dt>"Installed"</dt>
+                <dd>{version}</dd>
+            </dl>
+            <div class="actions">
+                <button
+                    type="button"
+                    disabled=move || blocked.get()
+                    on:click=move |_| {
+                        if confirmed("Update Strata? Strata is unreachable for a moment.") {
+                            actions.job(StrataJobKind::Update);
+                        }
+                    }
+                >
+                    "Update Strata"
+                </button>
+            </div>
+        </section>
+        <section class="card">
+            <h2>"Benchmark"</h2>
+            <p>{bench}</p>
+            <p class="muted small">"Measures the active model. Requests wait while it runs."</p>
+            <div class="actions">
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || blocked.get()
+                    on:click=move |_| actions.job(StrataJobKind::Benchmark)
+                >
+                    "Run benchmark"
+                </button>
+            </div>
+        </section>
+    }
+}
+
+#[component]
+fn StrataKey(actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+    view! {
+        <section class="card">
+            <h2>"Strata key"</h2>
+            <p class="muted">
+                "Only the proxy and Strata know it. Clients use their own API keys under Access. A new key applies once Strata has taken it over."
+            </p>
+            <div class="actions">
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || blocked.get()
+                    on:click=move |_| {
+                        if confirmed("Create a new Strata key? Strata restarts for it.") {
+                            actions.job(StrataJobKind::SetKey);
+                        }
+                    }
+                >
+                    "Create new Strata key"
+                </button>
+            </div>
+        </section>
     }
 }

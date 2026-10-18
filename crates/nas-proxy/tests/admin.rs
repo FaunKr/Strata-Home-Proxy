@@ -135,6 +135,8 @@ async fn every_area_shows_the_frame_with_the_state_badges() {
         ("/admin/pc", "PC"),
         ("/admin/strata", "Strata"),
         ("/admin/strata/output", "Strata"),
+        ("/admin/strata/version", "Strata"),
+        ("/admin/strata/connection", "Strata"),
         ("/admin/access", "Access"),
         ("/admin/system", "System"),
     ] {

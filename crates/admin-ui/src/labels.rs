@@ -205,13 +205,13 @@ pub fn event_class(kind: EventKind) -> &'static str {
 /// What a Strata job does, for the history and the page.
 pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
     match kind {
-        StrataJobKind::Install => "Einrichtung",
-        StrataJobKind::AddModel => "Modell installieren",
-        StrataJobKind::Activate => "Modell aktivieren",
-        StrataJobKind::Delete => "Modell löschen",
-        StrataJobKind::Update => "Update",
+        StrataJobKind::Install => "Setting up Strata",
+        StrataJobKind::AddModel => "Loading model",
+        StrataJobKind::Activate => "Making model active",
+        StrataJobKind::Delete => "Deleting model",
+        StrataJobKind::Update => "Updating Strata",
         StrataJobKind::Benchmark => "Benchmark",
-        StrataJobKind::SetKey => "Strata-Key wechseln",
+        StrataJobKind::SetKey => "New Strata key",
     }
 }
 

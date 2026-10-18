@@ -15,8 +15,8 @@ use crate::{
     overview::{Live, OverviewPage},
     pc_setup::PcPage,
     settings::SystemPage,
-    strata::StrataPage,
-    strata_output::StrataOutputPage,
+    strata::{ConnectionTab, ModelsTab, StrataArea, VersionTab},
+    strata_output::OutputTab,
 };
 
 /// The HTML page around the app.
@@ -73,8 +73,12 @@ pub fn App() -> impl IntoView {
                 <ParentRoute path=path!("/admin") view=Layout>
                     <Route path=path!("") view=OverviewPage />
                     <Route path=path!("pc") view=PcPage />
-                    <Route path=path!("strata") view=StrataPage />
-                    <Route path=path!("strata/output") view=StrataOutputPage />
+                    <ParentRoute path=path!("strata") view=StrataArea>
+                        <Route path=path!("") view=ModelsTab />
+                        <Route path=path!("output") view=OutputTab />
+                        <Route path=path!("version") view=VersionTab />
+                        <Route path=path!("connection") view=ConnectionTab />
+                    </ParentRoute>
                     <Route path=path!("access") view=AccessPage />
                     <Route path=path!("system") view=SystemPage />
                 </ParentRoute>

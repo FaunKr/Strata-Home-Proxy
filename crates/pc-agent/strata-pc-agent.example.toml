@@ -33,8 +33,9 @@ auto_start = true
 
 # Strata vor dem Standby beenden und nach dem Aufwachen neu starten. Das
 # Aufwachen dauert dann 1-3 min statt ca. 12 s, dafür startet die Grafikkarte
-# sauber. Einschalten, wenn der PC bei der ersten Anfrage nach dem Standby hängt.
-fresh_strata_after_standby = false
+# sauber. Auf diesem PC nötig: mit der RX 6800 XT hängt sonst die erste
+# Anfrage nach dem Standby (getestet am 18.10.2026).
+fresh_strata_after_standby = true
 
 # Antwortet Strata so lange nicht auf /health, wird es neu gestartet.
 restart_after_secs = 60

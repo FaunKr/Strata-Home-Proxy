@@ -40,4 +40,8 @@ Der Dienst schreibt nach `%LOCALAPPDATA%\StrataHome\strata-pc-agent.log`.
   er Maus und Tastatur und kann Strata in einem normalen Fenster starten.
   Nach einem Neustart muss sich daher jemand anmelden (oder die automatische
   Anmeldung von Windows ist eingerichtet).
+- Mit der RX 6800 XT hängt die erste Anfrage nach dem Standby, wenn Strata
+  geladen bleibt; nach einem Neustart von Strata klappt sie. Darum steht
+  `fresh_strata_after_standby = true` in der Vorlage: Strata wird vor dem
+  Standby beendet und danach neu gestartet. Aufwachen dauert so 1–3 min.
 - Ein Strata, das du selbst gestartet hast, bleibt in Ruhe, solange es antwortet.

@@ -134,6 +134,10 @@ Jedes installierte Modell sagt mit `speed_projection`, ob seine Konfiguration
 einen Steuervektor lädt (`--control-vector-scaled`, Stratas oder ein eigener).
 Ein älterer PC-Dienst lässt das Feld weg.
 
+`context` ist der Wert von `--max-context` in seiner Konfiguration (Tokens),
+`null`, wenn das Flag fehlt oder sein Wert keine Zahl ist. Ein älterer
+PC-Dienst lässt das Feld weg.
+
 ### `POST /strata/jobs`
 
 Startet einen Vorgang, Antwort `202` mit dem Vorgang. `400 {"reason": …}`
@@ -150,6 +154,7 @@ geht (Gaming an, ein Vorgang läuft, zu wenig Platz, aktives Modell löschen).
 | `benchmark` | – | `BENCH.bat --config <aktives Modell>`, behält Tokens/s mit Modell und Datum |
 | `set_key` | `api_key` | trägt den Key in alle Modell-Konfigurationen ein und startet Strata neu |
 | `set_speed_projection` | `model`, `on` | schaltet die Speed-Projection in der Konfiguration dieses Modells ein oder aus, ohne Setup; beim aktiven Modell wartet er, bis Strata keine Anfrage bearbeitet, und startet es neu |
+| `set_context` | `model`, `context` | setzt den Kontext in der Konfiguration dieses Modells, ohne Setup; beim aktiven Modell wartet er, bis Strata keine Anfrage bearbeitet, und startet es neu |
 
 Den Strata-Key erzeugt der Proxy. Er gilt erst, wenn der Vorgang fertig ist
 (auch über einen Neustart des Proxys); scheitert er, bleibt der alte. In der
@@ -169,6 +174,23 @@ Familien als Qwen und Coder sind ein `400`, ein Modell aus dem Katalog, das
 nicht installiert ist, wie bei `activate` ein `409`. Die Änderungszeit der
 Konfiguration bleibt, denn ohne eigenes Startskript startet Strata die
 zuletzt geänderte.
+
+`set_context` setzt nur den Wert von `--max-context` in `args` (fehlt das
+Flag, hängt er es an) und nimmt `--rope-scaling` und `--rope-scale` mit ihren
+Werten heraus. Er nimmt nur Kontexte aus dem Katalog bis 262144, der
+trainierten Länge: darüber braucht das Modell Rope-Scaling, das nur Setup
+einrichtet (`400`). Was Setup aus dem alten Kontext abgeleitet hat
+(KV-Streaming mit `--kv-resident`, `--kv`, parallele Slots, Kalibrierung),
+bleibt. Ein Modell aus dem Katalog, das nicht installiert ist, ist ein
+`409`. Die Änderungszeit bleibt wie bei `set_speed_projection`.
+
+Beim aktiven Modell wartet der Vorgang nach dem Neustart, bis Strata auf
+`/health` antwortet. Endet Strata vorher oder antwortet es nicht innerhalb
+von `context_start_secs` (Standard 600), schreibt er die alten `args` zurück,
+startet Strata damit neu und scheitert; die letzten Zeilen der
+Strata-Ausgabe stehen dann in `lines` des Vorgangs. Wird das Warten
+abgebrochen, kommen die alten `args` ebenso zurück. Im Gaming-Modus startet
+Strata nicht neu, und es wird nicht gewartet.
 
 ### `GET /strata/job`
 

@@ -72,6 +72,7 @@ Quellen: `setup.py`, `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_
   - `<data>/models/<ID>` (GGUF-Dateien, auch `.part`) und `<data>/packs/<id klein>` (Tokenizer)
   - `<data>/mtp` teilen sich alle Modelle.
 - **Modell-Konfiguration:** ein `strata-*.json` mit `exe` und einem Array `args` (so erkennt `find_configs` in `strata_bench.py` sie). `strata-*.shared-settings.json` ist keine. Strata schreibt sie mit `json.dumps(cfg, indent=1)`. Der Key steht in `api_key`.
+- **Kontext:** Setup schreibt `--context` als `--max-context <Tokens>` in `args` und liest ihn so zurück (`choices_from_config`). Über 262144 (der trainierten Länge) kommen `--rope-scaling yarn --rope-scale <Kontext / 262144>` dazu. Aus dem Kontext leitet Setup auch KV-Streaming (`--kv-resident`), parallele Slots und den Schlüssel der Kalibrierung ab; der Kontextwechsel des PC-Dienstes lässt diese, wie sie sind.
 - **Aktives Modell:** `run-<id>.bat` startet `serve/server.py`, das `strata.exe` startet und neu startet, wenn es stirbt; beenden also über den Ordner. Ohne eigenes Startskript startet `START-HERE.bat` die Konfiguration, die zuletzt benutzt wurde (die jüngste Änderungszeit, denn ein Start fasst sie an).
 - **Empfehlung von Setup:** ab 60 GB RAM `IQ3_XXS`, ab 44 GB `Q2_0`, ab 28 GB `coder-IQ1_M`. Kontext 64K bei 14–20 GB VRAM.
 - **Update** wie `UPDATE.bat`: `git pull --ff-only`, dann `START-HERE.bat --update` bei beendetem Strata (die Engine wird sonst nicht ersetzt). Modelldateien bleiben.

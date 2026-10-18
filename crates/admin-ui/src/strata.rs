@@ -58,6 +58,17 @@ impl Actions {
             speed_projection: Some(on),
         });
     }
+
+    fn set_context(&self, model: String, context: u32) {
+        self.start.dispatch(StartStrataJob {
+            kind: StrataJobKind::SetContext,
+            family: None,
+            size: None,
+            context: Some(context),
+            model: Some(model),
+            speed_projection: None,
+        });
+    }
 }
 
 /// What the tabs share: Strata as the PC service reported it, and the
@@ -585,7 +596,11 @@ fn Models(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl Int
                 .families
                 .iter()
                 .any(|f| f.speed_projection && m.family.as_deref() == Some(f.id.as_str()));
-            view! { <ModelRow model=m takes_projection actions blocked /> }
+            let contexts = info.contexts.clone();
+            let default_context = info.default_context;
+            view! {
+                <ModelRow model=m takes_projection contexts default_context actions blocked />
+            }
         })
         .collect_view();
     view! {
@@ -612,14 +627,34 @@ fn ModelRow(
     model: StrataModel,
     /// Its family offers the speed projection.
     takes_projection: bool,
+    /// The contexts setup offers, and its pick.
+    contexts: Vec<u32>,
+    default_context: u32,
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
     let size = bytes_gb(model.disk_bytes);
-    let meta = match &model.size {
+    // Only with word from the PC service on the context: an older one does not say.
+    let switch = model.context.map(|current| {
+        view! {
+            <ContextSwitch
+                id=model.id.clone()
+                active=model.active
+                current
+                contexts
+                default_context
+                actions
+                blocked
+            />
+        }
+    });
+    let mut meta = match &model.size {
         Some(quant) if *quant != model.id => format!("{quant} · {size}"),
         _ => size.clone(),
     };
+    if let Some(context) = model.context {
+        meta.push_str(&format!(" · {}K context", context / 1024));
+    }
     let buttons = (!model.active).then(|| {
         let activate = model.id.clone();
         let delete = model.id.clone();
@@ -725,7 +760,95 @@ fn ModelRow(
                 })}
             {projection}
             {buttons}
+            {switch}
         </li>
+    }
+}
+
+/// The longest context the switch offers: the model's trained length. Past
+/// it setup adds rope scaling, which only setup does.
+const MAX_SWITCHED_CONTEXT: u32 = 262_144;
+
+/// Picks another context for an installed model.
+#[component]
+fn ContextSwitch(
+    id: String,
+    /// Strata restarts with it: that is asked first.
+    active: bool,
+    current: u32,
+    contexts: Vec<u32>,
+    default_context: u32,
+    actions: Actions,
+    blocked: Signal<bool>,
+) -> impl IntoView {
+    let offered: Vec<u32> = contexts
+        .into_iter()
+        .filter(|&c| c <= MAX_SWITCHED_CONTEXT)
+        .collect();
+    let first = if offered.contains(&current) {
+        current
+    } else {
+        default_context
+    };
+    let choice = RwSignal::new(first);
+    let options = offered
+        .iter()
+        .map(|&c| {
+            let mut text = format!("{}K tokens", c / 1024);
+            match (c == current, c == default_context) {
+                (true, true) => text.push_str(" (current, recommended)"),
+                (true, false) => text.push_str(" (current)"),
+                (false, true) => text.push_str(" (recommended)"),
+                (false, false) => {}
+            }
+            view! {
+                <option value=c.to_string() selected=move || choice.get() == c>
+                    {text}
+                </option>
+            }
+        })
+        .collect_view();
+    let picker = format!("{id}-new-context");
+    let confirm = expect_context::<Confirm>();
+    let change = move |_| {
+        let (id, context) = (id.clone(), choice.get());
+        if !active {
+            actions.set_context(id, context);
+            return;
+        }
+        let question = Question {
+            title: format!("Change the context of {id} to {}K tokens?", context / 1024),
+            text: "Strata restarts with it once no request is running. Requests wait meanwhile."
+                .into(),
+            confirm: "Change context",
+            danger: false,
+        };
+        confirm.ask(question, move || actions.set_context(id.clone(), context));
+    };
+    view! {
+        <div class="row-form">
+            <label for=picker.clone() class="visually-hidden">
+                "New context"
+            </label>
+            <select
+                id=picker
+                on:change=move |ev| {
+                    if let Ok(c) = event_target_value(&ev).parse() {
+                        choice.set(c);
+                    }
+                }
+            >
+                {options}
+            </select>
+            <button
+                type="button"
+                class="secondary"
+                disabled=move || blocked.get() || choice.get() == current
+                on:click=change
+            >
+                "Change context"
+            </button>
+        </div>
     }
 }
 

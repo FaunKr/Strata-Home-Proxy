@@ -56,6 +56,10 @@ pub struct Config {
     /// After a start, give Strata this long to load the model before checking again.
     #[serde(default = "default_load")]
     pub load_time_secs: u64,
+    /// After a context switch the active model must answer within this
+    /// long, else its old context comes back.
+    #[serde(default = "default_context_start")]
+    pub context_start_secs: u64,
     /// Folder for the gaming flag and the log; next to the program by default.
     #[serde(default)]
     pub state_dir: Option<PathBuf>,
@@ -96,6 +100,9 @@ fn default_unhealthy() -> u64 {
 }
 fn default_load() -> u64 {
     240
+}
+fn default_context_start() -> u64 {
+    600
 }
 fn default_strata_repo() -> String {
     "https://github.com/Niko1221/Strata.git".into()

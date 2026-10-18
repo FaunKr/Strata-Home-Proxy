@@ -36,6 +36,13 @@ const KEPT_LINES: usize = 20;
 /// Strata's port and network access, as the proxy expects them.
 const STRATA_PORT: &str = "8080";
 const STRATA_HOST: &str = "0.0.0.0";
+/// The engine flag setup writes the context with.
+const CONTEXT_FLAG: &str = "--max-context";
+/// The flags setup adds past the trained context, each with one value.
+const ROPE_FLAGS: [&str; 2] = ["--rope-scaling", "--rope-scale"];
+/// The longest context the switch takes: the model's trained length, which
+/// needs no rope scaling.
+const MAX_SWITCHED_CONTEXT: u32 = 262_144;
 /// The engine flag setup loads the speed projection's control vector with.
 const PROJECTION_VECTOR_FLAG: &str = "--control-vector-scaled";
 /// The flags setup writes after it, with their values.
@@ -62,6 +69,7 @@ pub enum JobKind {
     Benchmark,
     SetKey,
     SetSpeedProjection,
+    SetContext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +156,10 @@ pub enum JobRequest {
         model: String,
         on: bool,
     },
+    SetContext {
+        model: String,
+        context: u32,
+    },
 }
 
 /// Why a job was not started: a value outside the catalog (400), or a state
@@ -189,6 +201,10 @@ enum Plan {
         id: String,
         on: bool,
     },
+    SetContext {
+        id: String,
+        context: u32,
+    },
 }
 
 impl Plan {
@@ -202,6 +218,7 @@ impl Plan {
             Self::Benchmark { .. } => JobKind::Benchmark,
             Self::SetKey { .. } => JobKind::SetKey,
             Self::SetSpeedProjection { .. } => JobKind::SetSpeedProjection,
+            Self::SetContext { .. } => JobKind::SetContext,
         }
     }
 
@@ -211,7 +228,8 @@ impl Plan {
             Self::Activate { id }
             | Self::Delete { id }
             | Self::Benchmark { id }
-            | Self::SetSpeedProjection { id, .. } => Some(id.clone()),
+            | Self::SetSpeedProjection { id, .. }
+            | Self::SetContext { id, .. } => Some(id.clone()),
             Self::Update | Self::SetKey { .. } => None,
         }
     }
@@ -474,6 +492,16 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             check_speed_projection(size, true)?;
             Ok(Plan::SetSpeedProjection { id, on })
         }
+        JobRequest::SetContext { model, context: c } => {
+            let context = context(c)?;
+            if context > MAX_SWITCHED_CONTEXT {
+                return Err(Refusal::BadRequest(format!(
+                    "Kontextlänge {context} braucht Rope-Scaling und geht nur über Setup"
+                )));
+            }
+            let id = installed_model(dir, &model)?;
+            Ok(Plan::SetContext { id, context })
+        }
     }
 }
 
@@ -592,6 +620,7 @@ async fn run(agent: &Arc<Agent>, plan: Plan) -> Outcome {
         Plan::Benchmark { id } => benchmark(agent, &id).await,
         Plan::SetKey { api_key } => set_key(agent, api_key).await,
         Plan::SetSpeedProjection { id, on } => set_speed_projection(agent, &id, on).await,
+        Plan::SetContext { id, context } => set_context(agent, &id, context).await,
     };
     match result {
         Ok(result) => Outcome::Done(result),
@@ -956,9 +985,6 @@ async fn set_speed_projection(
 }
 
 fn write_speed_projection(dir: &Path, id: &str, on: bool) -> Result<(), String> {
-    let path = config_path(dir, id);
-    let (_, mut cfg) = read_config(&path)?
-        .ok_or_else(|| format!("{} ist keine Modell-Konfiguration", path.display()))?;
     let vector: PathBuf = PROJECTION_VECTOR
         .iter()
         .fold(dir.to_path_buf(), |p, part| p.join(part));
@@ -968,16 +994,134 @@ fn write_speed_projection(dir: &Path, id: &str, on: bool) -> Result<(), String> 
             vector.display()
         ));
     }
-    let args = cfg["args"].as_array_mut().expect("read_config checks args");
-    without_speed_projection(args);
-    if on {
-        args.push(PROJECTION_VECTOR_FLAG.into());
-        args.push(format!("{}:1.0", vector.display()).into());
-        for (flag, values) in PROJECTION_FLAGS {
-            args.push(flag.into());
-            args.extend(values.iter().map(|&v| serde_json::Value::from(v)));
+    rewrite_args(dir, id, |args| {
+        without_speed_projection(args);
+        if on {
+            args.push(PROJECTION_VECTOR_FLAG.into());
+            args.push(format!("{}:1.0", vector.display()).into());
+            for (flag, values) in PROJECTION_FLAGS {
+                args.push(flag.into());
+                args.extend(values.iter().map(|&v| serde_json::Value::from(v)));
+            }
+        }
+    })
+    .map(drop)
+}
+
+/// Sets a model's context in its config, without setup; the settings setup
+/// derived from the old one stay. The active model restarts with it once
+/// Strata has no request at work; if it does not come up, its old args come
+/// back and Strata starts with those.
+async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Option<String>, Step> {
+    set_step(agent, "Konfiguration ändern");
+    let old = change_args(agent, id, move |args| with_context(args, context)).await?;
+    if active_model(agent).as_deref() != Some(id) {
+        return Ok(None);
+    }
+    wait_idle(agent).await?;
+    set_step(agent, "Strata neu starten");
+    agent.stop_strata();
+    restart_strata(agent).await;
+    let started = if agent.gaming() {
+        Ok(true)
+    } else {
+        started_with_new_args(agent).await
+    };
+    if let Ok(true) = started {
+        return Ok(None);
+    }
+    let output = agent.output.last_lines(KEPT_LINES);
+    set_step(agent, "Alten Kontext zurückholen");
+    change_args(agent, id, move |args| *args = old).await?;
+    agent.stop_strata();
+    restart_strata(agent).await;
+    if let Some(job) = agent.jobs.inner.lock().unwrap().current.as_mut() {
+        job.lines = output;
+    }
+    // A cancelled wait also leaves the old context, not an unproven one.
+    started?;
+    Err(Step::Failed(format!(
+        "Strata ist mit {}K Kontext nicht angelaufen; der alte Kontext gilt wieder",
+        context / 1024
+    )))
+}
+
+/// `rewrite_args` for a job.
+async fn change_args(
+    agent: &Agent,
+    id: &str,
+    change: impl FnOnce(&mut Vec<serde_json::Value>) + Send + 'static,
+) -> Result<Vec<serde_json::Value>, Step> {
+    let dir = agent.cfg.strata_dir.clone();
+    let model = id.to_string();
+    tokio::task::spawn_blocking(move || rewrite_args(&dir, &model, change))
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))?
+        .map_err(Step::Failed)
+}
+
+/// Whether the restarted Strata answers: `false` once it has ended or not
+/// answered within `context_start_secs`.
+async fn started_with_new_args(agent: &Agent) -> Result<bool, Step> {
+    set_step(agent, "Warten, bis Strata bereit ist");
+    let limit = Duration::from_secs(agent.cfg.context_start_secs);
+    let started = Instant::now();
+    loop {
+        if agent.jobs.inner.lock().unwrap().cancelled {
+            return Err(Step::Cancelled);
+        }
+        if agent.strata_healthy().await {
+            return Ok(true);
+        }
+        if !agent.output.reading() || started.elapsed() >= limit {
+            return Ok(false);
+        }
+        tokio::time::sleep(POLL).await;
+    }
+}
+
+/// `args` with this `--max-context`, in its place, and without the rope
+/// scaling setup adds past the trained length: every context the switch
+/// takes is within it.
+fn with_context(args: &mut Vec<serde_json::Value>, context: u32) {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut set = false;
+    let mut drop_value = false;
+    for arg in args.drain(..) {
+        if std::mem::take(&mut drop_value) {
+            continue;
+        }
+        if arg.as_str().is_some_and(|a| ROPE_FLAGS.contains(&a)) {
+            drop_value = true;
+        } else if arg == CONTEXT_FLAG {
+            drop_value = true;
+            if !set {
+                kept.extend([arg, context.to_string().into()]);
+                set = true;
+            }
+        } else {
+            kept.push(arg);
         }
     }
+    if !set {
+        kept.extend([CONTEXT_FLAG.into(), context.to_string().into()]);
+    }
+    *args = kept;
+}
+
+/// Changes `args` in a model's config; everything else in it stays. Gives
+/// the args from before.
+fn rewrite_args(
+    dir: &Path,
+    id: &str,
+    change: impl FnOnce(&mut Vec<serde_json::Value>),
+) -> Result<Vec<serde_json::Value>, String> {
+    let path = config_path(dir, id);
+    let (_, mut cfg) = read_config(&path)?
+        .ok_or_else(|| format!("{} ist keine Modell-Konfiguration", path.display()))?;
+    let args = cfg["args"].as_array_mut().expect("read_config checks args");
+    let before = args.clone();
+    change(args);
     // Without its own start script Strata starts the config touched last:
     // the change keeps the time, so the same model stays active.
     let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
@@ -992,7 +1136,7 @@ fn write_speed_projection(dir: &Path, id: &str, on: bool) -> Result<(), String> 
             tracing::warn!("Änderungszeit von {} nicht behalten: {e}", path.display());
         }
     }
-    Ok(())
+    Ok(before)
 }
 
 /// Takes setup's speed projection flags out of `args`, each with its values,
@@ -1485,6 +1629,7 @@ fn kind_text(kind: JobKind) -> &'static str {
         JobKind::Benchmark => "Benchmark",
         JobKind::SetKey => "Strata-Key setzen",
         JobKind::SetSpeedProjection => "Speed-Projection umschalten",
+        JobKind::SetContext => "Kontext ändern",
     }
 }
 
@@ -1533,6 +1678,9 @@ pub struct InstalledModel {
     pub active: bool,
     /// Its config loads a control vector, Strata's or another one.
     pub speed_projection: bool,
+    /// The context it starts with (`--max-context`); `None` if its config
+    /// does not say.
+    pub context: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1562,6 +1710,7 @@ pub fn view(agent: &Agent) -> StrataView {
                 disk_bytes: model_paths(cfg, &id)[..2].iter().map(|p| dir_size(p)).sum(),
                 active: active.as_deref() == Some(id.as_str()),
                 speed_projection: has_speed_projection(dir, &id),
+                context: model_context(dir, &id),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,
@@ -1619,6 +1768,14 @@ fn has_speed_projection(dir: &Path, id: &str) -> bool {
                 .as_array()
                 .is_some_and(|a| a.iter().any(|v| v == PROJECTION_VECTOR_FLAG))
         })
+}
+
+/// The value of `--max-context` in a model's config.
+fn model_context(dir: &Path, id: &str) -> Option<u32> {
+    let (_, cfg) = read_config(&config_path(dir, id)).ok().flatten()?;
+    let args = cfg["args"].as_array()?;
+    let at = args.iter().position(|v| v == CONTEXT_FLAG)?;
+    args.get(at + 1)?.as_str()?.parse().ok()
 }
 
 fn dir_size(dir: &Path) -> u64 {

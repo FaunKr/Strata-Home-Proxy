@@ -15,6 +15,7 @@ use crate::{
     },
     labels::label,
     overview::OverviewPage,
+    strata::StrataPage,
 };
 
 /// The HTML page around the app.
@@ -81,6 +82,10 @@ pub fn App() -> impl IntoView {
                     <Route path=path!("/admin") view=|| view! { <Protected><OverviewPage /></Protected> } />
                     <Route path=path!("/admin/") view=|| view! { <Protected><OverviewPage /></Protected> } />
                     <Route
+                        path=path!("/admin/strata")
+                        view=|| view! { <Protected><StrataPage /></Protected> }
+                    />
+                    <Route
                         path=path!("/admin/settings")
                         view=|| view! { <Protected><SettingsPage /></Protected> }
                     />
@@ -104,6 +109,7 @@ fn Nav() -> impl IntoView {
     view! {
         <nav>
             <A href="/admin/">"Übersicht"</A>
+            <A href="/admin/strata">"Strata"</A>
             <A href="/admin/settings">"Einstellungen"</A>
             <A href="/admin/api-keys">"API-Keys"</A>
             <A href="/admin/password">"Passwort"</A>

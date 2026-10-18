@@ -26,7 +26,9 @@ use serde_json::json;
 
 use crate::{
     config::{Config, format_mac, parse_mac},
+    managed::Managed,
     platform::Platform,
+    strata::{self, JobRequest, Jobs, Refusal, UpdateCheck},
 };
 
 /// Delay between answering a sleep request and going to standby, so the
@@ -65,6 +67,9 @@ pub struct Agent {
     gaming: AtomicBool,
     watchdog: Mutex<Watchdog>,
     macs: Mutex<HashMap<IpAddr, CachedMac>>,
+    managed: Mutex<Managed>,
+    pub(crate) jobs: Jobs,
+    pub(crate) updates: UpdateCheck,
 }
 
 struct Watchdog {
@@ -81,6 +86,9 @@ pub struct Status {
     /// wake this PC without it being typed in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
+    /// A Strata job (setup, download, update, benchmark) is running.
+    #[serde(default)]
+    pub strata_job: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,6 +110,8 @@ impl Agent {
             .build()
             .expect("HTTP client");
         let gaming = gaming_flag(&cfg).exists();
+        let managed = Managed::load(&cfg.state_dir());
+        let jobs = Jobs::load(&cfg.state_dir());
         Arc::new(Self {
             cfg,
             platform,
@@ -112,7 +122,25 @@ impl Agent {
                 last_start: None,
             }),
             macs: Mutex::new(HashMap::new()),
+            managed: Mutex::new(managed),
+            jobs,
+            updates: UpdateCheck::default(),
         })
+    }
+
+    pub(crate) fn platform(&self) -> &dyn Platform {
+        self.platform.as_ref()
+    }
+
+    /// Replaces the managed values and keeps them for the next start.
+    pub fn set_managed(&self, managed: Managed) -> anyhow::Result<()> {
+        managed.save(&self.cfg.state_dir())?;
+        *self.managed.lock().unwrap() = managed;
+        Ok(())
+    }
+
+    pub fn managed(&self) -> Managed {
+        self.managed.lock().unwrap().clone()
     }
 
     pub fn gaming(&self) -> bool {
@@ -121,19 +149,19 @@ impl Agent {
 
     fn strata_get(&self, path: &str) -> reqwest::RequestBuilder {
         let req = self.http.get(format!("{}{path}", self.cfg.strata_url));
-        match &self.cfg.strata_api_key {
+        match self.managed().api_key(&self.cfg) {
             Some(key) => req.bearer_auth(key),
             None => req,
         }
     }
 
-    async fn strata_healthy(&self) -> bool {
+    pub(crate) async fn strata_healthy(&self) -> bool {
         matches!(self.strata_get("/health").send().await, Ok(r) if r.status().is_success())
     }
 
     /// True if Strata reports a slot at work. Strata builds without `/slots`
     /// count as idle; the NAS proxy also tracks open answers itself.
-    async fn strata_busy(&self) -> bool {
+    pub(crate) async fn strata_busy(&self) -> bool {
         let Ok(resp) = self.strata_get("/slots").send().await else {
             return false;
         };
@@ -149,6 +177,7 @@ impl Agent {
             strata_running: self.strata_healthy().await,
             user_idle_secs: self.platform.user_idle().as_secs(),
             mac: None,
+            strata_job: self.jobs.running(),
         }
     }
 
@@ -187,6 +216,9 @@ impl Agent {
         if self.gaming() {
             return Err("Gaming-Modus ist an".into());
         }
+        if self.jobs.running() {
+            return Err("Strata-Einrichtung läuft".into());
+        }
         let idle = self.platform.user_idle();
         if idle < self.cfg.user_idle() {
             return Err(format!(
@@ -200,20 +232,29 @@ impl Agent {
         Ok(())
     }
 
-    fn start_strata(&self) {
+    /// Strata was started so recently that it may still be loading.
+    pub(crate) fn strata_loading(&self) -> bool {
+        self.watchdog
+            .lock()
+            .unwrap()
+            .last_start
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(self.cfg.load_time_secs))
+    }
+
+    pub(crate) fn start_strata(&self) {
         self.watchdog.lock().unwrap().last_start = Some(Instant::now());
         tracing::info!("Strata wird gestartet");
-        if let Err(e) = self
-            .platform
-            .start_strata(&self.cfg.strata_start, &self.cfg.strata_args)
-        {
+        let managed = self.managed();
+        let (program, args) = managed.start(&self.cfg);
+        if let Err(e) = self.platform.start_strata(program, args) {
             tracing::error!("Strata-Start fehlgeschlagen: {e}");
         }
     }
 
-    fn stop_strata(&self) {
+    pub(crate) fn stop_strata(&self) {
         tracing::info!("Strata wird beendet");
-        if let Err(e) = self.platform.stop_strata(&self.cfg.strata_processes) {
+        let managed = self.managed();
+        if let Err(e) = self.platform.stop_strata(managed.processes(&self.cfg)) {
             tracing::error!("Strata-Ende fehlgeschlagen: {e}");
         }
     }
@@ -236,6 +277,10 @@ impl Agent {
         }
         tracing::info!(enabled, "Gaming-Modus");
         if enabled {
+            // Downloaded parts stay; the same job continues there later.
+            if self.jobs.cancel() {
+                tracing::info!("Gaming an: Strata-Vorgang abgebrochen");
+            }
             self.stop_strata();
         } else {
             self.start_strata();
@@ -246,7 +291,8 @@ impl Agent {
     /// One watchdog pass: starts Strata when it is missing and restarts it
     /// when it stopped answering, e.g. after standby upset the graphics driver.
     pub async fn watchdog_tick(&self) {
-        if self.gaming() || !self.cfg.auto_start {
+        // A job sets Strata up or switches it; starting it now would get in the way.
+        if self.gaming() || !self.cfg.auto_start || self.jobs.running() {
             return;
         }
         let healthy = self.strata_healthy().await;
@@ -360,6 +406,42 @@ async fn gaming(State(agent): State<Arc<Agent>>, Json(req): Json<GamingRequest>)
     Json(agent.status().await)
 }
 
+async fn strata_view(State(agent): State<Arc<Agent>>) -> Json<strata::StrataView> {
+    strata::check_for_update(&agent);
+    let view = tokio::task::spawn_blocking(move || strata::view(&agent))
+        .await
+        .expect("view task");
+    Json(view)
+}
+
+async fn strata_job(State(agent): State<Arc<Agent>>) -> Json<Option<strata::Job>> {
+    Json(agent.jobs.current())
+}
+
+async fn start_job(State(agent): State<Arc<Agent>>, Json(request): Json<JobRequest>) -> Response {
+    match strata::start(&agent, request) {
+        Ok(job) => (StatusCode::ACCEPTED, Json(job)).into_response(),
+        Err(Refusal::BadRequest(reason)) => {
+            (StatusCode::BAD_REQUEST, Json(json!({"reason": reason}))).into_response()
+        }
+        Err(Refusal::Conflict(reason)) => {
+            (StatusCode::CONFLICT, Json(json!({"reason": reason}))).into_response()
+        }
+    }
+}
+
+async fn cancel_job(State(agent): State<Arc<Agent>>) -> Response {
+    if agent.jobs.cancel() {
+        (StatusCode::ACCEPTED, Json(agent.jobs.current())).into_response()
+    } else {
+        (
+            StatusCode::CONFLICT,
+            Json(json!({"reason": "Es läuft kein Vorgang"})),
+        )
+            .into_response()
+    }
+}
+
 /// Token check, plus the client list; localhost always passes the list.
 async fn guard(State(agent): State<Arc<Agent>>, req: Request, next: Next) -> Response {
     let peer = req
@@ -389,6 +471,10 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .route("/status", get(status))
         .route("/sleep", post(sleep))
         .route("/gaming", post(gaming))
+        .route("/strata", get(strata_view))
+        .route("/strata/jobs", post(start_job))
+        .route("/strata/job", get(strata_job))
+        .route("/strata/job/cancel", post(cancel_job))
         .layer(middleware::from_fn_with_state(agent.clone(), guard))
         .with_state(agent)
 }

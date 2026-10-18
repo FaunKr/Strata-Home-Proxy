@@ -8,7 +8,7 @@ use crate::{
         KeepAwake, KeepAwakeChoice, Overview, PcView, SetGaming, SleepNow, SleepView, StrataView,
         Wake, error_text,
     },
-    labels::{NO_MAC, event_label},
+    labels::{NO_MAC, event_label, strata_job_label},
 };
 
 /// The buttons' actions; made once per page, so a result stays visible
@@ -23,27 +23,35 @@ struct Actions {
 
 /// The latest overview, and seconds counted since it arrived.
 #[derive(Clone, Copy)]
-struct Live {
-    overview: RwSignal<Option<Overview>>,
+pub(crate) struct Live {
+    pub overview: RwSignal<Option<Overview>>,
     since: RwSignal<u64>,
-    lost: RwSignal<bool>,
+    pub lost: RwSignal<bool>,
+}
+
+impl Live {
+    /// Follows the overview stream while the page that calls it is shown.
+    pub fn follow() -> Self {
+        let live = Self {
+            overview: RwSignal::new(None),
+            since: RwSignal::new(0),
+            lost: RwSignal::new(false),
+        };
+        #[cfg(feature = "hydrate")]
+        client::connect(live);
+        live
+    }
 }
 
 #[component]
 pub fn OverviewPage() -> impl IntoView {
-    let live = Live {
-        overview: RwSignal::new(None),
-        since: RwSignal::new(0),
-        lost: RwSignal::new(false),
-    };
+    let live = Live::follow();
     let actions = Actions {
         wake: ServerAction::new(),
         sleep: ServerAction::new(),
         gaming: ServerAction::new(),
         keep: ServerAction::new(),
     };
-    #[cfg(feature = "hydrate")]
-    client::connect(live);
     view! {
         <h1>"Übersicht"</h1>
         {move || match live.overview.get() {
@@ -73,6 +81,23 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
             "Kein PC-Dienst eingerichtet: kein Gaming-Modus und kein automatisches Schlafen.",
         ),
     ];
+    let no_key = (!overview.api_key_exists).then(|| {
+        view! {
+            <p class="warning" role="status">
+                "Noch kein API-Key angelegt: jeder Client bekommt 401. "
+                <a href="/admin/api-keys">"Key anlegen"</a>
+            </p>
+        }
+    });
+    let job = overview.strata_job.clone().map(|j| {
+        let percent = j.percent.map(|p| format!(", {p} %")).unwrap_or_default();
+        view! {
+            <p class="warning" role="status">
+                {format!("Strata-Vorgang läuft: {}{percent}. ", strata_job_label(j.kind))}
+                <a href="/admin/strata">"Ansehen"</a>
+            </p>
+        }
+    });
     let last_request = overview
         .last_request
         .clone()
@@ -85,6 +110,8 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
             .flatten()
             .map(|w| view! { <p class="warning">{w}</p> })
             .collect_view()}
+        {no_key}
+        {job}
         <section class="panel cards">
             <div>
                 <h2>"PC"</h2>

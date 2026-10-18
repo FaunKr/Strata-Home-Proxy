@@ -24,7 +24,10 @@ use leptos_axum::{
 };
 
 use crate::{
-    api::{ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, Session, SettingsView},
+    api::{
+        ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, Session, SettingsView, StrataJobForm,
+        StrataPage,
+    },
     app::{App, shell},
 };
 
@@ -67,6 +70,12 @@ pub trait Backend: Send + Sync + 'static {
     fn create_api_key(&self, name: &str) -> Result<CreatedKey, String>;
     /// Removes a client key; a message for the user if there is none.
     fn revoke_api_key(&self, name: &str, prefix: &str) -> Result<(), String>;
+    /// Strata on the PC, without waking it.
+    fn strata(&self) -> BoxFuture<'static, StrataPage>;
+    /// Starts a Strata job, waking the PC first; the PC service's reason if
+    /// it refuses.
+    fn start_strata_job(&self, form: StrataJobForm) -> BoxFuture<'static, Result<(), String>>;
+    fn cancel_strata_job(&self) -> BoxFuture<'static, Result<(), String>>;
 }
 
 pub type SharedBackend = Arc<dyn Backend>;

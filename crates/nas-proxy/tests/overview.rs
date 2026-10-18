@@ -597,3 +597,24 @@ async fn gaming_on_without_strata_address_says_why() {
     assert!(resp.text().await.unwrap().contains("Strata-Adresse"));
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
 }
+
+// --- API keys (#27) ---
+
+#[tokio::test]
+async fn warns_while_no_api_key_exists() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    live.until("Key vorhanden", |v| v["api_key_exists"] == true)
+        .await;
+    let prefix = &s.key[..12];
+    let resp = b
+        .call("revoke-api-key", &[("name", "Test"), ("prefix", prefix)])
+        .await;
+    assert_eq!(resp.status(), 200);
+    live.until("kein Key", |v| v["api_key_exists"] == false)
+        .await;
+    b.call("create-api-key", &[("name", "Laptop")]).await;
+    live.until("wieder ein Key", |v| v["api_key_exists"] == true)
+        .await;
+}

@@ -2,13 +2,24 @@
 //! mode and restarts Strata when it stops answering.
 
 pub mod agent;
+pub mod catalog;
+pub mod command;
 pub mod config;
+pub mod managed;
 pub mod platform;
+pub mod strata;
 
 use std::{sync::Arc, time::Duration};
 
 pub use agent::{Agent, Peer, Status};
 pub use config::Config;
+
+/// Writes via a temporary file, so a crash never leaves half a file behind.
+pub(crate) fn write_replacing(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path))
+}
 
 const WATCHDOG_EVERY: Duration = Duration::from_secs(5);
 

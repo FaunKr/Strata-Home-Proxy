@@ -59,6 +59,16 @@ pub struct Config {
     /// card the NAS connects to (`AA:BB:CC:DD:EE:FF` or `AA-BB-…`).
     #[serde(default)]
     pub mac: Option<String>,
+    /// Where Strata is fetched from when the web UI sets it up. Fixed here,
+    /// never taken from a request.
+    #[serde(default = "default_strata_repo")]
+    pub strata_repo: String,
+    /// Strata's folder for a setup from the web UI.
+    #[serde(default = "default_strata_dir")]
+    pub strata_dir: PathBuf,
+    /// Where the setup puts the model files (60–190 GB each).
+    #[serde(default = "default_strata_data_dir")]
+    pub strata_data_dir: PathBuf,
 }
 
 fn default_listen() -> SocketAddr {
@@ -78,6 +88,15 @@ fn default_unhealthy() -> u64 {
 }
 fn default_load() -> u64 {
     240
+}
+fn default_strata_repo() -> String {
+    "https://github.com/Niko1221/Strata.git".into()
+}
+fn default_strata_dir() -> PathBuf {
+    PathBuf::from(r"C:\Strata")
+}
+fn default_strata_data_dir() -> PathBuf {
+    PathBuf::from(r"C:\Strata-data")
 }
 
 impl Config {

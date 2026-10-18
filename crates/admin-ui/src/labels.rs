@@ -1,6 +1,6 @@
 //! How the pages name and explain things.
 
-use crate::api::EventKind;
+use crate::api::{EventKind, StrataJobKind};
 
 /// Messages that the proxy and the overview both show.
 pub const NOT_CONFIGURED: &str = "Die Strata-Adresse fehlt, der Proxy ist nicht eingerichtet.";
@@ -111,5 +111,23 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::GamingOff => "Gaming aus",
         EventKind::KeepAwakeSet => "Wach halten",
         EventKind::KeepAwakeEnded => "Wach halten beendet",
+        EventKind::StrataJobStarted => "Strata-Vorgang gestartet",
+        EventKind::StrataJobDone => "Strata-Vorgang fertig",
+        EventKind::StrataJobFailed => "Strata-Vorgang fehlgeschlagen",
+        EventKind::StrataJobCancelled => "Strata-Vorgang abgebrochen",
+        EventKind::StrataKeyChanged => "Strata-Key gewechselt",
+    }
+}
+
+/// What a Strata job does, for the history and the page.
+pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
+    match kind {
+        StrataJobKind::Install => "Einrichtung",
+        StrataJobKind::AddModel => "Modell installieren",
+        StrataJobKind::Activate => "Modell aktivieren",
+        StrataJobKind::Delete => "Modell löschen",
+        StrataJobKind::Update => "Update",
+        StrataJobKind::Benchmark => "Benchmark",
+        StrataJobKind::SetKey => "Strata-Key wechseln",
     }
 }

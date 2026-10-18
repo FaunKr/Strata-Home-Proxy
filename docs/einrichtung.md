@@ -67,11 +67,19 @@ Klappt es nicht: BIOS-Punkte aus Schritt 1 und *Energy Efficient Ethernet* prüf
 
 ## 5. Strata
 
-- [ ] `START-HERE.bat` läuft durch, das Modell lädt auf der RX 6800 XT
-- [ ] `BENCH.bat` liefert Werte (Tokens/s notieren): ____
-- [ ] Strata läuft mit `--host 0.0.0.0`, Port **8080** und **API-Key**
+Einfacher Weg, sobald Proxy und PC-Dienst laufen: Weboberfläche, Seite
+**Strata**. Der Knopf weckt den PC, holt Strata, richtet es mit dem
+empfohlenen Modell ein und trägt den Strata-Key in Strata und Proxy ein.
+Die Empfehlung folgt Stratas eigenem Setup: ab 60 GB RAM `IQ3_XXS`, ab 44 GB
+`Q2_0`, ab 28 GB `coder-IQ1_M`; Kontext 64K für eine 16-GB-Karte.
+
+- [ ] Strata-Seite: „Strata einrichten“ läuft durch, das Modell lädt auf der RX 6800 XT
+- [ ] „Benchmark starten“ liefert Tokens/s: ____
 - [ ] `curl http://<PC-IP>:8080/health` vom NAS aus liefert `200`
 - [ ] Standby-Test: PC schlafen legen, wecken, dann noch einmal `/health` abfragen. Antwortet Strata danach nicht mehr, notieren (dafür ist der Watchdog im PC-Dienst gedacht)
+
+Von Hand geht es weiter so: `START-HERE.bat` mit `--host 0.0.0.0`, Port
+**8080** und **API-Key**, den Key dann in den Proxy-Einstellungen eintragen.
 
 ## 6. Firewall auf dem PC
 

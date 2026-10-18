@@ -1,6 +1,8 @@
 # Coding Standards
 
 Regeln für das Review. Was ein Test oder Clippy schon prüft, steht hier nicht.
+Verhalten von Strata (Endpunkte, Auth, Metriken): `docs/strata-api.md`.
+Schon entschiedene Fragen: `docs/adr/`.
 
 ## Weboberfläche und Login
 
@@ -25,3 +27,7 @@ Regeln für das Review. Was ein Test oder Clippy schon prüft, steht hier nicht.
 - **Vorrang der Einstellungen:** vom PC gemeldete MAC, dann Wert von der
   Seite, dann Umgebungsvariable, dann Standardwert. Neue Einstellungen folgen
   derselben Reihenfolge und werden live über `AppState::cfg()` gelesen.
+- **Strata-Vorgänge führen nur feste Programme aus.** Der PC-Dienst nimmt
+  Werte nur aus `catalog.rs` und prüft Modell-IDs gegen den Katalog, bevor sie
+  in einen Pfad gehen. Der Strata-Key steht in keiner Antwort an die
+  Weboberfläche und in keinem gespeicherten Vorgang.

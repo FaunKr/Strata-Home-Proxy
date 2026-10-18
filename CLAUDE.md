@@ -4,6 +4,7 @@
 - Vor dem Push `scripts/check.sh`: dieselben Checks wie der CI-Job `test`.
 - Bevor du vorschlägst, einen PR zu mergen: `/code-review` über seinen Diff.
 - Neue Proxy-Tests nutzen das Gerüst mit simuliertem PC und Strata in `crates/nas-proxy/tests/common`.
+- Wackelnde oder hängende Tests: `scripts/repeat-test.sh` lässt eine Testdatei vielfach laufen und nennt, welcher hängt.
 
 ## Agent skills
 

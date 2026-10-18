@@ -54,7 +54,7 @@ Bevor irgendetwas anderes gebaut wird, muss das hier klappen:
    Strata muss noch nicht laufen. Per SSH auf dem NAS (MAC und Broadcast
    anpassen):
    ```sh
-   docker run --rm --network host -e STRATA_URL=http://unbenutzt \
+   docker run --rm --network host \
      -e PC_MAC=AA-BB-CC-DD-EE-FF -e WOL_ADDR=192.168.1.255:9 \
      ghcr.io/faunkr/strata-home-proxy:latest wake
    ```

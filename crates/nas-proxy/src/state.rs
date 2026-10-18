@@ -14,6 +14,7 @@ use serde::Serialize;
 
 use crate::{
     agent::{AgentClient, SleepAnswer},
+    auth::Auth,
     config::Config,
     events::{EventKind, EventLog},
     settings::Settings,
@@ -57,6 +58,8 @@ struct Inner {
 
 pub struct AppState {
     pub settings: Settings,
+    /// Password and sessions of the web UI.
+    pub auth: Auth,
     /// For forwarding; no overall timeout, since answers can take very long.
     pub upstream: Client,
     /// For `/health` and the PC service, rebuilt when `PROBE_TIMEOUT_MS` changes.
@@ -94,6 +97,7 @@ impl AppState {
             .build()
             .expect("HTTP client");
         Arc::new(Self {
+            auth: Auth::new(cfg.data_dir.clone(), cfg.ui_password.clone()),
             events: EventLog::new(cfg.data_dir.clone()),
             upstream,
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),

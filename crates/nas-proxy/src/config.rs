@@ -48,6 +48,9 @@ pub struct Config {
     /// memory only if unset. Not changeable on the settings page, since the
     /// settings themselves live there.
     pub data_dir: Option<PathBuf>,
+    /// Replaces the default password `admin` of the web UI (`UI_PASSWORD`).
+    /// Not on the settings page; the password is changed there instead.
+    pub ui_password: Option<String>,
 }
 
 /// A value that can be set by environment variable and on the settings page.
@@ -128,6 +131,7 @@ impl Default for Config {
             probe_timeout: Duration::from_millis(2000),
             max_body_bytes: 64 * 1024 * 1024,
             data_dir: None,
+            ui_password: None,
         }
     }
 }
@@ -142,6 +146,7 @@ impl Config {
             }
         }
         cfg.data_dir = env_value("DATA_DIR").map(PathBuf::from);
+        cfg.ui_password = env_value("UI_PASSWORD");
         Ok(cfg)
     }
 

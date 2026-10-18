@@ -146,7 +146,8 @@ pub async fn agent_sleep(State(pc): State<Pc>) -> Response {
 pub async fn serve(router: Router) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let app = router.into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     addr
 }
 
@@ -227,6 +228,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         probe_timeout: Duration::from_millis(500),
         max_body_bytes: 1 << 20,
         data_dir: None,
+        ui_password: None,
     };
     tweak(&mut cfg);
     let state = AppState::new(cfg);

@@ -21,6 +21,7 @@ pub enum EventKind {
     SleepAccepted,
     SleepRefused,
     GamingRejected,
+    PasswordChanged,
 }
 
 #[derive(Clone, Debug, Serialize)]

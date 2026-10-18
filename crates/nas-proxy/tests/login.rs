@@ -1,0 +1,217 @@
+//! Login and password of the web UI, over HTTP like a browser.
+
+mod common;
+
+use std::sync::Arc;
+
+use common::*;
+use strata_nas_proxy::{AppState, Config, api_router};
+
+/// A browser with one cookie jar.
+struct Browser {
+    base: String,
+    cookie: Option<String>,
+}
+
+impl Browser {
+    fn new(base: &str) -> Self {
+        Self {
+            base: base.to_string(),
+            cookie: None,
+        }
+    }
+
+    /// Calls a server function with form fields; keeps the session cookie.
+    async fn call(&mut self, name: &str, fields: &[(&str, &str)]) -> reqwest::Response {
+        let body = fields
+            .iter()
+            .map(|(k, v)| format!("{k}={}", encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let mut req = reqwest::Client::new()
+            .post(format!("{}/admin/api/{name}", self.base))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body);
+        if let Some(c) = &self.cookie {
+            req = req.header("cookie", c);
+        }
+        let resp = req.send().await.unwrap();
+        if let Some(set) = resp.headers().get("set-cookie") {
+            let pair = set.to_str().unwrap().split(';').next().unwrap().to_string();
+            self.cookie = (!pair.ends_with('=')).then_some(pair);
+        }
+        resp
+    }
+
+    async fn session(&mut self) -> String {
+        let resp = self.call("session", &[]).await;
+        assert_eq!(resp.status(), 200);
+        resp.json::<String>().await.unwrap()
+    }
+
+    async fn page(&self, path: &str) -> String {
+        let mut req = reqwest::Client::new().get(format!("{}{path}", self.base));
+        if let Some(c) = &self.cookie {
+            req = req.header("cookie", c);
+        }
+        req.send().await.unwrap().text().await.unwrap()
+    }
+}
+
+fn encode(v: &str) -> String {
+    v.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+async fn change(b: &mut Browser, current: &str, new: &str) -> reqwest::Response {
+    b.call(
+        "change-password",
+        &[("current", current), ("new", new), ("repeat", new)],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn without_login_only_the_login_page_is_shown() {
+    let s = setup(true, |_| {}).await;
+    let mut b = Browser::new(&s.url);
+    let html = b.page("/admin/").await;
+    assert!(html.contains("Anmelden"), "{html}");
+    assert!(!html.contains("Hier zeigt der Proxy"), "{html}");
+    assert_eq!(b.session().await, "Anonymous");
+    let resp = change(&mut b, "admin", "ein langes Passwort").await;
+    assert_eq!(resp.status(), 401);
+}
+
+#[tokio::test]
+async fn first_login_forces_a_new_password() {
+    let s = setup(true, |_| {}).await;
+    let mut b = Browser::new(&s.url);
+    let resp = b.call("login", &[("password", "falsch")]).await;
+    assert_eq!(resp.status(), 401);
+    assert!(resp.text().await.unwrap().contains("Falsches Passwort"));
+    assert_eq!(
+        b.call("login", &[("password", "admin")]).await.status(),
+        200
+    );
+    assert_eq!(b.session().await, "MustChange");
+    let html = b.page("/admin/").await;
+    assert!(html.contains("Neues Passwort festlegen"), "{html}");
+
+    let resp = change(&mut b, "admin", "kurz").await;
+    assert_ne!(resp.status(), 200);
+    assert_eq!(
+        change(&mut b, "admin", "ein langes Passwort")
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(b.session().await, "Ready");
+    let html = b.page("/admin/").await;
+    assert!(html.contains("Hier zeigt der Proxy"), "{html}");
+    assert!(kinds(&s.state).contains(&strata_nas_proxy::events::EventKind::PasswordChanged));
+
+    // The default password is gone.
+    let mut other = Browser::new(&s.url);
+    assert_ne!(
+        other.call("login", &[("password", "admin")]).await.status(),
+        200
+    );
+}
+
+#[tokio::test]
+async fn ui_password_replaces_the_default() {
+    let s = setup(true, |c| c.ui_password = Some("start-123".into())).await;
+    let mut b = Browser::new(&s.url);
+    assert_ne!(
+        b.call("login", &[("password", "admin")]).await.status(),
+        200
+    );
+    assert_eq!(
+        b.call("login", &[("password", "start-123")]).await.status(),
+        200
+    );
+    assert_eq!(b.session().await, "MustChange");
+}
+
+#[tokio::test]
+async fn repeated_failures_are_slowed_down() {
+    let s = setup(true, |_| {}).await;
+    let mut b = Browser::new(&s.url);
+    for _ in 0..5 {
+        b.call("login", &[("password", "falsch")]).await;
+    }
+    let resp = b.call("login", &[("password", "admin")]).await;
+    assert_ne!(resp.status(), 200);
+    assert!(resp.text().await.unwrap().contains("Zu viele Fehlversuche"));
+}
+
+#[tokio::test]
+async fn changing_the_password_ends_other_sessions() {
+    let s = setup(true, |_| {}).await;
+    let mut first = Browser::new(&s.url);
+    first.call("login", &[("password", "admin")]).await;
+    change(&mut first, "admin", "erstes Passwort").await;
+    let mut second = Browser::new(&s.url);
+    second
+        .call("login", &[("password", "erstes Passwort")])
+        .await;
+    assert_eq!(second.session().await, "Ready");
+
+    assert_eq!(
+        change(&mut first, "erstes Passwort", "zweites Passwort")
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(first.session().await, "Ready");
+    assert_eq!(second.session().await, "Anonymous");
+
+    first.call("logout", &[]).await;
+    assert_eq!(first.session().await, "Anonymous");
+}
+
+async fn proxy_on(dir: &std::path::Path) -> String {
+    let cfg = Config {
+        data_dir: Some(dir.to_path_buf()),
+        ..Config::default()
+    };
+    let state: Arc<AppState> = AppState::new(cfg);
+    let addr = serve(api_router(state)).await;
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn password_and_session_survive_a_restart() {
+    let dir = std::env::temp_dir().join(format!("strata-login-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut b = Browser::new(&proxy_on(&dir).await);
+    b.call("login", &[("password", "admin")]).await;
+    change(&mut b, "admin", "dauerhaftes Passwort").await;
+
+    // Same data directory, new proxy: the cookie still works.
+    b.base = proxy_on(&dir).await;
+    assert_eq!(b.session().await, "Ready");
+    let mut fresh = Browser::new(&b.base);
+    assert_eq!(
+        fresh
+            .call("login", &[("password", "dauerhaftes Passwort")])
+            .await
+            .status(),
+        200
+    );
+
+    // Deleting the password file brings the default back.
+    std::fs::remove_file(dir.join("admin-password.json")).unwrap();
+    let mut reset = Browser::new(&proxy_on(&dir).await);
+    assert_eq!(
+        reset.call("login", &[("password", "admin")]).await.status(),
+        200
+    );
+    assert_eq!(reset.session().await, "MustChange");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

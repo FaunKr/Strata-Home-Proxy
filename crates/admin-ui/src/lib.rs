@@ -1,6 +1,7 @@
 //! Web UI of the NAS proxy, under `/admin/` on the API port. Rendered on the
 //! server and made interactive in the browser (Leptos, hydration).
 
+pub mod api;
 pub mod app;
 #[cfg(feature = "ssr")]
 pub mod server;

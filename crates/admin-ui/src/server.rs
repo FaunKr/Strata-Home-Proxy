@@ -1,12 +1,100 @@
-//! Server side: the axum routes for `/admin/`.
+//! Server side: the axum routes for `/admin/` and the interface the proxy
+//! implements for the server functions.
 
-use std::path::PathBuf;
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
+    sync::Arc,
+};
 
-use axum::Router;
+use axum::{
+    Router,
+    extract::ConnectInfo,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+};
 use leptos::prelude::*;
-use leptos_axum::{LeptosRoutes, generate_route_list};
+use leptos_axum::{LeptosRoutes, ResponseOptions, generate_route_list};
 
-use crate::app::{App, shell};
+use crate::{
+    api::Session,
+    app::{App, shell},
+};
+
+pub const COOKIE: &str = "strata_admin";
+const COOKIE_MAX_AGE_SECS: u64 = 30 * 24 * 3600;
+
+/// What the UI needs from the proxy. Provided as context to every page and
+/// server function call.
+pub trait Backend: Send + Sync + 'static {
+    fn session(&self, token: Option<&str>) -> Session;
+    /// A session token, or a message for the user.
+    fn login(&self, password: &str, client: IpAddr) -> Result<String, String>;
+    /// A new session token, or a message for the user.
+    fn change_password(&self, token: &str, current: &str, new: &str) -> Result<String, String>;
+}
+
+pub type SharedBackend = Arc<dyn Backend>;
+
+pub fn backend() -> SharedBackend {
+    expect_context::<SharedBackend>()
+}
+
+/// The session token from the request's cookie.
+pub async fn token() -> Option<String> {
+    let headers: HeaderMap = leptos_axum::extract().await.ok()?;
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .find_map(|pair| {
+            let (name, value) = pair.trim().split_once('=')?;
+            (name == COOKIE).then(|| value.to_string())
+        })
+}
+
+pub async fn client_ip() -> IpAddr {
+    leptos_axum::extract::<ConnectInfo<SocketAddr>>()
+        .await
+        .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |c| c.0.ip())
+}
+
+/// The caller's token if logged in, else 401. `allow_must_change` lets a
+/// session with the default password through (only for changing it).
+pub async fn require_login(allow_must_change: bool) -> Result<String, ServerFnError> {
+    let token = token().await;
+    match backend().session(token.as_deref()) {
+        Session::Ready => Ok(token.unwrap_or_default()),
+        Session::MustChange if allow_must_change => Ok(token.unwrap_or_default()),
+        Session::MustChange => {
+            expect_context::<ResponseOptions>().set_status(StatusCode::FORBIDDEN);
+            Err(ServerFnError::new("Bitte zuerst das Passwort ändern."))
+        }
+        Session::Anonymous => {
+            expect_context::<ResponseOptions>().set_status(StatusCode::UNAUTHORIZED);
+            Err(ServerFnError::new("Nicht angemeldet."))
+        }
+    }
+}
+
+pub fn set_cookie(token: &str) {
+    let value = format!(
+        "{COOKIE}={token}; Path=/admin; HttpOnly; SameSite=Strict; Max-Age={COOKIE_MAX_AGE_SECS}"
+    );
+    insert_cookie(&value);
+}
+
+pub fn clear_cookie() {
+    insert_cookie(&format!(
+        "{COOKIE}=; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=0"
+    ));
+}
+
+fn insert_cookie(value: &str) {
+    if let Ok(value) = HeaderValue::from_str(value) {
+        expect_context::<ResponseOptions>().insert_header(header::SET_COOKIE, value);
+    }
+}
 
 /// Where the built browser files live (`LEPTOS_SITE_ROOT`, set in the Docker
 /// image); `target/site` when developing with cargo-leptos.
@@ -24,17 +112,14 @@ pub fn options(site_root: PathBuf) -> LeptosOptions {
         .build()
 }
 
-/// Routes for the pages, the server functions and the browser files. `context`
-/// runs for every page and server function call and provides what they need.
-pub fn router<S>(
-    options: LeptosOptions,
-    context: impl Fn() + Clone + Send + Sync + 'static,
-) -> Router<S>
+/// Routes for the pages, the server functions and the browser files.
+pub fn router<S>(options: LeptosOptions, backend: SharedBackend) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
     let pkg = PathBuf::from(options.site_root.as_ref()).join(options.site_pkg_dir.as_ref());
     let routes = generate_route_list(App);
+    let context = move || provide_context(Arc::clone(&backend));
     Router::new()
         .leptos_routes_with_context(&options, routes, context, {
             let options = options.clone();

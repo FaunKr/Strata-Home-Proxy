@@ -1,6 +1,8 @@
 //! NAS proxy for Strata: wakes the PC on demand and sends it to sleep when idle.
 
+pub mod admin;
 pub mod agent;
+pub mod auth;
 pub mod config;
 pub mod events;
 pub mod proxy;
@@ -10,7 +12,12 @@ pub mod wol;
 
 use std::sync::Arc;
 
-use axum::{Router, http::StatusCode, routing::any};
+use axum::{
+    Router,
+    extract::{Request, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 
 pub use config::Config;
 pub use settings::Settings;
@@ -20,17 +27,20 @@ pub use state::AppState;
 /// is forwarded to Strata. UI calls never wake the PC or count as activity.
 pub fn api_router(state: Arc<AppState>) -> Router {
     let options = strata_admin_ui::server::options(strata_admin_ui::server::site_root());
-    let admin = strata_admin_ui::server::router(options, || {});
+    let admin = strata_admin_ui::server::router(options, admin::backend(&state));
     Router::new()
         .merge(admin)
-        // Unknown UI paths must not reach Strata either.
-        .route("/admin/{*rest}", any(admin_not_found))
-        .fallback(proxy::handle)
+        .fallback(fallback)
         .with_state(state)
 }
 
-async fn admin_not_found() -> (StatusCode, &'static str) {
-    (StatusCode::NOT_FOUND, "Nicht gefunden")
+/// Everything the UI does not answer goes to Strata, except unknown UI paths.
+async fn fallback(state: State<Arc<AppState>>, req: Request) -> Response {
+    let path = req.uri().path();
+    if path == "/admin" || path.starts_with("/admin/") {
+        return (StatusCode::NOT_FOUND, "Nicht gefunden").into_response();
+    }
+    proxy::handle(state, req).await
 }
 
 pub async fn run(cfg: Config) -> anyhow::Result<()> {
@@ -49,6 +59,8 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     state.spawn_idle_loop();
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!("API-Proxy hört auf {listen}");
-    axum::serve(listener, api_router(state)).await?;
+    // The client address is needed to slow down password guessing.
+    let app = api_router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    axum::serve(listener, app).await?;
     Ok(())
 }

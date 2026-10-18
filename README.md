@@ -62,9 +62,31 @@ ins Heimnetz. Alle Einstellungen stehen mit Erklärung in
 
 Nur ein Weckpaket senden, zum Testen: `docker compose run --rm strata-proxy wake`
 
+## Weboberfläche
+
+Unter `http://<NAS-IP>:8080/admin/`, also auf demselben Port wie die API.
+Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
+
+- **Erste Anmeldung:** Passwort `admin`, oder der Wert von `UI_PASSWORD`, falls
+  gesetzt. Danach muss ein eigenes Passwort (mindestens 8 Zeichen) festgelegt
+  werden, vorher geht nichts anderes. Es liegt als Hash in
+  `/data/admin-password.json`.
+- **Angemeldet bleiben:** 30 Tage, auch über einen Neustart. Ein Passwortwechsel
+  meldet alle anderen Geräte ab.
+- **Passwort vergessen:** `/data/admin-password.json` löschen und den Container
+  neu starten, dann gilt wieder das Standardpasswort.
+- Nach 5 Fehlversuchen von derselben Adresse ist die Anmeldung 1 min gesperrt.
+  `/admin/` ist überall erreichbar, wo die API erreichbar ist; das Passwort ist
+  der einzige Schutz.
+
 ## Entwickeln
 
 ```sh
 cargo test      # startet ein nachgebautes Strata, PC-Dienst und WoL-Empfänger
 cargo clippy --all-targets -- -D warnings
 ```
+
+Die Weboberfläche (Leptos, [crates/admin-ui](crates/admin-ui)) braucht für den
+Browser-Teil `rustup target add wasm32-unknown-unknown` und
+`cargo install cargo-leptos --locked`. Dann baut `cargo leptos build` Proxy und
+Oberfläche, `cargo leptos watch` startet beides und baut bei Änderungen neu.

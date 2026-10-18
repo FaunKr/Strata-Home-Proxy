@@ -6,6 +6,8 @@ use strata_admin_ui::api::{StrataInfo, StrataJob};
 
 use crate::config::Config;
 
+const LOG_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct PcStatus {
     pub gaming_mode: bool,
@@ -153,6 +155,26 @@ impl AgentClient {
         resp.json()
             .await
             .map_err(|e| format!("Antwort des PC-Dienstes nicht lesbar: {e}"))
+    }
+
+    /// The Strata-Ausgabe as the service streams it: `None` without an
+    /// answer, `Err` with the status of a refusal.
+    pub async fn strata_log(&self) -> Option<Result<reqwest::Response, reqwest::StatusCode>> {
+        let base = self.base.as_ref()?;
+        // Its own client: the stream stays open far longer than a probe may take.
+        let http = Client::builder()
+            .connect_timeout(LOG_CONNECT_TIMEOUT)
+            .build()
+            .ok()?;
+        let mut req = http.get(format!("{base}/strata-log"));
+        if let Some(token) = &self.token {
+            req = req.bearer_auth(token);
+        }
+        let resp = req.send().await.ok()?;
+        if !resp.status().is_success() {
+            return Some(Err(resp.status()));
+        }
+        Some(Ok(resp))
     }
 
     pub async fn cancel_strata_job(&self) -> Result<(), String> {

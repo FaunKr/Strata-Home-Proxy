@@ -2,7 +2,8 @@
 //! gaming mode and the Strata watchdog.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
+    convert::Infallible,
     net::{IpAddr, SocketAddr},
     path::PathBuf,
     sync::{
@@ -17,16 +18,21 @@ use axum::{
     extract::{ConnectInfo, Request, State, connect_info::Connected},
     http::{StatusCode, header},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::{get, post},
     serve::IncomingStream,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::broadcast;
 
 use crate::{
     config::{Config, format_mac, parse_mac},
     managed::Managed,
+    output::{Message, Notice, StrataOutput},
     platform::Platform,
     strata::{self, JobRequest, Jobs, Refusal, UpdateCheck},
 };
@@ -70,6 +76,7 @@ pub struct Agent {
     managed: Mutex<Managed>,
     pub(crate) jobs: Jobs,
     pub(crate) updates: UpdateCheck,
+    output: Arc<StrataOutput>,
 }
 
 struct Watchdog {
@@ -112,6 +119,7 @@ impl Agent {
         let gaming = gaming_flag(&cfg).exists();
         let managed = Managed::load(&cfg.state_dir());
         let jobs = Jobs::load(&cfg.state_dir());
+        let output = Arc::new(StrataOutput::new(cfg.state_dir()));
         Arc::new(Self {
             cfg,
             platform,
@@ -125,6 +133,7 @@ impl Agent {
             managed: Mutex::new(managed),
             jobs,
             updates: UpdateCheck::default(),
+            output,
         })
     }
 
@@ -246,8 +255,33 @@ impl Agent {
         tracing::info!("Strata wird gestartet");
         let managed = self.managed();
         let (program, args) = managed.start(&self.cfg);
-        if let Err(e) = self.platform.start_strata(program, args) {
-            tracing::error!("Strata-Start fehlgeschlagen: {e}");
+        let mut run = match self.platform.start_strata(program, args) {
+            Ok(run) => run,
+            Err(e) => {
+                tracing::error!("Strata-Start fehlgeschlagen: {e}");
+                return;
+            }
+        };
+        let output = Arc::clone(&self.output);
+        let id = output.started();
+        tokio::spawn(async move {
+            while let Some(line) = run.next_output().await {
+                output.push(id, &line);
+            }
+            output.ended(id);
+        });
+    }
+
+    /// What the Strata-Ausgabe has to say besides its lines.
+    async fn output_notice(&self) -> Notice {
+        if self.gaming() {
+            Notice::Gaming
+        } else if self.output.reading() {
+            Notice::Running
+        } else if self.strata_healthy().await {
+            Notice::NotStartedByAgent
+        } else {
+            Notice::NotRunning
         }
     }
 
@@ -442,6 +476,57 @@ async fn cancel_job(State(agent): State<Arc<Agent>>) -> Response {
     }
 }
 
+/// How often an open `GET /strata-log` checks whether its notice changed.
+const NOTICE_EVERY: Duration = Duration::from_secs(1);
+
+/// The kept Strata-Ausgabe, then each new line and every change of notice,
+/// for as long as the caller stays.
+async fn strata_log(State(agent): State<Arc<Agent>>) -> Response {
+    struct Follow {
+        agent: Arc<Agent>,
+        rx: broadcast::Receiver<Message>,
+        queue: VecDeque<Message>,
+        notice: Option<Notice>,
+        tick: tokio::time::Interval,
+    }
+    let (backlog, rx) = agent.output.subscribe();
+    let follow = Follow {
+        agent,
+        rx,
+        queue: backlog.into(),
+        notice: None,
+        tick: tokio::time::interval(NOTICE_EVERY),
+    };
+    let messages = futures_util::stream::unfold(follow, |mut f| async move {
+        loop {
+            if let Some(message) = f.queue.pop_front() {
+                let event = Event::default()
+                    .json_data(&message)
+                    .expect("message serializes");
+                return Some((Ok::<_, Infallible>(event), f));
+            }
+            tokio::select! {
+                message = f.rx.recv() => match message {
+                    Ok(message) => f.queue.push_back(message),
+                    // Too slow to follow: the caller connects again and
+                    // gets the kept lines anew.
+                    Err(_) => return None,
+                },
+                _ = f.tick.tick() => {
+                    let notice = f.agent.output_notice().await;
+                    if f.notice != Some(notice) {
+                        f.notice = Some(notice);
+                        f.queue.push_back(Message::Notice { reason: notice });
+                    }
+                }
+            }
+        }
+    });
+    Sse::new(messages)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
 /// Token check, plus the client list; localhost always passes the list.
 async fn guard(State(agent): State<Arc<Agent>>, req: Request, next: Next) -> Response {
     let peer = req
@@ -475,6 +560,7 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .route("/strata/jobs", post(start_job))
         .route("/strata/job", get(strata_job))
         .route("/strata/job/cancel", post(cancel_job))
+        .route("/strata-log", get(strata_log))
         .layer(middleware::from_fn_with_state(agent.clone(), guard))
         .with_state(agent)
 }

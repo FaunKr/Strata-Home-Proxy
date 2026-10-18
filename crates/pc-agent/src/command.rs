@@ -30,8 +30,9 @@ pub struct Running {
 
 impl Running {
     /// For implementations of [`crate::platform::Platform::run`]: `lines`
-    /// carries the output, `exit` the exit code (`None` without one, e.g.
-    /// after a cancel), `cancel` ends the command.
+    /// carries the output (a line rewritten with `\r` ends in `\r`), `exit`
+    /// the exit code (`None` without one, e.g. after a cancel), `cancel`
+    /// ends the command.
     pub fn new(
         lines: mpsc::UnboundedReceiver<String>,
         exit: oneshot::Receiver<Option<i32>>,
@@ -46,6 +47,13 @@ impl Running {
 
     /// The next line of output; `None` once the command closed its output.
     pub async fn next_line(&mut self) -> Option<String> {
+        let line = self.next_output().await?;
+        Some(line.strip_suffix('\r').map_or(line.clone(), String::from))
+    }
+
+    /// The next line as written: a line a progress bar rewrites with `\r`
+    /// ends in `\r`, and the next line takes its place.
+    pub async fn next_output(&mut self) -> Option<String> {
         self.lines.recv().await
     }
 
@@ -70,6 +78,9 @@ pub fn spawn(spec: &CommandSpec) -> Result<Running> {
     if let Some(dir) = &spec.dir {
         cmd.current_dir(dir);
     }
+    // Python holds its output back when it goes to a pipe; then the lines
+    // would come in batches instead of live.
+    cmd.env("PYTHONUNBUFFERED", "1");
     #[cfg(windows)]
     cmd.creation_flags(crate::platform::CREATE_NO_WINDOW);
     // Its own process group, so a cancel reaches everything it started.
@@ -100,29 +111,40 @@ pub fn spawn(spec: &CommandSpec) -> Result<Running> {
 }
 
 /// Sends every line of `from` to `to`. Progress bars rewrite their line with
-/// `\r`, so that ends a line too.
+/// `\r`, so that ends a line too; such a line keeps its `\r` at the end, so
+/// whoever shows the output can let the next one replace it.
+/// [`Running::next_line`] drops it again. `\r\n` ends a line like `\n`.
 async fn read_lines(mut from: impl AsyncRead + Unpin, to: mpsc::UnboundedSender<String>) {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
+    // A `\r` waits for the next byte: before `\n` it is part of a line end.
+    let mut carriage = false;
     while let Ok(n) = from.read(&mut chunk).await {
         if n == 0 {
             break;
         }
         for &b in &chunk[..n] {
-            if b == b'\n' || b == b'\r' {
-                send_line(&mut buf, &to);
-            } else {
-                buf.push(b);
+            if carriage && b != b'\n' {
+                send_line(&mut buf, true, &to);
+            }
+            carriage = b == b'\r';
+            match b {
+                b'\n' => send_line(&mut buf, false, &to),
+                b'\r' => {}
+                _ => buf.push(b),
             }
         }
     }
-    send_line(&mut buf, &to);
+    send_line(&mut buf, carriage, &to);
 }
 
-fn send_line(buf: &mut Vec<u8>, to: &mpsc::UnboundedSender<String>) {
-    let line = String::from_utf8_lossy(buf).trim_end().to_string();
+fn send_line(buf: &mut Vec<u8>, rewritten: bool, to: &mpsc::UnboundedSender<String>) {
+    let mut line = String::from_utf8_lossy(buf).trim_end().to_string();
     buf.clear();
     if !line.is_empty() {
+        if rewritten {
+            line.push('\r');
+        }
         let _ = to.send(line);
     }
 }

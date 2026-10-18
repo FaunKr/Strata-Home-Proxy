@@ -8,6 +8,9 @@ pub mod overview;
 #[cfg(feature = "ssr")]
 pub mod server;
 pub mod strata;
+pub mod strata_output;
+#[cfg(feature = "hydrate")]
+mod stream;
 
 pub use app::{App, shell};
 

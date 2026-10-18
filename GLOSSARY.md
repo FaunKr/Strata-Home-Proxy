@@ -63,3 +63,7 @@ _Avoid_: Startet
 **Ereignis**:
 Ein Eintrag im Verlauf des Proxys über PC, Wecken, Schlafen oder die Weboberfläche.
 _Avoid_: Log-Eintrag
+
+**Strata-Ausgabe**:
+Was ein vom PC-Dienst gestartetes Strata auf seine Konsole schreibt; der PC-Dienst merkt sich die letzten 500 Zeilen, die Weboberfläche zeigt sie live auf der gleichnamigen Seite. Kein Ereignis.
+_Avoid_: Strata-Log, Log-Eintrag (nur `strata-log` und `strata.log` im Code und in Dateinamen)

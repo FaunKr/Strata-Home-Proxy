@@ -36,6 +36,17 @@ anmeldest. Er
 
 Der Dienst schreibt nach `%LOCALAPPDATA%\StrataHome\strata-pc-agent.log`.
 
+## Strata-Ausgabe
+
+Der Dienst startet Strata ohne Konsolenfenster und liest dessen Ausgabe
+selbst mit. Die Zeilen des laufenden Strata stehen in
+`%LOCALAPPDATA%\StrataHome\strata.log` (bei jedem Start neu), die letzten
+500 zeigt die Weboberfläche live auf der Seite „Strata-Ausgabe“ (Knopf auf
+der Übersicht). Python-Programme bekommen `PYTHONUNBUFFERED=1`, damit die
+Ausgabe sofort kommt und nicht in Schüben. Ein Strata, das du selbst per
+Doppelklick startest, läuft in seinem eigenen Fenster; dessen Ausgabe sieht
+der Dienst nicht.
+
 ## Verwaltete Werte
 
 Richtet der Dienst Strata selbst ein (Seite „Strata“ der Weboberfläche),
@@ -48,7 +59,7 @@ wieder von Hand einrichten will, löscht die Datei und startet den Dienst neu.
 ## Hinweise
 
 - Der Dienst läuft im Benutzerkonto, nicht als Windows-Dienst: nur so sieht
-  er Maus und Tastatur und kann Strata in einem normalen Fenster starten.
+  er Maus und Tastatur und kann Strata in deiner Sitzung starten.
   Nach einem Neustart muss sich daher jemand anmelden (oder die automatische
   Anmeldung von Windows ist eingerichtet).
 - Mit der RX 6800 XT hängt die erste Anfrage nach dem Standby, wenn Strata

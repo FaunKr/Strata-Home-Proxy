@@ -10,6 +10,7 @@ use crate::{
         SleepView, StrataView, Wake, error_text, get_setup,
     },
     confirm::{Confirm, Question},
+    hardware::HardwareCard,
     icons::Icon,
     labels::{event_class, event_label, pc_badge, strata_badge, strata_job_label},
 };
@@ -183,6 +184,9 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
         }
     });
     let events = overview.events.clone();
+    let hardware = overview.setup.agent_configured.then(|| {
+        view! { <HardwareCard hardware=overview.hardware.clone() pc=overview.pc /> }
+    });
     view! {
         {lost}
         {job}
@@ -192,6 +196,7 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
             <KeepAwakeCard overview=overview.clone() actions />
         </div>
         <Tiles overview live />
+        {hardware}
         <section class="card" aria-labelledby="events-heading">
             <h2 id="events-heading">"Recent events"</h2>
             {if events.is_empty() {

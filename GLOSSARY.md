@@ -50,6 +50,10 @@ _Avoid_: Shutdown, Sleep-Befehl
 Die kurze Zeit nach einer angenommenen Schlafen-Anfrage, in der der PC noch antworten kann und trotzdem als schlafend gilt.
 _Avoid_: Settling (nur im Code)
 
+**Hardwarewerte**:
+Was der PC-Dienst über Last, Temperatur, Speicher und Lüfter von Grafikkarte und CPU meldet; die Übersicht zeigt sie, solange der PC wach ist.
+_Avoid_: Stats, Telemetrie
+
 **Gaming-Modus**:
 Ein Zustand des PCs, in dem Strata beendet ist, Anfragen abgewiesen werden und der Proxy den PC nicht schlafen schickt.
 _Avoid_: Spielemodus

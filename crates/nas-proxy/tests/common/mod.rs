@@ -70,6 +70,9 @@ pub struct FakePc {
     pub job_polls: AtomicUsize,
     /// Version the PC service reports in `/status`; none, like an old service, if unset.
     pub version: Mutex<Option<String>>,
+    /// Hardwarewerte the PC service reports in `/status`; none, like a service
+    /// from before them, if unset.
+    pub hardware: Mutex<Option<Value>>,
     pub update_requests: AtomicUsize,
     /// The PC service refuses updates with this reason (409).
     pub refuse_update: Mutex<Option<String>>,
@@ -232,6 +235,9 @@ pub async fn agent_status(State(pc): State<Pc>) -> Response {
     }
     if let Some(version) = pc.version.lock().unwrap().clone() {
         status["version"] = json!(version);
+    }
+    if let Some(hardware) = pc.hardware.lock().unwrap().clone() {
+        status["hardware"] = hardware;
     }
     Json(status).into_response()
 }

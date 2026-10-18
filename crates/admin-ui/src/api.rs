@@ -285,6 +285,45 @@ pub struct Overview {
     /// The PC service's version and updates; `None` until it answered once
     /// since the proxy started.
     pub pc_service: Option<PcServiceView>,
+    pub hardware: HardwareView,
+}
+
+/// The Hardwarewerte for the overview.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum HardwareView {
+    /// No values: the PC is not awake, or its service does not answer.
+    Unavailable,
+    /// The PC service answers but is too old to report them.
+    Unsupported,
+    Values(Hardware),
+}
+
+/// What the PC service reports about GPU and CPU in `/status` (see
+/// docs/pc-agent-api.md). A value it could not read is `None`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Hardware {
+    /// The GPU with the most VRAM; `None` if there is none.
+    pub gpu: Option<Gpu>,
+    pub cpu: Cpu,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Gpu {
+    pub load_pct: Option<f32>,
+    pub temp_c: Option<f32>,
+    pub vram_used_bytes: Option<u64>,
+    pub vram_total_bytes: Option<u64>,
+    /// 0 while the fan stands still.
+    pub fan_rpm: Option<u32>,
+    /// Power draw as a share of the card's power limit.
+    pub power_pct: Option<f32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Cpu {
+    pub load_pct: Option<f32>,
+    pub ram_used_bytes: Option<u64>,
+    pub ram_total_bytes: Option<u64>,
 }
 
 /// The PC service's version against the one the NAS carries.

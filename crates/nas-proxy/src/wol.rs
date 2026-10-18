@@ -7,8 +7,8 @@ use tokio::net::UdpSocket;
 /// Six `0xFF` bytes followed by the MAC address sixteen times.
 pub fn magic_packet(mac: [u8; 6]) -> [u8; 102] {
     let mut packet = [0xffu8; 102];
-    for chunk in packet[6..].chunks_exact_mut(6) {
-        chunk.copy_from_slice(&mac);
+    for chunk in packet[6..].as_chunks_mut::<6>().0 {
+        *chunk = mac;
     }
     packet
 }
@@ -34,8 +34,8 @@ mod tests {
         let mac = [1, 2, 3, 4, 5, 6];
         let packet = magic_packet(mac);
         assert_eq!(&packet[..6], &[0xff; 6]);
-        for chunk in packet[6..].chunks_exact(6) {
-            assert_eq!(chunk, &mac);
+        for chunk in packet[6..].as_chunks::<6>().0 {
+            assert_eq!(*chunk, mac);
         }
     }
 }

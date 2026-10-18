@@ -51,7 +51,7 @@ Die kurze Zeit nach einer angenommenen Schlafen-Anfrage, in der der PC noch antw
 _Avoid_: Settling (nur im Code)
 
 **Hardwarewerte**:
-Was der PC-Dienst über Last, Temperatur, Speicher und Lüfter von Grafikkarte und CPU meldet; die Übersicht zeigt sie, solange der PC wach ist.
+Was der PC-Dienst über Last, Temperatur, Speicher und Lüfter von Grafikkarte und CPU meldet; die Übersicht zeigt sie.
 _Avoid_: Stats, Telemetrie
 
 **Gaming-Modus**:

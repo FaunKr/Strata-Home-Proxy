@@ -47,7 +47,7 @@ pub trait Platform: Send + Sync + 'static {
     fn replace_program(&self, downloaded: &Path) -> Result<()>;
     /// Ends this process, so the new program gets the port.
     fn exit(&self);
-    /// The Hardwarewerte; must not block, `/status` asks every few seconds.
+    /// The Hardwarewerte; returns at once, `/status` asks every few seconds.
     fn hardware(&self) -> Hardware {
         Hardware::default()
     }

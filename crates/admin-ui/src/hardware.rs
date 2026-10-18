@@ -13,14 +13,14 @@ pub fn HardwareCard(hardware: HardwareView, pc: PcView) -> impl IntoView {
         HardwareView::Values(h) => {
             let gpu = h.gpu.unwrap_or_default();
             view! {
-                <Row label="GPU" stats=gpu_stats(&gpu) />
-                <Row label="CPU" stats=cpu_stats(&h.cpu) />
+                <Row label="GPU" values=gpu_values(&gpu) />
+                <Row label="CPU" values=cpu_values(&h.cpu) />
             }
             .into_any()
         }
         HardwareView::Unsupported => view! {
             <p class="muted small">
-                "Update the PC service to see hardware stats. "
+                "Update the PC service to see hardware values. "
                 <a href="/admin/pc">"Update on PC page"</a>
             </p>
         }
@@ -43,12 +43,12 @@ pub fn HardwareCard(hardware: HardwareView, pc: PcView) -> impl IntoView {
 }
 
 #[component]
-fn Row(label: &'static str, stats: Vec<(&'static str, String)>) -> impl IntoView {
+fn Row(label: &'static str, values: Vec<(&'static str, String)>) -> impl IntoView {
     view! {
         <div class="hw-row">
             <h3>{label}</h3>
-            <dl class="hw-stats">
-                {stats
+            <dl class="hw-values">
+                {values
                     .into_iter()
                     .map(|(name, value)| {
                         view! {
@@ -64,7 +64,7 @@ fn Row(label: &'static str, stats: Vec<(&'static str, String)>) -> impl IntoView
     }
 }
 
-fn gpu_stats(gpu: &Gpu) -> Vec<(&'static str, String)> {
+fn gpu_values(gpu: &Gpu) -> Vec<(&'static str, String)> {
     vec![
         ("Load", percent(gpu.load_pct)),
         ("Temperature", or_none(gpu.temp_c, |t| format!("{t:.0} °C"))),
@@ -77,7 +77,7 @@ fn gpu_stats(gpu: &Gpu) -> Vec<(&'static str, String)> {
     ]
 }
 
-fn cpu_stats(cpu: &Cpu) -> Vec<(&'static str, String)> {
+fn cpu_values(cpu: &Cpu) -> Vec<(&'static str, String)> {
     vec![
         ("Load", percent(cpu.load_pct)),
         ("RAM", memory(cpu.ram_used_bytes, cpu.ram_total_bytes)),

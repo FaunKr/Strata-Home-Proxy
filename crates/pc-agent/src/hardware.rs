@@ -30,8 +30,8 @@ pub struct Cpu {
     pub ram_total_bytes: Option<u64>,
 }
 
-/// The latest sample. A thread takes one every `SAMPLE` from the first call
-/// on, so `/status` never waits for the counters.
+/// The latest sample, without waiting. A thread takes one every `SAMPLE`
+/// while `/status` is asked; the first call starts it and gets no values.
 #[cfg(windows)]
 pub fn read() -> Hardware {
     windows::read()
@@ -40,8 +40,11 @@ pub fn read() -> Hardware {
 #[cfg(windows)]
 mod windows {
     use std::{
-        sync::{Mutex, Once},
-        time::Duration,
+        sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::{Duration, Instant},
     };
 
     use windows_sys::{
@@ -72,22 +75,34 @@ mod windows {
     /// Shorter than the proxy's round of 5 s, so a sample is never older.
     const SAMPLE: Duration = Duration::from_secs(2);
 
+    /// The thread stops after this long without a call.
+    const IDLE: Duration = Duration::from_secs(30);
+
     static LATEST: Mutex<Option<Hardware>> = Mutex::new(None);
-    static START: Once = Once::new();
+    static LAST_READ: Mutex<Option<Instant>> = Mutex::new(None);
+    static RUNNING: AtomicBool = AtomicBool::new(false);
 
     pub fn read() -> Hardware {
-        START.call_once(|| {
-            let mut sampler = Sampler::default();
-            *LATEST.lock().unwrap() = Some(sampler.sample());
-            std::thread::spawn(move || {
-                loop {
-                    std::thread::sleep(SAMPLE);
-                    let sample = sampler.sample();
-                    *LATEST.lock().unwrap() = Some(sample);
-                }
-            });
-        });
+        *LAST_READ.lock().unwrap() = Some(Instant::now());
+        if !RUNNING.swap(true, Ordering::SeqCst) {
+            std::thread::spawn(sample_while_asked);
+        }
         LATEST.lock().unwrap().clone().unwrap_or_default()
+    }
+
+    fn sample_while_asked() {
+        let mut sampler = Sampler::default();
+        loop {
+            let sample = sampler.sample();
+            *LATEST.lock().unwrap() = Some(sample);
+            std::thread::sleep(SAMPLE);
+            if LAST_READ.lock().unwrap().is_none_or(|t| t.elapsed() > IDLE) {
+                // Nothing stale for the next caller.
+                *LATEST.lock().unwrap() = None;
+                RUNNING.store(false, Ordering::SeqCst);
+                return;
+            }
+        }
     }
 
     /// What one sample needs from the one before.
@@ -160,8 +175,9 @@ mod windows {
 
     /// Load of the busiest engine (3D, copy, video …) of the adapter, each
     /// engine summed over all processes, as Task Manager shows it.
-    fn engine_load(engines: &[(String, f64)], tag: &str) -> Option<f32> {
-        let mut per_engine: Instances = Vec::new();
+    fn engine_load(engines: &Instances, tag: &str) -> Option<f32> {
+        // Engine name and its load summed over processes.
+        let mut per_engine: Vec<(String, f64)> = Vec::new();
         for (name, value) in engines {
             // `pid_1234_luid_0x…_phys_0_eng_0_engtype_3D`: the part from the
             // LUID on names the engine.
@@ -283,8 +299,9 @@ mod windows {
     /// English names, so a German Windows finds them too.
     struct Counters {
         query: PDH_HQUERY,
-        engines: PDH_HCOUNTER,
-        memory: PDH_HCOUNTER,
+        /// Either may be missing; the other still counts.
+        engines: Option<PDH_HCOUNTER>,
+        memory: Option<PDH_HCOUNTER>,
     }
 
     // SAFETY: PDH handles may be used from any thread; only the sampler's
@@ -305,15 +322,13 @@ mod windows {
                 (unsafe { PdhAddEnglishCounterW(query, wide.as_ptr(), 0, &mut counter) } == 0)
                     .then_some(counter)
             };
-            let counters = (
-                add(r"\GPU Engine(*)\Utilization Percentage"),
-                add(r"\GPU Adapter Memory(*)\Dedicated Usage"),
-            );
-            let (Some(engines), Some(memory)) = counters else {
+            let engines = add(r"\GPU Engine(*)\Utilization Percentage");
+            let memory = add(r"\GPU Adapter Memory(*)\Dedicated Usage");
+            if engines.is_none() && memory.is_none() {
                 // SAFETY: opened above, closed once.
                 unsafe { PdhCloseQuery(query) };
                 return None;
-            };
+            }
             Some(Self {
                 query,
                 engines,
@@ -328,7 +343,10 @@ mod windows {
             if unsafe { PdhCollectQueryData(self.query) } != 0 {
                 return (Vec::new(), Vec::new());
             }
-            (values(self.engines), values(self.memory))
+            (
+                self.engines.map(values).unwrap_or_default(),
+                self.memory.map(values).unwrap_or_default(),
+            )
         }
     }
 

@@ -29,8 +29,9 @@ gemeldete MAC in `DATA_DIR` und weckt damit; sie hat Vorrang vor `PC_MAC` und
 den Werten aus der Weboberfläche.
 
 `hardware` sind die Hardwarewerte für die Übersicht. Der Dienst liest sie aus
-Windows selbst, ohne Treiber, alle 2 s im Hintergrund, und antwortet mit der
-letzten Messung:
+Windows selbst, ohne Treiber: Solange `/status` gefragt wird, misst er alle 2 s
+im Hintergrund und antwortet mit der letzten Messung. Die erste Anfrage nach
+30 s Ruhe startet die Messung und bekommt nur `null`-Werte.
 
 ```json
 "hardware": {

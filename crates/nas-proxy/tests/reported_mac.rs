@@ -59,3 +59,18 @@ async fn proxy_without_pc_mac_learns_it_from_the_pc() {
     *s.pc.report_mac.lock().unwrap() = Some("AA:BB:CC:DD:EE:FF".into());
     learned(&s).await;
 }
+
+#[tokio::test]
+async fn the_pc_area_shows_the_reported_mac() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.report_mac.lock().unwrap() = Some("AA-BB-CC-DD-EE-FF".into());
+    learned(&s).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live
+        .until("gemeldete MAC", |v| {
+            v["pc_service"]["reported_mac"] == "AA:BB:CC:DD:EE:FF"
+        })
+        .await;
+    assert_eq!(v["idle_timeout_secs"], 3600);
+}

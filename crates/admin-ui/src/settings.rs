@@ -19,7 +19,40 @@ pub fn SystemPage() -> impl IntoView {
             <h1>"System"</h1>
             <p class="lead">"Technical settings of the proxy itself. Rarely needs changing."</p>
         </div>
-        <SettingsSections sections=&[&SYSTEM] data_dir_note=true />
+        <ProxyFacts />
+        <SettingsSections sections=&[&SYSTEM] />
+    }
+}
+
+/// The proxy's version and data directory, with a warning while `DATA_DIR`
+/// is missing.
+#[component]
+fn ProxyFacts() -> impl IntoView {
+    let settings = OnceResource::new(get_settings());
+    view! {
+        <Transition>
+            {move || Suspend::new(async move {
+                settings
+                    .await
+                    .ok()
+                    .map(|view| {
+                        let note = (!view.persistent).then(|| view! { <DataDirNote /> });
+                        let data_dir = view.data_dir.unwrap_or_else(|| "Not set".to_string());
+                        view! {
+                            {note}
+                            <section class="card">
+                                <h2>"Proxy"</h2>
+                                <dl class="facts">
+                                    <dt>"Version"</dt>
+                                    <dd>{format!("Version {}", view.version)}</dd>
+                                    <dt>"Data directory"</dt>
+                                    <dd class="mono">{data_dir}</dd>
+                                </dl>
+                            </section>
+                        }
+                    })
+            })}
+        </Transition>
     }
 }
 
@@ -31,58 +64,32 @@ struct SectionUi {
     advanced_open: RwSignal<bool>,
 }
 
-/// The given sections of the settings, loaded together. With
-/// `data_dir_note`, a note above them explains a missing `DATA_DIR`.
+/// The given sections of the settings. Each loads on its own, so saving one
+/// leaves unsaved changes in another alone.
 #[component]
-pub fn SettingsSections(
-    sections: &'static [&'static SectionDef],
-    #[prop(optional)] data_dir_note: bool,
-) -> impl IntoView {
+pub fn SettingsSections(sections: &'static [&'static SectionDef]) -> impl IntoView {
+    sections
+        .iter()
+        .map(|def| view! { <LoadedSection def /> })
+        .collect_view()
+}
+
+#[component]
+fn LoadedSection(def: &'static SectionDef) -> impl IntoView {
     let refresh = RwSignal::new(0u32);
     let settings = Resource::new(move || refresh.get(), |_| get_settings());
-    let uis: Vec<SectionUi> = sections
-        .iter()
-        .map(|_| SectionUi {
-            saved: RwSignal::new(false),
-            advanced_open: RwSignal::new(false),
-        })
-        .collect();
+    let ui = SectionUi {
+        saved: RwSignal::new(false),
+        advanced_open: RwSignal::new(false),
+    };
     view! {
-        <Transition fallback=|| view! { <p>"Loading …"</p> }>
-            {
-                let uis = uis.clone();
-                move || {
-                    let uis = uis.clone();
-                    Suspend::new(async move {
-                        match settings.await {
-                            Ok(view) => {
-                                let note = (data_dir_note && !view.persistent)
-                                    .then(|| view! { <DataDirNote /> });
-                                let sections = sections
-                                    .iter()
-                                    .zip(uis)
-                                    .map(|(def, ui)| {
-                                        view! {
-                                            <Section
-                                                def
-                                                entries=view.entries.clone()
-                                                ui
-                                                refresh
-                                            />
-                                        }
-                                    })
-                                    .collect_view();
-                                view! {
-                                    {note}
-                                    {sections}
-                                }
-                                    .into_any()
-                            }
-                            Err(e) => view! { <p class="error">{error_text(&e)}</p> }.into_any(),
-                        }
-                    })
+        <Transition fallback=|| view! { <p class="hint">"Loading …"</p> }>
+            {move || Suspend::new(async move {
+                match settings.await {
+                    Ok(view) => view! { <Section def entries=view.entries ui refresh /> }.into_any(),
+                    Err(e) => view! { <p class="error">{error_text(&e)}</p> }.into_any(),
                 }
-            }
+            })}
         </Transition>
     }
 }
@@ -223,7 +230,10 @@ fn Section(
             .count();
         let summary = match changed {
             0 => format!("{} values, all default", advanced.len()),
-            n => format!("{} values, {n} not default", advanced.len()),
+            n => format!(
+                "{} values, {n} set here or in the environment",
+                advanced.len()
+            ),
         };
         let details = NodeRef::<Details>::new();
         let rows = advanced

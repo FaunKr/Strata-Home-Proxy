@@ -92,6 +92,10 @@ pub struct SettingsView {
     /// False while no Strata URL is set.
     pub configured: bool,
     pub entries: Vec<SettingEntry>,
+    /// The proxy's own version.
+    pub version: String,
+    /// `DATA_DIR` as the proxy uses it.
+    pub data_dir: Option<String>,
 }
 
 #[server(prefix = "/admin/api", endpoint = "settings")]
@@ -265,6 +269,8 @@ pub struct Overview {
     pub now: u64,
     #[serde(flatten)]
     pub setup: Setup,
+    /// After this long without requests the PC is put to sleep.
+    pub idle_timeout_secs: u64,
     pub pc: PcView,
     pub strata: StrataView,
     /// Start or end of the last API request, as local time text.
@@ -295,6 +301,8 @@ pub struct PcServiceView {
     pub updating: bool,
     /// Why the last update failed.
     pub update_error: Option<String>,
+    /// The MAC address the service reported, e.g. `3c:7c:3f:12:a4:9e`.
+    pub reported_mac: Option<String>,
 }
 
 /// One message of the Strata-Ausgabe stream (`/admin/api/strata-output-stream`).

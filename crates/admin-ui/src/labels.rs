@@ -236,6 +236,6 @@ pub fn strata_badge(overview: &Overview) -> (&'static str, &'static str) {
         (StrataView::Loading, _) => ("Loading", "is-warn"),
         (StrataView::Unloaded, _) => ("Idle", "is-ok"),
         (StrataView::Ready, _) => ("Ready", "is-ok"),
-        (StrataView::Busy { .. }, _) => ("Busy", "is-ok"),
+        (StrataView::Busy { .. }, _) => ("Busy", "is-warn"),
     }
 }

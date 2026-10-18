@@ -142,13 +142,18 @@ impl Settings {
 
     /// Drops a saved value, so the environment or default applies again.
     pub fn reset(&self, key: &str) -> Result<()> {
-        find_field(key).ok_or_else(|| anyhow::anyhow!("unbekannte Einstellung {key}"))?;
+        find_field(key).ok_or_else(|| anyhow::anyhow!("unknown setting {key}"))?;
         let mut inner = self.inner.write().unwrap();
         let mut saved = inner.saved.clone();
         if saved.remove(key).is_none() {
             return Ok(());
         }
         self.commit(&mut inner, saved)
+    }
+
+    /// The MAC the PC service reported last, if any.
+    pub fn reported_mac(&self) -> Option<[u8; 6]> {
+        self.inner.read().unwrap().reported_mac
     }
 
     /// Takes the MAC the PC service reported. Returns true if it is new.

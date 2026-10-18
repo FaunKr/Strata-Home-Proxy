@@ -172,7 +172,7 @@ impl Config {
     /// text clears an optional value.
     pub fn apply(&mut self, key: &str, raw: &str) -> Result<()> {
         let raw = raw.trim();
-        let field = find_field(key).with_context(|| format!("unbekannte Einstellung {key}"))?;
+        let field = find_field(key).with_context(|| format!("unknown setting {key}"))?;
         if raw.is_empty() && !field.optional {
             bail!("must not be empty");
         }

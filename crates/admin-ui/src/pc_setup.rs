@@ -92,6 +92,10 @@ fn ServiceState(
         .clone()
         .unwrap_or_else(|| "old, reports no version".to_string());
     let available = service.available.clone().unwrap_or_else(|| "–".to_string());
+    let reported_mac = service
+        .reported_mac
+        .clone()
+        .unwrap_or_else(|| "–".to_string());
     let target = service
         .available
         .clone()
@@ -129,6 +133,8 @@ fn ServiceState(
             <dd>{installed}</dd>
             <dt>"Available"</dt>
             <dd>{available}</dd>
+            <dt>"Reported MAC"</dt>
+            <dd class="mono">{reported_mac}</dd>
         </dl>
         {service.updating.then(|| view! { <p class="hint" role="status">"The PC service restarts with the new version …"</p> })}
         {service

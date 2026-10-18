@@ -225,7 +225,7 @@ where
         // The overview lives at `/admin`; the router knows no trailing slash.
         .route(
             "/admin/",
-            get(|| async { axum::response::Redirect::permanent("/admin") }),
+            get(|| async { axum::response::Redirect::temporary("/admin") }),
         )
         .route(
             "/admin/api/overview-stream",

@@ -310,7 +310,10 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
             },
         }
     };
-    let (pc_service, timed_out) = state.pc_setup.view();
+    let (mut pc_service, timed_out) = state.pc_setup.view();
+    if let Some(service) = &mut pc_service {
+        service.reported_mac = state.settings.reported_mac().map(crate::config::format_mac);
+    }
     if let Some(reason) = timed_out {
         state.events.record(
             crate::events::EventKind::PcServiceUpdateFailed,
@@ -330,6 +333,7 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
     Overview {
         now: clock::unix(now),
         setup: setup(state),
+        idle_timeout_secs: cfg.idle_timeout.as_secs(),
         strata_job: probe.job.clone(),
         pc,
         strata,

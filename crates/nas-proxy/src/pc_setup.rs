@@ -161,6 +161,7 @@ impl PcSetup {
             available,
             updating: update.running_since.is_some(),
             update_error: update.error.clone(),
+            reported_mac: None,
         });
         (view, timed_out)
     }

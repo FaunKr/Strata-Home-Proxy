@@ -95,6 +95,13 @@ impl Backend for UiBackend {
             persistent: self.0.settings.persistent(),
             configured: self.0.cfg().strata_url.is_some(),
             entries,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            data_dir: self
+                .0
+                .cfg()
+                .data_dir
+                .as_ref()
+                .map(|d| d.display().to_string()),
         }
     }
 
@@ -174,7 +181,7 @@ impl Backend for UiBackend {
             state.overview.refresh_now();
             match answer {
                 Ok(SleepAnswer::Accepted) => Ok(()),
-                Ok(SleepAnswer::Refused(reason)) => Err(format!("Abgelehnt: {reason}")),
+                Ok(SleepAnswer::Refused(reason)) => Err(format!("Refused: {reason}")),
                 Err(_) => Err("The PC service does not answer.".to_string()),
             }
         }

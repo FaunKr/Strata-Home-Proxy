@@ -410,7 +410,10 @@ fn KeepAwakeCard(overview: Overview, actions: Actions) -> impl IntoView {
     };
     let text = match &kept {
         Some(until) => format!("Awake until {until}, even across a restart of the proxy."),
-        None => "Off. The PC sleeps once it has had no requests for a while.".to_string(),
+        None => format!(
+            "Off. The PC sleeps after {} without requests.",
+            idle_text(overview.idle_timeout_secs)
+        ),
     };
     view! {
         <section class="card">
@@ -536,6 +539,16 @@ fn strata_sentence(strata: &StrataView) -> String {
             text.push('.');
             text
         }
+    }
+}
+
+/// `15 min`, `2 h` or `1 h 30 min`.
+fn idle_text(secs: u64) -> String {
+    let mins = secs.div_ceil(60);
+    match (mins / 60, mins % 60) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m} min"),
     }
 }
 

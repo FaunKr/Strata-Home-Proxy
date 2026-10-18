@@ -30,7 +30,7 @@ pub enum UpdateError {
 pub async fn update(agent: &Arc<Agent>) -> Result<(), UpdateError> {
     let Some(nas) = agent.cfg.nas_url.clone() else {
         return Err(UpdateError::Refused(
-            "Der PC-Dienst kennt die Adresse des NAS nicht. Einmal mit dem Befehl von der Seite PC-Dienst neu einrichten."
+            "Der PC-Dienst kennt die Adresse des NAS nicht. Einmal mit dem Befehl aus dem Bereich PC der Weboberfläche neu einrichten."
                 .into(),
         ));
     };

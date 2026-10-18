@@ -168,7 +168,7 @@ async fn an_old_service_without_update_is_told_to_set_up_again() {
         v["pc_service"]["update_error"]
             .as_str()
             .unwrap()
-            .contains("neu einrichten")
+            .contains("Install it once more")
     );
 }
 
@@ -227,7 +227,7 @@ async fn an_up_to_date_service_is_not_updated() {
     let mut b = logged_in(&s.url).await;
     let resp = b.call("pc-service-update", &[]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("schon"));
+    assert!(resp.text().await.unwrap().contains("already"));
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
 }
 

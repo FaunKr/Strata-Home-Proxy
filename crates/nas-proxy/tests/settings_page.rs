@@ -62,11 +62,16 @@ async fn shows_every_value_with_its_origin() {
     assert_eq!(entry(&view, "PC_AGENT_TOKEN")["value"], "set");
     assert!(!view.to_string().contains("streng-geheim"));
 
-    let html = b.page("/admin/strata").await;
+    let html = b.page("/admin/strata/connection").await;
     assert!(html.contains("Strata address"), "{html}");
     assert!(html.contains("Environment"), "{html}");
     let html = b.page("/admin/system").await;
     assert!(html.contains("Takes effect after a restart"), "{html}");
+    assert!(
+        html.contains(&format!("Version {}", env!("CARGO_PKG_VERSION"))),
+        "{html}"
+    );
+    assert!(html.contains(&dir.display().to_string()), "{html}");
     let html = b.page("/admin/pc").await;
     assert!(html.contains("Saved here"), "{html}");
     assert!(!html.contains("streng-geheim"));
@@ -105,7 +110,10 @@ async fn each_area_shows_its_own_settings() {
                 "SLEEP_SETTLE_SECS",
             ][..],
         ),
-        ("/admin/strata", &["STRATA_URL", "STRATA_API_KEY"][..]),
+        (
+            "/admin/strata/connection",
+            &["STRATA_URL", "STRATA_API_KEY"][..],
+        ),
         (
             "/admin/system",
             &[

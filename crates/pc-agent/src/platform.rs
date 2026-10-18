@@ -5,13 +5,20 @@ use std::{net::IpAddr, path::Path, process::Command, time::Duration};
 
 use anyhow::{Result, bail};
 
+use crate::command::{self, CommandSpec, Running};
+
 pub trait Platform: Send + Sync + 'static {
     /// Time since the last keyboard or mouse input.
     fn user_idle(&self) -> Duration;
     /// Puts the PC into standby. Returns after the PC wakes up again.
     fn suspend(&self) -> Result<()>;
     fn start_strata(&self, program: &Path, args: &[String]) -> Result<()>;
+    /// Ends Strata. Each entry is a program name (`strata.exe`) or a folder
+    /// (ending in `\` or `/`): every program from that folder ends, with all
+    /// it started.
     fn stop_strata(&self, processes: &[String]) -> Result<()>;
+    /// Starts a command whose output is read line by line.
+    fn run(&self, spec: &CommandSpec) -> Result<Running>;
     /// MAC address of the network card that holds `local`, the address the
     /// NAS connected to. `None` if unknown. May be slow; the caller caches it.
     fn mac_for(&self, _local: IpAddr) -> Option<[u8; 6]> {
@@ -32,11 +39,8 @@ mod imp {
 
     use super::*;
 
-    /// Keeps helper programs from flashing a console window.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
     pub fn hidden(cmd: &mut Command) -> &mut Command {
-        cmd.creation_flags(CREATE_NO_WINDOW)
+        cmd.creation_flags(super::CREATE_NO_WINDOW)
     }
 
     pub fn user_idle() -> Duration {
@@ -92,10 +96,31 @@ mod imp {
     }
 
     pub fn stop(processes: &[String]) -> Result<()> {
-        for name in processes {
-            // Exit code 128 means "not running", which is fine.
-            hidden(Command::new("taskkill").args(["/F", "/T", "/IM", name])).status()?;
+        for entry in processes {
+            if super::is_folder(entry) {
+                stop_folder(entry)?;
+            } else {
+                // Exit code 128 means "not running", which is fine.
+                hidden(Command::new("taskkill").args(["/F", "/T", "/IM", entry])).status()?;
+            }
         }
+        Ok(())
+    }
+
+    /// Ends every program started from `folder`, with the programs they
+    /// started: a venv's python.exe starts the real interpreter elsewhere.
+    fn stop_folder(folder: &str) -> Result<()> {
+        let folder = folder.trim_end_matches(['\\', '/']).replace('\'', "''");
+        let script = format!(
+            "Get-Process | Where-Object {{ $_.Path -like '{folder}\\*' }} | ForEach-Object {{ taskkill /F /T /PID $_.Id | Out-Null }}"
+        );
+        hidden(Command::new("powershell").args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &script,
+        ]))
+        .status()?;
         Ok(())
     }
 }
@@ -119,11 +144,31 @@ mod imp {
     }
 
     pub fn stop(processes: &[String]) -> Result<()> {
-        for name in processes {
-            Command::new("pkill").arg("-x").arg(name).status()?;
+        for entry in processes {
+            if super::is_folder(entry) {
+                // Every program whose command line starts in the folder.
+                Command::new("pkill")
+                    .arg("-f")
+                    .arg(format!("^{entry}"))
+                    .status()?;
+            } else {
+                Command::new("pkill").arg("-x").arg(entry).status()?;
+            }
         }
         Ok(())
     }
+}
+
+/// Keeps helper programs from flashing a console window.
+#[cfg(windows)]
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(windows)]
+pub(crate) use imp::hidden;
+
+/// Whether an entry of `strata_processes` names a folder rather than a program.
+pub fn is_folder(entry: &str) -> bool {
+    entry.ends_with(['\\', '/'])
 }
 
 /// Asks Windows which adapter holds `local` and reads its MAC address.
@@ -132,7 +177,7 @@ fn windows_mac_for(local: IpAddr) -> Option<[u8; 6]> {
     let script = format!(
         "(Get-NetAdapter -InterfaceIndex (Get-NetIPAddress -IPAddress '{local}' -ErrorAction Stop).InterfaceIndex).MacAddress"
     );
-    let out = imp::hidden(Command::new("powershell").args([
+    let out = hidden(Command::new("powershell").args([
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -158,6 +203,9 @@ impl Platform for System {
     }
     fn stop_strata(&self, processes: &[String]) -> Result<()> {
         imp::stop(processes)
+    }
+    fn run(&self, spec: &CommandSpec) -> Result<Running> {
+        command::spawn(spec)
     }
     #[cfg(windows)]
     fn mac_for(&self, local: IpAddr) -> Option<[u8; 6]> {

@@ -21,9 +21,12 @@ strata_url = "http://127.0.0.1:8080"
 strata_start = 'C:\Strata\START-HERE.bat'
 strata_args = []
 
-# Prozessnamen, aus denen ein laufendes Strata besteht (im Task-Manager unter
-# "Details" nachsehen, während Strata läuft). Werden im Gaming-Modus beendet.
-strata_processes = ["llama-server.exe"]
+# Was zu einem laufenden Strata gehört; wird im Gaming-Modus beendet. Ein
+# Ordner (mit \ am Ende) beendet jedes Programm daraus samt allem, was es
+# gestartet hat: Strata läuft als Python aus .venv, das engine\strata.exe
+# startet und nach einem Absturz neu startet. Ein Programmname (z. B.
+# "strata.exe") beendet nur Programme mit genau diesem Namen.
+strata_processes = ['C:\Strata\']
 
 # Kein Schlafen, solange die letzte Tastatur- oder Mauseingabe jünger ist.
 user_idle_minutes = 10

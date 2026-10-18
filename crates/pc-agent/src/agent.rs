@@ -26,6 +26,7 @@ use serde_json::json;
 
 use crate::{
     config::{Config, format_mac, parse_mac},
+    managed::Managed,
     platform::Platform,
 };
 
@@ -65,6 +66,7 @@ pub struct Agent {
     gaming: AtomicBool,
     watchdog: Mutex<Watchdog>,
     macs: Mutex<HashMap<IpAddr, CachedMac>>,
+    managed: Mutex<Managed>,
 }
 
 struct Watchdog {
@@ -102,6 +104,7 @@ impl Agent {
             .build()
             .expect("HTTP client");
         let gaming = gaming_flag(&cfg).exists();
+        let managed = Managed::load(&cfg.state_dir());
         Arc::new(Self {
             cfg,
             platform,
@@ -112,7 +115,19 @@ impl Agent {
                 last_start: None,
             }),
             macs: Mutex::new(HashMap::new()),
+            managed: Mutex::new(managed),
         })
+    }
+
+    /// Replaces the managed values and keeps them for the next start.
+    pub fn set_managed(&self, managed: Managed) -> anyhow::Result<()> {
+        managed.save(&self.cfg.state_dir())?;
+        *self.managed.lock().unwrap() = managed;
+        Ok(())
+    }
+
+    pub fn managed(&self) -> Managed {
+        self.managed.lock().unwrap().clone()
     }
 
     pub fn gaming(&self) -> bool {
@@ -121,7 +136,7 @@ impl Agent {
 
     fn strata_get(&self, path: &str) -> reqwest::RequestBuilder {
         let req = self.http.get(format!("{}{path}", self.cfg.strata_url));
-        match &self.cfg.strata_api_key {
+        match self.managed().api_key(&self.cfg) {
             Some(key) => req.bearer_auth(key),
             None => req,
         }
@@ -203,17 +218,17 @@ impl Agent {
     fn start_strata(&self) {
         self.watchdog.lock().unwrap().last_start = Some(Instant::now());
         tracing::info!("Strata wird gestartet");
-        if let Err(e) = self
-            .platform
-            .start_strata(&self.cfg.strata_start, &self.cfg.strata_args)
-        {
+        let managed = self.managed();
+        let (program, args) = managed.start(&self.cfg);
+        if let Err(e) = self.platform.start_strata(program, args) {
             tracing::error!("Strata-Start fehlgeschlagen: {e}");
         }
     }
 
     fn stop_strata(&self) {
         tracing::info!("Strata wird beendet");
-        if let Err(e) = self.platform.stop_strata(&self.cfg.strata_processes) {
+        let managed = self.managed();
+        if let Err(e) = self.platform.stop_strata(managed.processes(&self.cfg)) {
             tracing::error!("Strata-Ende fehlgeschlagen: {e}");
         }
     }

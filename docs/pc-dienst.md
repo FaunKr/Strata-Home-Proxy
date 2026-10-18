@@ -25,14 +25,25 @@ anmeldest. Er
    legt die Desktop-Verknüpfung **Gaming an-aus** an.
 3. `%LOCALAPPDATA%\StrataHome\strata-pc-agent.toml` öffnen und prüfen:
    - `strata_start`: Pfad zu `START-HERE.bat`
-   - `strata_processes`: im Task-Manager unter *Details* nachsehen, welche
-     Prozesse zu Strata gehören, während es läuft
+   - `strata_processes`: der Strata-Ordner mit `\` am Ende (Vorgabe
+     `C:\Strata\`). Der Dienst beendet dann jedes Programm aus diesem Ordner
+     samt allem, was es gestartet hat; nur `strata.exe` zu beenden reicht
+     nicht, weil Strata die Engine nach einem Absturz neu startet
    - `strata_api_key`: nur falls `/health` ohne Key nicht antwortet
    Danach in der Aufgabenplanung „Strata PC-Dienst“ beenden und neu starten.
 4. Auf dem NAS in der App `PC_AGENT_URL` (`http://<PC-IP>:8091`) und
    `PC_AGENT_TOKEN` (das Token aus Schritt 2) eintragen.
 
 Der Dienst schreibt nach `%LOCALAPPDATA%\StrataHome\strata-pc-agent.log`.
+
+## Verwaltete Werte
+
+Richtet der Dienst Strata selbst ein (Seite „Strata“ der Weboberfläche),
+speichert er Startskript, Strata-Ordner und Strata-Key in
+`strata-managed.json` neben der TOML. Diese Werte gehen vor `strata_start`,
+`strata_args`, `strata_processes` und `strata_api_key` aus der TOML; die TOML
+selbst bleibt unverändert. Ohne diese Datei gilt die TOML wie bisher. Wer
+wieder von Hand einrichten will, löscht die Datei und startet den Dienst neu.
 
 ## Hinweise
 

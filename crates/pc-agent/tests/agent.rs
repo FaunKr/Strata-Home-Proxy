@@ -2,7 +2,7 @@
 
 use std::{
     net::SocketAddr,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -12,7 +12,12 @@ use std::{
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use serde_json::{Value, json};
-use strata_pc_agent::{Agent, Config, Peer, Status, agent::router, platform::Platform};
+use strata_pc_agent::{
+    Agent, Config, Peer, Status,
+    agent::router,
+    command::{CommandSpec, Running},
+    platform::Platform,
+};
 use tokio::net::TcpListener;
 
 #[derive(Default)]
@@ -25,6 +30,10 @@ struct Fake {
     strata_busy: AtomicBool,
     mac: Mutex<Option<[u8; 6]>>,
     mac_lookups: AtomicUsize,
+    /// Program and arguments of the last start.
+    started: Mutex<Option<(PathBuf, Vec<String>)>>,
+    /// What the last stop was told to end.
+    stopped: Mutex<Option<Vec<String>>>,
 }
 
 struct FakePlatform(Arc<Fake>);
@@ -37,15 +46,20 @@ impl Platform for FakePlatform {
         self.0.suspends.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
-    fn start_strata(&self, _: &Path, _: &[String]) -> anyhow::Result<()> {
+    fn start_strata(&self, program: &Path, args: &[String]) -> anyhow::Result<()> {
+        *self.0.started.lock().unwrap() = Some((program.to_path_buf(), args.to_vec()));
         self.0.starts.fetch_add(1, Ordering::SeqCst);
         self.0.strata_up.store(true, Ordering::SeqCst);
         Ok(())
     }
-    fn stop_strata(&self, _: &[String]) -> anyhow::Result<()> {
+    fn stop_strata(&self, processes: &[String]) -> anyhow::Result<()> {
+        *self.0.stopped.lock().unwrap() = Some(processes.to_vec());
         self.0.stops.fetch_add(1, Ordering::SeqCst);
         self.0.strata_up.store(false, Ordering::SeqCst);
         Ok(())
+    }
+    fn run(&self, spec: &CommandSpec) -> anyhow::Result<Running> {
+        anyhow::bail!("kein nachgebauter Befehl für {}", spec.program.display())
     }
     fn mac_for(&self, _local: std::net::IpAddr) -> Option<[u8; 6]> {
         self.0.mac_lookups.fetch_add(1, Ordering::SeqCst);
@@ -342,4 +356,41 @@ async fn configured_mac_replaces_the_found_one() {
     *s.fake.mac.lock().unwrap() = Some([9; 6]);
     assert_eq!(status_json(&s).await["mac"], "11:22:33:44:55:66");
     assert_eq!(s.fake.mac_lookups.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn managed_values_come_before_the_configuration() {
+    let s = setup_with("managed", |cfg| {
+        let managed = json!({
+            "strata_start": "C:\\Strata\\run-qwen.bat",
+            "strata_processes": ["C:\\Strata\\"],
+        });
+        let dir = cfg.state_dir.clone().unwrap();
+        std::fs::write(dir.join("strata-managed.json"), managed.to_string()).unwrap();
+        cfg.strata_args = vec!["--aus-der-toml".into()];
+    })
+    .await;
+    s.agent.set_gaming(true);
+    assert_eq!(
+        s.fake.stopped.lock().unwrap().clone().unwrap(),
+        ["C:\\Strata\\"]
+    );
+    s.agent.set_gaming(false);
+    let (program, args) = s.fake.started.lock().unwrap().clone().unwrap();
+    assert_eq!(program, PathBuf::from("C:\\Strata\\run-qwen.bat"));
+    // Arguments from the TOML belong to its start script, not the managed one.
+    assert!(args.is_empty(), "{args:?}");
+}
+
+#[tokio::test]
+async fn without_managed_values_the_configuration_applies() {
+    let s = setup("unmanaged").await;
+    s.agent.set_gaming(true);
+    s.agent.set_gaming(false);
+    let (program, _) = s.fake.started.lock().unwrap().clone().unwrap();
+    assert_eq!(program, PathBuf::from("START-HERE.bat"));
+    assert_eq!(
+        s.fake.stopped.lock().unwrap().clone().unwrap(),
+        ["llama-server.exe"]
+    );
 }

@@ -17,11 +17,11 @@ Der Dienst auf dem NAS, über den alle Anfragen an Strata laufen.
 _Avoid_: NAS-Proxy (nur im Code), Gateway
 
 **Weboberfläche**:
-Die Seiten des Proxys unter `/admin`: Übersicht, Einstellungen, Anmeldung.
+Die Seiten des Proxys unter `/admin`, gegliedert in die Bereiche Overview (Übersicht), PC, Strata, Access und System, dazu die Anmeldung. Die Oberfläche ist englisch; die Fachbegriffe hier bleiben deutsch.
 _Avoid_: Admin-UI, Dashboard
 
 **Einrichtungsbefehl**:
-Der PowerShell-Einzeiler von der Seite *PC-Dienst*, der den PC-Dienst vom NAS lädt, einrichtet und beim Proxy anmeldet.
+Der PowerShell-Einzeiler aus dem Bereich *PC* der Weboberfläche, der den PC-Dienst vom NAS lädt, einrichtet und beim Proxy anmeldet.
 _Avoid_: Installer, Setup-Link
 
 **Einmalcode**:
@@ -73,5 +73,5 @@ Ein Eintrag im Verlauf des Proxys über PC, Wecken, Schlafen oder die Weboberfl�
 _Avoid_: Log-Eintrag
 
 **Strata-Ausgabe**:
-Was ein vom PC-Dienst gestartetes Strata auf seine Konsole schreibt; der PC-Dienst merkt sich die letzten 500 Zeilen, die Weboberfläche zeigt sie live auf der gleichnamigen Seite. Kein Ereignis.
+Was ein vom PC-Dienst gestartetes Strata auf seine Konsole schreibt; der PC-Dienst merkt sich die letzten 500 Zeilen, die Weboberfläche zeigt sie live im Bereich Strata (Reiter *Output*). Kein Ereignis.
 _Avoid_: Strata-Log, Log-Eintrag (nur `strata-log` und `strata.log` im Code und in Dateinamen)

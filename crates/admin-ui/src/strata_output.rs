@@ -1,5 +1,6 @@
-//! The page "Strata-Ausgabe": what Strata writes to its console on the PC,
-//! live from the proxy. It follows the newest line until one scrolls up.
+//! The tab "Output" of the Strata area: what Strata writes to its console on
+//! the PC, live from the proxy. It follows the newest line until one
+//! scrolls up.
 
 use leptos::{html::Pre, prelude::*};
 
@@ -7,12 +8,12 @@ use leptos::{html::Pre, prelude::*};
 use crate::api::OutputMessage;
 use crate::api::OutputNotice;
 
-/// Lines the page keeps, like `KEPT` of the PC service's Strata-Ausgabe.
+/// Lines the tab keeps, like `KEPT` of the PC service's Strata-Ausgabe.
 #[cfg(feature = "hydrate")]
 const KEPT: usize = 500;
 
 #[component]
-pub fn StrataOutputPage() -> impl IntoView {
+pub fn OutputTab() -> impl IntoView {
     let lines = RwSignal::new(Vec::<String>::new());
     let notice = RwSignal::new(None::<OutputNotice>);
     let lost = RwSignal::new(false);
@@ -48,20 +49,47 @@ pub fn StrataOutputPage() -> impl IntoView {
         }
     };
     view! {
-        <h1>"Strata-Ausgabe"</h1>
-        <p><a href="/admin/">"Zurück zur Übersicht"</a></p>
-        {move || lost.get().then(|| view! {
-            <p class="warning" role="status">"Verbindung unterbrochen, verbinde neu …"</p>
-        })}
-        {move || notice.get().and_then(notice_text).map(|text| view! {
-            <p class="warning" role="status">{text}</p>
-        })}
-        <pre class="lines output" node_ref=pre on:scroll=on_scroll>
-            {move || lines.with(|l| l.join("\n"))}
-        </pre>
-        {move || (!at_end.get()).then(|| view! {
-            <p class="hint">"Angehalten. Ganz nach unten scrollen, um wieder mitzulaufen."</p>
-        })}
+        <section class="card">
+            <div class="card-head">
+                <h2>"Console output"</h2>
+                {move || {
+                    let waiting = notice.with(|n| n.is_some_and(|n| n != OutputNotice::Running));
+                    let (text, class) = if lost.get() {
+                        ("Reconnecting", "badge is-warn")
+                    } else if waiting {
+                        ("Waiting", "badge is-idle")
+                    } else if at_end.get() {
+                        ("Live", "badge is-ok")
+                    } else {
+                        ("Paused", "badge is-idle")
+                    };
+                    view! {
+                        <span class=class>
+                            <span class="dot"></span>
+                            {text}
+                        </span>
+                    }
+                }}
+            </div>
+            <p class="muted small">"What Strata prints on the PC, newest at the bottom."</p>
+            {move || {
+                notice
+                    .get()
+                    .and_then(notice_text)
+                    .map(|text| view! { <p class="warning" role="status">{text}</p> })
+            }}
+            <pre class="lines output" node_ref=pre on:scroll=on_scroll tabindex="0">
+                {move || lines.with(|l| l.join("\n"))}
+            </pre>
+            {move || {
+                (!at_end.get())
+                    .then(|| {
+                        view! {
+                            <p class="hint">"Paused. Scroll to the bottom to follow again."</p>
+                        }
+                    })
+            }}
+        </section>
     }
 }
 
@@ -94,19 +122,19 @@ fn notice_text(notice: OutputNotice) -> Option<&'static str> {
     Some(match notice {
         OutputNotice::Running => return None,
         OutputNotice::Asleep => {
-            "Der PC schläft. Die Ausgabe erscheint, sobald er wach ist; diese Seite weckt ihn nicht."
+            "The PC is asleep. The output appears once it is awake; this tab does not wake it."
         }
-        OutputNotice::NoAgent => "Kein PC-Dienst eingerichtet, die Ausgabe kommt über ihn.",
+        OutputNotice::NoAgent => "No PC service is set up, and the output comes through it.",
         OutputNotice::TooOld => {
-            "Der PC-Dienst kennt die Strata-Ausgabe nicht. Bitte den PC-Dienst aktualisieren."
+            "The PC service does not know the output yet. Please update the PC service."
         }
         OutputNotice::Refused => {
-            "Der PC-Dienst lehnt den Proxy ab. PC_AGENT_TOKEN und allowed_clients prüfen."
+            "The PC service refuses the proxy. Check PC_AGENT_TOKEN and allowed_clients."
         }
-        OutputNotice::Gaming => "Gaming-Modus: Strata ist beendet.",
-        OutputNotice::NotRunning => "Strata läuft nicht.",
+        OutputNotice::Gaming => "Gaming mode: Strata is stopped.",
+        OutputNotice::NotRunning => "Strata is not running.",
         OutputNotice::NotStartedByAgent => {
-            "Strata wurde nicht vom PC-Dienst gestartet, deshalb gibt es keine Ausgabe. Nach dem nächsten Start durch den PC-Dienst erscheint sie hier."
+            "Strata was not started by the PC service, so there is no output. It appears here after the next start by the PC service."
         }
     })
 }

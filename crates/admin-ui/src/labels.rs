@@ -1,11 +1,11 @@
 //! How the pages name and explain things.
 
-use crate::api::{EventKind, StrataJobKind};
+use crate::api::{EventKind, Overview, PcView, StrataJobKind, StrataView};
 
 /// Messages that the proxy and the overview both show.
-pub const NOT_CONFIGURED: &str = "Die Strata-Adresse fehlt, der Proxy ist nicht eingerichtet.";
-pub const NO_MAC: &str = "Keine MAC-Adresse bekannt, der PC kann nicht geweckt werden.";
-pub const NO_AGENT: &str = "Kein PC-Dienst eingerichtet (PC_AGENT_URL).";
+pub const NOT_CONFIGURED: &str = "The Strata address is missing, the proxy is not set up.";
+pub const NO_MAC: &str = "No MAC address is known, so the PC cannot be woken.";
+pub const NO_AGENT: &str = "No PC service is set up (PC_AGENT_URL).";
 
 pub struct Label {
     pub title: &'static str,
@@ -15,123 +15,227 @@ pub struct Label {
 pub fn label(key: &str) -> Label {
     let (title, help) = match key {
         "STRATA_URL" => (
-            "Strata-Adresse",
-            "Basis-URL von Strata auf dem PC, z. B. http://192.168.1.50:8080.",
+            "Strata address",
+            "Base URL of Strata on the PC, e.g. http://192.168.1.50:8080.",
         ),
         "STRATA_API_KEY" => (
-            "API-Key von Strata",
-            "Derselbe Key wie in Strata. Der Proxy setzt ihn bei jeder Anfrage an Strata ein und nutzt ihn für seine eigenen Aufrufe (z. B. die Übersicht); Clients nutzen ihre eigenen API-Keys. Wird nie angezeigt.",
+            "Strata API key",
+            "The same key as in Strata. The proxy adds it to every request to Strata and uses it for its own calls; clients use their own API keys. Never shown.",
         ),
         "PC_MAC" => (
-            "MAC-Adresse des PCs",
-            "Netzwerkkarte, die das Weckpaket empfängt. Meldet der PC-Dienst seine MAC, gilt diese.",
+            "MAC address",
+            "Network card that receives the wake packet. A MAC the PC service reports takes precedence.",
         ),
         "WOL_ADDR" => (
-            "Weckadresse",
-            "Wohin das Weckpaket geht, meist die Broadcast-Adresse mit Port 9, z. B. 192.168.1.255:9.",
+            "Wake address",
+            "Where the wake packet goes, usually the broadcast address on port 9, e.g. 192.168.1.255:9.",
         ),
         "PC_AGENT_URL" => (
-            "Adresse des PC-Dienstes",
-            "z. B. http://192.168.1.50:8091. Ohne ihn kein Gaming-Modus und kein automatisches Schlafen.",
+            "PC service address",
+            "E.g. http://192.168.1.50:8091. Without it there is no gaming mode and no automatic sleep.",
         ),
         "PC_AGENT_TOKEN" => (
-            "Token des PC-Dienstes",
-            "Dasselbe Geheimnis wie in strata-pc-agent.toml. Wird nie angezeigt.",
+            "PC service token",
+            "The same secret as in strata-pc-agent.toml. Never shown.",
         ),
         "IDLE_TIMEOUT_SECS" => (
-            "Leerlauf bis zum Schlafen",
-            "Sekunden ohne Anfrage, bevor der PC schlafen soll.",
+            "Idle time before sleep",
+            "Without requests for this long, the PC goes to sleep.",
         ),
         "WAKE_TIMEOUT_SECS" => (
-            "Längste Weckwartezeit",
-            "Sekunden, die eine Anfrage höchstens auf das Aufwachen wartet.",
+            "Longest wake wait",
+            "How long a request waits at most for the PC to wake.",
         ),
         "WOL_RESEND_SECS" => (
-            "Weckpaket wiederholen",
-            "Sekunden zwischen zwei Weckpaketen, solange der PC nicht antwortet.",
+            "Resend wake packet",
+            "Time between two wake packets while the PC does not answer.",
         ),
         "HEALTH_POLL_MS" => (
-            "Prüfabstand beim Aufwachen",
-            "Millisekunden zwischen zwei Abfragen von /health.",
+            "Check interval while waking",
+            "Time between two calls of /health while the PC wakes.",
         ),
         "PING_INTERVAL_SECS" => (
-            "Ping-Abstand",
-            "Sekunden Stille in einem Stream, nach denen ein Ping gesendet wird.",
+            "Ping interval",
+            "Silence in a stream after which a ping is sent.",
         ),
         "IDLE_CHECK_SECS" => (
-            "Leerlauf-Prüfung",
-            "Sekunden zwischen zwei Prüfungen, ob der PC schlafen kann.",
+            "Idle check",
+            "Time between two checks whether the PC can sleep.",
         ),
         "SLEEP_RETRY_SECS" => (
-            "Erneut fragen nach Ablehnung",
-            "Sekunden, bis der PC nach einem abgelehnten Schlafen erneut gefragt wird.",
+            "Ask again after refusal",
+            "Wait before asking again after the PC refused to sleep.",
         ),
         "SLEEP_SETTLE_SECS" => (
-            "Einschlafzeit",
-            "Sekunden nach einem angenommenen Schlafen, in denen Strata als weg gilt.",
+            "Settle time",
+            "After the PC accepted sleep, Strata counts as gone for this long.",
         ),
         "PROBE_TIMEOUT_MS" => (
-            "Zeitlimit für Abfragen",
-            "Millisekunden für /health und den PC-Dienst.",
+            "Probe timeout",
+            "Time limit for /health and calls to the PC service.",
         ),
-        "MAX_BODY_BYTES" => (
-            "Größte Anfrage",
-            "Bytes, die eine Anfrage höchstens haben darf.",
-        ),
-        "LISTEN_ADDR" => (
-            "Adresse des Proxys",
-            "Adresse und Port, auf denen der Proxy lauscht.",
-        ),
+        "MAX_BODY_BYTES" => ("Largest request", "Requests above this size are refused."),
+        "LISTEN_ADDR" => ("Proxy address", "Address and port the proxy listens on."),
         _ => ("", ""),
     };
     Label {
-        title: if title.is_empty() { "Unbekannt" } else { title },
+        title: if title.is_empty() { "Unknown" } else { title },
         help,
+    }
+}
+
+/// A group of settings shown together in an area, saved with one button.
+pub struct SectionDef {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub help: &'static str,
+    pub keys: &'static [&'static str],
+    /// Rarely changed; folded away under "Advanced".
+    pub advanced: &'static [&'static str],
+}
+
+pub const PC_CONNECTION: SectionDef = SectionDef {
+    id: "pc-connection",
+    title: "Connection",
+    help: "How the proxy reaches your PC. The install command fills in the PC service values.",
+    keys: &["PC_MAC", "WOL_ADDR", "PC_AGENT_URL", "PC_AGENT_TOKEN"],
+    advanced: &[],
+};
+
+pub const PC_WAKE_SLEEP: SectionDef = SectionDef {
+    id: "pc-wake-sleep",
+    title: "Wake & sleep",
+    help: "When the PC goes to sleep, and how long requests wait for it to wake.",
+    keys: &["IDLE_TIMEOUT_SECS"],
+    advanced: &[
+        "WAKE_TIMEOUT_SECS",
+        "WOL_RESEND_SECS",
+        "HEALTH_POLL_MS",
+        "IDLE_CHECK_SECS",
+        "SLEEP_RETRY_SECS",
+        "SLEEP_SETTLE_SECS",
+    ],
+};
+
+pub const STRATA_CONNECTION: SectionDef = SectionDef {
+    id: "strata-connection",
+    title: "Connection",
+    help: "Where Strata runs, and the key the proxy uses to talk to it.",
+    keys: &["STRATA_URL", "STRATA_API_KEY"],
+    advanced: &[],
+};
+
+pub const SYSTEM: SectionDef = SectionDef {
+    id: "system",
+    title: "Proxy",
+    help: "Network and limits of the proxy itself.",
+    keys: &[
+        "LISTEN_ADDR",
+        "MAX_BODY_BYTES",
+        "PING_INTERVAL_SECS",
+        "PROBE_TIMEOUT_MS",
+    ],
+    advanced: &[],
+};
+
+/// The unit a value is entered in, shown inside its field.
+pub fn unit(key: &str) -> Option<&'static str> {
+    if key.ends_with("_SECS") {
+        Some("s")
+    } else if key.ends_with("_MS") {
+        Some("ms")
+    } else if key.ends_with("_BYTES") {
+        Some("bytes")
+    } else {
+        None
     }
 }
 
 /// How the overview names an event from the history.
 pub fn event_label(kind: EventKind) -> &'static str {
     match kind {
-        EventKind::WakeSent => "Weckpaket gesendet",
-        EventKind::Awake => "Aufgewacht",
-        EventKind::WakeTimeout => "Nicht rechtzeitig aufgewacht",
-        EventKind::SleepAccepted => "Schlafen angenommen",
-        EventKind::SleepRefused => "Schlafen abgelehnt",
-        EventKind::GamingRejected => "Anfrage abgewiesen: Gaming-Modus",
-        EventKind::PasswordChanged => "Passwort geändert",
-        EventKind::SettingSaved => "Einstellung gespeichert",
-        EventKind::ApiKeyCreated => "API-Key angelegt",
-        EventKind::ApiKeyRevoked => "API-Key widerrufen",
-        EventKind::SettingReset => "Einstellung zurückgesetzt",
-        EventKind::MacLearned => "MAC-Adresse gemeldet",
-        EventKind::WakeRequested => "Wecken angefordert",
-        EventKind::SleepRequested => "Schlafen angefordert",
-        EventKind::GamingOn => "Gaming an",
-        EventKind::GamingOff => "Gaming aus",
-        EventKind::KeepAwakeSet => "Wach halten",
-        EventKind::KeepAwakeEnded => "Wach halten beendet",
-        EventKind::StrataJobStarted => "Strata-Vorgang gestartet",
-        EventKind::StrataJobDone => "Strata-Vorgang fertig",
-        EventKind::StrataJobFailed => "Strata-Vorgang fehlgeschlagen",
-        EventKind::StrataJobCancelled => "Strata-Vorgang abgebrochen",
-        EventKind::StrataKeyChanged => "Strata-Key gewechselt",
-        EventKind::PcServiceRegistered => "PC-Dienst eingerichtet",
-        EventKind::PcServiceUpdateRequested => "Update des PC-Dienstes angestoßen",
-        EventKind::PcServiceUpdated => "PC-Dienst aktualisiert",
-        EventKind::PcServiceUpdateFailed => "Update des PC-Dienstes fehlgeschlagen",
+        EventKind::WakeSent => "Wake packet sent",
+        EventKind::Awake => "PC woke up",
+        EventKind::WakeTimeout => "PC did not wake in time",
+        EventKind::SleepAccepted => "PC went to sleep",
+        EventKind::SleepRefused => "PC refused to sleep",
+        EventKind::GamingRejected => "Request refused: gaming mode",
+        EventKind::PasswordChanged => "Password changed",
+        EventKind::SettingSaved => "Setting saved",
+        EventKind::ApiKeyCreated => "API key created",
+        EventKind::ApiKeyRevoked => "API key revoked",
+        EventKind::SettingReset => "Setting reset",
+        EventKind::MacLearned => "MAC address reported",
+        EventKind::WakeRequested => "Wake requested",
+        EventKind::SleepRequested => "Sleep requested",
+        EventKind::GamingOn => "Gaming mode on",
+        EventKind::GamingOff => "Gaming mode off",
+        EventKind::KeepAwakeSet => "Keep awake",
+        EventKind::KeepAwakeEnded => "Keep awake ended",
+        EventKind::StrataJobStarted => "Strata job started",
+        EventKind::StrataJobDone => "Strata job done",
+        EventKind::StrataJobFailed => "Strata job failed",
+        EventKind::StrataJobCancelled => "Strata job cancelled",
+        EventKind::StrataKeyChanged => "Strata key changed",
+        EventKind::PcServiceRegistered => "PC service set up",
+        EventKind::PcServiceUpdateRequested => "PC service update requested",
+        EventKind::PcServiceUpdated => "PC service updated",
+        EventKind::PcServiceUpdateFailed => "PC service update failed",
+    }
+}
+
+/// The color of an event's dot; the text says the same.
+pub fn event_class(kind: EventKind) -> &'static str {
+    match kind {
+        EventKind::WakeTimeout | EventKind::StrataJobFailed | EventKind::PcServiceUpdateFailed => {
+            "is-bad"
+        }
+        EventKind::SleepRefused
+        | EventKind::GamingRejected
+        | EventKind::GamingOn
+        | EventKind::WakeSent
+        | EventKind::WakeRequested
+        | EventKind::KeepAwakeSet
+        | EventKind::StrataJobCancelled => "is-warn",
+        EventKind::SleepAccepted | EventKind::SleepRequested => "is-idle",
+        _ => "is-ok",
     }
 }
 
 /// What a Strata job does, for the history and the page.
 pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
     match kind {
-        StrataJobKind::Install => "Einrichtung",
-        StrataJobKind::AddModel => "Modell installieren",
-        StrataJobKind::Activate => "Modell aktivieren",
-        StrataJobKind::Delete => "Modell löschen",
-        StrataJobKind::Update => "Update",
+        StrataJobKind::Install => "Setting up Strata",
+        StrataJobKind::AddModel => "Loading model",
+        StrataJobKind::Activate => "Making model active",
+        StrataJobKind::Delete => "Deleting model",
+        StrataJobKind::Update => "Updating Strata",
         StrataJobKind::Benchmark => "Benchmark",
-        StrataJobKind::SetKey => "Strata-Key wechseln",
+        StrataJobKind::SetKey => "New Strata key",
+    }
+}
+
+/// The PC's state as a badge: text and color class.
+pub fn pc_badge(pc: PcView) -> (&'static str, &'static str) {
+    match pc {
+        PcView::Unknown => ("Unknown", "is-idle"),
+        PcView::Asleep => ("Asleep", "is-idle"),
+        PcView::Waking => ("Waking", "is-warn"),
+        PcView::Awake => ("Awake", "is-ok"),
+        PcView::Gaming => ("Gaming", "is-ok"),
+    }
+}
+
+/// Strata's state as a badge: text and color class.
+pub fn strata_badge(overview: &Overview) -> (&'static str, &'static str) {
+    match (&overview.strata, overview.pc) {
+        (StrataView::Offline, PcView::Gaming) => ("Paused", "is-warn"),
+        (StrataView::Offline, PcView::Waking) => ("Starting", "is-warn"),
+        (StrataView::Offline, PcView::Awake) => ("Offline", "is-bad"),
+        (StrataView::Offline, _) => ("Offline", "is-idle"),
+        (StrataView::Loading, _) => ("Loading", "is-warn"),
+        (StrataView::Unloaded, _) => ("Idle", "is-ok"),
+        (StrataView::Ready, _) => ("Ready", "is-ok"),
+        (StrataView::Busy { .. }, _) => ("Busy", "is-warn"),
     }
 }

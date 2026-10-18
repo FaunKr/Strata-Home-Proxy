@@ -31,7 +31,7 @@ Schon entschiedene Fragen: `docs/adr/`.
 - **Vorrang der Einstellungen:** vom PC gemeldete MAC, dann Wert von der
   Seite, dann Umgebungsvariable, dann Standardwert. Neue Einstellungen folgen
   derselben Reihenfolge und werden live über `AppState::cfg()` gelesen. Das
-  gilt für Werte der Einstellungsseite, nicht für feste Pfade im Image wie
+  gilt für Werte aus den Einstellungs-Abschnitten der Weboberfläche, nicht für feste Pfade im Image wie
   `LEPTOS_SITE_ROOT` oder `PC_AGENT_EXE`.
 - **Strata-Vorgänge führen nur feste Programme aus.** Der PC-Dienst nimmt
   Werte nur aus `catalog.rs` und prüft Modell-IDs gegen den Katalog, bevor sie

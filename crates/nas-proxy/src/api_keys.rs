@@ -46,14 +46,14 @@ pub enum KeyError {
 impl std::fmt::Display for KeyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EmptyName => write!(f, "Bitte einen Namen angeben."),
+            Self::EmptyName => write!(f, "Please enter a name."),
             Self::NameTooLong => write!(
                 f,
-                "Der Name ist zu lang (höchstens {MAX_NAME_CHARS} Zeichen)."
+                "The name is too long (at most {MAX_NAME_CHARS} characters)."
             ),
-            Self::DuplicateName => write!(f, "Es gibt schon einen Key mit diesem Namen."),
-            Self::UnknownKey => write!(f, "Diesen Key gibt es nicht (mehr)."),
-            Self::NotSaved(e) => write!(f, "Key nicht gespeichert: {e}"),
+            Self::DuplicateName => write!(f, "A key with this name exists already."),
+            Self::UnknownKey => write!(f, "This key does not exist (any more)."),
+            Self::NotSaved(e) => write!(f, "Key not saved: {e}"),
         }
     }
 }

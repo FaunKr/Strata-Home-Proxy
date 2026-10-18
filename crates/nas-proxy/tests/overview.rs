@@ -242,12 +242,7 @@ async fn counts_down_to_sleep_and_follows_the_setting() {
     let left = countdown(&v).unwrap();
     assert!((3590..=3600).contains(&left), "{left}");
 
-    let resp = b
-        .call(
-            "save-setting",
-            &[("key", "IDLE_TIMEOUT_SECS"), ("value", "600")],
-        )
-        .await;
+    let resp = save_settings(&mut b, &[("IDLE_TIMEOUT_SECS", "600")]).await;
     assert_eq!(resp.status(), 200);
     let v = live
         .until("kürzerer Countdown", |v| {
@@ -331,7 +326,7 @@ async fn wake_button_wakes_and_idle_counts_from_then() {
         .iter()
         .find(|e| e["kind"] == "wake_requested")
         .unwrap();
-    assert_eq!(requested["detail"], "über Weboberfläche");
+    assert_eq!(requested["detail"], "from the web UI");
 }
 
 #[tokio::test]
@@ -417,7 +412,7 @@ async fn gaming_on_reports_a_failed_wake() {
     let mut b = logged_in(&s.url).await;
     let resp = b.call("gaming", &[("enabled", "true")]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("nicht rechtzeitig"));
+    assert!(resp.text().await.unwrap().contains("did not wake in time"));
     assert!(!s.pc.gaming.load(Ordering::SeqCst));
     let kinds: Vec<_> = kinds(&s.state)
         .into_iter()
@@ -434,7 +429,7 @@ async fn gaming_on_reports_a_failed_wake() {
         .expect("Wecken angefordert");
     assert_eq!(
         requested.detail.as_deref(),
-        Some("für Gaming-Modus, über Weboberfläche")
+        Some("for gaming mode, from the web UI")
     );
 }
 
@@ -584,7 +579,7 @@ async fn gaming_on_without_strata_address_says_why() {
     let mut b = logged_in(&s.url).await;
     let resp = b.call("gaming", &[("enabled", "true")]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("Strata-Adresse"));
+    assert!(resp.text().await.unwrap().contains("Strata address"));
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
 }
 
@@ -607,4 +602,53 @@ async fn warns_while_no_api_key_exists() {
     b.call("create-api-key", &[("name", "Laptop")]).await;
     live.until("wieder ein Key", |v| v["api_key_exists"] == true)
         .await;
+}
+
+// --- Setup checklist (#65) ---
+
+#[tokio::test]
+async fn stream_tells_whether_data_survives_a_restart() {
+    let s = setup(true, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live.until("PC wach", |v| v["pc"] == "Awake").await;
+    assert_eq!(v["persistent"], false);
+
+    let dir = std::env::temp_dir().join(format!("strata-overview-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let s = setup(true, |c| c.data_dir = Some(dir.clone())).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live.until("PC wach", |v| v["pc"] == "Awake").await;
+    assert_eq!(v["persistent"], true);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn fresh_proxy_lists_what_is_left_to_set_up() {
+    let s = setup(false, |c| c.strata_url = None).await;
+    for k in s.state.api_keys.list() {
+        s.state.api_keys.revoke(&k.name, &k.prefix).unwrap();
+    }
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin").await;
+    assert!(html.contains("Finish setup"), "{html}");
+    assert!(html.contains("2 of 5 done"), "{html}");
+    assert!(html.contains("Set address"), "{html}");
+    assert!(html.contains("Create key"), "{html}");
+    assert!(html.contains("How to"), "{html}");
+    assert!(!html.contains("Set MAC"), "{html}");
+    assert!(!html.contains(">Install<"), "{html}");
+}
+
+#[tokio::test]
+async fn set_up_proxy_shows_no_checklist() {
+    let dir = std::env::temp_dir().join(format!("strata-checklist-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let s = setup(false, |c| c.data_dir = Some(dir.clone())).await;
+    s.state.api_keys.create("Laptop").unwrap();
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin").await;
+    assert!(!html.contains("Finish setup"), "{html}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

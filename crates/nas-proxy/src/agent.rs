@@ -62,7 +62,7 @@ pub enum UpdateAnswer {
     NoAnswer,
 }
 
-pub const TOO_OLD_FOR_UPDATE: &str = "Dieser PC-Dienst ist zu alt für ein Update über die Weboberfläche. Einmal mit dem Befehl von der Seite PC-Dienst neu einrichten.";
+pub const TOO_OLD_FOR_UPDATE: &str = "This PC service is too old to update from the web UI. Install it once more with the command from the PC area.";
 
 pub struct AgentClient {
     base: Option<String>,
@@ -119,7 +119,7 @@ impl AgentClient {
     pub async fn set_gaming(&self, enabled: bool) -> anyhow::Result<()> {
         let req = self
             .request(reqwest::Method::POST, "/gaming")
-            .ok_or_else(|| anyhow::anyhow!("PC_AGENT_URL ist nicht gesetzt"))?;
+            .ok_or_else(|| anyhow::anyhow!("PC_AGENT_URL is not set"))?;
         let resp = req
             .json(&serde_json::json!({ "enabled": enabled }))
             .send()
@@ -133,7 +133,7 @@ impl AgentClient {
     pub async fn request_sleep(&self) -> anyhow::Result<SleepAnswer> {
         let req = self
             .request(reqwest::Method::POST, "/sleep")
-            .ok_or_else(|| anyhow::anyhow!("PC_AGENT_URL ist nicht gesetzt"))?;
+            .ok_or_else(|| anyhow::anyhow!("PC_AGENT_URL is not set"))?;
         let resp = req.send().await?;
         if resp.status().is_success() {
             return Ok(SleepAnswer::Accepted);
@@ -172,18 +172,18 @@ impl AgentClient {
     pub async fn start_strata_job(&self, body: &serde_json::Value) -> Result<StrataJob, String> {
         let req = self
             .request(reqwest::Method::POST, "/strata/jobs")
-            .ok_or_else(|| "PC_AGENT_URL ist nicht gesetzt".to_string())?;
+            .ok_or_else(|| "PC_AGENT_URL is not set".to_string())?;
         let resp = req
             .json(body)
             .send()
             .await
-            .map_err(|_| "Der PC-Dienst antwortet nicht.".to_string())?;
+            .map_err(|_| "The PC service does not answer.".to_string())?;
         if !resp.status().is_success() {
             return Err(reason(resp).await);
         }
         resp.json()
             .await
-            .map_err(|e| format!("Antwort des PC-Dienstes nicht lesbar: {e}"))
+            .map_err(|e| format!("The PC service's answer is unreadable: {e}"))
     }
 
     /// The Strata-Ausgabe as the service streams it: `None` without an
@@ -211,11 +211,11 @@ impl AgentClient {
     pub async fn cancel_strata_job(&self) -> Result<(), String> {
         let req = self
             .request(reqwest::Method::POST, "/strata/job/cancel")
-            .ok_or_else(|| "PC_AGENT_URL ist nicht gesetzt".to_string())?;
+            .ok_or_else(|| "PC_AGENT_URL is not set".to_string())?;
         let resp = req
             .send()
             .await
-            .map_err(|_| "Der PC-Dienst antwortet nicht.".to_string())?;
+            .map_err(|_| "The PC service does not answer.".to_string())?;
         if !resp.status().is_success() {
             return Err(reason(resp).await);
         }
@@ -226,7 +226,7 @@ impl AgentClient {
     /// own and restart.
     pub async fn update(&self) -> UpdateAnswer {
         let Some(req) = self.request(reqwest::Method::POST, "/update") else {
-            return UpdateAnswer::Refused("PC_AGENT_URL ist nicht gesetzt".into());
+            return UpdateAnswer::Refused("PC_AGENT_URL is not set".into());
         };
         let Ok(resp) = req.timeout(UPDATE_TIMEOUT).send().await else {
             return UpdateAnswer::NoAnswer;

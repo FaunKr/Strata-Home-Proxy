@@ -165,8 +165,8 @@ async fn key_management_needs_a_login() {
     let mut b = Browser::new(&s.url);
     assert_eq!(b.call("api-keys", &[]).await.status(), 401);
     assert_eq!(create(&mut b, "Fremd").await.status(), 401);
-    let html = b.page("/admin/api-keys").await;
-    assert!(html.contains("Anmelden"), "{html}");
+    let html = b.page("/admin/access").await;
+    assert!(html.contains("Sign in"), "{html}");
 }
 
 #[tokio::test]
@@ -375,4 +375,27 @@ async fn strata_asking_for_a_key_the_proxy_lacks_is_told_apart() {
         resp.headers()["x-strata-proxy-status"],
         "strata_unauthorized"
     );
+}
+
+#[tokio::test]
+async fn access_page_lists_keys_with_a_revoke_button() {
+    let s = setup(true, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/access").await;
+    assert!(html.contains(">Test<"), "{html}");
+    assert!(html.contains(">Revoke<"), "{html}");
+    assert!(!html.contains("type=\"checkbox\""), "{html}");
+    assert!(!html.contains("No API keys yet"), "{html}");
+}
+
+#[tokio::test]
+async fn access_page_without_keys_says_every_client_gets_401() {
+    let s = setup(true, |_| {}).await;
+    for k in s.state.api_keys.list() {
+        s.state.api_keys.revoke(&k.name, &k.prefix).unwrap();
+    }
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/access").await;
+    assert!(html.contains("No API keys yet"), "{html}");
+    assert!(html.contains("401"), "{html}");
 }

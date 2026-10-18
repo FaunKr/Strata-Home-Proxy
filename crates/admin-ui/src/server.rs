@@ -27,7 +27,7 @@ use leptos_axum::{
 use crate::{
     api::{
         ApiKeysView, CreatedKey, KeepAwakeChoice, OutputMessage, Overview, PcSetupCommand, Session,
-        SettingsView, StrataJobForm, StrataPage,
+        SettingValue, SettingsView, Setup, StrataJobForm, StrataPage,
     },
     app::{App, shell},
 };
@@ -52,10 +52,13 @@ pub trait Backend: Send + Sync + 'static {
     /// Ends the session of this token, also for copies of the cookie.
     fn logout(&self, token: &str);
     fn settings(&self) -> SettingsView;
-    /// Saves one value; a message for the user if it is invalid.
-    fn save_setting(&self, key: &str, value: &str) -> Result<(), String>;
+    /// Saves values together, leaving empty secrets as they are; for an
+    /// invalid value its key and a message for the user, and none is saved.
+    fn save_settings(&self, values: &[SettingValue]) -> Result<(), (Option<String>, String)>;
     /// Drops a saved value, so the environment or default applies again.
     fn reset_setting(&self, key: &str) -> Result<(), String>;
+    /// How far the proxy is set up.
+    fn setup(&self) -> Setup;
     /// The overview now and after every change, for as long as it is held.
     /// While anyone holds one, the proxy checks on the PC and Strata.
     fn overview(&self) -> BoxStream<'static, Overview>;
@@ -134,11 +137,11 @@ pub async fn require_login(allow_must_change: bool) -> Result<String, ServerFnEr
         Session::MustChange if allow_must_change => Ok(token.unwrap_or_default()),
         Session::MustChange => {
             expect_context::<ResponseOptions>().set_status(StatusCode::FORBIDDEN);
-            Err(ServerFnError::new("Bitte zuerst das Passwort ändern."))
+            Err(ServerFnError::new("Please change the password first."))
         }
         Session::Anonymous => {
             expect_context::<ResponseOptions>().set_status(StatusCode::UNAUTHORIZED);
-            Err(ServerFnError::new("Nicht angemeldet."))
+            Err(ServerFnError::new("Not signed in."))
         }
     }
 }
@@ -227,6 +230,11 @@ where
         })
         .clone();
     Router::new()
+        // The overview lives at `/admin`; the router knows no trailing slash.
+        .route(
+            "/admin/",
+            get(|| async { axum::response::Redirect::temporary("/admin") }),
+        )
         .route(
             "/admin/api/overview-stream",
             get(move |headers: HeaderMap| async move {

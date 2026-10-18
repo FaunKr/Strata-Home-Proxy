@@ -107,7 +107,7 @@ if ($NasUrl) {
     try {
         $reg = Invoke-RestMethod -Method Post "$NasBase/admin/agent/register" -ContentType "application/json" -Body $body
     } catch {
-        throw "Anmeldung beim NAS fehlgeschlagen. Der Code gilt nur einmal und kurz: auf der Seite PC-Dienst einen neuen Befehl erzeugen. ($_)"
+        throw "Anmeldung beim NAS fehlgeschlagen. Der Code gilt nur einmal und kurz: im Bereich PC der Weboberflaeche einen neuen Befehl erzeugen. ($_)"
     }
     # Was die Anmeldung festlegt, wird ersetzt; alles andere in einer
     # vorhandenen Konfiguration bleibt.

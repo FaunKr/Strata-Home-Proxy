@@ -58,20 +58,20 @@ pub enum AuthError {
 impl std::fmt::Display for AuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::WrongPassword => write!(f, "Falsches Passwort."),
+            Self::WrongPassword => write!(f, "Wrong password."),
             Self::Throttled(wait) => write!(
                 f,
-                "Zu viele Fehlversuche. Bitte in {} s erneut versuchen.",
+                "Too many failed attempts. Please try again in {} s.",
                 wait.as_secs().max(1)
             ),
-            Self::NotLoggedIn => write!(f, "Nicht angemeldet."),
+            Self::NotLoggedIn => write!(f, "Not signed in."),
             Self::NotSaved => write!(
                 f,
-                "Das neue Passwort konnte nicht gespeichert werden. Das alte gilt weiter."
+                "The new password could not be saved. The old one still applies."
             ),
             Self::WeakPassword => write!(
                 f,
-                "Das neue Passwort braucht mindestens {MIN_PASSWORD_LEN} Zeichen und darf nicht das Standardpasswort sein."
+                "The new password needs at least {MIN_PASSWORD_LEN} characters and must not be the default password."
             ),
         }
     }

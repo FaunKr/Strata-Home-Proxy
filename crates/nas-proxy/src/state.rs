@@ -483,7 +483,7 @@ impl AppState {
                 let waited = started.elapsed();
                 self.events.record(
                     EventKind::Awake,
-                    Some(format!("nach {:.1} s", waited.as_secs_f64())),
+                    Some(format!("after {:.1} s", waited.as_secs_f64())),
                 );
                 return Ok(());
             }
@@ -595,7 +595,7 @@ impl AppState {
                 if last_wol.is_some() {
                     self.events.record(
                         EventKind::Awake,
-                        Some(format!("nach {:.1} s", started.elapsed().as_secs_f64())),
+                        Some(format!("after {:.1} s", started.elapsed().as_secs_f64())),
                     );
                 }
                 return Ok(());
@@ -623,7 +623,7 @@ impl AppState {
         }
         if self.pc_status(&agent).await.is_none() {
             if !enabled {
-                anyhow::bail!("Der PC schläft, der Gaming-Modus ist also schon aus.");
+                anyhow::bail!("The PC is asleep, so gaming mode is off already.");
             }
             let cfg = self.cfg();
             if cfg.strata_url.is_none() {
@@ -634,11 +634,11 @@ impl AppState {
             }
             self.events.record(
                 EventKind::WakeRequested,
-                Some(format!("für Gaming-Modus, {by}")),
+                Some(format!("for gaming mode, {by}")),
             );
             self.wake_until_agent().await.map_err(|e| match e {
                 WakeError::NoMac => anyhow::anyhow!(NO_MAC),
-                _ => anyhow::anyhow!("Der PC ist nicht rechtzeitig aufgewacht."),
+                _ => anyhow::anyhow!("The PC did not wake in time."),
             })?;
         }
         agent.set_gaming(enabled).await?;

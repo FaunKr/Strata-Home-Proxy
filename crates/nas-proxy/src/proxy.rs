@@ -181,7 +181,7 @@ fn client_keys(headers: &HeaderMap) -> impl Iterator<Item = &str> {
 /// such a request never wakes the PC or counts as activity.
 fn unauthorized(flavor: Flavor) -> Response {
     const MESSAGE: &str =
-        "Kein gültiger API-Key. Keys gibt es in der Weboberfläche des Proxys unter API-Keys.";
+        "Kein gültiger API-Key. Keys gibt es in der Weboberfläche des Proxys unter Access.";
     let body = match flavor {
         Flavor::Anthropic => flavor.error_json("authentication_error", MESSAGE),
         // What OpenAI itself answers for a wrong key.
@@ -201,7 +201,7 @@ fn unauthorized(flavor: Flavor) -> Response {
 fn not_configured(flavor: Flavor) -> Response {
     let body = flavor.error_json(
         "api_error",
-        "Proxy ist nicht eingerichtet: die Adresse von Strata fehlt (STRATA_URL oder Einstellungsseite).",
+        "Proxy ist nicht eingerichtet: die Adresse von Strata fehlt (STRATA_URL, oder in der Weboberfläche unter Strata → Connection).",
     );
     tagged(
         (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response(),

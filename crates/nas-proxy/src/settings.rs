@@ -122,15 +122,38 @@ impl Settings {
         self.commit(&mut inner, saved)
     }
 
+    /// Saves several values together: all take effect at once, or, if one is
+    /// invalid, none does. The error names the invalid value's key, or none
+    /// if saving itself failed.
+    pub fn set_many(&self, values: &[(&str, &str)]) -> Result<(), (Option<String>, anyhow::Error)> {
+        let mut check = self.current().as_ref().clone();
+        for (key, raw) in values {
+            check
+                .apply(key, raw.trim())
+                .map_err(|e| (Some(key.to_string()), e))?;
+        }
+        let mut inner = self.inner.write().unwrap();
+        let mut saved = inner.saved.clone();
+        for (key, raw) in values {
+            saved.insert(key.to_string(), raw.trim().to_string());
+        }
+        self.commit(&mut inner, saved).map_err(|e| (None, e))
+    }
+
     /// Drops a saved value, so the environment or default applies again.
     pub fn reset(&self, key: &str) -> Result<()> {
-        find_field(key).ok_or_else(|| anyhow::anyhow!("unbekannte Einstellung {key}"))?;
+        find_field(key).ok_or_else(|| anyhow::anyhow!("unknown setting {key}"))?;
         let mut inner = self.inner.write().unwrap();
         let mut saved = inner.saved.clone();
         if saved.remove(key).is_none() {
             return Ok(());
         }
         self.commit(&mut inner, saved)
+    }
+
+    /// The MAC the PC service reported last, if any.
+    pub fn reported_mac(&self) -> Option<[u8; 6]> {
+        self.inner.read().unwrap().reported_mac
     }
 
     /// Takes the MAC the PC service reported. Returns true if it is new.
@@ -168,7 +191,7 @@ impl Settings {
                 let mut value = inner.current.value(key);
                 let mut saved = inner.saved.get(key).cloned();
                 if field.secret {
-                    value = value.map(|_| "gesetzt".to_string());
+                    value = value.map(|_| "set".to_string());
                     saved = None;
                 }
                 Entry {
@@ -190,7 +213,7 @@ impl Settings {
             };
             let text = serde_json::to_string_pretty(&stored).expect("settings serialize");
             write_private(dir, SETTINGS_FILE, text.as_bytes())
-                .map_err(|e| anyhow::anyhow!("nicht gespeichert: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("not saved: {e}"))?;
         }
         inner.current = Arc::new(resolve(&self.base, &saved, inner.reported_mac));
         inner.saved = saved;
@@ -280,7 +303,7 @@ mod tests {
         let s = Settings::new(base(None), &[]);
         s.set("PC_AGENT_TOKEN", "geheim").unwrap();
         let token = entry(&s.entries(), "PC_AGENT_TOKEN").clone();
-        assert_eq!(token.value.as_deref(), Some("gesetzt"));
+        assert_eq!(token.value.as_deref(), Some("set"));
         assert_eq!(token.saved, None);
         assert_eq!(s.current().pc_agent_token.as_deref(), Some("geheim"));
     }

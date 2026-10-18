@@ -50,9 +50,7 @@ pub async fn change_password(
 ) -> Result<(), ServerFnError> {
     let token = require_login(true).await?;
     if new != repeat {
-        return Err(ServerFnError::new(
-            "Die beiden neuen Passwörter stimmen nicht überein.",
-        ));
+        return Err(ServerFnError::new("The two new passwords do not match."));
     }
     let token = backend()
         .change_password(&token, &current, &new, client_ip().await)
@@ -76,7 +74,7 @@ pub enum Source {
 pub struct SettingEntry {
     /// Environment variable name, e.g. `STRATA_URL`.
     pub key: String,
-    /// The value in effect; for secrets only "gesetzt".
+    /// The value in effect; for secrets only "set".
     pub value: Option<String>,
     pub source: Source,
     /// The value saved on this page, if any (never for secrets).
@@ -94,6 +92,10 @@ pub struct SettingsView {
     /// False while no Strata URL is set.
     pub configured: bool,
     pub entries: Vec<SettingEntry>,
+    /// The proxy's own version.
+    pub version: String,
+    /// `DATA_DIR` as the proxy uses it.
+    pub data_dir: Option<String>,
 }
 
 #[server(prefix = "/admin/api", endpoint = "settings")]
@@ -102,10 +104,36 @@ pub async fn get_settings() -> Result<SettingsView, ServerFnError> {
     Ok(backend().settings())
 }
 
-#[server(prefix = "/admin/api", endpoint = "save-setting")]
-pub async fn save_setting(key: String, value: String) -> Result<(), ServerFnError> {
+/// One value of a settings section, as the page sends it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingValue {
+    pub key: String,
+    pub value: String,
+}
+
+/// Saves the changed values of a section together: all or none. An empty
+/// secret stays as it is. An invalid value's error reads "KEY: message".
+#[server(prefix = "/admin/api", endpoint = "save-settings", input = server_fn::codec::Json)]
+pub async fn save_settings(values: Vec<SettingValue>) -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().save_setting(&key, &value).map_err(bad_request)
+    backend()
+        .save_settings(&values)
+        .map_err(|(key, message)| match key {
+            Some(key) => bad_request(format!("{key}: {message}")),
+            None => bad_request(message),
+        })
+}
+
+/// Splits a save error into the key it names and its message.
+pub fn setting_error(text: &str) -> (Option<&str>, &str) {
+    match text.split_once(": ") {
+        Some((key, message))
+            if !key.is_empty() && key.bytes().all(|b| b.is_ascii_uppercase() || b == b'_') =>
+        {
+            (Some(key), message)
+        }
+        _ => (None, text),
+    }
 }
 
 #[server(prefix = "/admin/api", endpoint = "reset-setting")]
@@ -199,12 +227,9 @@ pub fn error_text(err: &ServerFnError) -> String {
     }
 }
 
-/// What the overview shows; sent as a whole on every change.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Overview {
-    /// The proxy's clock (Unix seconds), so the page can count down without
-    /// trusting the viewer's clock.
-    pub now: u64,
+/// How far the proxy is set up; the overview's checklist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Setup {
     /// False while no Strata URL is set.
     pub configured: bool,
     /// False while no MAC address is known: the PC cannot be woken.
@@ -213,6 +238,39 @@ pub struct Overview {
     pub agent_configured: bool,
     /// False while no API key exists: every client gets 401.
     pub api_key_exists: bool,
+    /// False without `DATA_DIR`: settings and keys are lost on a restart.
+    pub persistent: bool,
+}
+
+impl Setup {
+    /// Every item of the checklist is done.
+    pub fn complete(&self) -> bool {
+        self.configured
+            && self.mac_known
+            && self.agent_configured
+            && self.api_key_exists
+            && self.persistent
+    }
+}
+
+/// How far the proxy is set up, without asking the PC; the overview's
+/// checklist before its live stream arrives.
+#[server(prefix = "/admin/api", endpoint = "setup")]
+pub async fn get_setup() -> Result<Setup, ServerFnError> {
+    require_login(false).await?;
+    Ok(backend().setup())
+}
+
+/// What the overview shows; sent as a whole on every change.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Overview {
+    /// The proxy's clock (Unix seconds), so the page can count down without
+    /// trusting the viewer's clock.
+    pub now: u64,
+    #[serde(flatten)]
+    pub setup: Setup,
+    /// After this long without requests the PC is put to sleep.
+    pub idle_timeout_secs: u64,
     pub pc: PcView,
     pub strata: StrataView,
     /// Start or end of the last API request, as local time text.
@@ -243,6 +301,8 @@ pub struct PcServiceView {
     pub updating: bool,
     /// Why the last update failed.
     pub update_error: Option<String>,
+    /// The MAC address the service reported, e.g. `3c:7c:3f:12:a4:9e`.
+    pub reported_mac: Option<String>,
 }
 
 /// One message of the Strata-Ausgabe stream (`/admin/api/strata-output-stream`).

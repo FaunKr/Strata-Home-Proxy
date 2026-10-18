@@ -165,7 +165,7 @@ async fn a_code_works_once() {
     assert_eq!(resp.status(), 403);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(
-        body["error"].as_str().unwrap().contains("neuen Befehl"),
+        body["error"].as_str().unwrap().contains("new command"),
         "{body}"
     );
     assert_eq!(s.state.cfg().pc_agent_token, token);
@@ -220,9 +220,11 @@ async fn registering_does_not_wake_the_pc() {
 async fn setup_page_offers_the_command() {
     let s = setup(false, |_| {}).await;
     let b = logged_in(&s.url).await;
-    let html = b.page("/admin/pc-dienst").await;
-    assert!(html.contains("PC-Dienst einrichten"), "{html}");
-    assert!(html.contains("Befehl erzeugen"), "{html}");
+    let html = b.page("/admin/pc").await;
+    assert!(html.contains("Install on a PC"), "{html}");
+    assert!(html.contains("Create install command"), "{html}");
+    // The service card waits for the live overview.
+    assert!(html.contains("PC service"), "{html}");
 }
 
 async fn script(s: &Setup, query: &str) -> (u16, String) {
@@ -264,7 +266,7 @@ async fn script_without_a_valid_code_only_explains() {
         // Windows PowerShell shows no body for errors, so the explanation
         // comes as a script that prints it.
         assert_eq!(status, 200, "{query}");
-        assert!(text.contains("neuen Befehl"), "{text}");
+        assert!(text.contains("new command"), "{text}");
         assert!(!text.contains("Register-ScheduledTask"), "{text}");
     }
 }

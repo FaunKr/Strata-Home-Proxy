@@ -48,12 +48,7 @@ async fn without_strata_key_no_key_reaches_strata() {
 async fn strata_key_is_shown_only_as_set() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
-    let resp = b
-        .call(
-            "save-setting",
-            &[("key", "STRATA_API_KEY"), ("value", "strata-geheim")],
-        )
-        .await;
+    let resp = save_settings(&mut b, &[("STRATA_API_KEY", "strata-geheim")]).await;
     assert_eq!(resp.status(), 200);
     let text = b.call("settings", &[]).await.text().await.unwrap();
     assert!(!text.contains("strata-geheim"), "{text}");
@@ -65,6 +60,6 @@ async fn strata_key_is_shown_only_as_set() {
         .find(|e| e["key"] == "STRATA_API_KEY")
         .unwrap()
         .clone();
-    assert_eq!(entry["value"], "gesetzt");
+    assert_eq!(entry["value"], "set");
     assert_eq!(entry["secret"], true);
 }

@@ -26,9 +26,9 @@ async fn settings_need_a_login() {
     let s = setup(true, |_| {}).await;
     let mut b = Browser::new(&s.url);
     assert_eq!(b.call("settings", &[]).await.status(), 401);
-    let html = b.page("/admin/settings").await;
-    assert!(html.contains("Anmelden"), "{html}");
-    assert!(!html.contains("Strata-Adresse"), "{html}");
+    let html = b.page("/admin/system").await;
+    assert!(html.contains("Sign in"), "{html}");
+    assert!(!html.contains("Proxy address"), "{html}");
 
     // With the default password still in place: change it first.
     b.call("login", &[("password", "admin")]).await;
@@ -59,27 +59,84 @@ async fn shows_every_value_with_its_origin() {
     assert_eq!(entry(&view, "IDLE_TIMEOUT_SECS")["value"], "600");
     assert_eq!(entry(&view, "WAKE_TIMEOUT_SECS")["source"], "Default");
     assert_eq!(entry(&view, "LISTEN_ADDR")["restart"], true);
-    assert_eq!(entry(&view, "PC_AGENT_TOKEN")["value"], "gesetzt");
+    assert_eq!(entry(&view, "PC_AGENT_TOKEN")["value"], "set");
     assert!(!view.to_string().contains("streng-geheim"));
 
-    let html = b.page("/admin/settings").await;
-    assert!(html.contains("Strata-Adresse"), "{html}");
-    assert!(html.contains("aus Umgebungsvariable"), "{html}");
-    assert!(html.contains("Gilt nach Neustart"), "{html}");
+    let html = b.page("/admin/strata/connection").await;
+    assert!(html.contains("Strata address"), "{html}");
+    assert!(html.contains("Environment"), "{html}");
+    let html = b.page("/admin/system").await;
+    assert!(html.contains("Takes effect after a restart"), "{html}");
+    assert!(
+        html.contains(&format!("Version {}", env!("CARGO_PKG_VERSION"))),
+        "{html}"
+    );
+    assert!(html.contains(&dir.display().to_string()), "{html}");
+    let html = b.page("/admin/pc").await;
+    assert!(html.contains("Saved here"), "{html}");
     assert!(!html.contains("streng-geheim"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[tokio::test]
-async fn warns_without_data_dir_and_without_strata_url() {
+async fn system_explains_a_missing_data_dir() {
     let s = setup(true, |c| c.strata_url = None).await;
     let mut b = logged_in(&s.url).await;
     let view = settings(&mut b).await;
     assert_eq!(view["persistent"], false);
     assert_eq!(view["configured"], false);
-    let html = b.page("/admin/settings").await;
-    assert!(html.contains("DATA_DIR ist nicht gesetzt"), "{html}");
-    assert!(html.contains("noch nicht eingerichtet"), "{html}");
+    let html = b.page("/admin/system").await;
+    assert!(html.contains("DATA_DIR is not set"), "{html}");
+}
+
+#[tokio::test]
+async fn each_area_shows_its_own_settings() {
+    let s = setup(true, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    let areas = [
+        (
+            "/admin/pc",
+            &[
+                "PC_MAC",
+                "WOL_ADDR",
+                "PC_AGENT_URL",
+                "PC_AGENT_TOKEN",
+                "IDLE_TIMEOUT_SECS",
+                "WAKE_TIMEOUT_SECS",
+                "WOL_RESEND_SECS",
+                "HEALTH_POLL_MS",
+                "IDLE_CHECK_SECS",
+                "SLEEP_RETRY_SECS",
+                "SLEEP_SETTLE_SECS",
+            ][..],
+        ),
+        (
+            "/admin/strata/connection",
+            &["STRATA_URL", "STRATA_API_KEY"][..],
+        ),
+        (
+            "/admin/system",
+            &[
+                "LISTEN_ADDR",
+                "MAX_BODY_BYTES",
+                "PING_INTERVAL_SECS",
+                "PROBE_TIMEOUT_MS",
+            ][..],
+        ),
+    ];
+    let all: Vec<&str> = areas
+        .iter()
+        .flat_map(|(_, keys)| keys.iter().copied())
+        .collect();
+    assert_eq!(all.len(), 17);
+    for (path, keys) in areas {
+        let html = b.page(path).await;
+        for key in &all {
+            let field = format!("id=\"setting-{key}\"");
+            assert_eq!(html.contains(&field), keys.contains(key), "{path}: {key}");
+        }
+    }
+    assert!(!b.page("/admin/access").await.contains("id=\"setting-"));
 }
 
 #[tokio::test]
@@ -93,14 +150,82 @@ async fn reported_mac_is_shown_above_the_saved_one() {
     assert_eq!(mac["source"], "Reported");
     assert_eq!(mac["value"], "AA:AA:AA:AA:AA:AA");
     assert_eq!(mac["saved"], "01:02:03:04:05:06");
-    let html = b.page("/admin/settings").await;
-    assert!(html.contains("vom PC gemeldet"), "{html}");
-    assert!(html.contains("Ersatzwert"), "{html}");
+    let html = b.page("/admin/pc").await;
+    assert!(html.contains("Reported by PC"), "{html}");
+    assert!(html.contains("only a fallback"), "{html}");
+    assert!(html.contains("value=\"01:02:03:04:05:06\""), "{html}");
 }
 
 async fn save(b: &mut Browser, key: &str, value: &str) -> reqwest::Response {
-    b.call("save-setting", &[("key", key), ("value", value)])
-        .await
+    save_settings(b, &[(key, value)]).await
+}
+
+#[tokio::test]
+async fn a_section_is_saved_in_one_call() {
+    use strata_nas_proxy::events::EventKind;
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = save_settings(
+        &mut b,
+        &[("IDLE_TIMEOUT_SECS", "600"), ("WAKE_TIMEOUT_SECS", "99")],
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let cfg = s.state.cfg();
+    assert_eq!(cfg.idle_timeout.as_secs(), 600);
+    assert_eq!(cfg.wake_timeout.as_secs(), 99);
+    let view = settings(&mut b).await;
+    assert_eq!(entry(&view, "IDLE_TIMEOUT_SECS")["source"], "Saved");
+    assert_eq!(entry(&view, "WAKE_TIMEOUT_SECS")["source"], "Saved");
+    let saved: Vec<_> = s
+        .state
+        .events
+        .recent()
+        .into_iter()
+        .filter(|e| e.kind == EventKind::SettingSaved)
+        .filter_map(|e| e.detail)
+        .collect();
+    assert_eq!(saved.len(), 2, "{saved:?}");
+}
+
+#[tokio::test]
+async fn one_invalid_value_saves_none_and_names_its_key() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = save_settings(&mut b, &[("IDLE_TIMEOUT_SECS", "600"), ("PC_MAC", "12:34")]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(resp.text().await.unwrap().contains("PC_MAC: "));
+    assert_eq!(s.state.cfg().idle_timeout.as_secs(), 3600);
+    let view = settings(&mut b).await;
+    assert_ne!(entry(&view, "IDLE_TIMEOUT_SECS")["source"], "Saved");
+}
+
+#[tokio::test]
+async fn an_empty_secret_stays_as_it_is() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(
+        save(&mut b, "PC_AGENT_TOKEN", "streng-geheim")
+            .await
+            .status(),
+        200
+    );
+    let resp = save_settings(
+        &mut b,
+        &[("PC_AGENT_TOKEN", ""), ("IDLE_TIMEOUT_SECS", "5")],
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let cfg = s.state.cfg();
+    assert_eq!(cfg.pc_agent_token.as_deref(), Some("streng-geheim"));
+    assert_eq!(cfg.idle_timeout.as_secs(), 5);
+
+    // Only a reset removes it.
+    b.call("reset-setting", &[("key", "PC_AGENT_TOKEN")]).await;
+    assert_ne!(
+        s.state.cfg().pc_agent_token.as_deref(),
+        Some("streng-geheim")
+    );
 }
 
 #[tokio::test]
@@ -173,7 +298,7 @@ async fn invalid_values_are_rejected_with_a_message() {
         assert!(!resp.text().await.unwrap().is_empty());
     }
     let resp = save(&mut b, "IDLE_TIMEOUT_SECS", "bald").await;
-    assert!(resp.text().await.unwrap().contains("ganze Zahl"));
+    assert!(resp.text().await.unwrap().contains("whole number"));
     assert_eq!(s.state.cfg().idle_timeout.as_secs(), 3600);
     assert!(
         s.state

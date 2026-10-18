@@ -94,7 +94,7 @@ async fn a_sleeping_pc_keeps_its_last_version_and_is_not_woken_for_an_update() {
 
     let resp = b.call("pc-service-update", &[]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("schläft"));
+    assert!(resp.text().await.unwrap().contains("asleep"));
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
@@ -122,7 +122,7 @@ async fn update_button_updates_the_service_and_records_it() {
         .iter()
         .find(|e| e.kind == EventKind::PcServiceUpdateRequested)
         .expect("Update im Verlauf");
-    assert_eq!(requested.detail.as_deref(), Some("über Weboberfläche"));
+    assert_eq!(requested.detail.as_deref(), Some("from the web UI"));
     let updated = events
         .iter()
         .find(|e| e.kind == EventKind::PcServiceUpdated)
@@ -168,7 +168,7 @@ async fn an_old_service_without_update_is_told_to_set_up_again() {
         v["pc_service"]["update_error"]
             .as_str()
             .unwrap()
-            .contains("neu einrichten")
+            .contains("Install it once more")
     );
 }
 
@@ -203,7 +203,7 @@ async fn a_second_press_while_an_update_runs_changes_nothing() {
     assert_eq!(b.call("pc-service-update", &[]).await.status(), 200);
     let resp = b.call("pc-service-update", &[]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("läuft schon"));
+    assert!(resp.text().await.unwrap().contains("running already"));
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 1);
     let v = live
         .until("Update läuft", |v| v["pc_service"]["updating"] == true)
@@ -227,7 +227,7 @@ async fn an_up_to_date_service_is_not_updated() {
     let mut b = logged_in(&s.url).await;
     let resp = b.call("pc-service-update", &[]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("schon"));
+    assert!(resp.text().await.unwrap().contains("already"));
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
 }
 

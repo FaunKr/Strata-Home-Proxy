@@ -12,8 +12,8 @@ async fn without_login_only_the_login_page_is_shown() {
     let s = setup(true, |_| {}).await;
     let mut b = Browser::new(&s.url);
     let html = b.page("/admin/").await;
-    assert!(html.contains("Anmelden"), "{html}");
-    assert!(!html.contains("Hier zeigt der Proxy"), "{html}");
+    assert!(html.contains("Sign in"), "{html}");
+    assert!(!html.contains("class=\"badges\""), "{html}");
     assert_eq!(b.session().await, "Anonymous");
     let resp = change(&mut b, "admin", "ein langes Passwort").await;
     assert_eq!(resp.status(), 401);
@@ -25,14 +25,14 @@ async fn first_login_forces_a_new_password() {
     let mut b = Browser::new(&s.url);
     let resp = b.call("login", &[("password", "falsch")]).await;
     assert_eq!(resp.status(), 401);
-    assert!(resp.text().await.unwrap().contains("Falsches Passwort"));
+    assert!(resp.text().await.unwrap().contains("Wrong password"));
     assert_eq!(
         b.call("login", &[("password", "admin")]).await.status(),
         200
     );
     assert_eq!(b.session().await, "MustChange");
     let html = b.page("/admin/").await;
-    assert!(html.contains("Neues Passwort festlegen"), "{html}");
+    assert!(html.contains("Set a new password"), "{html}");
 
     let resp = change(&mut b, "admin", "kurz").await;
     assert_ne!(resp.status(), 200);
@@ -44,8 +44,8 @@ async fn first_login_forces_a_new_password() {
     );
     assert_eq!(b.session().await, "Ready");
     let html = b.page("/admin/").await;
-    assert!(html.contains("<h1>Übersicht</h1>"), "{html}");
-    assert!(!html.contains("Neues Passwort festlegen"), "{html}");
+    assert!(html.contains("<h1>Overview</h1>"), "{html}");
+    assert!(!html.contains("Set a new password"), "{html}");
     assert!(kinds(&s.state).contains(&strata_nas_proxy::events::EventKind::PasswordChanged));
 
     // The default password is gone.
@@ -80,7 +80,12 @@ async fn repeated_failures_are_slowed_down() {
     }
     let resp = b.call("login", &[("password", "admin")]).await;
     assert_ne!(resp.status(), 200);
-    assert!(resp.text().await.unwrap().contains("Zu viele Fehlversuche"));
+    assert!(
+        resp.text()
+            .await
+            .unwrap()
+            .contains("Too many failed attempts")
+    );
 }
 
 #[tokio::test]
@@ -126,7 +131,12 @@ async fn wrong_current_password_counts_as_failed_attempt() {
         );
     }
     let resp = change(&mut b, "admin", "ein langes Passwort").await;
-    assert!(resp.text().await.unwrap().contains("Zu viele Fehlversuche"));
+    assert!(
+        resp.text()
+            .await
+            .unwrap()
+            .contains("Too many failed attempts")
+    );
 }
 
 async fn proxy_on(dir: &std::path::Path) -> String {

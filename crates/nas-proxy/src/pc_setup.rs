@@ -38,7 +38,7 @@ const VERSION_MARKER: &[u8] = b"strata-pc-agent-version:";
 /// An update that has not reported its new version this long after the
 /// button failed; the service may take 5 min for the download alone.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(420);
-const UPDATE_TIMED_OUT: &str = "Der PC-Dienst hat nach dem Update keine neue Version gemeldet. Läuft er noch? Sonst den Befehl von der Seite PC-Dienst auf dem PC ausführen.";
+const UPDATE_TIMED_OUT: &str = "The PC service reported no new version after the update. Is it still running? Otherwise run the install command from the PC area on the PC.";
 
 pub struct PcSetup {
     program: Mutex<PathBuf>,
@@ -161,6 +161,7 @@ impl PcSetup {
             available,
             updating: update.running_since.is_some(),
             update_error: update.error.clone(),
+            reported_mac: None,
         });
         (view, timed_out)
     }
@@ -171,14 +172,14 @@ impl PcSetup {
         let mut update = self.update.lock().unwrap();
         self.expire(&mut update);
         if update.running_since.is_some() {
-            return Err("Ein Update läuft schon.".into());
+            return Err("An update is running already.".into());
         }
         if update
             .reported
             .as_ref()
             .is_some_and(|v| v.as_deref() == Some(available))
         {
-            return Err("Der PC-Dienst ist schon auf dem Stand des NAS.".into());
+            return Err("The PC service already runs the version on the NAS.".into());
         }
         update.running_since = Some(Instant::now());
         update.error = None;
@@ -196,7 +197,7 @@ impl PcSetup {
     pub fn command(&self, host: &str) -> Result<PcSetupCommand, String> {
         if !valid_host(host) {
             return Err(format!(
-                "Die Adresse {host:?} taugt nicht für den Befehl; die Seite über die IP des NAS öffnen."
+                "The address {host:?} does not work for the command; open this page through the NAS's IP address."
             ));
         }
         let lifetime = *self.lifetime.lock().unwrap();
@@ -260,10 +261,10 @@ pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
         return Err(strata_admin_ui::labels::NO_AGENT.into());
     }
     let Some(available) = state.pc_setup.program_version() else {
-        return Err("Dieses Image enthält keinen PC-Dienst zum Aktualisieren.".into());
+        return Err("This image carries no PC service to update.".into());
     };
     if state.pc_status(&agent).await.is_none() {
-        return Err("Der PC schläft; ein Update geht nur bei wachem PC.".into());
+        return Err("The PC is asleep; an update needs the PC awake.".into());
     }
     state.pc_setup.begin_update(&available)?;
     state
@@ -329,11 +330,7 @@ async fn program(State(state): State<Arc<AppState>>) -> Response {
             .into_response(),
         Err(e) => {
             tracing::warn!("{} nicht lesbar: {e}", path.display());
-            (
-                StatusCode::NOT_FOUND,
-                "Der PC-Dienst liegt nicht in diesem Image",
-            )
-                .into_response()
+            (StatusCode::NOT_FOUND, "This image carries no PC service").into_response()
         }
     }
 }
@@ -353,7 +350,7 @@ async fn install_script(
     // explanation comes as a script that prints it.
     if !valid_host(host) {
         return explain(
-            "Die Adresse des NAS im Befehl taugt nicht. Die Weboberflaeche ueber die IP des NAS oeffnen und einen neuen Befehl erzeugen.",
+            "The NAS address in the command does not work. Open the web UI through the NAS's IP address and create a new command.",
         );
     }
     if !uninstall && !state.pc_setup.is_current(code) {
@@ -377,7 +374,8 @@ async fn install_script(
     powershell(script)
 }
 
-const CODE_INVALID: &str = "Der Code gilt nicht (mehr). Auf der Seite PC-Dienst der Weboberflaeche einen neuen Befehl erzeugen.";
+const CODE_INVALID: &str =
+    "The code is not valid (any more). Create a new command in the PC area of the web UI.";
 
 fn explain(message: &str) -> Response {
     powershell(format!("Write-Host '{message}' -ForegroundColor Red"))
@@ -426,7 +424,7 @@ async fn register(
 ) -> Response {
     let host = host(&headers);
     if !valid_host(host) {
-        return refused("Die Adresse des NAS taugt nicht; die IP des NAS verwenden.");
+        return refused("The NAS address does not work; use the NAS's IP address.");
     }
     if !state.pc_setup.redeem(&reg.code) {
         return refused(CODE_INVALID);

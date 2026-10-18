@@ -10,7 +10,8 @@ use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
     api::{
         ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, OutputMessage, Overview,
-        PcSetupCommand, Session, SettingEntry, SettingsView, Source, StrataJobForm, StrataPage,
+        PcSetupCommand, Session, SettingEntry, SettingValue, SettingsView, Setup, Source,
+        StrataJobForm, StrataPage,
     },
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
@@ -27,7 +28,7 @@ use crate::{
 };
 
 /// Detail of events caused by a button on the overview.
-const BY_UI: &str = "über Weboberfläche";
+const BY_UI: &str = "from the web UI";
 
 struct UiBackend(Arc<AppState>);
 
@@ -94,14 +95,32 @@ impl Backend for UiBackend {
             persistent: self.0.settings.persistent(),
             configured: self.0.cfg().strata_url.is_some(),
             entries,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            data_dir: self
+                .0
+                .cfg()
+                .data_dir
+                .as_ref()
+                .map(|d| d.display().to_string()),
         }
     }
 
-    fn save_setting(&self, key: &str, value: &str) -> Result<(), String> {
-        self.0.settings.set(key, value).map_err(|e| e.to_string())?;
+    fn save_settings(&self, values: &[SettingValue]) -> Result<(), (Option<String>, String)> {
+        let secret = |key: &str| crate::config::find_field(key).is_some_and(|f| f.secret);
+        let values: Vec<(&str, &str)> = values
+            .iter()
+            .filter(|v| !(secret(&v.key) && v.value.trim().is_empty()))
+            .map(|v| (v.key.as_str(), v.value.as_str()))
+            .collect();
         self.0
-            .events
-            .record(EventKind::SettingSaved, Some(key.to_string()));
+            .settings
+            .set_many(&values)
+            .map_err(|(key, e)| (key, e.to_string()))?;
+        for (key, _) in values {
+            self.0
+                .events
+                .record(EventKind::SettingSaved, Some(key.to_string()));
+        }
         Ok(())
     }
 
@@ -111,6 +130,10 @@ impl Backend for UiBackend {
             .events
             .record(EventKind::SettingReset, Some(key.to_string()));
         Ok(())
+    }
+
+    fn setup(&self) -> Setup {
+        overview::setup(&self.0)
     }
 
     fn overview(&self) -> BoxStream<'static, Overview> {
@@ -158,8 +181,8 @@ impl Backend for UiBackend {
             state.overview.refresh_now();
             match answer {
                 Ok(SleepAnswer::Accepted) => Ok(()),
-                Ok(SleepAnswer::Refused(reason)) => Err(format!("Abgelehnt: {reason}")),
-                Err(_) => Err("Der PC-Dienst antwortet nicht.".to_string()),
+                Ok(SleepAnswer::Refused(reason)) => Err(format!("Refused: {reason}")),
+                Err(_) => Err("The PC service does not answer.".to_string()),
             }
         }
         .boxed()
@@ -210,7 +233,7 @@ impl Backend for UiBackend {
         let text = clock::local_text(clock::unix(until));
         self.0.events.record(
             EventKind::KeepAwakeSet,
-            Some(format!("bis {text}, {BY_UI}")),
+            Some(format!("until {text}, {BY_UI}")),
         );
         Ok(())
     }

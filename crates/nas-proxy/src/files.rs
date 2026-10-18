@@ -1,24 +1,36 @@
 //! Files in `DATA_DIR`.
 
-use std::{io::Write, path::Path};
+use std::{
+    io::Write,
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
-/// Writes via a temporary file, so a crash never leaves half a file behind.
-/// Only the owner may read it, since some files hold secrets.
+/// Numbers the temporary files, so simultaneous writes never share one.
+static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
+
+/// Writes via a temporary file of its own, so a crash never leaves half a file
+/// behind and two writes of the same file never mix. Only the owner may read
+/// it, since some files hold secrets.
 pub fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!("{name}.tmp"));
+    let n = NEXT_TMP.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!("{name}.{}-{n}.tmp", std::process::id()));
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    // A new file every time: a leftover from a crash is never reused.
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        // Private from the first byte; set_permissions covers a leftover .tmp.
+        use std::os::unix::fs::OpenOptionsExt;
+        // Private from the first byte.
         options.mode(0o600);
-        let mut file = options.open(&tmp)?;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        file.write_all(bytes)?;
     }
-    #[cfg(not(unix))]
-    options.open(&tmp)?.write_all(bytes)?;
-    std::fs::rename(&tmp, dir.join(name))
+    let written = options
+        .open(&tmp)
+        .and_then(|mut file| file.write_all(bytes))
+        .and_then(|()| std::fs::rename(&tmp, dir.join(name)));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }

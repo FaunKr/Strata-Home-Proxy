@@ -121,8 +121,8 @@ Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
 ## Entwickeln
 
 ```sh
-cargo test      # startet ein nachgebautes Strata, PC-Dienst und WoL-Empfänger
-cargo clippy --all-targets -- -D warnings
+cargo test         # startet ein nachgebautes Strata, PC-Dienst und WoL-Empfänger
+scripts/check.sh   # alle Checks des CI: fmt, clippy (auch wasm), Tests
 ```
 
 Die Weboberfläche (Leptos, [crates/admin-ui](crates/admin-ui)) braucht für den

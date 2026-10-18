@@ -1,7 +1,7 @@
 ## Arbeiten im Repo
 
 - PRs gehen gegen `main`.
-- Vor dem Push dieselben Befehle wie der CI-Job `test` (`.github/workflows/ci.yml`), auch die wasm-Zeile für die Weboberfläche.
+- Vor dem Push `scripts/check.sh`: dieselben Checks wie der CI-Job `test`.
 - Neue Proxy-Tests nutzen das Gerüst mit simuliertem PC und Strata in `crates/nas-proxy/tests/common`.
 
 ## Agent skills

@@ -13,12 +13,15 @@ Regeln für das Review. Was ein Test oder Clippy schon prüft, steht hier nicht.
   beim Ändern.
 - **Fehler beim Speichern werden gemeldet.** Ein Wert, der nicht in `DATA_DIR`
   landet, gilt nicht als gespeichert, und die Seite sagt das.
+- **Kein veralteter Stand überschreibt einen neueren.** Wer eine Kopie unter
+  einem Lock zieht und außerhalb schreibt, hält dabei eine Schreibsperre, die
+  auch jeder andere Write derselben Datei nimmt.
 
 ## Proxy und PC
 
 - **`/admin` weckt den PC nie** und setzt die Zeit bis zum Standby nicht
-  zurück. Neue Routen unter `/admin` brauchen einen Test dafür, sonst fallen sie
-  bei einem Fehler in den Proxy durch.
+  zurück. Server-Funktionen prüft `no_server_function_wakes_the_pc` von selbst;
+  eine eigene Route wie `overview-stream` braucht einen eigenen Test.
 - **Vorrang der Einstellungen:** vom PC gemeldete MAC, dann Wert von der
   Seite, dann Umgebungsvariable, dann Standardwert. Neue Einstellungen folgen
   derselben Reihenfolge und werden live über `AppState::cfg()` gelesen.

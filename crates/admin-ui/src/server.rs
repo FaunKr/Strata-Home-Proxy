@@ -13,7 +13,9 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
 };
 use leptos::prelude::*;
-use leptos_axum::{LeptosRoutes, ResponseOptions, generate_route_list};
+use leptos_axum::{
+    LeptosRoutes, ResponseOptions, generate_route_list_with_exclusions_and_ssg_and_context,
+};
 
 use crate::{
     api::{Session, SettingsView},
@@ -131,8 +133,11 @@ where
     S: Clone + Send + Sync + 'static,
 {
     let pkg = PathBuf::from(options.site_root.as_ref()).join(options.site_pkg_dir.as_ref());
-    let routes = generate_route_list(App);
     let context = move || provide_context(Arc::clone(&backend));
+    // Listing the routes renders the app once, which starts the session
+    // resource; without the backend in context that call panics.
+    let routes =
+        generate_route_list_with_exclusions_and_ssg_and_context(App, None, context.clone()).0;
     Router::new()
         .leptos_routes_with_context(&options, routes, context, {
             let options = options.clone();

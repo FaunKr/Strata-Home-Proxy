@@ -184,6 +184,24 @@ pub fn event_label(kind: EventKind) -> &'static str {
     }
 }
 
+/// The color of an event's dot; the text says the same.
+pub fn event_class(kind: EventKind) -> &'static str {
+    match kind {
+        EventKind::WakeTimeout | EventKind::StrataJobFailed | EventKind::PcServiceUpdateFailed => {
+            "is-bad"
+        }
+        EventKind::SleepRefused
+        | EventKind::GamingRejected
+        | EventKind::GamingOn
+        | EventKind::WakeSent
+        | EventKind::WakeRequested
+        | EventKind::KeepAwakeSet
+        | EventKind::StrataJobCancelled => "is-warn",
+        EventKind::SleepAccepted | EventKind::SleepRequested => "is-idle",
+        _ => "is-ok",
+    }
+}
+
 /// What a Strata job does, for the history and the page.
 pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
     match kind {

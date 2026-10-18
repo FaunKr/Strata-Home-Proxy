@@ -1,14 +1,16 @@
-//! The overview page: state of PC and Strata, live from the proxy, and the
-//! buttons to wake, sleep, switch gaming mode and keep the PC awake.
+//! The overview: the PC's state with its main button, gaming mode and keep
+//! awake, tiles for Strata, requests, sleep and the PC service, the latest
+//! events, and a checklist while the proxy is not fully set up.
 
 use leptos::prelude::*;
 
 use crate::{
     api::{
-        KeepAwake, KeepAwakeChoice, Overview, PcView, SetGaming, SleepNow, SleepView, StrataView,
-        Wake, error_text,
+        KeepAwake, KeepAwakeChoice, Overview, PcServiceView, PcView, SetGaming, Setup, SleepNow,
+        SleepView, StrataView, Wake, error_text, get_setup,
     },
-    labels::{NO_MAC, event_label, strata_job_label},
+    icons::Icon,
+    labels::{event_class, event_label, pc_badge, strata_badge, strata_job_label},
 };
 
 /// The buttons' actions; made once per page, so a result stays visible
@@ -19,6 +21,8 @@ struct Actions {
     sleep: ServerAction<SleepNow>,
     gaming: ServerAction<SetGaming>,
     keep: ServerAction<KeepAwake>,
+    /// The keep-awake choice pressed last, to mark it while it lasts.
+    picked: RwSignal<Option<KeepAwakeChoice>>,
 }
 
 /// The latest overview, and seconds counted since it arrived.
@@ -51,107 +55,146 @@ pub fn OverviewPage() -> impl IntoView {
         sleep: ServerAction::new(),
         gaming: ServerAction::new(),
         keep: ServerAction::new(),
+        picked: RwSignal::new(None),
     };
     view! {
         <div class="page-head">
             <h1>"Overview"</h1>
         </div>
+        <Checklist live />
         {move || match live.overview.get() {
             None if live.lost.get() => {
-                view! { <p class="warning" role="status">"Verbindung zum Proxy unterbrochen, verbinde neu …"</p> }
+                view! {
+                    <p class="warning" role="status">
+                        "Connection to the proxy lost, reconnecting …"
+                    </p>
+                }
                     .into_any()
             }
-            None => view! { <p>"Lädt …"</p> }.into_any(),
+            None => view! { <p class="hint">"Loading …"</p> }.into_any(),
             Some(o) => view! { <Body overview=o live actions /> }.into_any(),
         }}
+    }
+}
+
+/// "Finish setup", until everything is done. Before the live stream
+/// arrives it shows what the server knew when the page was drawn.
+#[component]
+fn Checklist(live: Live) -> impl IntoView {
+    let first = OnceResource::new(get_setup());
+    view! {
+        <Transition>
+            {move || Suspend::new(async move {
+                let first = first.await.ok();
+                move || {
+                    live.overview
+                        .with(|o| o.as_ref().map(|o| o.setup))
+                        .or(first)
+                        .filter(|s| !s.complete())
+                        .map(|setup| view! { <SetupCard setup /> })
+                }
+            })}
+        </Transition>
+    }
+}
+
+#[component]
+fn SetupCard(setup: Setup) -> impl IntoView {
+    let items = [
+        (
+            "Strata address",
+            setup.configured,
+            "Set address",
+            "/admin/strata/connection",
+        ),
+        (
+            "MAC address of the PC",
+            setup.mac_known,
+            "Set MAC",
+            "/admin/pc",
+        ),
+        ("PC service", setup.agent_configured, "Install", "/admin/pc"),
+        (
+            "API key for your clients",
+            setup.api_key_exists,
+            "Create key",
+            "/admin/access",
+        ),
+        (
+            "Keep changes across restarts (DATA_DIR)",
+            setup.persistent,
+            "How to",
+            "/admin/system",
+        ),
+    ];
+    let done = items.iter().filter(|i| i.1).count();
+    let total = items.len();
+    view! {
+        <section class="card checklist" aria-labelledby="setup-heading">
+            <div class="card-head">
+                <h2 id="setup-heading">"Finish setup"</h2>
+                <span class="muted small">{format!("{done} of {total} done")}</span>
+            </div>
+            <progress value=done max=total aria-hidden="true"></progress>
+            <ul>
+                {items
+                    .into_iter()
+                    .map(|(label, done, action, href)| {
+                        view! {
+                            <li class=if done { "check done" } else { "check todo" }>
+                                <span class="tick">
+                                    {done.then(|| view! { <Icon icon=Icon::Check size=14 /> })}
+                                </span>
+                                <span class="label">
+                                    {label}
+                                    <span class="visually-hidden">
+                                        {if done { " (done)" } else { " (open)" }}
+                                    </span>
+                                </span>
+                                {(!done).then(|| view! { <a href=href>{action}</a> })}
+                            </li>
+                        }
+                    })
+                    .collect_view()}
+            </ul>
+        </section>
     }
 }
 
 #[component]
 fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
     let lost = move || {
-        live.lost
-            .get()
-            .then(|| view! { <p class="warning" role="status">"Verbindung unterbrochen, die Anzeige ist nicht aktuell."</p> })
+        live.lost.get().then(|| {
+            view! {
+                <p class="warning" role="status">
+                    "Connection lost, the display may be out of date."
+                </p>
+            }
+        })
     };
-    let warnings = [
-        (!overview.configured).then_some(
-            "Der Proxy ist noch nicht eingerichtet: die Strata-Adresse fehlt (Einstellungen).",
-        ),
-        (!overview.mac_known).then_some(NO_MAC),
-        (!overview.agent_configured).then_some(
-            "Kein PC-Dienst eingerichtet: kein Gaming-Modus und kein automatisches Schlafen.",
-        ),
-    ];
-    let no_key = (!overview.api_key_exists).then(|| {
-        view! {
-            <p class="warning" role="status">
-                "Noch kein API-Key angelegt: jeder Client bekommt 401. "
-                <a href="/admin/access">"Key anlegen"</a>
-            </p>
-        }
-    });
     let job = overview.strata_job.clone().map(|j| {
         let percent = j.percent.map(|p| format!(", {p} %")).unwrap_or_default();
         view! {
             <p class="warning" role="status">
-                {format!("Strata-Vorgang läuft: {}{percent}. ", strata_job_label(j.kind))}
-                <a href="/admin/strata">"Ansehen"</a>
+                {format!("Strata job running: {}{percent}. ", strata_job_label(j.kind))}
+                <a href="/admin/strata">"View"</a>
             </p>
         }
     });
-    let last_request = overview
-        .last_request
-        .clone()
-        .unwrap_or_else(|| "noch keine seit dem Start".to_string());
     let events = overview.events.clone();
     view! {
         {lost}
-        {warnings
-            .into_iter()
-            .flatten()
-            .map(|w| view! { <p class="warning">{w}</p> })
-            .collect_view()}
-        {no_key}
         {job}
-        <section class="panel cards">
-            <div>
-                <h2>"PC"</h2>
-                <p class="state">{pc_text(overview.pc)}</p>
-            </div>
-            <div>
-                <h2>"Strata"</h2>
-                <p class="state">{strata_text(&overview.strata)}</p>
-                <a class="button secondary" href="/admin/strata/output">"Strata-Ausgabe"</a>
-            </div>
-            <div>
-                <h2>"Letzte Anfrage"</h2>
-                <p class="state">{last_request}</p>
-            </div>
-            <div>
-                <h2>"Schlafen"</h2>
-                <p class="state">
-                    <SleepText sleep=overview.sleep.clone() now=overview.now since=live.since />
-                </p>
-            </div>
-        </section>
-        {overview
-            .pc_service
-            .as_ref()
-            .filter(|s| s.update_available)
-            .map(|_| {
-                view! {
-                    <p class="warning" role="status">
-                        "A PC service update is available. "
-                        <a href="/admin/pc">"Open PC"</a>
-                    </p>
-                }
-            })}
-        <Controls overview actions />
-        <section class="panel">
-            <h2>"Letzte Ereignisse"</h2>
+        <Hero overview=overview.clone() actions />
+        <div class="quick">
+            <GamingCard overview=overview.clone() actions />
+            <KeepAwakeCard overview=overview.clone() actions />
+        </div>
+        <Tiles overview live />
+        <section class="card" aria-labelledby="events-heading">
+            <h2 id="events-heading">"Recent events"</h2>
             {if events.is_empty() {
-                view! { <p class="hint">"Noch keine."</p> }.into_any()
+                view! { <p class="hint">"None yet."</p> }.into_any()
             } else {
                 view! {
                     <ul class="events">
@@ -161,9 +204,15 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
                                 view! {
                                     <li>
                                         <span class="time">{e.time}</span>
-                                        " "
-                                        {event_label(e.kind)}
-                                        {e.detail.map(|d| view! { <span class="hint">{format!(" ({d})")}</span> })}
+                                        <span class=format!("ev-dot {}", event_class(e.kind))></span>
+                                        <span>
+                                            {event_label(e.kind)}
+                                            {e
+                                                .detail
+                                                .map(|d| {
+                                                    view! { <span class="hint">{format!(" · {d}")}</span> }
+                                                })}
+                                        </span>
                                     </li>
                                 }
                             })
@@ -176,37 +225,303 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
     }
 }
 
-fn pc_text(pc: PcView) -> &'static str {
-    match pc {
-        PcView::Unknown => "unbekannt",
-        PcView::Asleep => "schläft",
-        PcView::Waking => "wacht auf …",
-        PcView::Awake => "wach",
-        PcView::Gaming => "Gaming-Modus",
+/// The PC's state, large, with the button that fits it.
+#[component]
+fn Hero(overview: Overview, actions: Actions) -> impl IntoView {
+    let Actions { wake, sleep, .. } = actions;
+    let pc = overview.pc;
+    let (_, class) = pc_badge(pc);
+    let (title, sub) = match pc {
+        PcView::Asleep => (
+            "Asleep".to_string(),
+            "The next request wakes it automatically.".to_string(),
+        ),
+        PcView::Waking => (
+            "Waking up …".to_string(),
+            "Wake packet sent, waiting for Strata to answer.".to_string(),
+        ),
+        PcView::Awake => ("Awake".to_string(), strata_sentence(&overview.strata)),
+        PcView::Gaming => (
+            "Awake, gaming".to_string(),
+            "Strata is paused while gaming mode is on.".to_string(),
+        ),
+        PcView::Unknown => (
+            "Unknown".to_string(),
+            "The proxy has not reached the PC yet.".to_string(),
+        ),
+    };
+    let setup = overview.setup;
+    let can_wake = setup.mac_known && setup.configured;
+    let button = match pc {
+        PcView::Asleep | PcView::Unknown => view! {
+            <button
+                type="button"
+                class="hero-btn"
+                disabled=move || !can_wake || wake.pending().get()
+                on:click=move |_| {
+                    wake.dispatch(Wake {});
+                }
+            >
+                <Icon icon=Icon::Power size=18 />
+                "Wake PC"
+            </button>
+        }
+        .into_any(),
+        PcView::Waking => view! {
+            <button type="button" class="hero-btn" disabled>
+                "Waking …"
+            </button>
+        }
+        .into_any(),
+        PcView::Awake => {
+            let agent = setup.agent_configured;
+            view! {
+                <button
+                    type="button"
+                    class="secondary hero-btn"
+                    disabled=move || !agent || sleep.pending().get()
+                    on:click=move |_| {
+                        sleep.dispatch(SleepNow {});
+                    }
+                >
+                    <Icon icon=Icon::Moon size=18 />
+                    "Sleep now"
+                </button>
+            }
+            .into_any()
+        }
+        PcView::Gaming => ().into_any(),
+    };
+    let icon = if pc == PcView::Asleep {
+        Icon::Moon
+    } else {
+        Icon::Monitor
+    };
+    view! {
+        <section class="card hero" aria-label="PC">
+            <div class="hero-main">
+                <div class=format!("hero-icon {class}")>
+                    <Icon icon size=26 />
+                </div>
+                <div>
+                    <p class="eyebrow">"Your PC"</p>
+                    <p class="hero-state">{title}</p>
+                    <p class="muted">{sub}</p>
+                </div>
+            </div>
+            <div>{button}</div>
+            {result_text(wake.value())}
+            {result_text(sleep.value())}
+        </section>
     }
 }
 
-fn strata_text(strata: &StrataView) -> String {
+#[component]
+fn GamingCard(overview: Overview, actions: Actions) -> impl IntoView {
+    let gaming = actions.gaming;
+    let busy = matches!(overview.strata, StrataView::Busy { .. });
+    let agent = overview.setup.agent_configured;
+    let on = overview.pc == PcView::Gaming;
+    view! {
+        <section class="card">
+            <div class="toggle-row">
+                <button
+                    type="button"
+                    class="switch"
+                    role="switch"
+                    aria-checked=if on { "true" } else { "false" }
+                    aria-labelledby="gaming-heading"
+                    disabled=move || !agent || gaming.pending().get()
+                    on:click=move |_| {
+                        let enabled = !on;
+                        if !enabled
+                            || confirmed(
+                                busy,
+                                "Strata is working on a request, and gaming mode stops Strata. Switch it on anyway?",
+                            )
+                        {
+                            gaming.dispatch(SetGaming { enabled });
+                        }
+                    }
+                >
+                    <span class="knob"></span>
+                </button>
+                <div>
+                    <h2 id="gaming-heading">"Gaming mode"</h2>
+                    <p class="muted small">
+                        {if agent {
+                            "Pauses Strata so games get the GPU. Requests get 503 until you switch it off."
+                        } else {
+                            "Needs the PC service."
+                        }}
+                    </p>
+                    {move || {
+                        gaming
+                            .pending()
+                            .get()
+                            .then(|| {
+                                view! {
+                                    <p class="hint" role="status">
+                                        {if on { "Switching off …" } else { "Switching on …" }}
+                                    </p>
+                                }
+                            })
+                    }}
+                </div>
+            </div>
+            {result_text(gaming.value())}
+        </section>
+    }
+}
+
+#[component]
+fn KeepAwakeCard(overview: Overview, actions: Actions) -> impl IntoView {
+    let Actions { keep, picked, .. } = actions;
+    let kept = overview.keep_awake_until.clone();
+    let active = kept.is_some();
+    let chip = move |choice: KeepAwakeChoice, text: &'static str| {
+        let pressed = move || active && picked.get() == Some(choice);
+        view! {
+            <button
+                type="button"
+                class="chip"
+                aria-pressed=move || if pressed() { "true" } else { "false" }
+                disabled=move || keep.pending().get()
+                on:click=move |_| {
+                    picked.set(Some(choice));
+                    keep.dispatch(KeepAwake { choice });
+                }
+            >
+                {text}
+            </button>
+        }
+    };
+    let text = match &kept {
+        Some(until) => format!("Awake until {until}, even across a restart of the proxy."),
+        None => "Off. The PC sleeps once it has had no requests for a while.".to_string(),
+    };
+    view! {
+        <section class="card">
+            <h2 id="keep-heading">"Keep awake"</h2>
+            <div class="chips" role="group" aria-labelledby="keep-heading">
+                {chip(KeepAwakeChoice::OneHour, "1 h")}
+                {chip(KeepAwakeChoice::FourHours, "4 h")}
+                {chip(KeepAwakeChoice::EightHours, "8 h")}
+                {chip(KeepAwakeChoice::Morning, "Until 8:00")}
+                {active.then(|| chip(KeepAwakeChoice::Off, "Stop"))}
+            </div>
+            <p class="muted small">{text}</p>
+            {result_text(keep.value())}
+        </section>
+    }
+}
+
+#[component]
+fn Tiles(overview: Overview, live: Live) -> impl IntoView {
+    let (strata_value, _) = strata_badge(&overview);
+    let strata_sub = strata_sentence(&overview.strata);
+    let (last_value, last_sub) = match overview.last_request.clone() {
+        Some(t) => (t, "Last API request"),
+        None => ("None yet".to_string(), "Since the proxy started"),
+    };
+    let service = overview.pc_service.clone();
+    view! {
+        <div class="tiles">
+            <Tile label="Strata" value=strata_value.to_string() sub=strata_sub>
+                <a class="small" href="/admin/strata/output">
+                    "Output"
+                </a>
+            </Tile>
+            <Tile label="Last request" value=last_value sub=last_sub.to_string() />
+            <section class="card tile">
+                <h2>"Sleep"</h2>
+                <p class="tile-value">
+                    <SleepText sleep=overview.sleep.clone() now=overview.now since=live.since />
+                </p>
+            </section>
+            <ServiceTile service agent=overview.setup.agent_configured />
+        </div>
+    }
+}
+
+#[component]
+fn Tile(
+    label: &'static str,
+    value: String,
+    sub: String,
+    #[prop(optional)] children: Option<Children>,
+) -> impl IntoView {
+    view! {
+        <section class="card tile">
+            <h2>{label}</h2>
+            <p class="tile-value">{value}</p>
+            <p class="muted small">{sub}</p>
+            {children.map(|c| view! { <div>{c()}</div> })}
+        </section>
+    }
+}
+
+#[component]
+fn ServiceTile(service: Option<PcServiceView>, agent: bool) -> impl IntoView {
+    let (value, sub, update) = match service {
+        Some(s) => {
+            let value = s
+                .version
+                .as_ref()
+                .map_or_else(|| "Old version".to_string(), |v| format!("Version {v}"));
+            let sub = if s.updating {
+                "Updating …".to_string()
+            } else if s.update_available {
+                s.available.as_ref().map_or_else(
+                    || "An update is available".to_string(),
+                    |v| format!("Version {v} is available"),
+                )
+            } else {
+                "Up to date".to_string()
+            };
+            (value, sub, s.update_available && !s.updating)
+        }
+        None if agent => (
+            "Not reached yet".to_string(),
+            "Reports once the PC is awake".to_string(),
+            false,
+        ),
+        None => (
+            "Not installed".to_string(),
+            "No gaming mode, no automatic sleep".to_string(),
+            false,
+        ),
+    };
+    view! {
+        <Tile label="PC service" value sub>
+            {update.then(|| view! { <a class="small" href="/admin/pc">"Update on PC page"</a> })}
+        </Tile>
+    }
+}
+
+/// What Strata does, as a sentence.
+fn strata_sentence(strata: &StrataView) -> String {
     match strata {
-        StrataView::Offline => "offline".into(),
-        StrataView::Loading => "lädt …".into(),
-        StrataView::Unloaded => "bereit, Modell lädt bei der nächsten Anfrage".into(),
-        StrataView::Ready => "bereit".into(),
+        StrataView::Offline => "Strata is not running.".into(),
+        StrataView::Loading => "Strata is loading the model.".into(),
+        StrataView::Unloaded => "Strata is ready and loads the model with the next request.".into(),
+        StrataView::Ready => "Strata is ready.".into(),
         StrataView::Busy {
             processing,
             deferred,
             tokens_per_sec,
         } => {
             let mut text = match processing {
-                1 => "bearbeitet 1 Anfrage".to_string(),
-                n => format!("bearbeitet {n} Anfragen"),
+                1 => "Strata is working on 1 request".to_string(),
+                n => format!("Strata is working on {n} requests"),
             };
             if let Some(waiting) = deferred.filter(|n| *n > 0) {
-                text.push_str(&format!(", {waiting} wartend"));
+                text.push_str(&format!(", {waiting} waiting"));
             }
             if let Some(tps) = tokens_per_sec {
-                text.push_str(&format!(", {tps:.0} Token/s"));
+                text.push_str(&format!(", {tps:.0} tokens/s"));
             }
+            text.push('.');
             text
         }
     }
@@ -229,22 +544,22 @@ fn SleepText(sleep: SleepView, now: u64, since: RwSignal<u64>) -> impl IntoView 
     let left = move |at: u64| at as i64 - (now + since.get()) as i64;
     move || match &sleep {
         SleepView::At(at) => match left(*at) {
-            l if l > 0 => format!("in {}", duration_text(l)),
-            _ => "gleich".to_string(),
+            l if l > 0 => format!("In {}", duration_text(l)),
+            _ => "Now".to_string(),
         },
-        SleepView::Asleep => "PC schläft".into(),
-        SleepView::Waking => "PC wacht auf".into(),
-        SleepView::Gaming => "Gaming-Modus".into(),
-        SleepView::KeptAwake { until } => format!("Wach gehalten bis {until}"),
-        SleepView::Busy => "Anfrage läuft".into(),
+        SleepView::Asleep => "Asleep".into(),
+        SleepView::Waking => "Waking up".into(),
+        SleepView::Gaming => "Not while gaming".into(),
+        SleepView::KeptAwake { until } => format!("Kept awake until {until}"),
+        SleepView::Busy => "Request running".into(),
         SleepView::Refused { reason, retry_at } => {
             format!(
-                "Abgelehnt: {reason}, nächster Versuch in {}",
+                "Refused: {reason}, next try in {}",
                 duration_text(left(*retry_at))
             )
         }
-        SleepView::NoAgent => "nie (kein PC-Dienst)".into(),
-        SleepView::Unknown => "Zustand des PCs unbekannt".into(),
+        SleepView::NoAgent => "Never (no PC service)".into(),
+        SleepView::Unknown => "PC state unknown".into(),
     }
 }
 
@@ -272,93 +587,6 @@ fn result_text(
             .get()
             .and_then(|r| r.err())
             .map(|e| view! { <p class="error" role="alert">{error_text(&e)}</p> })
-    }
-}
-
-#[component]
-fn Controls(overview: Overview, actions: Actions) -> impl IntoView {
-    let Actions {
-        wake,
-        sleep,
-        gaming,
-        keep,
-    } = actions;
-    let busy = matches!(overview.strata, StrataView::Busy { .. });
-    let pc = overview.pc;
-    let agent = overview.agent_configured;
-    let can_wake =
-        overview.mac_known && overview.configured && matches!(pc, PcView::Asleep | PcView::Unknown);
-    let can_sleep = agent && pc == PcView::Awake;
-    let gaming_on = pc == PcView::Gaming;
-    let kept = overview.keep_awake_until.clone();
-    let keep_button = move |choice: KeepAwakeChoice, text: &'static str| {
-        view! {
-            <button
-                class="secondary"
-                disabled=move || keep.pending().get()
-                on:click=move |_| {
-                    keep.dispatch(KeepAwake { choice });
-                }
-            >
-                {text}
-            </button>
-        }
-    };
-    view! {
-        <section class="panel">
-            <h2>"Steuerung"</h2>
-            <div class="actions">
-                <button
-                    disabled=move || !can_wake || wake.pending().get()
-                    on:click=move |_| {
-                        wake.dispatch(Wake {});
-                    }
-                >
-                    "Jetzt wecken"
-                </button>
-                <button
-                    disabled=move || !can_sleep || sleep.pending().get()
-                    on:click=move |_| {
-                        if confirmed(busy, "Strata bearbeitet gerade eine Anfrage. Trotzdem schlafen legen?") {
-                            sleep.dispatch(SleepNow {});
-                        }
-                    }
-                >
-                    "Jetzt schlafen legen"
-                </button>
-                <button
-                    disabled=move || !agent || gaming.pending().get()
-                    on:click=move |_| {
-                        let enabled = !gaming_on;
-                        if !enabled
-                            || confirmed(busy, "Strata bearbeitet gerade eine Anfrage, Gaming beendet Strata. Trotzdem einschalten?")
-                        {
-                            gaming.dispatch(SetGaming { enabled });
-                        }
-                    }
-                >
-                    {move || match (gaming.pending().get(), gaming_on) {
-                        (true, false) => "Gaming wird eingeschaltet …",
-                        (true, true) => "Gaming wird ausgeschaltet …",
-                        (false, false) => "Gaming an",
-                        (false, true) => "Gaming aus",
-                    }}
-                </button>
-            </div>
-            {result_text(wake.value())}
-            {result_text(sleep.value())}
-            {result_text(gaming.value())}
-            <h3>"Wach halten"</h3>
-            {kept.map(|until| view! { <p class="hint">{format!("Bis {until}, auch über einen Neustart.")}</p> })}
-            <div class="actions">
-                {keep_button(KeepAwakeChoice::OneHour, "1 h")}
-                {keep_button(KeepAwakeChoice::FourHours, "4 h")}
-                {keep_button(KeepAwakeChoice::EightHours, "8 h")}
-                {keep_button(KeepAwakeChoice::Morning, "bis morgen 8 Uhr")}
-                {overview.keep_awake_until.is_some().then(|| keep_button(KeepAwakeChoice::Off, "beenden"))}
-            </div>
-            {result_text(keep.value())}
-        </section>
     }
 }
 

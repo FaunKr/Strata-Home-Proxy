@@ -603,3 +603,52 @@ async fn warns_while_no_api_key_exists() {
     live.until("wieder ein Key", |v| v["api_key_exists"] == true)
         .await;
 }
+
+// --- Setup checklist (#65) ---
+
+#[tokio::test]
+async fn stream_tells_whether_data_survives_a_restart() {
+    let s = setup(true, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live.until("PC wach", |v| v["pc"] == "Awake").await;
+    assert_eq!(v["persistent"], false);
+
+    let dir = std::env::temp_dir().join(format!("strata-overview-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let s = setup(true, |c| c.data_dir = Some(dir.clone())).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live.until("PC wach", |v| v["pc"] == "Awake").await;
+    assert_eq!(v["persistent"], true);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn fresh_proxy_lists_what_is_left_to_set_up() {
+    let s = setup(false, |c| c.strata_url = None).await;
+    for k in s.state.api_keys.list() {
+        s.state.api_keys.revoke(&k.name, &k.prefix).unwrap();
+    }
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin").await;
+    assert!(html.contains("Finish setup"), "{html}");
+    assert!(html.contains("2 of 5 done"), "{html}");
+    assert!(html.contains("Set address"), "{html}");
+    assert!(html.contains("Create key"), "{html}");
+    assert!(html.contains("How to"), "{html}");
+    assert!(!html.contains("Set MAC"), "{html}");
+    assert!(!html.contains(">Install<"), "{html}");
+}
+
+#[tokio::test]
+async fn set_up_proxy_shows_no_checklist() {
+    let dir = std::env::temp_dir().join(format!("strata-checklist-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let s = setup(false, |c| c.data_dir = Some(dir.clone())).await;
+    s.state.api_keys.create("Laptop").unwrap();
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin").await;
+    assert!(!html.contains("Finish setup"), "{html}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

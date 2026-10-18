@@ -26,7 +26,7 @@ use leptos_axum::{
 use crate::{
     api::{
         ApiKeysView, CreatedKey, KeepAwakeChoice, OutputMessage, Overview, PcSetupCommand, Session,
-        SettingValue, SettingsView, StrataJobForm, StrataPage,
+        SettingValue, SettingsView, Setup, StrataJobForm, StrataPage,
     },
     app::{App, shell},
 };
@@ -56,6 +56,8 @@ pub trait Backend: Send + Sync + 'static {
     fn save_settings(&self, values: &[SettingValue]) -> Result<(), (Option<String>, String)>;
     /// Drops a saved value, so the environment or default applies again.
     fn reset_setting(&self, key: &str) -> Result<(), String>;
+    /// How far the proxy is set up.
+    fn setup(&self) -> Setup;
     /// The overview now and after every change, for as long as it is held.
     /// While anyone holds one, the proxy checks on the PC and Strata.
     fn overview(&self) -> BoxStream<'static, Overview>;

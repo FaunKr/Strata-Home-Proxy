@@ -225,12 +225,9 @@ pub fn error_text(err: &ServerFnError) -> String {
     }
 }
 
-/// What the overview shows; sent as a whole on every change.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Overview {
-    /// The proxy's clock (Unix seconds), so the page can count down without
-    /// trusting the viewer's clock.
-    pub now: u64,
+/// How far the proxy is set up; the overview's checklist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Setup {
     /// False while no Strata URL is set.
     pub configured: bool,
     /// False while no MAC address is known: the PC cannot be woken.
@@ -239,6 +236,37 @@ pub struct Overview {
     pub agent_configured: bool,
     /// False while no API key exists: every client gets 401.
     pub api_key_exists: bool,
+    /// False without `DATA_DIR`: settings and keys are lost on a restart.
+    pub persistent: bool,
+}
+
+impl Setup {
+    /// Every item of the checklist is done.
+    pub fn complete(&self) -> bool {
+        self.configured
+            && self.mac_known
+            && self.agent_configured
+            && self.api_key_exists
+            && self.persistent
+    }
+}
+
+/// How far the proxy is set up, without asking the PC; the overview's
+/// checklist before its live stream arrives.
+#[server(prefix = "/admin/api", endpoint = "setup")]
+pub async fn get_setup() -> Result<Setup, ServerFnError> {
+    require_login(false).await?;
+    Ok(backend().setup())
+}
+
+/// What the overview shows; sent as a whole on every change.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Overview {
+    /// The proxy's clock (Unix seconds), so the page can count down without
+    /// trusting the viewer's clock.
+    pub now: u64,
+    #[serde(flatten)]
+    pub setup: Setup,
     pub pc: PcView,
     pub strata: StrataView,
     /// Start or end of the last API request, as local time text.

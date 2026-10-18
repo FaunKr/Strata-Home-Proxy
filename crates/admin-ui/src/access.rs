@@ -95,14 +95,6 @@ fn ApiKeys() -> impl IntoView {
                         Ok(view) => {
                             let empty = view.keys.is_empty();
                             view! {
-                                {(!view.persistent)
-                                    .then(|| {
-                                        view! {
-                                            <p class="warning" role="status">
-                                                "DATA_DIR is not set: keys are lost on the next restart."
-                                            </p>
-                                        }
-                                    })}
                                 {empty
                                     .then(|| {
                                         view! {

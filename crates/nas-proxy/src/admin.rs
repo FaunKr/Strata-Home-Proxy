@@ -10,8 +10,8 @@ use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
     api::{
         ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, OutputMessage, Overview,
-        PcSetupCommand, Session, SettingEntry, SettingValue, SettingsView, Source, StrataJobForm,
-        StrataPage,
+        PcSetupCommand, Session, SettingEntry, SettingValue, SettingsView, Setup, Source,
+        StrataJobForm, StrataPage,
     },
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
@@ -123,6 +123,10 @@ impl Backend for UiBackend {
             .events
             .record(EventKind::SettingReset, Some(key.to_string()));
         Ok(())
+    }
+
+    fn setup(&self) -> Setup {
+        overview::setup(&self.0)
     }
 
     fn overview(&self) -> BoxStream<'static, Overview> {

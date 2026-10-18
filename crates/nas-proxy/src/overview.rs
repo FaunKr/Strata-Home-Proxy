@@ -12,7 +12,7 @@ use std::{
 };
 
 use futures_util::{StreamExt, stream::BoxStream};
-use strata_admin_ui::api::{EventView, Overview, PcView, SleepView, StrataJob, StrataView};
+use strata_admin_ui::api::{EventView, Overview, PcView, Setup, SleepView, StrataJob, StrataView};
 use tokio::sync::{Notify, watch};
 
 use crate::{
@@ -266,6 +266,18 @@ fn strata_view(probe: &Probe, in_flight: usize) -> StrataView {
     }
 }
 
+/// How far the proxy is set up, from the configuration alone.
+pub fn setup(state: &AppState) -> Setup {
+    let cfg = state.cfg();
+    Setup {
+        configured: cfg.strata_url.is_some(),
+        mac_known: cfg.pc_mac.is_some(),
+        agent_configured: cfg.pc_agent_url.is_some(),
+        api_key_exists: !state.api_keys.is_empty(),
+        persistent: state.settings.persistent(),
+    }
+}
+
 fn build(state: &AppState, probe: &Probe) -> Overview {
     let cfg = state.cfg();
     let snap = state.snapshot();
@@ -317,10 +329,7 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
         .collect();
     Overview {
         now: clock::unix(now),
-        configured: cfg.strata_url.is_some(),
-        mac_known: cfg.pc_mac.is_some(),
-        agent_configured: cfg.pc_agent_url.is_some(),
-        api_key_exists: !state.api_keys.is_empty(),
+        setup: setup(state),
         strata_job: probe.job.clone(),
         pc,
         strata,

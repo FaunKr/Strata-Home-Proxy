@@ -37,7 +37,7 @@ fn PcService() -> impl IntoView {
         match o.pc_service {
             Some(service) => view! { <ServiceState service pc=o.pc update /> }.into_any(),
             None => {
-                let (badge, text) = if o.agent_configured {
+                let (badge, text) = if o.setup.agent_configured {
                     (
                         view! { <span class="badge is-idle"><span class="dot"></span>"Not reached yet"</span> },
                         "The proxy has not heard from it since it started. It reports once the PC is awake.",

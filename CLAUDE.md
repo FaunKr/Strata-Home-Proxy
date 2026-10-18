@@ -17,3 +17,7 @@ Standard-Labels: needs-triage, needs-info, ready-for-agent, ready-for-human, won
 ### Domain docs
 
 Single-context: ein `GLOSSARY.md` und `docs/adr/` im Repo-Root. See `docs/agents/domain.md`.
+
+### Strata
+
+Strata ist eine eigene Engine, kein llama-server. Endpunkte, Felder, Metriken und Auth, die Proxy und PC-Dienst nutzen: `docs/strata-api.md`.

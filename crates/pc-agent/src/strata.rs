@@ -874,32 +874,18 @@ async fn set_key(agent: &Arc<Agent>, api_key: String) -> Result<Option<String>, 
     Ok(None)
 }
 
-/// Sets `api_key` in each model config (`strata-*.json` with `exe` and
-/// `args`, as Strata's own tools tell them apart), keeping everything else.
+/// Sets `api_key` in each model config, keeping everything else.
 fn write_key(dir: &Path, key: &str) -> Result<(), String> {
     // Every config is read first: one that does not parse stops the change
     // before any has the new key.
     let mut changed = Vec::new();
     for id in installed_models(dir) {
         let path = dir.join(format!("strata-{id}.json"));
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| format!("{} nicht lesbar: {e}", path.display()))?;
-        let mut cfg =
-            serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
-                .map_err(|e| format!("{} ist kein gültiges JSON: {e}", path.display()))?;
-        let Some(fields) = cfg.as_object_mut() else {
+        let Some((text, mut cfg)) = read_config(&path)? else {
             continue;
         };
-        if !fields.contains_key("exe") || !fields.get("args").is_some_and(|a| a.is_array()) {
-            continue;
-        }
-        fields.insert("api_key".into(), key.into());
-        // As Strata writes it (`json.dumps(cfg, indent=1)`).
-        let mut out = Vec::new();
-        let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
-        let mut ser = serde_json::Serializer::with_formatter(&mut out, formatter);
-        serde::Serialize::serialize(&cfg, &mut ser).expect("config serializes");
-        changed.push((path, text, String::from_utf8(out).expect("JSON is UTF-8")));
+        cfg.insert("api_key".into(), key.into());
+        changed.push((path, text, config_text(cfg)));
     }
     for (i, (path, _, new)) in changed.iter().enumerate() {
         if let Err(e) = crate::write_replacing(path, new) {
@@ -911,6 +897,34 @@ fn write_key(dir: &Path, key: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// A model config with its text as read, or `None` for a `strata-*.json`
+/// that is none: model configs have `exe` and an `args` array, as Strata's
+/// own tools tell them apart.
+fn read_config(path: &Path) -> Result<Option<(String, ConfigFields)>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("{} nicht lesbar: {e}", path.display()))?;
+    let cfg = serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
+        .map_err(|e| format!("{} ist kein gültiges JSON: {e}", path.display()))?;
+    let serde_json::Value::Object(fields) = cfg else {
+        return Ok(None);
+    };
+    if !fields.contains_key("exe") || !fields.get("args").is_some_and(|a| a.is_array()) {
+        return Ok(None);
+    }
+    Ok(Some((text, fields)))
+}
+
+type ConfigFields = serde_json::Map<String, serde_json::Value>;
+
+/// A config as Strata writes it (`json.dumps(cfg, indent=1)`).
+fn config_text(cfg: ConfigFields) -> String {
+    let mut out = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+    let mut ser = serde_json::Serializer::with_formatter(&mut out, formatter);
+    serde::Serialize::serialize(&cfg, &mut ser).expect("config serializes");
+    String::from_utf8(out).expect("JSON is UTF-8")
 }
 
 /// Whether Strata's Git source has commits this folder lacks; asked in the

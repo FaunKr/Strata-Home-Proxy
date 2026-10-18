@@ -1,7 +1,7 @@
 ## Arbeiten im Repo
 
 - PRs gehen gegen `main`.
-- Vor dem Push `scripts/check.sh`: dieselben Checks wie der CI-Job `test`.
+- Vor dem Push `scripts/check.sh`: dieselben Checks wie der CI-Job `test`. Zum Iterieren prüft `scripts/check.sh <crate>…` nur diese Crates.
 - Bevor du vorschlägst, einen PR zu mergen: `/code-review` über seinen Diff.
 - UI-Änderungen im Browser prüfen: `scripts/ui-check.sh` (`SHOTS=1` für Screenshots).
 - Neue Proxy-Tests nutzen das Gerüst mit simuliertem PC und Strata in `crates/nas-proxy/tests/common`.

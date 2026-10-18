@@ -19,11 +19,11 @@ concurrency:
   cancel-in-progress: true
 jobs:
   changes:
-    # Decides which of the jobs below a pull request needs: the crates it
-    # touches plus the crates that depend on them (the NAS proxy links the web
-    # UI). Shared files, pushes to main and manual runs need everything.
+    # Decides which of the jobs below a pull request needs (scripts/ci-select.sh).
+    # Pushes to main and manual runs need everything.
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: read
     outputs:
       test: ${{ steps.select.outputs.test }}
@@ -31,62 +31,26 @@ jobs:
       windows: ${{ steps.select.outputs.windows }}
       image: ${{ steps.select.outputs.image }}
     steps:
-      - uses: dorny/paths-filter@v3
-        id: filter
-        if: github.event_name == 'pull_request'
-        with:
-          filters: |
-            shared: &shared
-              - Cargo.toml
-              - Cargo.lock
-              - rust-toolchain*
-              - .github/workflows/**
-              - scripts/check.sh
-            admin-ui:
-              - crates/admin-ui/**
-            nas-proxy:
-              - crates/nas-proxy/**
-              # Embedded and served by the proxy (include_str!).
-              - deploy/windows/**
-            pc-agent:
-              - crates/pc-agent/**
-            windows:
-              - *shared
-              - crates/pc-agent/**
-              - deploy/windows/**
-            image:
-              - *shared
-              - crates/**
-              - deploy/windows/**
-              - Dockerfile
-              - .dockerignore
+      - uses: actions/checkout@v4
       - id: select
         env:
-          PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
-          SHARED: ${{ steps.filter.outputs.shared }}
-          ADMIN_UI: ${{ steps.filter.outputs.admin-ui }}
-          NAS_PROXY: ${{ steps.filter.outputs.nas-proxy }}
-          PC_AGENT: ${{ steps.filter.outputs.pc-agent }}
-          WINDOWS: ${{ steps.filter.outputs.windows }}
-          IMAGE: ${{ steps.filter.outputs.image }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          # An empty package list means the whole workspace (scripts/check.sh).
-          if [[ $PULL_REQUEST != true || $SHARED == true ]]; then
-            printf '%s\n' test=true packages= windows=true image=true >> "$GITHUB_OUTPUT"
+          if [[ -z $PR ]]; then
+            scripts/ci-select.sh --all | tee -a "$GITHUB_OUTPUT"
             exit 0
           fi
-          packages=()
-          [[ $ADMIN_UI == true ]] && packages+=(strata-admin-ui strata-nas-proxy)
-          [[ $NAS_PROXY == true ]] && packages+=(strata-nas-proxy)
-          [[ $PC_AGENT == true ]] && packages+=(strata-pc-agent)
-          packages=$(printf '%s\n' "${packages[@]}" | sort -u | xargs)
-          {
-            echo "test=$([[ -n $packages ]] && echo true || echo false)"
-            echo "packages=$packages"
-            echo "windows=$WINDOWS"
-            echo "image=$IMAGE"
-          } >> "$GITHUB_OUTPUT"
-          cat "$GITHUB_OUTPUT"
+          # Renamed files count with their old path too.
+          files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)')
+          # The API lists at most 3000 files; beyond that, run everything.
+          count=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .changed_files)
+          if ((count >= 3000)); then
+            scripts/ci-select.sh --all
+          else
+            scripts/ci-select.sh <<<"$files"
+          fi | tee -a "$GITHUB_OUTPUT"
   test:
     needs: changes
     if: needs.changes.outputs.test == 'true'

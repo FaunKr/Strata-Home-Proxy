@@ -7,21 +7,22 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-members=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
 if (($#)); then
-  packages=("$@")
-  for package in "${packages[@]}"; do
-    if ! grep -qx -- "$package" <<<"$members"; then
-      echo "Unbekanntes Paket: $package (vorhanden: ${members//$'\n'/ })" >&2
+  for package in "$@"; do
+    # Workspace crates have a path ID; a dependency's name would match too.
+    if [[ $(cargo pkgid "$package" 2>/dev/null) != path+file://"$PWD"/crates/* ]]; then
+      echo "Unbekanntes Paket: $package" >&2
       exit 2
     fi
   done
+  packages=" $* "
+  package_args=()
+  for package in "$@"; do package_args+=(-p "$package"); done
 else
-  mapfile -t packages <<<"$members"
+  packages=all
+  package_args=(--workspace)
 fi
-selected() { [[ " ${packages[*]} " == *" $1 "* ]]; }
-package_args=()
-for package in "${packages[@]}"; do package_args+=(-p "$package"); done
+selected() { [[ $packages == all || $packages == *" $1 "* ]]; }
 
 cargo fmt --check
 cargo clippy "${package_args[@]}" --all-targets -- -D warnings
@@ -39,8 +40,8 @@ if selected strata-pc-agent; then
   fi
 fi
 # install.ps1 parses, as the CI job `windows` checks it; only where PowerShell
-# is installed.
-if selected strata-pc-agent && command -v pwsh >/dev/null; then
+# is installed. The NAS proxy serves the script, the PC service runs it.
+if (selected strata-pc-agent || selected strata-nas-proxy) && command -v pwsh >/dev/null; then
   pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("deploy/windows/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
 fi
 # Erst bauen, dann mit Zeitlimit testen: ein hängender Test bricht ab, statt

@@ -8,10 +8,9 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+  # No paths-ignore here: a docs-only pull request still needs ci-ok, so the
+  # changes job runs and skips everything else.
   pull_request:
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
   workflow_dispatch:
 # A new push to a PR cancels the run for the commit before it; runs on main are
 # never cancelled, so every commit there gets its image.
@@ -47,6 +46,8 @@ jobs:
               - crates/admin-ui/**
             nas-proxy:
               - crates/nas-proxy/**
+              # Embedded and served by the proxy (include_str!).
+              - deploy/windows/**
             pc-agent:
               - crates/pc-agent/**
             windows:
@@ -56,6 +57,7 @@ jobs:
             image:
               - *shared
               - crates/**
+              - deploy/windows/**
               - Dockerfile
               - .dockerignore
       - id: select
@@ -75,11 +77,12 @@ jobs:
           fi
           packages=()
           [[ $ADMIN_UI == true ]] && packages+=(strata-admin-ui strata-nas-proxy)
-          [[ $NAS_PROXY == true && $ADMIN_UI != true ]] && packages+=(strata-nas-proxy)
+          [[ $NAS_PROXY == true ]] && packages+=(strata-nas-proxy)
           [[ $PC_AGENT == true ]] && packages+=(strata-pc-agent)
+          packages=$(printf '%s\n' "${packages[@]}" | sort -u | xargs)
           {
-            echo "test=$([[ ${#packages[@]} -gt 0 ]] && echo true || echo false)"
-            echo "packages=${packages[*]}"
+            echo "test=$([[ -n $packages ]] && echo true || echo false)"
+            echo "packages=$packages"
             echo "windows=$WINDOWS"
             echo "image=$IMAGE"
           } >> "$GITHUB_OUTPUT"

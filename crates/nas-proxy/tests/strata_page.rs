@@ -73,7 +73,7 @@ async fn a_sleeping_pc_shows_the_last_answer_and_stays_asleep() {
     page(&mut b).await;
     s.pc.awake.store(false, Ordering::SeqCst);
     let v = page(&mut b).await;
-    assert!(v["problem"].as_str().unwrap().contains("schläft"), "{v}");
+    assert!(v["problem"].as_str().unwrap().contains("asleep"), "{v}");
     assert_eq!(v["stale"], true);
     assert_eq!(v["info"]["installed"], true);
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -86,7 +86,10 @@ async fn an_older_pc_service_asks_for_an_update() {
     let mut b = logged_in(&s.url).await;
     let v = page(&mut b).await;
     assert!(
-        v["problem"].as_str().unwrap().contains("aktualisieren"),
+        v["problem"]
+            .as_str()
+            .unwrap()
+            .contains("update the PC service"),
         "{v}"
     );
 }
@@ -332,7 +335,7 @@ async fn the_page_lists_installed_models_without_waking() {
     assert!(html.contains("Installed models"), "{html}");
     assert!(html.contains("IQ3_XXS"), "{html}");
     assert!(html.contains("81.0 GB"), "{html}");
-    assert!(html.contains("schläft"), "{html}");
+    assert!(html.contains("asleep"), "{html}");
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
 }

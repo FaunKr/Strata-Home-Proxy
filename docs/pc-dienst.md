@@ -14,8 +14,8 @@ anmeldest. Er
 
 ## Installieren
 
-1. In der Weboberfläche des NAS die Seite **PC-Dienst** öffnen und
-   **Befehl erzeugen** drücken.
+1. In der Weboberfläche des NAS den Bereich **PC** öffnen und
+   **Create install command** drücken.
 2. Den Befehl in eine PowerShell auf dem PC einfügen, z. B.:
    ```powershell
    irm http://192.168.1.10:8090/admin/agent/install.ps1?code=K7F2Q9AB | iex
@@ -25,7 +25,7 @@ anmeldest. Er
    beim NAS an, richtet den Start bei Anmeldung ein, öffnet Port 8091 nur für
    das NAS und legt die Desktop-Verknüpfung **Gaming an-aus** an. Token,
    `PC_AGENT_URL` und den Strata-Key trägt der NAS selbst ein.
-3. Startskript und Strata-Programme setzt die Seite **Strata**. Bis dahin
+3. Startskript und Strata-Programme setzt der Bereich **Strata**. Bis dahin
    läuft der Dienst, startet Strata aber nicht selbst.
 
 Der Code im Befehl gilt 15 Minuten und für einen PC; ein neuer Befehl macht
@@ -34,21 +34,21 @@ neuer Befehl die .exe aus und meldet den PC neu an (neues Token, z. B. nachdem
 auf dem NAS Token oder Adresse zurückgesetzt wurden); die übrige Konfiguration
 bleibt.
 
-**Aktualisieren:** Die Übersicht zeigt die Version des PC-Dienstes und
-**Update verfügbar**, sobald das Image des NAS eine andere enthält (nach einem
-neuen Image). Der Knopf **Update** geht nur bei wachem PC und weckt ihn nie.
+**Aktualisieren:** Der Bereich **PC** zeigt die Version des PC-Dienstes und
+**Update available**, sobald das Image des NAS eine andere enthält (nach einem
+neuen Image). Der Knopf **Update to …** geht nur bei wachem PC und weckt ihn nie.
 Der Dienst lädt die .exe vom NAS, legt sie an dieselbe Stelle (Aufgabe und
 Verknüpfung bleiben gültig), startet sie und beendet sich. Solange Strata eine
 Anfrage bearbeitet oder ein Strata-Vorgang läuft, lehnt er ab; Strata kann
 beim Neustart des Dienstes mit beendet werden und startet dann neu. Schlägt
-das Update fehl, läuft der alte Dienst weiter und die Übersicht nennt den
+das Update fehl, läuft der alte Dienst weiter und der Bereich **PC** nennt den
 Grund. Ein Dienst, der vor dem Update-Knopf eingerichtet wurde, braucht
 einmal den Befehl von oben.
 
-**Entfernen:** Die Seite zeigt nach *Befehl erzeugen* auch den Befehl dazu
+**Entfernen:** Der Bereich zeigt nach *Create install command* auch den Befehl dazu
 (`irm http://<NAS>:<Port>/admin/agent/install.ps1?uninstall | iex`). Er entfernt
-Aufgabe, Firewall-Regel, Verknüpfung und Ordner. Auf dem NAS danach unter
-*Einstellungen* `PC_AGENT_URL` und `PC_AGENT_TOKEN` zurücksetzen.
+Aufgabe, Firewall-Regel, Verknüpfung und Ordner. Auf dem NAS danach im
+Bereich *PC* `PC_AGENT_URL` und `PC_AGENT_TOKEN` mit *Reset* zurücksetzen.
 
 ### Ohne NAS
 
@@ -67,7 +67,7 @@ Aufgabe, Firewall-Regel, Verknüpfung und Ordner. Auf dem NAS danach unter
      nicht, weil Strata die Engine nach einem Absturz neu startet
    - `strata_api_key`: nur falls `/health` ohne Key nicht antwortet
    Danach in der Aufgabenplanung „Strata PC-Dienst“ beenden und neu starten.
-4. Auf dem NAS unter *Einstellungen* `PC_AGENT_URL` (`http://<PC-IP>:8091`) und
+4. Auf dem NAS im Bereich *PC* `PC_AGENT_URL` (`http://<PC-IP>:8091`) und
    `PC_AGENT_TOKEN` (das Token aus Schritt 2) eintragen.
 
 Entfernen: `powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall`.
@@ -79,8 +79,8 @@ Der Dienst schreibt nach `%LOCALAPPDATA%\StrataHome\strata-pc-agent.log`.
 Der Dienst startet Strata ohne Konsolenfenster und liest dessen Ausgabe
 selbst mit. Die Zeilen des laufenden Strata stehen in
 `%LOCALAPPDATA%\StrataHome\strata.log` (bei jedem Start neu), die letzten
-500 zeigt die Weboberfläche live auf der Seite „Strata-Ausgabe“ (Knopf auf
-der Übersicht). Python-Programme bekommen `PYTHONUNBUFFERED=1`, damit die
+500 zeigt die Weboberfläche live im Reiter *Output* des Bereichs *Strata*
+(`/admin/strata/output`). Python-Programme bekommen `PYTHONUNBUFFERED=1`, damit die
 Ausgabe sofort kommt und nicht in Schüben. Ein Strata, das du selbst per
 Doppelklick startest, läuft in seinem eigenen Fenster; dessen Ausgabe sieht
 der Dienst nicht. Startet das Startskript Strata seinerseits mit `start` in
@@ -93,7 +93,7 @@ Strata daran ab, startet der neu gestartete Dienst es wieder.
 
 ## Verwaltete Werte
 
-Richtet der Dienst Strata selbst ein (Seite „Strata“ der Weboberfläche),
+Richtet der Dienst Strata selbst ein (Bereich *Strata* der Weboberfläche),
 speichert er Startskript, Strata-Ordner und Strata-Key in
 `strata-managed.json` neben der TOML. Diese Werte gehen vor `strata_start`,
 `strata_args`, `strata_processes` und `strata_api_key` aus der TOML; die TOML

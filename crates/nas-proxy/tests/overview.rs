@@ -326,7 +326,7 @@ async fn wake_button_wakes_and_idle_counts_from_then() {
         .iter()
         .find(|e| e["kind"] == "wake_requested")
         .unwrap();
-    assert_eq!(requested["detail"], "über Weboberfläche");
+    assert_eq!(requested["detail"], "from the web UI");
 }
 
 #[tokio::test]
@@ -412,7 +412,7 @@ async fn gaming_on_reports_a_failed_wake() {
     let mut b = logged_in(&s.url).await;
     let resp = b.call("gaming", &[("enabled", "true")]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("nicht rechtzeitig"));
+    assert!(resp.text().await.unwrap().contains("did not wake in time"));
     assert!(!s.pc.gaming.load(Ordering::SeqCst));
     let kinds: Vec<_> = kinds(&s.state)
         .into_iter()
@@ -429,7 +429,7 @@ async fn gaming_on_reports_a_failed_wake() {
         .expect("Wecken angefordert");
     assert_eq!(
         requested.detail.as_deref(),
-        Some("für Gaming-Modus, über Weboberfläche")
+        Some("for gaming mode, from the web UI")
     );
 }
 
@@ -579,7 +579,7 @@ async fn gaming_on_without_strata_address_says_why() {
     let mut b = logged_in(&s.url).await;
     let resp = b.call("gaming", &[("enabled", "true")]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("Strata-Adresse"));
+    assert!(resp.text().await.unwrap().contains("Strata address"));
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
 }
 

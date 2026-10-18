@@ -136,11 +136,11 @@ pub async fn require_login(allow_must_change: bool) -> Result<String, ServerFnEr
         Session::MustChange if allow_must_change => Ok(token.unwrap_or_default()),
         Session::MustChange => {
             expect_context::<ResponseOptions>().set_status(StatusCode::FORBIDDEN);
-            Err(ServerFnError::new("Bitte zuerst das Passwort ändern."))
+            Err(ServerFnError::new("Please change the password first."))
         }
         Session::Anonymous => {
             expect_context::<ResponseOptions>().set_status(StatusCode::UNAUTHORIZED);
-            Err(ServerFnError::new("Nicht angemeldet."))
+            Err(ServerFnError::new("Not signed in."))
         }
     }
 }

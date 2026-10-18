@@ -59,7 +59,7 @@ async fn shows_every_value_with_its_origin() {
     assert_eq!(entry(&view, "IDLE_TIMEOUT_SECS")["value"], "600");
     assert_eq!(entry(&view, "WAKE_TIMEOUT_SECS")["source"], "Default");
     assert_eq!(entry(&view, "LISTEN_ADDR")["restart"], true);
-    assert_eq!(entry(&view, "PC_AGENT_TOKEN")["value"], "gesetzt");
+    assert_eq!(entry(&view, "PC_AGENT_TOKEN")["value"], "set");
     assert!(!view.to_string().contains("streng-geheim"));
 
     let html = b.page("/admin/strata").await;
@@ -290,7 +290,7 @@ async fn invalid_values_are_rejected_with_a_message() {
         assert!(!resp.text().await.unwrap().is_empty());
     }
     let resp = save(&mut b, "IDLE_TIMEOUT_SECS", "bald").await;
-    assert!(resp.text().await.unwrap().contains("ganze Zahl"));
+    assert!(resp.text().await.unwrap().contains("whole number"));
     assert_eq!(s.state.cfg().idle_timeout.as_secs(), 3600);
     assert!(
         s.state

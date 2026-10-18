@@ -29,10 +29,9 @@ use crate::{
 /// A key handed to the PC that counts once its job is done; kept over a
 /// restart of the proxy.
 const PENDING_FILE: &str = "strata-pending-key.json";
-const BY_UI: &str = "für Strata, über Weboberfläche";
-const ASLEEP: &str = "Der PC schläft oder sein Dienst antwortet nicht. Ein Knopf weckt ihn.";
-const TOO_OLD: &str =
-    "Der PC-Dienst kennt die Strata-Verwaltung nicht. Bitte den PC-Dienst aktualisieren.";
+const BY_UI: &str = "for Strata, from the web UI";
+const ASLEEP: &str = "The PC is asleep or its service does not answer. A button here wakes it.";
+const TOO_OLD: &str = "The PC service cannot manage Strata yet. Please update the PC service.";
 
 pub struct StrataState {
     /// The last answer of the PC service, shown while the PC sleeps.
@@ -184,7 +183,7 @@ async fn wake(state: &AppState) -> Result<(), String> {
         .record(EventKind::WakeRequested, Some(BY_UI.into()));
     state.wake_until_agent().await.map_err(|e| match e {
         WakeError::NoMac => NO_MAC.to_string(),
-        _ => "Der PC ist nicht rechtzeitig aufgewacht.".to_string(),
+        _ => "The PC did not wake in time.".to_string(),
     })
 }
 

@@ -50,9 +50,7 @@ pub async fn change_password(
 ) -> Result<(), ServerFnError> {
     let token = require_login(true).await?;
     if new != repeat {
-        return Err(ServerFnError::new(
-            "Die beiden neuen Passwörter stimmen nicht überein.",
-        ));
+        return Err(ServerFnError::new("The two new passwords do not match."));
     }
     let token = backend()
         .change_password(&token, &current, &new, client_ip().await)
@@ -76,7 +74,7 @@ pub enum Source {
 pub struct SettingEntry {
     /// Environment variable name, e.g. `STRATA_URL`.
     pub key: String,
-    /// The value in effect; for secrets only "gesetzt".
+    /// The value in effect; for secrets only "set".
     pub value: Option<String>,
     pub source: Source,
     /// The value saved on this page, if any (never for secrets).

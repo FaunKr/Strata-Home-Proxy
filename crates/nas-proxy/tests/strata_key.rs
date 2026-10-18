@@ -60,6 +60,6 @@ async fn strata_key_is_shown_only_as_set() {
         .find(|e| e["key"] == "STRATA_API_KEY")
         .unwrap()
         .clone();
-    assert_eq!(entry["value"], "gesetzt");
+    assert_eq!(entry["value"], "set");
     assert_eq!(entry["secret"], true);
 }

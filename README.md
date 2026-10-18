@@ -13,8 +13,8 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 | --- | --- |
 | 1. Einmalige Einrichtung | Anleitung: [docs/einrichtung.md](docs/einrichtung.md) |
 | 2. NAS-Proxy | gebaut, gegen nachgebautes Strata getestet |
-| 3. PC-Dienst und Gaming-Schalter | gebaut, gegen nachgebauten PC getestet; Einrichtung per Befehl von der Seite *PC-Dienst*: [docs/pc-dienst.md](docs/pc-dienst.md) |
-| 4. Weboberfläche | Anmeldung, Einstellungen und Übersicht gebaut; Verlauf mit Stromschätzung offen |
+| 3. PC-Dienst und Gaming-Schalter | gebaut, gegen nachgebauten PC getestet; Einrichtung per Befehl aus dem Bereich *PC*: [docs/pc-dienst.md](docs/pc-dienst.md) |
+| 4. Weboberfläche | gebaut (englisch, Bereiche Overview, PC, Strata, Access, System); Verlauf mit Stromschätzung offen |
 | 5. Abnahme auf echter Hardware | offen |
 
 ## Was der NAS-Proxy tut
@@ -22,7 +22,7 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 - Leitet alle Pfade an Strata weiter (OpenAI- und Anthropic-Format), Antworten
   werden live durchgereicht.
 - **API-Keys:** Jeder Client braucht einen eigenen Key aus der Weboberfläche
-  (Seite *API-Keys*), als `Authorization: Bearer …` oder `x-api-key`. Ohne
+  (Bereich *Access*), als `Authorization: Bearer …` oder `x-api-key`. Ohne
   gültigen Key kommt sofort `401` mit `x-strata-proxy-status: unauthorized`;
   der PC wird dafür nicht geweckt. Strata bekommt nie den Key des Clients,
   sondern den Strata-Key (`STRATA_API_KEY`), den nur der Proxy kennt.
@@ -73,30 +73,34 @@ Nur ein Weckpaket senden, zum Testen: `docker compose run --rm strata-proxy wake
 ## Weboberfläche
 
 Unter `http://<NAS-IP>:8080/admin/`, also auf demselben Port wie die API.
-Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
+Aufrufe dort wecken den PC nicht und halten ihn nicht wach. Die Oberfläche
+ist englisch und in fünf Bereiche gegliedert: *Overview*, *PC*, *Strata*
+(Reiter *Models*, *Output*, *Version & benchmark*, *Connection*), *Access* und
+*System*; oben zeigen zwei Abzeichen live den Zustand von PC und Strata.
 
-- **Übersicht:** zeigt live, ob der PC schläft, aufwacht, wach oder im
+- **Overview:** zeigt live, ob der PC schläft, aufwacht, wach oder im
   Gaming-Modus ist, ob Strata bereit ist, lädt, Anfragen bearbeitet (mit
   wartenden Anfragen und Token/s) oder offline ist, die letzte Anfrage, einen
   Countdown bis zum Schlafen (oder warum nicht geschlafen wird) und die letzten
-  zehn PC-Ereignisse. Solange eine Übersicht offen ist, fragt der Proxy alle
+  zehn PC-Ereignisse. Solange noch etwas fehlt (Strata-Adresse, MAC,
+  PC-Dienst, API-Key, `DATA_DIR`), steht oben die Checkliste *Finish setup*
+  mit Links in den passenden Bereich. Solange die Weboberfläche offen ist, fragt der Proxy alle
   5 s den PC-Dienst, `/health` und die Metriken von Strata ab; das
   weckt den PC nicht und hält ihn nicht wach. Für die Metriken braucht der
   Proxy den API-Key von Strata (`STRATA_API_KEY`). Welche Endpunkte von
   Strata der Proxy nutzt: [docs/strata-api.md](docs/strata-api.md).
-- **Knöpfe:** *Jetzt wecken* (die 15 min Leerlauf zählen ab dem Aufwachen),
-  *Jetzt schlafen legen* (lehnt der PC-Dienst ab, steht der Grund da),
-  *Gaming an/aus* (weckt einen schlafenden PC vorher; nach *aus* zählt der
-  Leerlauf neu) und *Wach halten* für 1 h, 4 h, 8 h oder bis morgen 8 Uhr.
+- **Knöpfe:** *Wake PC* (die 15 min Leerlauf zählen ab dem Aufwachen),
+  *Sleep now* (lehnt der PC-Dienst ab, steht der Grund da), der Schalter
+  *Gaming mode* (weckt einen schlafenden PC vorher; nach *aus* zählt der
+  Leerlauf neu) und *Keep awake* für 1 h, 4 h, 8 h oder bis morgen 8 Uhr.
   Wach halten übersteht einen Neustart (`/data/keep-awake.json`). „Morgen
   8 Uhr“ richtet sich nach der Zeitzone in `TZ` (z. B. `Europe/Berlin`), ohne
-  `TZ` nach UTC. Läuft gerade eine Anfrage, fragen *schlafen legen* und
-  *Gaming an* vorher nach. Jeder Knopf landet im Verlauf mit „über
-  Weboberfläche“.
-- **Version des PC-Dienstes:** steht auf der Übersicht, auch bei schlafendem
+  `TZ` nach UTC. Läuft gerade eine Anfrage, fragt *Gaming mode* vorher in
+  einem Dialog nach. Jeder Knopf landet im Verlauf mit „from the web UI“.
+- **Version des PC-Dienstes:** steht im Bereich *PC*, auch bei schlafendem
   PC (die zuletzt gemeldete). Enthält das Image eine andere, erscheint
-  *Update*; der Knopf geht nur bei wachem PC und weckt ihn nie. Scheitert das
-  Update, nennt die Übersicht den Grund.
+  *Update to …*; der Knopf geht nur bei wachem PC und weckt ihn nie. Scheitert
+  das Update, steht dort der Grund. Die Overview weist nur auf das Update hin.
 - **Erste Anmeldung:** Passwort `admin`, oder der Wert von `UI_PASSWORD`, falls
   gesetzt. Danach muss ein eigenes Passwort (mindestens 8 Zeichen) festgelegt
   werden, vorher geht nichts anderes. Es liegt als Hash in
@@ -106,20 +110,22 @@ Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
 - **Passwort vergessen:** `/data/admin-password.json` löschen und den Container
   neu starten, dann gilt wieder das Standardpasswort.
 - **Einstellungen:** Jeder Wert aus [deploy/env.example](deploy/env.example)
-  außer `DATA_DIR` lässt sich dort ändern und gilt sofort, nur die Adresse des
+  außer `DATA_DIR` lässt sich in seinem Bereich ändern (*PC*: Verbindung,
+  Wecken und Schlafen; *Strata → Connection*: Adresse und Key; *System*: der
+  Rest) und gilt nach *Save* des Abschnitts sofort, nur die Adresse des
   Proxys (`LISTEN_ADDR`) erst nach einem Neustart. Es gilt der Wert von der
-  Seite, sonst die Umgebungsvariable, sonst die Vorgabe; „Zurücksetzen“ verwirft
+  Seite, sonst die Umgebungsvariable, sonst die Vorgabe; *Reset* verwirft
   den Wert von der Seite. Bei der MAC hat die vom PC-Dienst gemeldete Vorrang.
-  Gespeichert wird in `/data/settings.json`; ohne `DATA_DIR` warnt die Seite,
+  Gespeichert wird in `/data/settings.json`; ohne `DATA_DIR` warnen *System* und die Checkliste,
   dass Änderungen beim Neustart verloren gehen. Das Token des PC-Dienstes wird
   nie angezeigt.
-- **PC-Dienst:** *Befehl erzeugen* zeigt einen PowerShell-Befehl, der den
+- **PC-Dienst:** *Create install command* im Bereich *PC* zeigt einen PowerShell-Befehl (mit *Copy*), der den
   PC-Dienst vom NAS lädt, einrichtet und beim Proxy anmeldet; Token und
   `PC_AGENT_URL` trägt der Proxy dann selbst ein. Der Code darin gilt 15 min
   und einmal. Die .exe liegt im Image und ist ohne Anmeldung unter
   `/admin/agent/strata-pc-agent.exe` abrufbar. Details:
   [docs/pc-dienst.md](docs/pc-dienst.md).
-- **API-Keys:** Einen Key pro Client anlegen. Er wird nur direkt nach dem
+- **API-Keys** (Bereich *Access*): Einen Key pro Client anlegen. Er wird nur direkt nach dem
   Anlegen vollständig angezeigt und nur als Hash in `/data/api-keys.json`
   gespeichert. Die Liste zeigt Anfang, Erstellung und letzte Nutzung; ein
   widerrufener Key gilt sofort nicht mehr. Solange kein Key existiert, bekommt

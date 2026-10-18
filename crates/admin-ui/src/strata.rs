@@ -116,12 +116,32 @@ pub fn StrataArea() -> impl IntoView {
         live,
     };
     provide_context(area);
+    let tabs = NodeRef::<leptos::html::Nav>::new();
+    #[cfg(feature = "hydrate")]
+    {
+        // On a narrow screen the tabs scroll; keep the current one in view.
+        let location = leptos_router::hooks::use_location();
+        Effect::new(move |_| {
+            location.pathname.track();
+            request_animation_frame(move || {
+                use wasm_bindgen::JsCast;
+                let Some(nav) = tabs.get_untracked() else {
+                    return;
+                };
+                if let Ok(Some(tab)) = nav.query_selector("[aria-current=page]")
+                    && let Ok(tab) = tab.dyn_into::<web_sys::HtmlElement>()
+                {
+                    nav.set_scroll_left(tab.offset_left() - nav.offset_left() - 16);
+                }
+            });
+        });
+    }
     view! {
         <div class="page-head">
             <h1>"Strata"</h1>
             <p class="lead">"The engine on your PC that runs the models."</p>
         </div>
-        <nav class="tabs" aria-label="Strata">
+        <nav class="tabs" aria-label="Strata" node_ref=tabs>
             <A href="/admin/strata" exact=true attr:class="tab">
                 "Models"
             </A>

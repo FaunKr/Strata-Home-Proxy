@@ -67,19 +67,19 @@ Klappt es nicht: BIOS-Punkte aus Schritt 1 und *Energy Efficient Ethernet* prüf
 
 ## 5. Strata
 
-Einfacher Weg, sobald Proxy und PC-Dienst laufen: Weboberfläche, Seite
+Einfacher Weg, sobald Proxy und PC-Dienst laufen: Weboberfläche, Bereich
 **Strata**. Der Knopf weckt den PC, holt Strata, richtet es mit dem
 empfohlenen Modell ein und trägt den Strata-Key in Strata und Proxy ein.
 Die Empfehlung folgt Stratas eigenem Setup: ab 60 GB RAM `IQ3_XXS`, ab 44 GB
 `Q2_0`, ab 28 GB `coder-IQ1_M`; Kontext 64K für eine 16-GB-Karte.
 
-- [ ] Strata-Seite: „Strata einrichten“ läuft durch, das Modell lädt auf der RX 6800 XT
-- [ ] „Benchmark starten“ liefert Tokens/s: ____
+- [ ] Bereich *Strata*: „Set up Strata“ läuft durch, das Modell lädt auf der RX 6800 XT
+- [ ] „Run benchmark“ (Reiter *Version & benchmark*) liefert Tokens/s: ____
 - [ ] `curl http://<PC-IP>:8080/health` vom NAS aus liefert `200`
 - [ ] Standby-Test: PC schlafen legen, wecken, dann noch einmal `/health` abfragen. Antwortet Strata danach nicht mehr, notieren (dafür ist der Watchdog im PC-Dienst gedacht)
 
 Von Hand geht es weiter so: `START-HERE.bat` mit `--host 0.0.0.0`, Port
-**8080** und **API-Key**, den Key dann in den Proxy-Einstellungen eintragen.
+**8080** und **API-Key**, den Key dann in der Weboberfläche unter *Strata → Connection* eintragen.
 
 ## 6. Firewall auf dem PC
 
@@ -97,10 +97,10 @@ New-NetFirewallRule -DisplayName "Strata nur vom NAS" -Direction Inbound -Protoc
 Erst wenn der Proxy auf dem NAS läuft (siehe README):
 
 - [ ] `http://<NAS-IP>:8080/admin/` öffnen, mit `admin` (oder `UI_PASSWORD`) anmelden und ein eigenes Passwort festlegen
-- [ ] Seite *PC-Dienst*: *Befehl erzeugen* und den Befehl in eine PowerShell auf dem PC einfügen ([docs/pc-dienst.md](pc-dienst.md))
-- [ ] Unter *Einstellungen* prüfen, dass Strata-Adresse, MAC und PC-Dienst stimmen
-- [ ] Unter *Einstellungen* den API-Key von Strata eintragen, damit die Übersicht laufende und wartende Anfragen und Token/s zeigt
-- [ ] Die *Übersicht* zeigt PC und Strata richtig an; *Jetzt schlafen legen* und *Jetzt wecken* wirken
+- [ ] Bereich *PC*: *Create install command* und den Befehl in eine PowerShell auf dem PC einfügen ([docs/pc-dienst.md](pc-dienst.md))
+- [ ] Die Checkliste *Finish setup* auf der *Overview* ist verschwunden (Strata-Adresse, MAC, PC-Dienst, API-Key und `DATA_DIR` sind da)
+- [ ] Unter *Strata → Connection* den API-Key von Strata eintragen, damit die Übersicht laufende und wartende Anfragen und Token/s zeigt
+- [ ] Die *Overview* zeigt PC und Strata richtig an; *Sleep now* und *Wake PC* wirken
 
 Was die Weboberfläche speichert, liegt in `/data` und gilt sofort. Es geht vor
 den Umgebungsvariablen, die wiederum vor den eingebauten Standardwerten gelten.
@@ -111,8 +111,8 @@ Passwort vergessen: `/data/admin-password.json` löschen und den Container neu
 starten. Danach gilt wieder `admin` (bzw. `UI_PASSWORD`), alle alten
 Anmeldungen sind ungültig und beim ersten Login wird ein neues Passwort verlangt.
 
-- [ ] Unter *Einstellungen* den API-Key von Strata als `STRATA_API_KEY` eintragen (den Wert von `--api-key` aus Schritt 5)
-- [ ] Unter *API-Keys* für jeden Client einen eigenen Key anlegen und sofort kopieren; er wird nicht wieder angezeigt
+- [ ] Unter *Strata → Connection* den API-Key von Strata als `STRATA_API_KEY` eintragen (den Wert von `--api-key` aus Schritt 5)
+- [ ] Unter *Access* für jeden Client einen eigenen Key anlegen und sofort kopieren; er wird nicht wieder angezeigt
 - [ ] Skill `local-agent`: `STRATA_URLS` auf `http://<NAS-IP>:8080`, und dort, wo bisher der Strata-Key stand, den Key aus der Weboberfläche
 - [ ] Claude Code direkt gegen Strata (falls genutzt): `ANTHROPIC_BASE_URL=http://<NAS-IP>:8080` und `ANTHROPIC_API_KEY=<Key aus der Weboberfläche>` (geht als `x-api-key` raus)
 - [ ] Open WebUI (falls genutzt): *Admin-Einstellungen → Verbindungen → OpenAI API*, URL `http://<NAS-IP>:8080/v1`, als Key den Key aus der Weboberfläche

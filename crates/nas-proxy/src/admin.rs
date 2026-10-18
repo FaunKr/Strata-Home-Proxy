@@ -28,7 +28,7 @@ use crate::{
 };
 
 /// Detail of events caused by a button on the overview.
-const BY_UI: &str = "über Weboberfläche";
+const BY_UI: &str = "from the web UI";
 
 struct UiBackend(Arc<AppState>);
 
@@ -175,7 +175,7 @@ impl Backend for UiBackend {
             match answer {
                 Ok(SleepAnswer::Accepted) => Ok(()),
                 Ok(SleepAnswer::Refused(reason)) => Err(format!("Abgelehnt: {reason}")),
-                Err(_) => Err("Der PC-Dienst antwortet nicht.".to_string()),
+                Err(_) => Err("The PC service does not answer.".to_string()),
             }
         }
         .boxed()
@@ -226,7 +226,7 @@ impl Backend for UiBackend {
         let text = clock::local_text(clock::unix(until));
         self.0.events.record(
             EventKind::KeepAwakeSet,
-            Some(format!("bis {text}, {BY_UI}")),
+            Some(format!("until {text}, {BY_UI}")),
         );
         Ok(())
     }

@@ -151,7 +151,7 @@ impl Config {
         for f in FIELDS {
             if let Some(raw) = env_value(f.key) {
                 cfg.apply(f.key, &raw)
-                    .map_err(|e| anyhow::anyhow!("{}={raw:?} ist ungültig: {e}", f.key))?;
+                    .map_err(|e| anyhow::anyhow!("{}={raw:?} is invalid: {e}", f.key))?;
             }
         }
         cfg.data_dir = env_value("DATA_DIR").map(PathBuf::from);
@@ -174,7 +174,7 @@ impl Config {
         let raw = raw.trim();
         let field = find_field(key).with_context(|| format!("unbekannte Einstellung {key}"))?;
         if raw.is_empty() && !field.optional {
-            bail!("darf nicht leer sein");
+            bail!("must not be empty");
         }
         let text = (!raw.is_empty()).then(|| raw.to_string());
         match key {
@@ -239,12 +239,12 @@ fn env_value(key: &str) -> Option<String> {
 
 fn number<T: std::str::FromStr>(raw: &str, unit: &str) -> Result<T> {
     raw.parse()
-        .map_err(|_| anyhow::anyhow!("erwartet eine ganze Zahl ({unit})"))
+        .map_err(|_| anyhow::anyhow!("expects a whole number ({unit})"))
 }
 
 fn address(raw: &str) -> Result<SocketAddr> {
     raw.parse()
-        .map_err(|_| anyhow::anyhow!("erwartet IP-Adresse mit Port, z. B. 192.168.1.255:9"))
+        .map_err(|_| anyhow::anyhow!("expects an IP address with port, e.g. 192.168.1.255:9"))
 }
 
 fn secs(raw: &str) -> Result<Duration> {
@@ -257,7 +257,7 @@ fn millis(raw: &str) -> Result<Duration> {
 
 fn positive(d: Duration) -> Result<Duration> {
     if d.is_zero() {
-        bail!("muss größer als 0 sein");
+        bail!("must be greater than 0");
     }
     Ok(d)
 }
@@ -265,14 +265,14 @@ fn positive(d: Duration) -> Result<Duration> {
 /// A key that can go into an HTTP header as is.
 fn header_safe(raw: &str) -> Result<String> {
     if reqwest::header::HeaderValue::from_str(&format!("Bearer {raw}")).is_err() {
-        bail!("enthält Zeichen, die in keinem HTTP-Header erlaubt sind");
+        bail!("contains characters no HTTP header allows");
     }
     Ok(raw.to_string())
 }
 
 fn url(raw: &str) -> Result<String> {
     if !(raw.starts_with("http://") || raw.starts_with("https://")) {
-        bail!("muss mit http:// oder https:// beginnen");
+        bail!("must start with http:// or https://");
     }
     Ok(raw.trim_end_matches('/').to_string())
 }
@@ -281,12 +281,12 @@ fn url(raw: &str) -> Result<String> {
 pub fn parse_mac(raw: &str) -> Result<[u8; 6]> {
     let parts: Vec<&str> = raw.trim().split([':', '-']).collect();
     if parts.len() != 6 {
-        bail!("MAC-Adresse {raw:?} hat nicht sechs Teile");
+        bail!("MAC address {raw:?} does not have six parts");
     }
     let mut mac = [0u8; 6];
     for (byte, part) in mac.iter_mut().zip(parts) {
         *byte = u8::from_str_radix(part, 16)
-            .with_context(|| format!("MAC-Adresse {raw:?} enthält {part:?}"))?;
+            .with_context(|| format!("MAC address {raw:?} contains {part:?}"))?;
     }
     Ok(mac)
 }

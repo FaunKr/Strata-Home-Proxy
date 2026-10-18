@@ -53,8 +53,11 @@ pub fn OutputTab() -> impl IntoView {
             <div class="card-head">
                 <h2>"Console output"</h2>
                 {move || {
+                    let waiting = notice.with(|n| n.is_some_and(|n| n != OutputNotice::Running));
                     let (text, class) = if lost.get() {
                         ("Reconnecting", "badge is-warn")
+                    } else if waiting {
+                        ("Waiting", "badge is-idle")
                     } else if at_end.get() {
                         ("Live", "badge is-ok")
                     } else {

@@ -25,7 +25,7 @@ async fn first_login_forces_a_new_password() {
     let mut b = Browser::new(&s.url);
     let resp = b.call("login", &[("password", "falsch")]).await;
     assert_eq!(resp.status(), 401);
-    assert!(resp.text().await.unwrap().contains("Falsches Passwort"));
+    assert!(resp.text().await.unwrap().contains("Wrong password"));
     assert_eq!(
         b.call("login", &[("password", "admin")]).await.status(),
         200
@@ -80,7 +80,12 @@ async fn repeated_failures_are_slowed_down() {
     }
     let resp = b.call("login", &[("password", "admin")]).await;
     assert_ne!(resp.status(), 200);
-    assert!(resp.text().await.unwrap().contains("Zu viele Fehlversuche"));
+    assert!(
+        resp.text()
+            .await
+            .unwrap()
+            .contains("Too many failed attempts")
+    );
 }
 
 #[tokio::test]
@@ -126,7 +131,12 @@ async fn wrong_current_password_counts_as_failed_attempt() {
         );
     }
     let resp = change(&mut b, "admin", "ein langes Passwort").await;
-    assert!(resp.text().await.unwrap().contains("Zu viele Fehlversuche"));
+    assert!(
+        resp.text()
+            .await
+            .unwrap()
+            .contains("Too many failed attempts")
+    );
 }
 
 async fn proxy_on(dir: &std::path::Path) -> String {

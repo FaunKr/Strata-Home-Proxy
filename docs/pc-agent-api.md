@@ -19,14 +19,14 @@ NAS) und von 127.0.0.1 an.
 beim Bauen, sonst `dev`). Dieselbe Angabe steht als Text
 `strata-pc-agent-version:<version>` in der .exe; so liest der Proxy die
 Version der .exe in seinem Image, ohne sie auszuführen. Weicht sie ab oder
-fehlt `version` (Dienst von vor dem Update-Knopf), zeigt die Übersicht
-„Update verfügbar“.
+fehlt `version` (Dienst von vor dem Update-Knopf), zeigt der Bereich *PC*
+„Update available“.
 
 `mac` ist die MAC-Adresse der Netzwerkkarte, über die die Anfrage kam (also
 die, die das Weckpaket empfangen muss), oder der Wert `mac` aus der
 Konfiguration. Ist sie unbekannt, fehlt das Feld. Der Proxy merkt sich die
 gemeldete MAC in `DATA_DIR` und weckt damit; sie hat Vorrang vor `PC_MAC` und
-der Einstellungsseite.
+den Werten aus der Weboberfläche.
 
 Antwortet der Dienst nicht, geht der Proxy davon aus, dass der PC schläft,
 und weckt ihn.
@@ -60,8 +60,8 @@ der alte Dienst, der neue wartet so lange auf den Port und löscht dann die
   läuft weiter, nichts ist verändert.
 
 Der Proxy schickt das nur bei wachem PC und weckt ihn dafür nie. Ein Dienst
-ohne diesen Endpunkt antwortet 404; die Übersicht sagt dann, ihn einmal mit
-dem Befehl von der Seite PC-Dienst neu einzurichten.
+ohne diesen Endpunkt antwortet 404; der Bereich *PC* sagt dann, ihn einmal
+mit dem Befehl von dort neu einzurichten.
 
 ## `POST /gaming` (für die Weboberfläche)
 
@@ -71,7 +71,7 @@ dem Befehl von der Seite PC-Dienst neu einzurichten.
 
 An: Strata beenden, Schlafen sperren. Aus: Strata starten, Schlafen erlauben.
 
-## `GET /strata-log` (für die Seite „Strata-Ausgabe“)
+## `GET /strata-log` (für den Reiter *Output* im Bereich *Strata*)
 
 Die Strata-Ausgabe als Server-Sent Events: was ein vom Dienst gestartetes
 Strata auf seine Konsole schreibt. Zuerst kommen die gemerkten Zeilen (höchstens
@@ -90,7 +90,7 @@ hinterher, endet der Strom; beim nächsten Verbinden kommen die gemerkten
 Zeilen neu. Der Proxy öffnet den Strom nur, solange jemand die Seite offen hat
 und der PC ohnehin wach ist.
 
-## Strata verwalten (für die Seite „Strata“)
+## Strata verwalten (für den Bereich *Strata*)
 
 Der Dienst richtet Strata selbst ein und verwaltet es. Jeder Vorgang ruft
 feste Programme mit Werten aus Stratas eigenen Tabellen auf; eine Anfrage

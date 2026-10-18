@@ -186,7 +186,7 @@ impl Settings {
                 let mut value = inner.current.value(key);
                 let mut saved = inner.saved.get(key).cloned();
                 if field.secret {
-                    value = value.map(|_| "gesetzt".to_string());
+                    value = value.map(|_| "set".to_string());
                     saved = None;
                 }
                 Entry {
@@ -208,7 +208,7 @@ impl Settings {
             };
             let text = serde_json::to_string_pretty(&stored).expect("settings serialize");
             write_private(dir, SETTINGS_FILE, text.as_bytes())
-                .map_err(|e| anyhow::anyhow!("nicht gespeichert: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("not saved: {e}"))?;
         }
         inner.current = Arc::new(resolve(&self.base, &saved, inner.reported_mac));
         inner.saved = saved;
@@ -298,7 +298,7 @@ mod tests {
         let s = Settings::new(base(None), &[]);
         s.set("PC_AGENT_TOKEN", "geheim").unwrap();
         let token = entry(&s.entries(), "PC_AGENT_TOKEN").clone();
-        assert_eq!(token.value.as_deref(), Some("gesetzt"));
+        assert_eq!(token.value.as_deref(), Some("set"));
         assert_eq!(token.saved, None);
         assert_eq!(s.current().pc_agent_token.as_deref(), Some("geheim"));
     }

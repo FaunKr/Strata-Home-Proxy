@@ -3,9 +3,9 @@
 use crate::api::{EventKind, Overview, PcView, StrataJobKind, StrataView};
 
 /// Messages that the proxy and the overview both show.
-pub const NOT_CONFIGURED: &str = "Die Strata-Adresse fehlt, der Proxy ist nicht eingerichtet.";
-pub const NO_MAC: &str = "Keine MAC-Adresse bekannt, der PC kann nicht geweckt werden.";
-pub const NO_AGENT: &str = "Kein PC-Dienst eingerichtet (PC_AGENT_URL).";
+pub const NOT_CONFIGURED: &str = "The Strata address is missing, the proxy is not set up.";
+pub const NO_MAC: &str = "No MAC address is known, so the PC cannot be woken.";
+pub const NO_AGENT: &str = "No PC service is set up (PC_AGENT_URL).";
 
 pub struct Label {
     pub title: &'static str,

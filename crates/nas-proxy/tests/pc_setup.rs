@@ -165,7 +165,7 @@ async fn a_code_works_once() {
     assert_eq!(resp.status(), 403);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(
-        body["error"].as_str().unwrap().contains("neuen Befehl"),
+        body["error"].as_str().unwrap().contains("new command"),
         "{body}"
     );
     assert_eq!(s.state.cfg().pc_agent_token, token);
@@ -266,7 +266,7 @@ async fn script_without_a_valid_code_only_explains() {
         // Windows PowerShell shows no body for errors, so the explanation
         // comes as a script that prints it.
         assert_eq!(status, 200, "{query}");
-        assert!(text.contains("neuen Befehl"), "{text}");
+        assert!(text.contains("new command"), "{text}");
         assert!(!text.contains("Register-ScheduledTask"), "{text}");
     }
 }

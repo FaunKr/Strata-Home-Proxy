@@ -44,8 +44,8 @@ Das Image baut die CI bei jedem Push: `ghcr.io/faunkr/strata-home-proxy:latest`.
 
 ```sh
 mkdir -p strata-proxy && cd strata-proxy
-curl -fsSLO https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/claude/project-thread-6vnmvd/deploy/docker-compose.yml
-curl -fsSL -o .env https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/claude/project-thread-6vnmvd/deploy/env.example
+curl -fsSLO https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/main/deploy/docker-compose.yml
+curl -fsSL -o .env https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/main/deploy/env.example
 nano .env                # Werte eintragen
 docker compose pull
 docker compose up -d

@@ -76,7 +76,15 @@ mod imp {
         }
         let mut cmd = Command::new("cmd");
         cmd.raw_arg(line);
-        if let Some(dir) = program.parent() {
+        // A bare file name has an empty parent, which Windows rejects as
+        // working directory ("The directory name is invalid").
+        if let Some(dir) = program.parent().filter(|d| !d.as_os_str().is_empty()) {
+            if !dir.is_dir() {
+                bail!(
+                    "Ordner {} aus strata_start gibt es nicht, Pfad in strata-pc-agent.toml prüfen",
+                    dir.display()
+                );
+            }
             cmd.current_dir(dir);
         }
         hidden(&mut cmd).spawn()?;

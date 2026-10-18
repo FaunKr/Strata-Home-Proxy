@@ -263,7 +263,7 @@ impl Agent {
             }
         };
         let output = Arc::clone(&self.output);
-        let id = output.started();
+        let run_id = output.started();
         // The page shows this output; the key must not reach it. A new key
         // comes with a restart, so the one of this start is enough.
         let key = managed
@@ -273,11 +273,11 @@ impl Agent {
         tokio::spawn(async move {
             while let Some(line) = run.next_output().await {
                 match &key {
-                    Some(key) => output.push(id, &line.replace(key.as_str(), "***")),
-                    None => output.push(id, &line),
+                    Some(key) => output.push(run_id, &line.replace(key.as_str(), "***")),
+                    None => output.push(run_id, &line),
                 }
             }
-            output.ended(id);
+            output.ended(run_id);
         });
     }
 

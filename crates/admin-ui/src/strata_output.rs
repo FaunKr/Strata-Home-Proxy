@@ -72,7 +72,10 @@ fn apply(
     notice: RwSignal<Option<OutputNotice>>,
 ) {
     match message {
-        OutputMessage::Reset => lines.update(Vec::clear),
+        OutputMessage::Reset => {
+            lines.update(Vec::clear);
+            notice.set(None);
+        }
         OutputMessage::Line { text } => lines.update(|l| {
             if l.len() == KEPT {
                 l.remove(0);
@@ -96,6 +99,9 @@ fn notice_text(notice: OutputNotice) -> Option<&'static str> {
         OutputNotice::NoAgent => "Kein PC-Dienst eingerichtet, die Ausgabe kommt über ihn.",
         OutputNotice::TooOld => {
             "Der PC-Dienst kennt die Strata-Ausgabe nicht. Bitte den PC-Dienst aktualisieren."
+        }
+        OutputNotice::Refused => {
+            "Der PC-Dienst lehnt den Proxy ab. PC_AGENT_TOKEN und allowed_clients prüfen."
         }
         OutputNotice::Gaming => "Gaming-Modus: Strata ist beendet.",
         OutputNotice::NotRunning => "Strata läuft nicht.",

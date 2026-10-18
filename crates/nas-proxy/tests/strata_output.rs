@@ -106,3 +106,12 @@ async fn an_open_page_does_not_keep_the_pc_awake() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+#[tokio::test]
+async fn a_refusing_pc_service_is_not_called_asleep() {
+    let s = setup(true, |_| {}).await;
+    s.pc.refuse_log.store(true, Ordering::SeqCst);
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("Hinweis", |m| m["notice"] == "refused").await;
+}

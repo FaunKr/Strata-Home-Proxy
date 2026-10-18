@@ -230,6 +230,8 @@ pub enum OutputNotice {
     NoAgent,
     /// The PC service is too old for the Strata-Ausgabe.
     TooOld,
+    /// The PC service refuses the proxy: token or allowed addresses.
+    Refused,
     Gaming,
     NotRunning,
     NotStartedByAgent,

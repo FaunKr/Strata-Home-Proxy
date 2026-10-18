@@ -96,8 +96,11 @@ async fn follow(state: &AppState, tx: &mpsc::Sender<OutputMessage>) {
                         return;
                     }
                 }
-                Some(Err(status)) if status == reqwest::StatusCode::NOT_FOUND => {
+                Some(Err(reqwest::StatusCode::NOT_FOUND)) => {
                     notice(tx, &mut shown, OutputNotice::TooOld).await;
+                }
+                Some(Err(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)) => {
+                    notice(tx, &mut shown, OutputNotice::Refused).await;
                 }
                 // Went to sleep between the two calls, most likely.
                 _ => notice(tx, &mut shown, OutputNotice::Asleep).await,

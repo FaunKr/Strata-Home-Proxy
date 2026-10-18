@@ -72,6 +72,8 @@ pub struct FakePc {
     /// added later follow live.
     pub strata_log: Mutex<Vec<Value>>,
     pub strata_log_requests: AtomicUsize,
+    /// The PC service refuses `GET /strata-log` (wrong token, other address).
+    pub refuse_log: AtomicBool,
 }
 
 /// Credential headers as Strata saw them.
@@ -358,6 +360,9 @@ pub async fn agent_strata_log(State(pc): State<Pc>) -> Response {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     pc.strata_log_requests.fetch_add(1, Ordering::SeqCst);
+    if pc.refuse_log.load(Ordering::SeqCst) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     let s = stream::unfold((pc, 0usize), |(pc, sent)| async move {
         loop {
             // A PC that went to sleep drops the connection.

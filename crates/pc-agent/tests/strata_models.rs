@@ -979,3 +979,136 @@ async fn the_page_shows_each_models_context() {
     let view = get(&s, "/strata").await;
     assert_eq!(model(&view, "IQ3_XXS")["context"], Value::Null, "{view}");
 }
+
+// --- #102 switching the context ---
+
+#[tokio::test]
+async fn switching_the_context_rewrites_only_max_context() {
+    let s = setup("models-context-set").await;
+    installed(&s);
+    config_with_args(
+        &s,
+        "coder-iq1_m",
+        json!([
+            "--native",
+            "b.gguf",
+            "--max-context",
+            "65536",
+            "--kv",
+            "int8"
+        ]),
+    );
+    let path = s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json");
+    let old = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let done = job(
+        &s,
+        json!({"kind": "set_context", "model": "coder-IQ1_M", "context": 131072}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(
+        args_of(&s, "coder-iq1_m"),
+        json!([
+            "--native",
+            "b.gguf",
+            "--max-context",
+            "131072",
+            "--kv",
+            "int8"
+        ])
+    );
+    assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), old);
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0, "an inactive model");
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0, "an inactive model");
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "coder-IQ1_M")["context"], 131072, "{view}");
+}
+
+#[tokio::test]
+async fn switching_down_from_past_256k_removes_the_rope_scaling() {
+    let s = setup("models-context-yarn").await;
+    installed(&s);
+    config_with_args(
+        &s,
+        "coder-iq1_m",
+        json!([
+            "--native",
+            "b.gguf",
+            "--max-context",
+            "524288",
+            "--rope-scaling",
+            "yarn",
+            "--rope-scale",
+            "2",
+            "--kv",
+            "int8"
+        ]),
+    );
+    let done = job(
+        &s,
+        json!({"kind": "set_context", "model": "coder-IQ1_M", "context": 262144}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(
+        args_of(&s, "coder-iq1_m"),
+        json!([
+            "--native",
+            "b.gguf",
+            "--max-context",
+            "262144",
+            "--kv",
+            "int8"
+        ])
+    );
+}
+
+#[tokio::test]
+async fn switching_the_context_is_refused_outside_what_it_takes() {
+    let s = setup("models-context-refused").await;
+    installed(&s);
+    let before =
+        std::fs::read_to_string(s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json")).unwrap();
+    for (body, status) in [
+        (
+            json!({"kind": "set_context", "model": "coder-IQ1_M", "context": 393216}),
+            400,
+        ),
+        (
+            json!({"kind": "set_context", "model": "coder-IQ1_M", "context": 524288}),
+            400,
+        ),
+        (
+            json!({"kind": "set_context", "model": "coder-IQ1_M", "context": 50000}),
+            400,
+        ),
+        (
+            json!({"kind": "set_context", "model": "Q2_0", "context": 65536}),
+            409,
+        ),
+        (
+            json!({"kind": "set_context", "model": "nichts", "context": 65536}),
+            400,
+        ),
+    ] {
+        let (code, answer) = post(&s, "/strata/jobs", body.clone()).await;
+        assert_eq!(code, status, "{body}: {answer}");
+    }
+    let after =
+        std::fs::read_to_string(s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json")).unwrap();
+    assert_eq!(before, after);
+}
+
+#[tokio::test]
+async fn switching_the_context_needs_an_installed_strata() {
+    let s = setup("models-context-no-strata").await;
+    let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 65536});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 409, "{answer}");
+}

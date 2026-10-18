@@ -515,6 +515,7 @@ pub enum StrataJobKind {
     Benchmark,
     SetKey,
     SetSpeedProjection,
+    SetContext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

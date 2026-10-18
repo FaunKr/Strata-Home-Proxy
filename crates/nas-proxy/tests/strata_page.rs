@@ -601,3 +601,56 @@ async fn without_word_from_the_pc_service_no_context_shows() {
     assert!(html.contains("IQ3_XXS"), "{html}");
     assert!(!html.contains("K context"), "{html}");
 }
+
+// --- #102 switching the context of an installed model ---
+
+#[tokio::test]
+async fn switching_the_context_sends_only_its_fields() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = b
+        .call(
+            "strata-job",
+            &[
+                ("kind", "set_context"),
+                ("model", "swift-IQ2_XS"),
+                ("context", "131072"),
+                ("family", "swift"),
+                ("speed_projection", "true"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        last_body(&s),
+        json!({"kind": "set_context", "model": "swift-IQ2_XS", "context": 131072})
+    );
+}
+
+#[tokio::test]
+async fn a_model_with_a_known_context_offers_to_change_it() {
+    let s = setup(true, |_| {}).await;
+    let mut info = with_two_models(None);
+    info["contexts"] = json!([8192, 65536, 262144, 524288]);
+    info["models"][1]["context"] = json!(524288);
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(html.matches("Change context").count(), 1, "{html}");
+    assert!(html.contains("256K tokens"), "{html}");
+    assert!(
+        !html.contains("512K tokens"),
+        "past 256K only setup: {html}"
+    );
+}
+
+#[tokio::test]
+async fn without_a_known_context_there_is_nothing_to_change() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_two_models(None));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(!html.contains("Change context"), "{html}");
+}

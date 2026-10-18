@@ -10,15 +10,27 @@ pub mod wol;
 
 use std::sync::Arc;
 
-use axum::Router;
+use axum::{Router, http::StatusCode, routing::any};
 
 pub use config::Config;
 pub use settings::Settings;
 pub use state::AppState;
 
-/// The API router: every path is forwarded to Strata.
+/// The router on the API port: the web UI under `/admin/`, every other path
+/// is forwarded to Strata. UI calls never wake the PC or count as activity.
 pub fn api_router(state: Arc<AppState>) -> Router {
-    Router::new().fallback(proxy::handle).with_state(state)
+    let options = strata_admin_ui::server::options(strata_admin_ui::server::site_root());
+    let admin = strata_admin_ui::server::router(options, || {});
+    Router::new()
+        .merge(admin)
+        // Unknown UI paths must not reach Strata either.
+        .route("/admin/{*rest}", any(admin_not_found))
+        .fallback(proxy::handle)
+        .with_state(state)
+}
+
+async fn admin_not_found() -> (StatusCode, &'static str) {
+    (StatusCode::NOT_FOUND, "Nicht gefunden")
 }
 
 pub async fn run(cfg: Config) -> anyhow::Result<()> {

@@ -1,0 +1,22 @@
+[package]
+name = "strata-admin-ui"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+leptos = "0.8"
+leptos_meta = "0.8"
+leptos_router = "0.8"
+serde = { version = "1.0.229", features = ["derive"] }
+console_error_panic_hook = { version = "0.1.7", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+leptos_axum = { version = "0.8", optional = true }
+axum = { version = "0.8.9", optional = true }
+tower-http = { version = "0.6", features = ["fs"], optional = true }
+
+[features]
+hydrate = ["leptos/hydrate", "dep:console_error_panic_hook", "dep:wasm-bindgen"]
+ssr = ["leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr", "dep:leptos_axum", "dep:axum", "dep:tower-http"]

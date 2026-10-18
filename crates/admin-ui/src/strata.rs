@@ -616,10 +616,13 @@ fn ModelRow(
     blocked: Signal<bool>,
 ) -> impl IntoView {
     let size = bytes_gb(model.disk_bytes);
-    let meta = match &model.size {
+    let mut meta = match &model.size {
         Some(quant) if *quant != model.id => format!("{quant} · {size}"),
         _ => size.clone(),
     };
+    if let Some(context) = model.context {
+        meta.push_str(&format!(" · {}K context", context / 1024));
+    }
     let buttons = (!model.active).then(|| {
         let activate = model.id.clone();
         let delete = model.id.clone();

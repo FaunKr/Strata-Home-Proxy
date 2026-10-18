@@ -36,6 +36,8 @@ const KEPT_LINES: usize = 20;
 /// Strata's port and network access, as the proxy expects them.
 const STRATA_PORT: &str = "8080";
 const STRATA_HOST: &str = "0.0.0.0";
+/// The engine flag setup writes the context with.
+const CONTEXT_FLAG: &str = "--max-context";
 /// The engine flag setup loads the speed projection's control vector with.
 const PROJECTION_VECTOR_FLAG: &str = "--control-vector-scaled";
 /// The flags setup writes after it, with their values.
@@ -1533,6 +1535,9 @@ pub struct InstalledModel {
     pub active: bool,
     /// Its config loads a control vector, Strata's or another one.
     pub speed_projection: bool,
+    /// The context it starts with (`--max-context`); `None` if its config
+    /// does not say.
+    pub context: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1562,6 +1567,7 @@ pub fn view(agent: &Agent) -> StrataView {
                 disk_bytes: model_paths(cfg, &id)[..2].iter().map(|p| dir_size(p)).sum(),
                 active: active.as_deref() == Some(id.as_str()),
                 speed_projection: has_speed_projection(dir, &id),
+                context: model_context(dir, &id),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,
@@ -1619,6 +1625,14 @@ fn has_speed_projection(dir: &Path, id: &str) -> bool {
                 .as_array()
                 .is_some_and(|a| a.iter().any(|v| v == PROJECTION_VECTOR_FLAG))
         })
+}
+
+/// The value of `--max-context` in a model's config.
+fn model_context(dir: &Path, id: &str) -> Option<u32> {
+    let (_, cfg) = read_config(&config_path(dir, id)).ok().flatten()?;
+    let args = cfg["args"].as_array()?;
+    let at = args.iter().position(|v| v == CONTEXT_FLAG)?;
+    args.get(at + 1)?.as_str()?.parse().ok()
 }
 
 fn dir_size(dir: &Path) -> u64 {

@@ -575,6 +575,10 @@ pub struct StrataModel {
     /// an older PC service, which does not say.
     #[serde(default)]
     pub speed_projection: Option<bool>,
+    /// Tokens it starts with; `None` from an older PC service, which does
+    /// not say, or a config without it.
+    #[serde(default)]
+    pub context: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

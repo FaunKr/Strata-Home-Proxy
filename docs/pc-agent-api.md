@@ -109,6 +109,10 @@ Jedes installierte Modell sagt mit `speed_projection`, ob seine Konfiguration
 einen Steuervektor lädt (`--control-vector-scaled`, Stratas oder ein eigener).
 Ein älterer PC-Dienst lässt das Feld weg.
 
+`context` ist der Wert von `--max-context` in seiner Konfiguration (Tokens),
+`null`, wenn das Flag fehlt oder sein Wert keine Zahl ist. Ein älterer
+PC-Dienst lässt das Feld weg.
+
 ### `POST /strata/jobs`
 
 Startet einen Vorgang, Antwort `202` mit dem Vorgang. `400 {"reason": …}`

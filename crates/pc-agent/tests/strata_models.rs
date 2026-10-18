@@ -947,3 +947,35 @@ async fn switching_a_model_keeps_the_model_start_here_starts() {
     assert_eq!(model(&view, "IQ3_XXS")["active"], true, "{view}");
     assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn the_page_shows_each_models_context() {
+    let s = setup("models-context-view").await;
+    installed(&s);
+    config_with_args(
+        &s,
+        "iq3_xxs",
+        json!(["--native", "a.gguf", "--max-context", "65536"]),
+    );
+    config_with_args(
+        &s,
+        "coder-iq1_m",
+        json!([
+            "--native",
+            "b.gguf",
+            "--max-context",
+            "524288",
+            "--rope-scaling",
+            "yarn",
+            "--rope-scale",
+            "2"
+        ]),
+    );
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "IQ3_XXS")["context"], 65536, "{view}");
+    assert_eq!(model(&view, "coder-IQ1_M")["context"], 524288, "{view}");
+
+    config_with_args(&s, "iq3_xxs", json!(["--native", "a.gguf"]));
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "IQ3_XXS")["context"], Value::Null, "{view}");
+}

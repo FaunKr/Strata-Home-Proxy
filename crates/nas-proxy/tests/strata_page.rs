@@ -574,3 +574,30 @@ async fn only_models_that_take_it_offer_to_switch_the_speed_projection() {
     let html = b.page("/admin/strata").await;
     assert!(!html.contains("Switch speed projection"), "{html}");
 }
+
+// --- #101 the context of installed models ---
+
+#[tokio::test]
+async fn an_installed_model_shows_its_context() {
+    let s = setup(true, |_| {}).await;
+    let mut info = with_two_models(None);
+    info["models"][0]["context"] = json!(65536);
+    info["models"][1]["context"] = json!(524288);
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("64K context"), "{html}");
+    assert!(html.contains("512K context"), "{html}");
+}
+
+#[tokio::test]
+async fn without_word_from_the_pc_service_no_context_shows() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_two_models(None));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("IQ3_XXS"), "{html}");
+    assert!(!html.contains("K context"), "{html}");
+}

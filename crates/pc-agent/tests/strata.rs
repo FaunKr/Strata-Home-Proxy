@@ -149,19 +149,21 @@ async fn install_runs_setup_with_the_fixed_values_and_starts_strata() {
 }
 
 #[tokio::test]
-async fn install_can_turn_on_the_experimental_speed_projection() {
-    let s = setup("strata-esp").await;
-    installable(&s);
-    let mut body = install();
-    body["experimental_speed_projection"] = json!(true);
-    let (code, job) = post(&s, "/strata/jobs", body).await;
-    assert_eq!(code, 202, "{job}");
-    assert_eq!(finished(&s).await["state"], "done");
-    let args = &s.fake.runs_of("START-HERE.bat")[0].args;
-    assert!(
-        args.ends_with(&["--experimental-speed-projection".into(), "on".into()]),
-        "{args:?}"
-    );
+async fn install_turns_the_experimental_speed_projection_on_or_off() {
+    for (wanted, value) in [(true, "on"), (false, "off")] {
+        let s = setup(&format!("strata-esp-{value}")).await;
+        installable(&s);
+        let mut body = install();
+        body["experimental_speed_projection"] = json!(wanted);
+        let (code, job) = post(&s, "/strata/jobs", body).await;
+        assert_eq!(code, 202, "{job}");
+        assert_eq!(finished(&s).await["state"], "done");
+        let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+        assert!(
+            args.ends_with(&["--experimental-speed-projection".into(), value.into()]),
+            "{args:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -319,6 +321,14 @@ async fn the_catalog_marks_what_fits_and_recommends_setups_pick() {
     assert_eq!(entry("IQ3_S")["fits"], true);
     assert_eq!(entry("unsloth-Q8_0")["fits"], false);
     assert_eq!(entry("unsloth-Q8_0")["ram_gb"], 136);
+    let projection: Vec<_> = view["families"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["speed_projection"] == true)
+        .map(|f| f["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(projection, ["qwen", "coder"]);
 }
 
 // --- Progress, cancel, resume (#30) ---

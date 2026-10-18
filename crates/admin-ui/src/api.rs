@@ -516,6 +516,10 @@ pub struct StrataModel {
 pub struct StrataFamily {
     pub id: String,
     pub title: String,
+    /// Setup offers the experimental speed projection; an older PC service
+    /// does not say so.
+    #[serde(default)]
+    pub speed_projection: bool,
 }
 
 /// A size from Strata's catalog.

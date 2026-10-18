@@ -114,6 +114,7 @@ pub enum JobRequest {
         /// The key the proxy uses; without it the service's own.
         #[serde(default)]
         api_key: Option<String>,
+        /// Strata's experimental speed projection; only for qwen and coder.
         #[serde(default)]
         experimental_speed_projection: bool,
     },
@@ -335,20 +336,19 @@ pub fn start(agent: &Arc<Agent>, request: JobRequest) -> Result<Job, Refusal> {
     Ok(job)
 }
 
-/// Strata's experimental speed projection, which setup offers only for the
-/// original Qwen3.8-Flash-Next and the Coder.
-fn speed_projection(size: &Size, on: bool) -> Result<bool, Refusal> {
-    if on && !takes_speed_projection(size) {
+/// Strata's experimental speed projection, only where setup offers it.
+fn check_speed_projection(size: &Size, wanted: bool) -> Result<bool, Refusal> {
+    if wanted && !takes_speed_projection(size) {
         return Err(Refusal::BadRequest(format!(
             "Die experimentelle Speed-Projection gibt es nur für Qwen und Coder, nicht für {}",
             size.id()
         )));
     }
-    Ok(on)
+    Ok(wanted)
 }
 
 fn takes_speed_projection(size: &Size) -> bool {
-    matches!(size.family, "qwen" | "coder")
+    catalog::family(size.family).is_some_and(|f| f.speed_projection)
 }
 
 fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
@@ -372,14 +372,14 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             size: s,
             context: c,
             api_key,
-            experimental_speed_projection: esp,
+            experimental_speed_projection: wanted,
         } => {
             let size = size(&family, &s)?;
             Ok(Plan::Install {
                 size,
                 context: context(c)?,
                 api_key: check_key(api_key)?,
-                speed_projection: speed_projection(size, esp)?,
+                speed_projection: check_speed_projection(size, wanted)?,
             })
         }
         JobRequest::AddModel {
@@ -387,14 +387,14 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             size: s,
             context: c,
             api_key,
-            experimental_speed_projection: esp,
+            experimental_speed_projection: wanted,
         } => {
             let size = size(&family, &s)?;
             let plan = Plan::AddModel {
                 size,
                 context: context(c)?,
                 api_key: api_key.map(check_key).transpose()?,
-                speed_projection: speed_projection(size, esp)?,
+                speed_projection: check_speed_projection(size, wanted)?,
             };
             strata_installed(dir)?;
             Ok(plan)
@@ -1368,6 +1368,9 @@ pub struct StrataView {
 pub struct FamilyView {
     pub id: String,
     pub title: String,
+    /// Setup offers the experimental speed projection.
+    #[serde(default)]
+    pub speed_projection: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1422,6 +1425,7 @@ pub fn view(agent: &Agent) -> StrataView {
             .map(|f| FamilyView {
                 id: f.id.into(),
                 title: f.title.into(),
+                speed_projection: f.speed_projection,
             })
             .collect(),
         catalog: catalog::SIZES

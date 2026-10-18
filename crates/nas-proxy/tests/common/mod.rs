@@ -316,7 +316,7 @@ pub fn strata_info(installed: bool) -> Value {
         "installed": installed,
         "version": installed.then_some("477ac13"),
         "models": models,
-        "families": [{"id": "qwen", "title": "Qwen3.8-Flash-Next"}],
+        "families": [{"id": "qwen", "title": "Qwen3.8-Flash-Next", "speed_projection": true}],
         "catalog": [{"id": "IQ3_XXS", "family": "qwen", "size": "IQ3_XXS",
                      "download_gb": 75.8, "ram_gb": 60, "fits": true,
                      "partly_downloaded": false}],

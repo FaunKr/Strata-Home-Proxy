@@ -255,14 +255,16 @@ fn ModelChoice(
     let choice = RwSignal::new(first);
     let context = RwSignal::new(info.default_context);
     let speed_projection = RwSignal::new(false);
-    // Strata's setup offers it only for these; it ignores it for the others.
     let takes_projection = {
         let sizes = sizes.clone();
+        let families = info.families.clone();
         Memo::new(move |_| {
             choice.with(|id| {
-                sizes
-                    .iter()
-                    .any(|s| &s.id == id && matches!(s.family.as_str(), "qwen" | "coder"))
+                sizes.iter().filter(|s| &s.id == id).any(|s| {
+                    families
+                        .iter()
+                        .any(|f| f.id == s.family && f.speed_projection)
+                })
             })
         })
     };
@@ -334,7 +336,7 @@ fn ModelChoice(
     };
     let picker = format!("{kind:?}-size");
     let ctx = format!("{kind:?}-context");
-    let esp = format!("{kind:?}-speed-projection");
+    let projection = format!("{kind:?}-speed-projection");
     view! {
         <label for=picker.clone()>"Modell"</label>
         <select id=picker on:change=move |ev| choice.set(event_target_value(&ev))>
@@ -354,12 +356,12 @@ fn ModelChoice(
         <Show when=move || takes_projection.get()>
             <div>
                 <input
-                    id=esp.clone()
+                    id=projection.clone()
                     type="checkbox"
                     prop:checked=move || speed_projection.get()
                     on:change=move |ev| speed_projection.set(event_target_checked(&ev))
                 />
-                <label for=esp.clone() class="inline">
+                <label for=projection.clone() class="inline">
                     "Experimentelle Speed-Projection"
                 </label>
                 <p class="hint">

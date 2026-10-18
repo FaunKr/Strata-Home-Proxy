@@ -10,7 +10,10 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-use crate::command::{self, CommandSpec, Running};
+use crate::{
+    command::{self, CommandSpec, Running},
+    hardware::Hardware,
+};
 
 pub trait Platform: Send + Sync + 'static {
     /// Time since the last keyboard or mouse input.
@@ -44,6 +47,10 @@ pub trait Platform: Send + Sync + 'static {
     fn replace_program(&self, downloaded: &Path) -> Result<()>;
     /// Ends this process, so the new program gets the port.
     fn exit(&self);
+    /// The Hardwarewerte; returns at once, `/status` asks every few seconds.
+    fn hardware(&self) -> Hardware {
+        Hardware::default()
+    }
 }
 
 pub struct System;
@@ -346,6 +353,10 @@ impl Platform for System {
     }
     fn exit(&self) {
         std::process::exit(0);
+    }
+    #[cfg(windows)]
+    fn hardware(&self) -> Hardware {
+        crate::hardware::read()
     }
 }
 

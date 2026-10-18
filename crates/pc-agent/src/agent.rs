@@ -31,6 +31,7 @@ use tokio::sync::broadcast;
 
 use crate::{
     config::{Config, format_mac, parse_mac},
+    hardware::Hardware,
     managed::Managed,
     output::{Message, Notice, StrataOutput},
     platform::Platform,
@@ -89,7 +90,7 @@ struct Watchdog {
     last_start: Option<Instant>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Status {
     pub gaming_mode: bool,
     pub strata_running: bool,
@@ -104,6 +105,8 @@ pub struct Status {
     /// This program's version, e.g. `0.1.0+558db97`.
     #[serde(default)]
     pub version: String,
+    #[serde(default)]
+    pub hardware: Hardware,
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,6 +209,7 @@ impl Agent {
             mac: None,
             strata_job: self.jobs.running(),
             version: crate::version().to_string(),
+            hardware: self.platform.hardware(),
         }
     }
 

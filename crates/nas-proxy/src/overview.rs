@@ -12,7 +12,9 @@ use std::{
 };
 
 use futures_util::{StreamExt, stream::BoxStream};
-use strata_admin_ui::api::{EventView, Overview, PcView, Setup, SleepView, StrataJob, StrataView};
+use strata_admin_ui::api::{
+    EventView, HardwareView, Overview, PcView, Setup, SleepView, StrataJob, StrataView,
+};
 use tokio::sync::{Notify, watch};
 
 use crate::{
@@ -278,6 +280,18 @@ pub fn setup(state: &AppState) -> Setup {
     }
 }
 
+/// Values only while the PC counts as awake: none from before Schlafen,
+/// also not in the Nachlauf, when the PC may still answer.
+fn hardware_view(pc: PcView, status: Option<&PcStatus>) -> HardwareView {
+    match (pc, status) {
+        (PcView::Awake | PcView::Gaming, Some(status)) => match &status.hardware {
+            Some(hardware) => HardwareView::Values(hardware.clone()),
+            None => HardwareView::Unsupported,
+        },
+        _ => HardwareView::Unavailable,
+    }
+}
+
 fn build(state: &AppState, probe: &Probe) -> Overview {
     let cfg = state.cfg();
     let snap = state.snapshot();
@@ -342,6 +356,7 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
         keep_awake_until,
         events,
         pc_service,
+        hardware: hardware_view(pc, probe.pc.as_ref()),
     }
 }
 

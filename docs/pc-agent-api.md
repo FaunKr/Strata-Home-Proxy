@@ -10,7 +10,7 @@ NAS) und von 127.0.0.1 an.
 ## `GET /status`
 
 ```json
-{ "gaming_mode": false, "strata_running": true, "user_idle_secs": 1840, "mac": "AA:BB:CC:DD:EE:FF", "strata_job": false, "version": "0.1.0+558db97" }
+{ "gaming_mode": false, "strata_running": true, "user_idle_secs": 1840, "mac": "AA:BB:CC:DD:EE:FF", "strata_job": false, "version": "0.1.0+558db97", "hardware": { … } }
 ```
 
 `strata_job` ist `true`, solange ein Strata-Vorgang läuft (siehe unten).
@@ -27,6 +27,31 @@ die, die das Weckpaket empfangen muss), oder der Wert `mac` aus der
 Konfiguration. Ist sie unbekannt, fehlt das Feld. Der Proxy merkt sich die
 gemeldete MAC in `DATA_DIR` und weckt damit; sie hat Vorrang vor `PC_MAC` und
 den Werten aus der Weboberfläche.
+
+`hardware` sind die Hardwarewerte für die Übersicht. Der Dienst liest sie aus
+Windows selbst, ohne Treiber: Solange `/status` gefragt wird, misst er alle 2 s
+im Hintergrund und antwortet mit der letzten Messung. Die erste Anfrage nach
+30 s Ruhe startet die Messung und bekommt nur `null`-Werte.
+
+```json
+"hardware": {
+  "gpu": { "load_pct": 37.0, "temp_c": 61.5, "vram_used_bytes": 12670000000,
+           "vram_total_bytes": 17163091968, "fan_rpm": 0, "power_pct": 41.0 },
+  "cpu": { "load_pct": 12.0, "ram_used_bytes": 22980000000, "ram_total_bytes": 34359738368 }
+}
+```
+
+- `gpu` ist die Grafikkarte mit dem meisten VRAM, `null` ohne Grafikkarte.
+- `power_pct` ist die Leistungsaufnahme als Anteil am Leistungslimit der
+  Karte, keine Watt.
+- `fan_rpm: 0` heißt, der Lüfter steht. Meldet der Treiber 0 und keine
+  Höchstdrehzahl, kennt er den Lüfter nicht, und der Wert ist `null`.
+- Temperatur und Leistung meldet der Treiber als 0, wenn er sie nicht kennt;
+  der Dienst macht daraus `null`.
+- Jeder Wert, den der Dienst nicht lesen kann, ist `null`; die anderen bleiben.
+- Die CPU-Last gilt seit der vorigen Messung und ist in der ersten `null`.
+
+Fehlt `hardware`, ist der Dienst älter; die Übersicht bittet dann um ein Update.
 
 Antwortet der Dienst nicht, geht der Proxy davon aus, dass der PC schläft,
 und weckt ihn.

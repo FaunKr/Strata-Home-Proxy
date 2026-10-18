@@ -6,6 +6,7 @@ pub mod api;
 pub mod app;
 pub mod confirm;
 pub mod copy;
+pub mod hardware;
 pub mod icons;
 pub mod labels;
 pub mod overview;

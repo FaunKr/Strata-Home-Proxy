@@ -4,14 +4,14 @@ use std::time::Duration;
 
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
-use strata_admin_ui::api::{StrataInfo, StrataJob};
+use strata_admin_ui::api::{Hardware, StrataInfo, StrataJob};
 
 use crate::config::Config;
 
 const LOG_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const LOG_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct PcStatus {
     pub gaming_mode: bool,
     #[serde(default)]
@@ -25,6 +25,9 @@ pub struct PcStatus {
     /// The service's version; missing from services before the update button.
     #[serde(default)]
     pub version: Option<String>,
+    /// The Hardwarewerte; missing from services before them.
+    #[serde(default)]
+    pub hardware: Option<Hardware>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

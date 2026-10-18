@@ -24,6 +24,7 @@ pub use strata_pc_agent::{
     Agent, Config, Peer, Status,
     agent::router,
     command::{CommandSpec, Running},
+    hardware::{Cpu, Gpu, Hardware},
     platform::Platform,
 };
 use tokio::{net::TcpListener, sync::mpsc, sync::oneshot};
@@ -75,6 +76,8 @@ pub struct Fake {
     pub replace_fails: Mutex<Option<String>>,
     /// Times the service ended itself after an update.
     pub exits: AtomicUsize,
+    /// What reading the hardware gives.
+    pub hardware: Mutex<Hardware>,
 }
 
 impl Fake {
@@ -238,6 +241,9 @@ impl Platform for FakePlatform {
     }
     fn exit(&self) {
         self.0.exits.fetch_add(1, Ordering::SeqCst);
+    }
+    fn hardware(&self) -> Hardware {
+        self.0.hardware.lock().unwrap().clone()
     }
 }
 

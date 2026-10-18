@@ -1,5 +1,5 @@
 //! The live overview: while at least one page watches, the proxy asks the PC
-//! service, Strata's `/health` and `/metrics/prometheus` every few seconds and
+//! service, Strata's `/health` and its metrics every few seconds and
 //! sends the overview again whenever it changes. Without watchers it asks
 //! nothing.
 
@@ -28,7 +28,7 @@ const POLL: Duration = Duration::from_secs(5);
 const REFRESH: Duration = Duration::from_millis(250);
 const EVENTS_SHOWN: usize = 10;
 
-/// Strata's numbers from `/metrics/prometheus`, which uses llama-server's names.
+/// Strata's numbers from `/metrics?format=prometheus` (see docs/strata-api.md).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Metrics {
     pub processing: u32,
@@ -187,7 +187,9 @@ async fn probe(state: &AppState) -> Probe {
 
 async fn metrics(state: &AppState) -> Option<Metrics> {
     let cfg = state.cfg();
-    let url = format!("{}/metrics/prometheus", cfg.strata_url.as_ref()?);
+    // Not `/metrics/prometheus`: its tokens/s counts finished requests only,
+    // and each scrape resets that window for other scrapers.
+    let url = format!("{}/metrics?format=prometheus", cfg.strata_url.as_ref()?);
     let mut req = state.probe_client().get(url);
     if let Some(auth) = cfg.strata_authorization() {
         req = req.header(reqwest::header::AUTHORIZATION, auth);
@@ -209,11 +211,11 @@ pub fn parse_metrics(text: &str) -> Option<Metrics> {
             (key == name).then(|| value.trim().parse::<f64>().ok())?
         })
     };
-    let processing = value("llamacpp:requests_processing")?;
+    let processing = value("vllm:num_requests_running")?;
     Some(Metrics {
         processing: processing as u32,
-        deferred: value("llamacpp:requests_deferred").unwrap_or(0.0) as u32,
-        tokens_per_sec: value("llamacpp:predicted_tokens_seconds").filter(|v| *v > 0.0),
+        deferred: value("vllm:num_requests_waiting").unwrap_or(0.0) as u32,
+        tokens_per_sec: value("strata:live_tok_s").filter(|v| *v > 0.0),
     })
 }
 
@@ -305,22 +307,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_llama_server_metrics() {
-        let text = "# HELP llamacpp:requests_processing Number of requests processing.\n\
-                    # TYPE llamacpp:requests_processing gauge\n\
-                    llamacpp:requests_processing 2\n\
-                    llamacpp:requests_deferred 1\n\
-                    llamacpp:predicted_tokens_seconds 38.5\n";
+    fn reads_strata_metrics() {
+        // Real output of Strata's serve/prometheus.py, see docs/strata-api.md.
         assert_eq!(
-            parse_metrics(text),
+            parse_metrics(include_str!("../tests/fixtures/strata-metrics-busy.prom")),
             Some(Metrics {
-                processing: 2,
+                processing: 1,
                 deferred: 1,
                 tokens_per_sec: Some(38.5)
             })
         );
         assert_eq!(
-            parse_metrics("llamacpp:requests_processing{model=\"a\"} 0\n"),
+            parse_metrics(include_str!("../tests/fixtures/strata-metrics-idle.prom")),
             Some(Metrics::default())
         );
         assert_eq!(parse_metrics("other 1\n"), None);

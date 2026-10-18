@@ -80,10 +80,10 @@ Aufrufe dort wecken den PC nicht und halten ihn nicht wach.
   wartenden Anfragen und Token/s) oder offline ist, die letzte Anfrage, einen
   Countdown bis zum Schlafen (oder warum nicht geschlafen wird) und die letzten
   zehn PC-Ereignisse. Solange eine Übersicht offen ist, fragt der Proxy alle
-  5 s den PC-Dienst, `/health` und `/metrics/prometheus` von Strata ab; das
-  weckt den PC nicht und hält ihn nicht wach. Für die Zahlen aus
-  `/metrics/prometheus` braucht der Proxy den API-Key von Strata
-  (`STRATA_API_KEY`).
+  5 s den PC-Dienst, `/health` und die Metriken von Strata ab; das
+  weckt den PC nicht und hält ihn nicht wach. Für die Metriken braucht der
+  Proxy den API-Key von Strata (`STRATA_API_KEY`). Welche Endpunkte von
+  Strata der Proxy nutzt: [docs/strata-api.md](docs/strata-api.md).
 - **Knöpfe:** *Jetzt wecken* (die 15 min Leerlauf zählen ab dem Aufwachen),
   *Jetzt schlafen legen* (lehnt der PC-Dienst ab, steht der Grund da),
   *Gaming an/aus* (weckt einen schlafenden PC vorher; nach *aus* zählt der

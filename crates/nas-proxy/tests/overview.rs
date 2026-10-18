@@ -169,7 +169,7 @@ async fn shows_what_is_not_set_up() {
 #[tokio::test]
 async fn shows_running_and_waiting_requests_from_metrics() {
     let s = setup(true, |c| c.strata_api_key = Some("geheim".into())).await;
-    *s.pc.metrics.lock().unwrap() = Some(metrics_text(2, 1, 38.5));
+    *s.pc.metrics.lock().unwrap() = Some(METRICS_BUSY.into());
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
@@ -177,7 +177,7 @@ async fn shows_running_and_waiting_requests_from_metrics() {
         .await;
     assert_eq!(
         v["strata"]["Busy"],
-        json!({"processing": 2, "deferred": 1, "tokens_per_sec": 38.5})
+        json!({"processing": 1, "deferred": 1, "tokens_per_sec": 38.5})
     );
     // Requests that bypass the proxy do not hold off the sleep request.
     assert!(countdown(&v).is_some(), "{v}");
@@ -186,7 +186,7 @@ async fn shows_running_and_waiting_requests_from_metrics() {
         Some("Bearer geheim")
     );
 
-    *s.pc.metrics.lock().unwrap() = Some(metrics_text(0, 0, 0.0));
+    *s.pc.metrics.lock().unwrap() = Some(METRICS_IDLE.into());
     live.until("bereit", |v| v["strata"] == "Ready").await;
 }
 

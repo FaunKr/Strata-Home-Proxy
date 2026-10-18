@@ -63,6 +63,10 @@ pub struct Config {
     /// card the NAS connects to (`AA:BB:CC:DD:EE:FF` or `AA-BB-…`).
     #[serde(default)]
     pub mac: Option<String>,
+    /// The NAS as the one-line setup reached it (`http://<NAS>:<Port>`);
+    /// where updates of this program come from.
+    #[serde(default)]
+    pub nas_url: Option<String>,
     /// Where Strata is fetched from when the web UI sets it up. Fixed here,
     /// never taken from a request.
     #[serde(default = "default_strata_repo")]
@@ -184,6 +188,38 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(cfg.strata_start, None);
         assert!(cfg.strata_processes.is_empty());
+    }
+
+    #[test]
+    fn configuration_from_the_one_line_setup_parses() {
+        // What install.ps1 writes after signing up with the NAS.
+        let dir =
+            std::env::temp_dir().join(format!("strata-pc-agent-setup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("strata-pc-agent.toml");
+        std::fs::write(
+            &path,
+            [
+                "# Konfiguration des PC-Dienstes, angelegt bei der Einrichtung vom NAS.",
+                "listen = \"0.0.0.0:8091\"",
+                "token = \"0123abcd\"",
+                "allowed_clients = [\"192.168.1.10\"]",
+                "strata_url = \"http://127.0.0.1:8080\"",
+                "nas_url = \"http://192.168.1.10:8090\"",
+                "fresh_strata_after_standby = true",
+                "strata_api_key = \"strata-geheim\"",
+            ]
+            .join("\r\n"),
+        )
+        .unwrap();
+        let cfg = Config::load(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(cfg.nas_url.as_deref(), Some("http://192.168.1.10:8090"));
+        assert_eq!(
+            cfg.allowed_clients,
+            ["192.168.1.10".parse::<IpAddr>().unwrap()]
+        );
+        assert_eq!(cfg.strata_start, None);
     }
 
     #[test]

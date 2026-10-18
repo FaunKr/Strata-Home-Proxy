@@ -222,3 +222,60 @@ async fn setup_page_offers_the_command() {
     assert!(html.contains("PC-Dienst einrichten"), "{html}");
     assert!(html.contains("Befehl erzeugen"), "{html}");
 }
+
+async fn script(s: &Setup, query: &str) -> (u16, String) {
+    let resp = reqwest::get(format!("{}/admin/agent/install.ps1{query}", s.url))
+        .await
+        .unwrap();
+    (resp.status().as_u16(), resp.text().await.unwrap())
+}
+
+#[tokio::test]
+async fn script_comes_with_nas_address_and_code() {
+    let s = setup(false, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let (_, code) = command(&mut b).await;
+    let (status, text) = script(&s, &format!("?code={code}")).await;
+    assert_eq!(status, 200);
+    assert!(
+        text.contains(&format!("[string]$NasUrl = \"{}\"", s.url)),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("[string]$Code = \"{code}\"")),
+        "{text}"
+    );
+    assert!(text.contains("[switch]$Uninstall,"), "{text}");
+    // Loading the script leaves the code for the sign-up, also after the
+    // script restarts itself with administrator rights.
+    assert_eq!(script(&s, &format!("?code={code}")).await.0, 200);
+    assert_eq!(register(&s, &code, 8091).await.status(), 200);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn script_without_a_valid_code_only_explains() {
+    let s = setup(false, |_| {}).await;
+    for query in ["", "?code=FALSCH"] {
+        let (status, text) = script(&s, query).await;
+        // Windows PowerShell shows no body for errors, so the explanation
+        // comes as a script that prints it.
+        assert_eq!(status, 200, "{query}");
+        assert!(text.contains("neuen Befehl"), "{text}");
+        assert!(!text.contains("Register-ScheduledTask"), "{text}");
+    }
+}
+
+#[tokio::test]
+async fn uninstall_script_needs_no_code() {
+    let s = setup(false, |_| {}).await;
+    let (status, text) = script(&s, "?uninstall").await;
+    assert_eq!(status, 200);
+    assert!(text.contains("[switch]$Uninstall = $true,"), "{text}");
+    assert!(
+        text.contains(&format!("[string]$NasUrl = \"{}\"", s.url)),
+        "{text}"
+    );
+    assert!(text.contains("[string]$Code = \"\""), "{text}");
+}

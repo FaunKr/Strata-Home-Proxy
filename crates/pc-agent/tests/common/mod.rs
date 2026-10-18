@@ -278,6 +278,7 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         load_time_secs: 1,
         state_dir: Some(dir.to_path_buf()),
         mac: None,
+        nas_url: None,
         strata_repo: "https://example.org/Strata.git".into(),
         strata_dir: dir.join("Strata"),
         strata_data_dir: dir.join("Strata-data"),

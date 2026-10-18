@@ -97,6 +97,7 @@ New-NetFirewallRule -DisplayName "Strata nur vom NAS" -Direction Inbound -Protoc
 Erst wenn der Proxy auf dem NAS läuft (siehe README):
 
 - [ ] `http://<NAS-IP>:8080/admin/` öffnen, mit `admin` (oder `UI_PASSWORD`) anmelden und ein eigenes Passwort festlegen
+- [ ] Seite *PC-Dienst*: *Befehl erzeugen* und den Befehl in eine PowerShell auf dem PC einfügen ([docs/pc-dienst.md](pc-dienst.md))
 - [ ] Unter *Einstellungen* prüfen, dass Strata-Adresse, MAC und PC-Dienst stimmen
 - [ ] Unter *Einstellungen* den API-Key von Strata eintragen, damit die Übersicht laufende und wartende Anfragen und Token/s zeigt
 - [ ] Die *Übersicht* zeigt PC und Strata richtig an; *Jetzt schlafen legen* und *Jetzt wecken* wirken

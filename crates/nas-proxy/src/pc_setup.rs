@@ -4,6 +4,7 @@
 //! `/admin/`, nothing here wakes the PC or counts as activity.
 
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -12,7 +13,7 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -29,6 +30,9 @@ const CODE_LIFETIME: Duration = Duration::from_secs(15 * 60);
 /// Easy to read out and type: no 0/O or 1/I.
 const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CODE_LEN: usize = 8;
+/// Installs, updates and removes the PC service; also used on its own, next
+/// to the program from the CI download.
+const INSTALL_SCRIPT: &str = include_str!("../../../deploy/windows/install.ps1");
 
 pub struct PcSetup {
     program: Mutex<PathBuf>,
@@ -91,16 +95,24 @@ impl PcSetup {
         })
     }
 
+    /// Whether `code` is the current code and still valid.
+    fn valid(&self, code: &str) -> bool {
+        Self::matches(self.code.lock().unwrap().as_ref(), code)
+    }
+
     /// Uses up the code if it is the current one and still valid.
     fn redeem(&self, code: &str) -> bool {
         let mut current = self.code.lock().unwrap();
-        let valid = current
-            .as_ref()
-            .is_some_and(|c| c.value.eq_ignore_ascii_case(code.trim()) && Instant::now() < c.until);
+        let valid = Self::matches(current.as_ref(), code);
         if valid {
             *current = None;
         }
         valid
+    }
+
+    fn matches(current: Option<&Code>, code: &str) -> bool {
+        current
+            .is_some_and(|c| c.value.eq_ignore_ascii_case(code.trim()) && Instant::now() < c.until)
     }
 }
 
@@ -123,6 +135,7 @@ fn valid_host(host: &str) -> bool {
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/admin/agent/strata-pc-agent.exe", get(program))
+        .route("/admin/agent/install.ps1", get(install_script))
         .route("/admin/agent/register", post(register))
 }
 
@@ -150,6 +163,58 @@ async fn program(State(state): State<Arc<AppState>>) -> Response {
                 .into_response()
         }
     }
+}
+
+/// The install script with the NAS's address and the code filled in, only
+/// for a valid code; `?uninstall` needs none. Loading it leaves the code for
+/// the sign-up, so the script can load itself again with administrator rights.
+async fn install_script(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let host = host(&headers);
+    let uninstall = query.contains_key("uninstall");
+    let code = query.get("code").map(String::as_str).unwrap_or_default();
+    if !valid_host(host) || (!uninstall && !state.pc_setup.valid(code)) {
+        // Windows PowerShell shows no body for an error status, so the
+        // explanation comes as a script that prints it.
+        return powershell(
+            "Write-Host 'Der Code gilt nicht (mehr). Auf der Seite PC-Dienst der Weboberflaeche einen neuen Befehl erzeugen.' -ForegroundColor Red"
+                .to_string(),
+        );
+    }
+    let code = if uninstall { "" } else { code.trim() };
+    let mut script = INSTALL_SCRIPT
+        .replacen(
+            "[string]$NasUrl = \"\"",
+            &format!("[string]$NasUrl = \"http://{host}\""),
+            1,
+        )
+        .replacen(
+            "[string]$Code = \"\"",
+            &format!("[string]$Code = \"{}\"", code.to_ascii_uppercase()),
+            1,
+        );
+    if uninstall {
+        script = script.replacen("[switch]$Uninstall,", "[switch]$Uninstall = $true,", 1);
+    }
+    powershell(script)
+}
+
+fn powershell(script: String) -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        script,
+    )
+        .into_response()
+}
+
+fn host(headers: &HeaderMap) -> &str {
+    headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or_default()
 }
 
 #[derive(Deserialize)]
@@ -206,13 +271,9 @@ async fn register(
         .record(EventKind::PcServiceRegistered, Some(url.clone()));
     state.overview.refresh_now();
     tracing::info!("PC-Dienst unter {url} eingerichtet");
-    let host = headers
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or_default();
     Json(Registered {
         token,
-        nas_url: format!("http://{host}"),
+        nas_url: format!("http://{}", host(&headers)),
         strata_api_key: state.cfg().strata_api_key.clone(),
     })
     .into_response()

@@ -33,7 +33,7 @@ const CODE_LEN: usize = 8;
 /// Installs, updates and removes the PC service; also used on its own, next
 /// to the program from the CI download.
 const INSTALL_SCRIPT: &str = include_str!("../../../deploy/windows/install.ps1");
-/// Text the program carries in front of its version (see `pc-agent/src/main.rs`).
+/// Text the program carries in front of its version (see `pc-agent/src/lib.rs`).
 const VERSION_MARKER: &[u8] = b"strata-pc-agent-version:";
 /// An accepted update that has not reported its new version after this long failed.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(180);

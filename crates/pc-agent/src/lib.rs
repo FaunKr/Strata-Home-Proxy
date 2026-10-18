@@ -19,6 +19,26 @@ pub use config::Config;
 /// Crate version plus build, e.g. `0.1.0+558db97`; see `build.rs`.
 pub const VERSION: &str = env!("STRATA_PC_AGENT_VERSION");
 
+const MARKER_PREFIX: &str = "strata-pc-agent-version:";
+/// The version as plain text in the program, so the NAS reads it from the
+/// .exe it serves without running it (see `nas-proxy/src/pc_setup.rs`).
+static VERSION_MARKER: &str = concat!(
+    "strata-pc-agent-version:",
+    env!("STRATA_PC_AGENT_VERSION"),
+    "\n"
+);
+
+/// The version as `/status` reports it. Read from the marker at run time,
+/// so no linker drops the marker from the program (`#[used]` alone does not
+/// keep it with MSVC).
+pub fn version() -> &'static str {
+    let marker: &'static str = std::hint::black_box(VERSION_MARKER);
+    marker
+        .strip_prefix(MARKER_PREFIX)
+        .and_then(|v| v.strip_suffix('\n'))
+        .unwrap_or(VERSION)
+}
+
 /// Writes via a temporary file, so a crash never leaves half a file behind.
 pub(crate) fn write_replacing(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();

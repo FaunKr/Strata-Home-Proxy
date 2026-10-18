@@ -205,7 +205,7 @@ impl Agent {
             user_idle_secs: self.platform.user_idle().as_secs(),
             mac: None,
             strata_job: self.jobs.running(),
-            version: crate::VERSION.to_string(),
+            version: crate::version().to_string(),
         }
     }
 

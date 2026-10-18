@@ -116,9 +116,16 @@ async fn admin_does_not_postpone_sleep() {
 async fn a_page_finishes_while_another_router_is_built() {
     use std::sync::{Arc, atomic::AtomicBool};
     let s = setup(true, |_| {}).await;
-    let stop = Arc::new(AtomicBool::new(false));
+    // Stops the builder also when an assert below fails.
+    struct Stop(Arc<AtomicBool>);
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let stop = Stop(Arc::new(AtomicBool::new(false)));
     let builder = {
-        let (stop, state) = (stop.clone(), s.state.clone());
+        let (stop, state) = (stop.0.clone(), s.state.clone());
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -127,6 +134,7 @@ async fn a_page_finishes_while_another_router_is_built() {
             let _rt = rt.enter();
             while !stop.load(Ordering::SeqCst) {
                 drop(strata_nas_proxy::api_router(state.clone()));
+                std::thread::sleep(Duration::from_millis(1));
             }
         })
     };
@@ -137,6 +145,6 @@ async fn a_page_finishes_while_another_router_is_built() {
             .expect("Seite hängt");
         assert!(html.contains("Anmelden"), "{html}");
     }
-    stop.store(true, Ordering::SeqCst);
+    drop(stop);
     builder.join().unwrap();
 }

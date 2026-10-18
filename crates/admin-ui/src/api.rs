@@ -188,6 +188,8 @@ pub struct Overview {
     pub mac_known: bool,
     /// False without a PC service: no gaming mode and no automatic sleep.
     pub agent_configured: bool,
+    /// False while no API key exists: every client gets 401.
+    pub api_key_exists: bool,
     pub pc: PcView,
     pub strata: StrataView,
     /// Start or end of the last API request, as local time text.

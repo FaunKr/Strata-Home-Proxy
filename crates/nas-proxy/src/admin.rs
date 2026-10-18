@@ -223,6 +223,7 @@ impl Backend for UiBackend {
         self.0
             .events
             .record(EventKind::ApiKeyCreated, Some(info.name.clone()));
+        self.0.overview.refresh_now();
         Ok(CreatedKey {
             key,
             info: key_info(info),
@@ -237,6 +238,7 @@ impl Backend for UiBackend {
         self.0
             .events
             .record(EventKind::ApiKeyRevoked, Some(name.to_string()));
+        self.0.overview.refresh_now();
         Ok(())
     }
 }

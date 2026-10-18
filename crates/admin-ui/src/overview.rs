@@ -73,6 +73,14 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
             "Kein PC-Dienst eingerichtet: kein Gaming-Modus und kein automatisches Schlafen.",
         ),
     ];
+    let no_key = (!overview.api_key_exists).then(|| {
+        view! {
+            <p class="warning" role="status">
+                "Noch kein API-Key angelegt: jeder Client bekommt 401. "
+                <a href="/admin/api-keys">"Key anlegen"</a>
+            </p>
+        }
+    });
     let last_request = overview
         .last_request
         .clone()
@@ -85,6 +93,7 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
             .flatten()
             .map(|w| view! { <p class="warning">{w}</p> })
             .collect_view()}
+        {no_key}
         <section class="panel cards">
             <div>
                 <h2>"PC"</h2>

@@ -189,6 +189,10 @@ struct JobsInner {
     cancel: Option<Cancel>,
     cancelled: bool,
     progress: Progress,
+    /// The key on the running command's line, kept out of its stored output.
+    secret: Option<String>,
+    /// A benchmark's chat decode speed, read as its output comes.
+    bench: Option<f64>,
 }
 
 impl Jobs {
@@ -297,6 +301,8 @@ pub fn start(agent: &Arc<Agent>, request: JobRequest) -> Result<Job, Refusal> {
         inner.cancel = None;
         inner.cancelled = false;
         inner.progress = Progress::default();
+        inner.secret = None;
+        inner.bench = None;
         job
     };
     save_job(agent);
@@ -407,7 +413,8 @@ fn installed_model(dir: &Path, model: &str) -> Result<String, Refusal> {
 
 /// The model the managed start script starts, in the catalog's letter case.
 fn active_model(agent: &Agent) -> Option<String> {
-    let start = agent.managed().strata_start?;
+    let managed = agent.managed();
+    let (start, _) = managed.start(&agent.cfg);
     let script = start.file_name()?.to_string_lossy().to_lowercase();
     installed_models(&agent.cfg.strata_dir)
         .find(|id| run_script(id) == script)
@@ -549,7 +556,8 @@ async fn add_model(agent: &Arc<Agent>, size: &Size, context: u32) -> Result<Opti
     if !agent.cfg.strata_dir.join("setup.py").is_file() {
         return Err("Strata ist noch nicht eingerichtet".to_string().into());
     }
-    let key = agent.managed().strata_api_key.unwrap_or_default();
+    let managed = agent.managed();
+    let key = managed.api_key(&agent.cfg).unwrap_or_default().to_string();
     setup(agent, size, context, &key).await?;
     Ok(None)
 }
@@ -707,7 +715,8 @@ pub struct Benchmark {
 /// Runs Strata's `BENCH.bat` against the running Strata and keeps its chat
 /// decode speed.
 async fn benchmark(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
-    if !agent.strata_healthy().await {
+    // A Strata that is still loading gets no second start.
+    if !agent.strata_healthy().await && !agent.strata_loading() {
         restart_strata(agent);
     }
     wait_for(
@@ -726,10 +735,12 @@ async fn benchmark(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step>
         dir: Some(dir),
     };
     command(agent, spec, false).await?;
-    let lines = agent.jobs.current().map(|j| j.lines).unwrap_or_default();
-    let tps = lines
-        .iter()
-        .find_map(|l| parse_bench(l))
+    let tps = agent
+        .jobs
+        .inner
+        .lock()
+        .unwrap()
+        .bench
         .ok_or_else(|| "Der Benchmark hat keine Tokens/s gemeldet".to_string())?;
     let result = format!("{} Token/s", (tps * 10.0).round() / 10.0);
     let record = Benchmark {
@@ -739,7 +750,7 @@ async fn benchmark(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step>
     };
     let path = agent.cfg.state_dir().join(BENCH_FILE);
     let text = serde_json::to_string_pretty(&record).expect("benchmark serializes");
-    if let Err(e) = write_replacing(&path, &text) {
+    if let Err(e) = crate::write_replacing(&path, &text) {
         tracing::warn!("{BENCH_FILE} nicht gespeichert: {e}");
     }
     Ok(Some(result))
@@ -788,11 +799,11 @@ fn write_key(dir: &Path, key: &str) -> Result<(), String> {
         let path = dir.join(format!("strata-{id}.json"));
         let text = std::fs::read_to_string(&path)
             .map_err(|e| format!("{} nicht lesbar: {e}", path.display()))?;
-        let Ok(mut cfg) =
+        // A config that does not parse would keep the old key: stop, before
+        // the proxy takes the new one.
+        let mut cfg =
             serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
-        else {
-            continue;
-        };
+                .map_err(|e| format!("{} ist kein gültiges JSON: {e}", path.display()))?;
         let Some(fields) = cfg.as_object_mut() else {
             continue;
         };
@@ -805,17 +816,10 @@ fn write_key(dir: &Path, key: &str) -> Result<(), String> {
         let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
         let mut ser = serde_json::Serializer::with_formatter(&mut out, formatter);
         serde::Serialize::serialize(&cfg, &mut ser).expect("config serializes");
-        write_replacing(&path, &String::from_utf8(out).expect("JSON is UTF-8"))
+        crate::write_replacing(&path, &String::from_utf8(out).expect("JSON is UTF-8"))
             .map_err(|e| format!("{} nicht geschrieben: {e}", path.display()))?;
     }
     Ok(())
-}
-
-/// Writes via a temporary file, so a crash never leaves half a file behind.
-fn write_replacing(path: &Path, text: &str) -> std::io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path))
 }
 
 /// Whether Strata's Git source has commits this folder lacks; asked in the
@@ -920,6 +924,7 @@ async fn setup(agent: &Arc<Agent>, size: &Size, context: u32, api_key: &str) -> 
     );
     if !api_key.is_empty() {
         args.extend(["--api-key".into(), api_key.to_string()]);
+        agent.jobs.inner.lock().unwrap().secret = Some(api_key.to_string());
     }
     if matches!(size.family, "qwen" | "coder") {
         // As Strata's own MCP tool sets it up.
@@ -1035,8 +1040,17 @@ async fn command(agent: &Arc<Agent>, spec: CommandSpec, progress: bool) -> Resul
             let JobsInner {
                 current,
                 progress: p,
+                secret,
+                bench,
                 ..
             } = &mut *inner;
+            let line = match secret.as_deref() {
+                Some(key) => line.replace(key, "***"),
+                None => line,
+            };
+            if let Some(tps) = parse_bench(&line) {
+                *bench = Some(tps);
+            }
             let Some(job) = current.as_mut() else {
                 continue;
             };
@@ -1122,7 +1136,7 @@ fn save_job(agent: &Agent) {
         return;
     };
     let text = serde_json::to_string_pretty(&job).expect("job serializes");
-    if let Err(e) = write_replacing(&agent.cfg.state_dir().join(JOB_FILE), &text) {
+    if let Err(e) = crate::write_replacing(&agent.cfg.state_dir().join(JOB_FILE), &text) {
         tracing::warn!("{JOB_FILE} nicht gespeichert: {e}");
     }
 }

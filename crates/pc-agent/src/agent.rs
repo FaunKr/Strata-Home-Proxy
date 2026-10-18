@@ -232,6 +232,15 @@ impl Agent {
         Ok(())
     }
 
+    /// Strata was started so recently that it may still be loading.
+    pub(crate) fn strata_loading(&self) -> bool {
+        self.watchdog
+            .lock()
+            .unwrap()
+            .last_start
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(self.cfg.load_time_secs))
+    }
+
     pub(crate) fn start_strata(&self) {
         self.watchdog.lock().unwrap().last_start = Some(Instant::now());
         tracing::info!("Strata wird gestartet");

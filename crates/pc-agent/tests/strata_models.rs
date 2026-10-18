@@ -438,3 +438,90 @@ async fn jobs_on_strata_need_an_installed_strata() {
         assert_eq!(code, 409, "{body}: {answer}");
     }
 }
+
+// --- found in review ---
+
+/// Strata set up by hand: start script and key only in the TOML.
+async fn set_up_by_hand(name: &str) -> Setup {
+    let s = setup_with(name, |c| {
+        c.strata_start = c.strata_dir.join("run-iq3_xxs.bat");
+        c.strata_api_key = Some(OLD_KEY.into());
+    })
+    .await;
+    installed(&s);
+    s.agent.set_managed(Managed::default()).unwrap();
+    s
+}
+
+#[tokio::test]
+async fn the_model_started_by_the_configuration_counts_as_active() {
+    let s = set_up_by_hand("models-by-hand").await;
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "delete", "model": "IQ3_XXS"}),
+    )
+    .await;
+    assert_eq!(code, 409, "{answer}");
+    assert_eq!(model(&get(&s, "/strata").await, "IQ3_XXS")["active"], true);
+}
+
+#[tokio::test]
+async fn another_model_gets_the_key_from_the_configuration() {
+    let s = set_up_by_hand("models-by-hand-key").await;
+    job(
+        &s,
+        json!({"kind": "add_model", "family": "swift", "size": "IQ2_XS", "context": 65536}),
+    )
+    .await;
+    let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+    assert!(args.contains(&OLD_KEY.to_string()), "{args:?}");
+}
+
+#[tokio::test]
+async fn the_key_never_shows_in_the_output() {
+    let s = setup("models-key-output").await;
+    installed(&s);
+    s.fake.command(
+        "START-HERE.bat",
+        FakeCommand {
+            lines: vec![format!("  server 0.0.0.0:8080, api key {OLD_KEY}")],
+            exit: Some(1),
+            ..FakeCommand::default()
+        },
+    );
+    let done = job(
+        &s,
+        json!({"kind": "add_model", "family": "swift", "size": "IQ2_XS", "context": 65536}),
+    )
+    .await;
+    assert!(!done.to_string().contains(OLD_KEY), "{done}");
+    let saved = std::fs::read_to_string(s.dir.join("strata-job.json")).unwrap();
+    assert!(!saved.contains(OLD_KEY), "{saved}");
+}
+
+#[tokio::test]
+async fn the_benchmark_result_is_found_before_much_more_output() {
+    let s = setup("models-bench-long").await;
+    installed(&s);
+    let mut rows = vec!["  chat decode tok/s   42.00   (41.00 - 43.00, n=3)".to_string()];
+    rows.extend((0..40).map(|i| format!("  more output {i}")));
+    let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+    bench(&s, &rows);
+    let done = job(&s, json!({"kind": "benchmark"})).await;
+    assert_eq!(done["result"], "42 Token/s", "{done}");
+}
+
+#[tokio::test]
+async fn a_damaged_model_config_stops_the_key_change() {
+    let s = setup("models-key-damaged").await;
+    installed(&s);
+    write(
+        s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json"),
+        "{\"exe\": \"x\",",
+    );
+    let done = job(&s, json!({"kind": "set_key", "api_key": NEW_KEY})).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert_eq!(s.agent.managed().strata_api_key.as_deref(), Some(OLD_KEY));
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+}

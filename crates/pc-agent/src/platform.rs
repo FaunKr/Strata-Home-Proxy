@@ -117,7 +117,8 @@ mod imp {
     fn stop_folder(folder: &str) -> Result<()> {
         let folder = folder.trim_end_matches(['\\', '/']).replace('\'', "''");
         let script = format!(
-            "Get-Process | Where-Object {{ $_.Path -like '{folder}\\*' }} | ForEach-Object {{ taskkill /F /T /PID $_.Id | Out-Null }}"
+            // StartsWith, not -like: brackets in the folder name are no wildcards.
+            "Get-Process | Where-Object {{ $_.Path -and $_.Path.StartsWith('{folder}\\', [StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{ taskkill /F /T /PID $_.Id | Out-Null }}"
         );
         hidden(Command::new("powershell").args([
             "-NoProfile",
@@ -183,13 +184,23 @@ mod imp {
                 // Every program whose command line starts in the folder.
                 Command::new("pkill")
                     .arg("-f")
-                    .arg(format!("^{entry}"))
+                    .arg(format!("^{}", regex_escape(entry)))
                     .status()?;
             } else {
                 Command::new("pkill").arg("-x").arg(entry).status()?;
             }
         }
         Ok(())
+    }
+
+    /// The folder as a literal in pkill's extended regex.
+    fn regex_escape(text: &str) -> String {
+        text.chars()
+            .flat_map(|c| {
+                let special = "\\.^$|?*+()[]{}".contains(c);
+                special.then_some('\\').into_iter().chain([c])
+            })
+            .collect()
     }
 
     pub fn ram_bytes() -> u64 {

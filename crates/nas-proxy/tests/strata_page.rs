@@ -117,8 +117,19 @@ async fn install_wakes_the_pc_and_hands_it_a_new_strata_key() {
     assert_eq!(body["context"], 65536);
     let key = body["api_key"].as_str().unwrap().to_string();
     assert_eq!(key.len(), 64);
-    assert_eq!(strata_key(&s).as_deref(), Some(key.as_str()));
+    let kinds = kinds(&s.state);
+    assert_eq!(
+        kinds.last(),
+        Some(&EventKind::StrataJobStarted),
+        "{kinds:?}"
+    );
+    assert!(kinds.contains(&EventKind::WakeRequested), "{kinds:?}");
+    // Until Strata is set up with it, the key counts nowhere.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(strata_key(&s), None);
 
+    s.pc.update_job(json!({"state": "done"}));
+    eventually("Key gilt", || strata_key(&s).as_deref() == Some(&key)).await;
     // The key reaches Strata with requests, never the page.
     assert!(!text.contains(&key));
     assert!(!page(&mut b).await.to_string().contains(&key));
@@ -133,14 +144,52 @@ async fn install_wakes_the_pc_and_hands_it_a_new_strata_key() {
     post_json(&s, "/v1/chat/completions", json!({})).await;
     let seen = s.pc.api_auth.lock().unwrap().clone().unwrap();
     assert_eq!(seen.authorization, Some(format!("Bearer {key}")));
+}
 
-    let kinds = kinds(&s.state);
+#[tokio::test]
+async fn a_failed_install_leaves_the_strata_key_alone() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(install(&mut b).await.status(), 200);
+    s.pc.update_job(json!({"state": "failed", "error": "kein Platz"}));
+    eventually("Fehlschlag vermerkt", || {
+        kinds(&s.state).contains(&EventKind::StrataJobFailed)
+    })
+    .await;
+    assert_eq!(strata_key(&s), None);
+}
+
+#[tokio::test]
+async fn a_new_key_still_counts_after_a_restart_of_the_proxy() {
+    let dir = std::env::temp_dir().join(format!("strata-pending-key-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let data = dir.clone();
+    let s = setup(true, move |c| c.data_dir = Some(data)).await;
+    let mut b = logged_in(&s.url).await;
+    b.call("strata-job", &[("kind", "set_key")]).await;
+    let key = last_body(&s)["api_key"].as_str().unwrap().to_string();
+
+    let restarted = strata_nas_proxy::AppState::new((*s.state.cfg()).clone());
+    s.pc.update_job(json!({"state": "done"}));
+    restarted.pc_status(&restarted.agent()).await.unwrap();
     assert_eq!(
-        kinds.last(),
-        Some(&EventKind::StrataJobStarted),
-        "{kinds:?}"
+        restarted.cfg().strata_api_key.as_deref(),
+        Some(key.as_str())
     );
-    assert!(kinds.contains(&EventKind::WakeRequested), "{kinds:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_status_from_before_the_start_does_not_end_the_job() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    b.call("strata-job", &[("kind", "set_key")]).await;
+    let key = last_body(&s)["api_key"].as_str().unwrap().to_string();
+    // Like a status answered just before the job began.
+    let stale = strata_nas_proxy::agent::PcStatus::default();
+    strata_nas_proxy::strata::note_status(&s.state, &s.state.agent(), &stale).await;
+    s.pc.update_job(json!({"state": "done"}));
+    eventually("neuer Key gilt", || strata_key(&s).as_deref() == Some(&key)).await;
 }
 
 #[tokio::test]
@@ -195,7 +244,7 @@ async fn progress_comes_through_the_live_stream() {
     s.pc.update_job(json!({"state": "done"}));
     live.until("Ende", |v| v["strata_job"].is_null()).await;
     let kinds = kinds(&s.state);
-    assert_eq!(kinds.last(), Some(&EventKind::StrataJobDone), "{kinds:?}");
+    assert!(kinds.contains(&EventKind::StrataJobDone), "{kinds:?}");
 }
 
 #[tokio::test]

@@ -44,13 +44,10 @@ impl Managed {
         })
     }
 
-    /// Writes the values to `dir`, via a temporary file so a crash never
-    /// leaves half a file behind.
+    /// Writes the values to `dir`.
     pub fn save(&self, dir: &Path) -> Result<()> {
-        let tmp = dir.join(format!("{MANAGED_FILE}.tmp"));
         let text = serde_json::to_string_pretty(self).expect("managed values serialize");
-        std::fs::write(&tmp, text)
-            .and_then(|()| std::fs::rename(&tmp, dir.join(MANAGED_FILE)))
+        crate::write_replacing(&dir.join(MANAGED_FILE), &text)
             .with_context(|| format!("{MANAGED_FILE} nicht gespeichert"))
     }
 

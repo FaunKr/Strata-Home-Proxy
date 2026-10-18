@@ -380,6 +380,9 @@ pub enum StrataJobState {
 /// A job on the PC as its service reports it (see docs/pc-agent-api.md).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StrataJob {
+    /// Counts up per job on the PC; missing from older services.
+    #[serde(default)]
+    pub id: Option<u64>,
     pub kind: StrataJobKind,
     #[serde(default)]
     pub model: Option<String>,

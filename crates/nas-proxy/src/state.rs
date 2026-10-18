@@ -248,7 +248,7 @@ impl AppState {
             events: EventLog::new(cfg.data_dir.clone()),
             upstream,
             overview: Monitor::default(),
-            strata: Default::default(),
+            strata: crate::strata::StrataState::new(cfg.data_dir.clone()),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
             inner: Mutex::new(Inner {

@@ -74,8 +74,9 @@ geht (Gaming an, ein Vorgang läuft, zu wenig Platz, aktives Modell löschen).
 | `benchmark` | – | `BENCH.bat --config <aktives Modell>`, behält Tokens/s mit Modell und Datum |
 | `set_key` | `api_key` | trägt den Key in alle Modell-Konfigurationen ein und startet Strata neu |
 
-Den Strata-Key erzeugt der Proxy. Bei `install` gilt er sofort, bei
-`set_key` erst, wenn der Vorgang fertig ist.
+Den Strata-Key erzeugt der Proxy. Er gilt erst, wenn der Vorgang fertig ist
+(auch über einen Neustart des Proxys); scheitert er, bleibt der alte. In der
+Ausgabe des Vorgangs steht statt des Keys `***`.
 
 ### `GET /strata/job`
 

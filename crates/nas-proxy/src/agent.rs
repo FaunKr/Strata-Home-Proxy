@@ -104,16 +104,10 @@ impl AgentClient {
             .request(reqwest::Method::POST, "/sleep")
             .ok_or_else(|| anyhow::anyhow!("PC_AGENT_URL ist nicht gesetzt"))?;
         let resp = req.send().await?;
-        let status = resp.status();
-        if status.is_success() {
+        if resp.status().is_success() {
             return Ok(SleepAnswer::Accepted);
         }
-        let reason = resp
-            .json::<SleepBody>()
-            .await
-            .ok()
-            .and_then(|b| b.reason)
-            .unwrap_or_else(|| format!("HTTP {status}"));
+        let reason = reason(resp).await;
         Ok(SleepAnswer::Refused(reason))
     }
 

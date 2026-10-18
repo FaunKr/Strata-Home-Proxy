@@ -14,6 +14,13 @@ use std::{sync::Arc, time::Duration};
 pub use agent::{Agent, Peer, Status};
 pub use config::Config;
 
+/// Writes via a temporary file, so a crash never leaves half a file behind.
+pub(crate) fn write_replacing(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path))
+}
+
 const WATCHDOG_EVERY: Duration = Duration::from_secs(5);
 
 pub async fn run(agent: Arc<Agent>) -> anyhow::Result<()> {

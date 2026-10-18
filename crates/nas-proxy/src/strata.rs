@@ -1,12 +1,16 @@
 //! Strata on the PC through its service: the Strata page, jobs started from
 //! it, and the Strata key. The proxy makes the key, hands it to the PC with
-//! the job and uses it itself; it never reaches the page.
+//! the job and uses it itself once the job is done; it never reaches the page.
 
-use std::sync::{
-    Mutex,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    path::PathBuf,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use strata_admin_ui::{
     api::{StrataInfo, StrataJob, StrataJobForm, StrataJobKind, StrataJobState, StrataPage},
@@ -18,22 +22,68 @@ use crate::{
     auth::{hex, random_key},
     clock,
     events::EventKind,
+    files::write_private,
     state::{AppState, WakeError},
 };
 
+/// A key handed to the PC that counts once its job is done; kept over a
+/// restart of the proxy.
+const PENDING_FILE: &str = "strata-pending-key.json";
 const BY_UI: &str = "für Strata, über Weboberfläche";
 const ASLEEP: &str = "Der PC schläft oder sein Dienst antwortet nicht. Ein Knopf weckt ihn.";
 const TOO_OLD: &str =
     "Der PC-Dienst kennt die Strata-Verwaltung nicht. Bitte den PC-Dienst aktualisieren.";
 
-#[derive(Default)]
 pub struct StrataState {
     /// The last answer of the PC service, shown while the PC sleeps.
     last: Mutex<Option<StrataInfo>>,
-    /// The PC service reported a running job at its last status.
+    /// A job was started or reported running, and its end is not noted yet.
     job_running: AtomicBool,
     /// A new Strata key the proxy uses once the PC took it over.
-    pending_key: Mutex<Option<String>>,
+    pending: Mutex<Option<PendingKey>>,
+    dir: Option<PathBuf>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PendingKey {
+    /// The job that hands the key to Strata.
+    job: u64,
+    key: String,
+}
+
+impl StrataState {
+    pub fn new(data_dir: Option<PathBuf>) -> Self {
+        let pending: Option<PendingKey> = data_dir
+            .as_ref()
+            .and_then(|dir| std::fs::read(dir.join(PENDING_FILE)).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        Self {
+            last: Mutex::new(None),
+            job_running: AtomicBool::new(pending.is_some()),
+            pending: Mutex::new(pending),
+            dir: data_dir,
+        }
+    }
+
+    fn set_pending(&self, pending: Option<PendingKey>) {
+        if let Some(dir) = &self.dir {
+            let written = match &pending {
+                Some(p) => write_private(
+                    dir,
+                    PENDING_FILE,
+                    &serde_json::to_vec(p).expect("pending key serializes"),
+                ),
+                None => std::fs::remove_file(dir.join(PENDING_FILE)).or_else(|e| match e.kind() {
+                    std::io::ErrorKind::NotFound => Ok(()),
+                    _ => Err(e),
+                }),
+            };
+            if let Err(e) = written {
+                tracing::error!("{PENDING_FILE} nicht gespeichert: {e}");
+            }
+        }
+        *self.pending.lock().unwrap() = pending;
+    }
 }
 
 /// The Strata page; asks the PC service but never wakes the PC.
@@ -91,17 +141,12 @@ pub async fn start_job(state: &AppState, form: StrataJobForm) -> Result<(), Stri
     let body = body(&form, key.as_deref());
     let job = agent.start_strata_job(&body).await?;
     state.strata.job_running.store(true, Ordering::SeqCst);
-    match (form.kind, key) {
-        // Strata gets the key with the setup; requests use it from now on.
-        (StrataJobKind::Install, Some(key)) => state
-            .settings
-            .set("STRATA_API_KEY", &key)
-            .map_err(|e| format!("Strata-Key nicht gespeichert: {e}"))?,
-        // Strata takes the key over when the job is done; until then the old one holds.
-        (StrataJobKind::SetKey, Some(key)) => {
-            *state.strata.pending_key.lock().unwrap() = Some(key);
-        }
-        _ => {}
+    // Strata has the key once the job is done; until then the old one holds.
+    if let Some(key) = key {
+        state.strata.set_pending(Some(PendingKey {
+            job: job.id.unwrap_or_default(),
+            key,
+        }));
     }
     state
         .events
@@ -168,19 +213,24 @@ fn detail(job: &StrataJob) -> String {
 }
 
 /// Notes the job flag of a PC status; when a job ended, records how and
-/// takes over a new Strata key.
+/// takes over the Strata key it handed to Strata.
 pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatus) {
-    let was = state
-        .strata
-        .job_running
-        .swap(status.strata_job, Ordering::SeqCst);
-    if !was || status.strata_job {
+    let strata = &state.strata;
+    if status.strata_job {
+        strata.job_running.store(true, Ordering::SeqCst);
         return;
     }
-    let pending = state.strata.pending_key.lock().unwrap().take();
+    if !strata.job_running.load(Ordering::SeqCst) {
+        return;
+    }
+    // A status asked for before the job started says "no job" too; the job
+    // itself tells. Without an answer the next status asks again.
     let Some(job) = agent.strata_job().await else {
         return;
     };
+    if job.state == StrataJobState::Running || !strata.job_running.swap(false, Ordering::SeqCst) {
+        return;
+    }
     let (kind, detail) = match job.state {
         StrataJobState::Done => (EventKind::StrataJobDone, detail(&job)),
         StrataJobState::Cancelled => (EventKind::StrataJobCancelled, detail(&job)),
@@ -192,21 +242,22 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
                 job.error.as_deref().unwrap_or("ohne Grund")
             ),
         ),
-        StrataJobState::Interrupted => (
+        StrataJobState::Interrupted | StrataJobState::Running => (
             EventKind::StrataJobFailed,
             format!("{}: unterbrochen", detail(&job)),
         ),
-        StrataJobState::Running => return,
     };
     state.events.record(kind, Some(detail));
-    if job.kind == StrataJobKind::SetKey
-        && job.state == StrataJobState::Done
-        && let Some(key) = pending
-    {
-        match state.settings.set("STRATA_API_KEY", &key) {
-            Ok(()) => state.events.record(EventKind::StrataKeyChanged, None),
-            Err(e) => tracing::error!("Neuer Strata-Key nicht gespeichert: {e}"),
+    let pending = strata.pending.lock().unwrap().clone();
+    if let Some(pending) = pending {
+        // A key whose job failed or was replaced never reached Strata.
+        if job.id.unwrap_or_default() == pending.job && job.state == StrataJobState::Done {
+            match state.settings.set("STRATA_API_KEY", &pending.key) {
+                Ok(()) => state.events.record(EventKind::StrataKeyChanged, None),
+                Err(e) => tracing::error!("Neuer Strata-Key nicht gespeichert: {e}"),
+            }
         }
+        strata.set_pending(None);
     }
     state.overview.refresh_now();
 }

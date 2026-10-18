@@ -64,13 +64,13 @@ ARG STRATA_BUILD_ID=dev
 RUN cargo build --locked --release --target x86_64-pc-windows-gnu -p strata-pc-agent
 # Der NAS liest die Version aus der .exe (nas-proxy/src/pc_setup.rs): die
 # erste Marke, auf die eine Version folgt. Fehlt sie, zeigt die Übersicht nie
-# ein Update an; das soll hier auffallen, nicht erst auf dem PC.
+# ein Update an; das soll hier auffallen, nicht erst auf dem PC. Die ID nach
+# dem + ist der Anfang von STRATA_BUILD_ID (build.rs kürzt einen Commit-Hash).
 RUN found="$(LC_ALL=C grep -ao 'strata-pc-agent-version:[!-~]\{1,63\}$' \
         target/x86_64-pc-windows-gnu/release/strata-pc-agent.exe | head -n1)"; \
-    case "$found" in \
-        *"+${STRATA_BUILD_ID}") ;; \
-        *) echo "Keine Version ...+${STRATA_BUILD_ID} in strata-pc-agent.exe, gefunden: '$found'" >&2; exit 1 ;; \
-    esac
+    id="${found##*+}"; \
+    case "$found" in *+?*) ;; *) id="" ;; esac; \
+    case "$STRATA_BUILD_ID" in "$id"*) [ -n "$id" ] ;; *) false ;; esac || { echo "Keine Version mit ${STRATA_BUILD_ID} in strata-pc-agent.exe, gefunden: '$found'" >&2; exit 1; }
 
 FROM debian:trixie-slim
 COPY --from=build /src/target/release/strata-nas-proxy /usr/local/bin/strata-nas-proxy

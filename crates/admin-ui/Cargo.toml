@@ -11,12 +11,16 @@ leptos = "0.8"
 leptos_meta = "0.8"
 leptos_router = "0.8"
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 console_error_panic_hook = { version = "0.1.7", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
+web-sys = { version = "0.3", features = ["EventSource", "MessageEvent"], optional = true }
+futures = { version = "0.3.34", optional = true }
+send_wrapper = { version = "0.6", optional = true }
 leptos_axum = { version = "0.8", optional = true }
 axum = { version = "0.8.9", optional = true }
 tower-http = { version = "0.6", features = ["fs"], optional = true }
 
 [features]
-hydrate = ["leptos/hydrate", "dep:console_error_panic_hook", "dep:wasm-bindgen"]
-ssr = ["leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr", "dep:leptos_axum", "dep:axum", "dep:tower-http"]
+hydrate = ["leptos/hydrate", "dep:console_error_panic_hook", "dep:wasm-bindgen", "dep:web-sys", "dep:send_wrapper"]
+ssr = ["leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr", "dep:leptos_axum", "dep:axum", "dep:tower-http", "dep:futures"]

@@ -113,3 +113,15 @@ button.secondary { background: transparent; color: var(--accent); }
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+.panel h2 { font-size: 1.05rem; margin: 0 0 8px; }
+.panel h3 { font-size: 1rem; margin: 16px 0 8px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; }
+.cards h2 { font-size: 0.85rem; font-weight: 600; color: var(--muted); margin: 0; }
+.cards .state { margin: 2px 0 0; font-size: 1.1rem; font-weight: 600; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+button:disabled { opacity: 0.5; cursor: default; }
+.events { list-style: none; margin: 0; padding: 0; }
+.events li { padding: 4px 0; border-top: 1px solid var(--line); }
+.events li:first-child { border-top: 0; }
+.events .time { font-variant-numeric: tabular-nums; color: var(--muted); }

@@ -596,3 +596,25 @@ async fn adding_a_model_needs_an_installed_strata() {
     .await;
     assert_eq!(code, 409, "{answer}");
 }
+
+/// After the one-line setup no start script is set: no model counts as
+/// active, and activating one, also the only one, sets it and starts Strata.
+#[tokio::test]
+async fn without_a_start_script_any_installed_model_can_be_activated() {
+    let s = setup_with("models-no-start", |c| c.strata_start = None).await;
+    installed(&s);
+    s.agent.set_managed(Managed::default()).unwrap();
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "IQ3_XXS")["active"], false);
+    assert_eq!(model(&view, "coder-IQ1_M")["active"], false);
+    let done = job(&s, json!({"kind": "activate", "model": "IQ3_XXS"})).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let managed = s.agent.managed();
+    assert_eq!(
+        managed.strata_start.as_deref(),
+        Some(s.agent.cfg.strata_dir.join("run-iq3_xxs.bat").as_path())
+    );
+    assert!(managed.strata_processes.is_some());
+    assert_eq!(model(&get(&s, "/strata").await, "IQ3_XXS")["active"], true);
+    assert!(s.fake.starts.load(Ordering::SeqCst) >= 1);
+}

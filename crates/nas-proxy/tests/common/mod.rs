@@ -68,6 +68,15 @@ pub struct FakePc {
     pub refuse_job: Mutex<Option<String>>,
     pub job_cancels: AtomicUsize,
     pub job_polls: AtomicUsize,
+    /// Version the PC service reports in `/status`; none, like an old service, if unset.
+    pub version: Mutex<Option<String>>,
+    pub update_requests: AtomicUsize,
+    /// The PC service refuses updates with this reason (409).
+    pub refuse_update: Mutex<Option<String>>,
+    /// An old PC service without `/update` (404).
+    pub no_update: AtomicBool,
+    /// The version the PC service reports after an accepted update.
+    pub update_to: Mutex<Option<String>>,
 }
 
 /// Credential headers as Strata saw them.
@@ -215,7 +224,28 @@ pub async fn agent_status(State(pc): State<Pc>) -> Response {
     if let Some(mac) = pc.report_mac.lock().unwrap().clone() {
         status["mac"] = json!(mac);
     }
+    if let Some(version) = pc.version.lock().unwrap().clone() {
+        status["version"] = json!(version);
+    }
     Json(status).into_response()
+}
+
+/// `POST /update`: accepted, the service then reports `update_to`.
+pub async fn agent_update(State(pc): State<Pc>) -> Response {
+    if !pc.up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    pc.update_requests.fetch_add(1, Ordering::SeqCst);
+    if pc.no_update.load(Ordering::SeqCst) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if let Some(reason) = pc.refuse_update.lock().unwrap().clone() {
+        return (StatusCode::CONFLICT, Json(json!({"reason": reason}))).into_response();
+    }
+    if let Some(version) = pc.update_to.lock().unwrap().clone() {
+        *pc.version.lock().unwrap() = Some(version);
+    }
+    (StatusCode::ACCEPTED, Json(json!({"accepted": true}))).into_response()
 }
 
 /// Strata's `/metrics`: the text set in `metrics` when asked for Prometheus'
@@ -420,6 +450,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
             .route("/strata/jobs", post(agent_start_job))
             .route("/strata/job", get(agent_job))
             .route("/strata/job/cancel", post(agent_cancel_job))
+            .route("/update", post(agent_update))
             .with_state(pc.clone()),
     )
     .await;

@@ -6,6 +6,15 @@ use std::{path::PathBuf, sync::Mutex};
 use anyhow::{Context, Result, bail};
 use strata_pc_agent::{Agent, Config, platform};
 
+/// The version as plain text in the program, so the NAS reads it from the
+/// .exe it serves without running it (see `nas-proxy/src/pc_setup.rs`).
+#[used]
+static VERSION_MARKER: &str = concat!(
+    "strata-pc-agent-version:",
+    env!("STRATA_PC_AGENT_VERSION"),
+    "\n"
+);
+
 const USAGE: &str = "strata-pc-agent [--config DATEI] [run | gaming an|aus|umschalten]";
 
 #[tokio::main]

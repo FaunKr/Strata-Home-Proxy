@@ -58,6 +58,9 @@ COPY crates ./crates
 # Der Proxy liefert das Installationsskript des PC-Dienstes aus (include_str!).
 COPY deploy/windows/install.ps1 ./deploy/windows/
 RUN cargo leptos build --release --project admin-ui
+# Der Commit kommt in die Version des PC-Dienstes (crates/pc-agent/build.rs);
+# daran erkennt die Übersicht, ob ein Update verfügbar ist.
+ARG STRATA_BUILD_ID=dev
 RUN cargo build --locked --release --target x86_64-pc-windows-gnu -p strata-pc-agent
 
 FROM debian:trixie-slim

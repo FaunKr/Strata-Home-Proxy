@@ -298,6 +298,13 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
             },
         }
     };
+    let (pc_service, timed_out) = state.pc_setup.view();
+    if let Some(reason) = timed_out {
+        state.events.record(
+            crate::events::EventKind::PcServiceUpdateFailed,
+            Some(reason),
+        );
+    }
     let events = state
         .events
         .latest_pc(EVENTS_SHOWN)
@@ -321,6 +328,7 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
         sleep,
         keep_awake_until,
         events,
+        pc_service,
     }
 }
 

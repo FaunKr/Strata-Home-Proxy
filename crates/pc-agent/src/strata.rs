@@ -426,12 +426,15 @@ fn installed_model(dir: &Path, model: &str) -> Result<String, Refusal> {
 
 /// The model the managed start script starts, in the catalog's letter case.
 /// Without a model's own start script (`START-HERE.bat` starts the model
-/// used last), the config Strata touched last, as Strata picks it.
+/// used last), the config Strata touched last, as Strata picks it. Without
+/// any start script (after the one-line setup) none: the service starts no
+/// model, and activating one sets the script.
 fn active_model(agent: &Agent) -> Option<String> {
     let managed = agent.managed();
     let script = managed
-        .start(&agent.cfg)
-        .and_then(|(start, _)| start.file_name())
+        .start(&agent.cfg)?
+        .0
+        .file_name()
         .map(|n| n.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     let dir = &agent.cfg.strata_dir;

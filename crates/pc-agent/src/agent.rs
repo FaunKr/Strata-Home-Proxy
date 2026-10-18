@@ -29,6 +29,7 @@ use crate::{
     managed::Managed,
     platform::Platform,
     strata::{self, JobRequest, Jobs, Refusal, UpdateCheck},
+    update::UpdateError,
 };
 
 /// Delay between answering a sleep request and going to standby, so the
@@ -37,6 +38,8 @@ const SUSPEND_DELAY: Duration = Duration::from_secs(2);
 /// A gap in wall-clock time this large between two watchdog passes means the
 /// PC was asleep.
 const RESUME_GAP: Duration = Duration::from_secs(30);
+/// Strata runs on this PC: a connection that takes longer is none.
+const STRATA_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 /// How long a looked-up MAC address is reused before asking the system again.
 const MAC_CACHE: Duration = Duration::from_secs(600);
 
@@ -70,6 +73,8 @@ pub struct Agent {
     managed: Mutex<Managed>,
     pub(crate) jobs: Jobs,
     pub(crate) updates: UpdateCheck,
+    /// An update of this program is under way.
+    pub(crate) updating: AtomicBool,
 }
 
 struct Watchdog {
@@ -89,6 +94,9 @@ pub struct Status {
     /// A Strata job (setup, download, update, benchmark) is running.
     #[serde(default)]
     pub strata_job: bool,
+    /// This program's version, e.g. `0.1.0+558db97`.
+    #[serde(default)]
+    pub version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,6 +114,10 @@ struct Slot {
 impl Agent {
     pub fn new(cfg: Config, platform: Box<dyn Platform>) -> Arc<Self> {
         let http = reqwest::Client::builder()
+            // Windows retries a refused connection to localhost for about
+            // 2 s; with Strata stopped, `/status` then took longer than the
+            // proxy waits, and the PC looked asleep.
+            .connect_timeout(STRATA_CONNECT_TIMEOUT)
             .timeout(Duration::from_secs(3))
             .build()
             .expect("HTTP client");
@@ -130,6 +142,7 @@ impl Agent {
             managed: Mutex::new(managed),
             jobs,
             updates: UpdateCheck::default(),
+            updating: AtomicBool::new(false),
         })
     }
 
@@ -183,6 +196,7 @@ impl Agent {
             user_idle_secs: self.platform.user_idle().as_secs(),
             mac: None,
             strata_job: self.jobs.running(),
+            version: crate::VERSION.to_string(),
         }
     }
 
@@ -459,6 +473,20 @@ async fn cancel_job(State(agent): State<Arc<Agent>>) -> Response {
     }
 }
 
+async fn update(State(agent): State<Arc<Agent>>) -> Response {
+    match crate::update::update(&agent).await {
+        Ok(()) => (StatusCode::ACCEPTED, Json(json!({"accepted": true}))).into_response(),
+        Err(UpdateError::Refused(reason)) => {
+            (StatusCode::CONFLICT, Json(json!({"reason": reason}))).into_response()
+        }
+        Err(UpdateError::Failed(reason)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"reason": reason})),
+        )
+            .into_response(),
+    }
+}
+
 /// Token check, plus the client list; localhost always passes the list.
 async fn guard(State(agent): State<Arc<Agent>>, req: Request, next: Next) -> Response {
     let peer = req
@@ -492,6 +520,7 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .route("/strata/jobs", post(start_job))
         .route("/strata/job", get(strata_job))
         .route("/strata/job/cancel", post(cancel_job))
+        .route("/update", post(update))
         .layer(middleware::from_fn_with_state(agent.clone(), guard))
         .with_state(agent)
 }

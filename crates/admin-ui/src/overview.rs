@@ -5,8 +5,8 @@ use leptos::prelude::*;
 
 use crate::{
     api::{
-        KeepAwake, KeepAwakeChoice, Overview, PcView, SetGaming, SleepNow, SleepView, StrataView,
-        Wake, error_text,
+        KeepAwake, KeepAwakeChoice, Overview, PcServiceView, PcView, SetGaming, SleepNow,
+        SleepView, StrataView, UpdatePcService, Wake, error_text,
     },
     labels::{NO_MAC, event_label, strata_job_label},
 };
@@ -19,6 +19,7 @@ struct Actions {
     sleep: ServerAction<SleepNow>,
     gaming: ServerAction<SetGaming>,
     keep: ServerAction<KeepAwake>,
+    update: ServerAction<UpdatePcService>,
 }
 
 /// The latest overview, and seconds counted since it arrived.
@@ -51,6 +52,7 @@ pub fn OverviewPage() -> impl IntoView {
         sleep: ServerAction::new(),
         gaming: ServerAction::new(),
         keep: ServerAction::new(),
+        update: ServerAction::new(),
     };
     view! {
         <h1>"Übersicht"</h1>
@@ -132,6 +134,10 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
                 </p>
             </div>
         </section>
+        {overview
+            .pc_service
+            .clone()
+            .map(|service| view! { <PcService service pc=overview.pc update=actions.update /> })}
         <Controls overview actions />
         <section class="panel">
             <h2>"Letzte Ereignisse"</h2>
@@ -157,6 +163,61 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
                 }
                     .into_any()
             }}
+        </section>
+    }
+}
+
+/// The PC service's version, and the update button when the NAS carries
+/// another one.
+#[component]
+fn PcService(
+    service: PcServiceView,
+    pc: PcView,
+    update: ServerAction<UpdatePcService>,
+) -> impl IntoView {
+    let awake = matches!(pc, PcView::Awake | PcView::Gaming);
+    let version = service
+        .version
+        .clone()
+        .unwrap_or_else(|| "alt, ohne Versionsangabe".to_string());
+    let hint = if service.updating {
+        Some("Update läuft, der PC-Dienst startet neu …".to_string())
+    } else if service.update_available && awake {
+        Some(match &service.available {
+            Some(v) => format!("Update verfügbar: {v}"),
+            None => "Update verfügbar".to_string(),
+        })
+    } else {
+        None
+    };
+    let button = (service.update_available && !service.updating).then(|| {
+        view! {
+            <div class="actions">
+                <button
+                    disabled=move || !awake || update.pending().get()
+                    on:click=move |_| {
+                        update.dispatch(UpdatePcService {});
+                    }
+                >
+                    {move || match (awake, update.pending().get()) {
+                        (false, _) => "Update (PC schläft)",
+                        (true, true) => "Update wird geladen …",
+                        (true, false) => "Update",
+                    }}
+                </button>
+            </div>
+        }
+    });
+    view! {
+        <section class="panel">
+            <h2>"PC-Dienst"</h2>
+            <p>{format!("Version {version}")}</p>
+            {hint.map(|h| view! { <p class="warning" role="status">{h}</p> })}
+            {service
+                .update_error
+                .map(|e| view! { <p class="error" role="alert">{format!("Letztes Update fehlgeschlagen: {e}")}</p> })}
+            {button}
+            {result_text(update.value())}
         </section>
     }
 }
@@ -267,6 +328,7 @@ fn Controls(overview: Overview, actions: Actions) -> impl IntoView {
         sleep,
         gaming,
         keep,
+        update: _,
     } = actions;
     let busy = matches!(overview.strata, StrataView::Busy { .. });
     let pc = overview.pc;

@@ -79,6 +79,10 @@ pub trait Backend: Send + Sync + 'static {
     /// A new one-time code and the command with it, for the PC to reach the
     /// NAS at `host` (as the browser did); a message if that is not usable.
     fn pc_setup_command(&self, host: &str) -> Result<PcSetupCommand, String>;
+    /// Asks the awake PC's service to update itself from the NAS. A message
+    /// if the PC sleeps or nothing can be updated; how the update went shows
+    /// on the overview.
+    fn update_pc_service(&self) -> BoxFuture<'static, Result<(), String>>;
 }
 
 pub type SharedBackend = Arc<dyn Backend>;

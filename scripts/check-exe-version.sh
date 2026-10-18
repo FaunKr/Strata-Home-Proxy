@@ -7,7 +7,7 @@
 set -eu
 exe=$1
 build_id=$2
-found="$(LC_ALL=C grep -ao 'strata-pc-agent-version:[!-~]\{1,63\}$' "$exe" | head -n1 || true)"
+found="$(LC_ALL=C grep -ao 'strata-pc-agent-version:[!-~]\{1,63\}$' "$exe" | head -n1)"
 id="${found##*+}"
 case "$found" in *+?*) ;; *) id="" ;; esac
 case "$build_id" in

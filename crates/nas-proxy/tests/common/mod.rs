@@ -601,12 +601,14 @@ impl Browser {
         if let Some(c) = &self.cookie {
             req = req.header("cookie", c);
         }
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         let mut html = Vec::new();
         let Ok(resp) = tokio::time::timeout_at(deadline, req.send()).await else {
             panic!("{path}: keine Antwort");
         };
-        let mut body = resp.unwrap().bytes_stream();
+        let mut body = resp
+            .unwrap_or_else(|e| panic!("{path}: {e}"))
+            .bytes_stream();
         loop {
             match tokio::time::timeout_at(deadline, body.next()).await {
                 Ok(Some(chunk)) => html.extend_from_slice(&chunk.unwrap()),

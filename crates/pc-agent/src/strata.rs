@@ -926,7 +926,8 @@ fn write_key(dir: &Path, key: &str) -> Result<(), String> {
 }
 
 /// Switches the speed projection in a model's config, with the flags setup
-/// writes for it; everything else in the config stays.
+/// writes for it; everything else in the config stays. The active model
+/// restarts with it once Strata has no request at work.
 async fn set_speed_projection(
     agent: &Arc<Agent>,
     id: &str,
@@ -934,10 +935,17 @@ async fn set_speed_projection(
 ) -> Result<Option<String>, Step> {
     set_step(agent, "Konfiguration ändern");
     let dir = agent.cfg.strata_dir.clone();
-    let id = id.to_string();
-    tokio::task::spawn_blocking(move || write_speed_projection(&dir, &id, on))
+    let model = id.to_string();
+    tokio::task::spawn_blocking(move || write_speed_projection(&dir, &model, on))
         .await
         .map_err(|e| Step::Failed(e.to_string()))??;
+    // The engine reads its flags at the start: the active model starts again.
+    if active_model(agent).as_deref() == Some(id) {
+        wait_idle(agent).await?;
+        set_step(agent, "Strata neu starten");
+        agent.stop_strata();
+        restart_strata(agent).await;
+    }
     Ok(None)
 }
 
@@ -972,8 +980,21 @@ fn write_speed_projection(dir: &Path, id: &str, on: bool) -> Result<(), String> 
             .map(serde_json::Value::from),
         );
     }
+    // Without its own start script Strata starts the config touched last:
+    // the change keeps the time, so the same model stays active.
+    let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
     crate::write_replacing(&path, &config_text(cfg))
-        .map_err(|e| format!("{} nicht geschrieben: {e}", path.display()))
+        .map_err(|e| format!("{} nicht geschrieben: {e}", path.display()))?;
+    if let Some(time) = modified {
+        let kept = std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|f| f.set_modified(time));
+        if let Err(e) = kept {
+            tracing::warn!("Änderungszeit von {} nicht behalten: {e}", path.display());
+        }
+    }
+    Ok(())
 }
 
 /// Takes setup's speed projection flags out of `args`, each with its values,

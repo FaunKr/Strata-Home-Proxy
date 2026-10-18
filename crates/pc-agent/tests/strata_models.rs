@@ -872,3 +872,71 @@ async fn without_strata_s_vector_switching_on_fails_and_changes_nothing() {
         std::fs::read_to_string(s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json")).unwrap();
     assert_eq!(before, after);
 }
+
+#[tokio::test]
+async fn switching_the_active_model_restarts_strata_after_the_running_request() {
+    let s = setup("models-esp-active").await;
+    installed(&s);
+    vector(&s);
+    s.fake.strata_busy.store(true, Ordering::SeqCst);
+    let body = json!({"kind": "set_speed_projection", "model": "IQ3_XXS", "on": true});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 202, "{answer}");
+    job_until(&s, "Warten auf die Anfrage", |j| {
+        j["step"].as_str().is_some_and(|t| t.contains("Anfrage"))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(
+        s.fake.stops.load(Ordering::SeqCst),
+        0,
+        "stopped mid-request"
+    );
+
+    s.fake.strata_busy.store(false, Ordering::SeqCst);
+    assert_eq!(finished(&s).await["state"], "done");
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "IQ3_XXS")["speed_projection"], true);
+    assert_eq!(model(&view, "IQ3_XXS")["active"], true);
+}
+
+#[tokio::test]
+async fn a_failed_switch_of_the_active_model_leaves_strata_running() {
+    let s = setup("models-esp-active-failed").await;
+    installed(&s);
+    let done = job(
+        &s,
+        json!({"kind": "set_speed_projection", "model": "IQ3_XXS", "on": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn switching_a_model_keeps_the_model_start_here_starts() {
+    let s = setup_with("models-esp-start-here", |c| {
+        c.strata_start = Some(c.strata_dir.join("START-HERE.bat"));
+    })
+    .await;
+    installed(&s);
+    s.agent.set_managed(Managed::default()).unwrap();
+    vector(&s);
+    std::thread::sleep(Duration::from_millis(20));
+    write(
+        s.agent.cfg.strata_dir.join("strata-iq3_xxs.json"),
+        &config_json("a.gguf"),
+    );
+    std::thread::sleep(Duration::from_millis(20));
+    let done = job(
+        &s,
+        json!({"kind": "set_speed_projection", "model": "coder-IQ1_M", "on": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "IQ3_XXS")["active"], true, "{view}");
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+}

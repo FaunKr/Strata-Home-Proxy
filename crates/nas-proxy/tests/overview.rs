@@ -87,7 +87,7 @@ async fn shows_the_last_request() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     live.until("PC wach", |v| v["pc"] == "Awake").await;
-    post_json(&s.url, "/v1/messages", json!({})).await;
+    post_json(&s, "/v1/messages", json!({})).await;
     let v = live
         .until("letzte Anfrage", |v| v["last_request"].is_string())
         .await;
@@ -217,10 +217,10 @@ async fn counts_open_requests_without_metrics() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     live.until("bereit", |v| v["strata"] == "Ready").await;
-    let url = s.url.clone();
+    let client = s.clone();
     let request = tokio::spawn(async move {
         post_json(
-            &url,
+            &client,
             "/v1/messages",
             json!({"stream": true, "pause_ms": 1500}),
         )
@@ -294,7 +294,7 @@ async fn lists_the_latest_pc_events_newest_first() {
     let mut live = Live::open(&b).await;
     live.until("PC schläft", |v| v["pc"] == "Asleep").await;
     // An API request wakes the PC; the list fills without reloading.
-    post_json(&s.url, "/v1/messages", json!({})).await;
+    post_json(&s, "/v1/messages", json!({})).await;
     let v = live
         .until("Aufgewacht", |v| kind_list(v).contains(&"awake".into()))
         .await;
@@ -539,10 +539,10 @@ async fn shows_a_running_request_as_the_reason_not_to_sleep() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     live.until("Countdown", |v| countdown(v).is_some()).await;
-    let url = s.url.clone();
+    let client = s.clone();
     let request = tokio::spawn(async move {
         post_json(
-            &url,
+            &client,
             "/v1/messages",
             json!({"stream": true, "pause_ms": 1500}),
         )

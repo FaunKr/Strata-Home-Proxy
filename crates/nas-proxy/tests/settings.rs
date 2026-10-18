@@ -18,21 +18,21 @@ async fn changed_strata_url_applies_at_once() {
         .settings
         .set("STRATA_URL", &format!("http://{other_strata}"))
         .unwrap();
-    let resp = post_json(&s.url, "/v1/messages", json!({})).await;
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
     assert_eq!(resp.status(), 200);
     assert_eq!(other.api_requests.load(Ordering::SeqCst), 1);
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 0);
 
     // Back to the environment value.
     s.state.settings.reset("STRATA_URL").unwrap();
-    post_json(&s.url, "/v1/messages", json!({})).await;
+    post_json(&s, "/v1/messages", json!({})).await;
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
 async fn shorter_idle_timeout_applies_at_once() {
     let s = setup(true, |_| {}).await;
-    post_json(&s.url, "/v1/messages", json!({})).await;
+    post_json(&s, "/v1/messages", json!({})).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 0);
     s.state.settings.set("IDLE_TIMEOUT_SECS", "1").unwrap();
@@ -46,7 +46,7 @@ async fn changed_mac_goes_into_the_next_magic_packet() {
     let other = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
     *s.pc.wake_mac.lock().unwrap() = Some(other);
     s.state.settings.set("PC_MAC", "AA:BB:CC:DD:EE:FF").unwrap();
-    let resp = post_json(&s.url, "/v1/messages", json!({})).await;
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
     assert_eq!(resp.status(), 200);
     assert_eq!(*s.pc.last_mac.lock().unwrap(), Some(other));
 }
@@ -54,7 +54,7 @@ async fn changed_mac_goes_into_the_next_magic_packet() {
 #[tokio::test]
 async fn proxy_without_strata_url_says_it_is_not_set_up() {
     let s = setup(true, |c| c.strata_url = None).await;
-    let resp = post_json(&s.url, "/v1/messages", json!({})).await;
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
     assert_eq!(resp.status(), 503);
     assert_eq!(resp.headers()[STATUS_HEADER], "not_configured");
     let body: Value = resp.json().await.unwrap();
@@ -70,7 +70,7 @@ async fn proxy_without_strata_url_says_it_is_not_set_up() {
 #[tokio::test]
 async fn waking_without_mac_fails_clearly() {
     let s = setup(false, |c| c.pc_mac = None).await;
-    let resp = post_json(&s.url, "/v1/chat/completions", json!({})).await;
+    let resp = post_json(&s, "/v1/chat/completions", json!({})).await;
     assert_eq!(resp.status(), 503);
     assert_eq!(resp.headers()[STATUS_HEADER], "no_mac");
     let body: Value = resp.json().await.unwrap();
@@ -105,7 +105,7 @@ async fn changed_wol_addr_goes_into_the_next_magic_packet() {
     let s = setup(false, |c| c.wol_addr = "127.0.0.1:9".parse().unwrap()).await;
     let wol = wol_listener(s.pc.clone()).await;
     s.state.settings.set("WOL_ADDR", &wol.to_string()).unwrap();
-    let resp = post_json(&s.url, "/v1/messages", json!({})).await;
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
     assert_eq!(resp.status(), 200);
     assert!(s.pc.wol_packets.load(Ordering::SeqCst) >= 1);
 }

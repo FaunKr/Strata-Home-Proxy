@@ -34,6 +34,7 @@ async fn admin_does_not_wake_the_pc() {
         "/admin",
         "/admin/",
         "/admin/gibt-es-nicht",
+        "/admin/api-keys",
         "/admin/pkg/admin-ui.js",
     ] {
         let resp = get(&format!("{}{path}", s.url)).await;
@@ -41,6 +42,27 @@ async fn admin_does_not_wake_the_pc() {
     }
     let resp = get(&format!("{}/admin/gibt-es-nicht", s.url)).await;
     assert_eq!(resp.status(), 404);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+    assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn managing_api_keys_does_not_wake_the_pc() {
+    let s = setup(false, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("api-keys", &[]).await.status(), 200);
+    let created: serde_json::Value = b
+        .call("create-api-key", &[("name", "Laptop")])
+        .await
+        .json()
+        .await
+        .unwrap();
+    let prefix = created["info"]["prefix"].as_str().unwrap();
+    let resp = b
+        .call("revoke-api-key", &[("name", "Laptop"), ("prefix", prefix)])
+        .await;
+    assert_eq!(resp.status(), 200);
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 0);

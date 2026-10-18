@@ -8,13 +8,17 @@ use std::{
 
 use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
-    api::{KeepAwakeChoice, Overview, Session, SettingEntry, SettingsView, Source},
+    api::{
+        ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, Overview, Session, SettingEntry,
+        SettingsView, Source,
+    },
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
 };
 
 use crate::{
     agent::SleepAnswer,
+    api_keys::KeyInfo,
     auth::{AuthError, SessionState},
     clock,
     events::EventKind,
@@ -205,5 +209,45 @@ impl Backend for UiBackend {
             Some(format!("bis {text}, {BY_UI}")),
         );
         Ok(())
+    }
+
+    fn api_keys(&self) -> ApiKeysView {
+        ApiKeysView {
+            persistent: self.0.api_keys.persistent(),
+            keys: self.0.api_keys.list().into_iter().map(key_info).collect(),
+        }
+    }
+
+    fn create_api_key(&self, name: &str) -> Result<CreatedKey, String> {
+        let (key, info) = self.0.api_keys.create(name).map_err(|e| e.to_string())?;
+        self.0
+            .events
+            .record(EventKind::ApiKeyCreated, Some(info.name.clone()));
+        Ok(CreatedKey {
+            key,
+            info: key_info(info),
+        })
+    }
+
+    fn revoke_api_key(&self, name: &str, prefix: &str) -> Result<(), String> {
+        self.0
+            .api_keys
+            .revoke(name, prefix)
+            .map_err(|e| e.to_string())?;
+        self.0
+            .events
+            .record(EventKind::ApiKeyRevoked, Some(name.to_string()));
+        Ok(())
+    }
+}
+
+fn key_info(k: KeyInfo) -> ApiKeyInfo {
+    ApiKeyInfo {
+        name: k.name,
+        prefix: k.prefix,
+        created: k.created,
+        last_used: k.last_used,
+        created_text: clock::local_text(k.created),
+        last_used_text: k.last_used.map(clock::local_text),
     }
 }

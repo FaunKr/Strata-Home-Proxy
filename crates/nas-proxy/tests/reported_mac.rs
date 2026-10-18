@@ -46,7 +46,7 @@ async fn reported_mac_is_learned_and_beats_pc_mac() {
     *s.pc.wake_mac.lock().unwrap() = Some(REPORTED);
     s.pc.awake.store(false, Ordering::SeqCst);
     *s.pc.report_mac.lock().unwrap() = None;
-    let resp = post_json(&s.url, "/v1/messages", json!({})).await;
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
     assert_eq!(resp.status(), 200);
     assert_eq!(*s.pc.last_mac.lock().unwrap(), Some(REPORTED));
     // A status without MAC keeps the learned one.

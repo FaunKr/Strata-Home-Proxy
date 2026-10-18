@@ -15,7 +15,7 @@ use strata_nas_proxy::{events::EventKind, proxy::STATUS_HEADER, state::PcState};
 #[tokio::test]
 async fn awake_pc_is_passed_through() {
     let s = setup(true, |_| {}).await;
-    let resp = post_json(&s.url, "/v1/chat/completions", json!({"model": "x"})).await;
+    let resp = post_json(&s, "/v1/chat/completions", json!({"model": "x"})).await;
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["choices"][0]["message"]["content"], "Hallo");
@@ -25,7 +25,7 @@ async fn awake_pc_is_passed_through() {
 #[tokio::test]
 async fn sleeping_pc_is_woken_for_plain_request() {
     let s = setup(false, |_| {}).await;
-    let resp = post_json(&s.url, "/v1/messages", json!({"model": "x"})).await;
+    let resp = post_json(&s, "/v1/messages", json!({"model": "x"})).await;
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["content"][0]["text"], "Hallo");
@@ -38,12 +38,7 @@ async fn sleeping_pc_is_woken_for_plain_request() {
 #[tokio::test]
 async fn sleeping_pc_streamed_request_gets_pings_then_answer() {
     let s = setup(false, |c| c.ping_interval = Duration::from_millis(100)).await;
-    let resp = post_json(
-        &s.url,
-        "/v1/messages",
-        json!({"model": "x", "stream": true}),
-    )
-    .await;
+    let resp = post_json(&s, "/v1/messages", json!({"model": "x", "stream": true})).await;
     assert_eq!(resp.status(), 200);
     assert!(
         resp.headers()["content-type"]
@@ -61,7 +56,7 @@ async fn sleeping_pc_streamed_request_gets_pings_then_answer() {
 #[tokio::test]
 async fn openai_stream_uses_comment_pings_while_waking() {
     let s = setup(false, |c| c.ping_interval = Duration::from_millis(100)).await;
-    let resp = post_json(&s.url, "/v1/chat/completions", json!({"stream": true})).await;
+    let resp = post_json(&s, "/v1/chat/completions", json!({"stream": true})).await;
     let text = resp.text().await.unwrap();
     assert!(text.starts_with(": ping\n\n"), "{text}");
     assert!(!text.contains("event: ping"));
@@ -73,7 +68,7 @@ async fn gaming_mode_answers_at_once() {
     let s = setup(true, |_| {}).await;
     s.pc.gaming.store(true, Ordering::SeqCst);
     let started = Instant::now();
-    let resp = post_json(&s.url, "/v1/messages", json!({"model": "x"})).await;
+    let resp = post_json(&s, "/v1/messages", json!({"model": "x"})).await;
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_eq!(resp.status(), 503);
     assert_eq!(resp.headers()[STATUS_HEADER], "gaming");
@@ -87,7 +82,7 @@ async fn gaming_mode_answers_at_once() {
 async fn wake_timeout_is_reported() {
     let s = setup(false, |c| c.wake_timeout = Duration::from_millis(800)).await;
     s.pc.ignore_wol.store(true, Ordering::SeqCst);
-    let resp = post_json(&s.url, "/v1/chat/completions", json!({})).await;
+    let resp = post_json(&s, "/v1/chat/completions", json!({})).await;
     assert_eq!(resp.status(), 504);
     assert_eq!(resp.headers()[STATUS_HEADER], "wake_timeout");
     let body: Value = resp.json().await.unwrap();
@@ -97,14 +92,14 @@ async fn wake_timeout_is_reported() {
 #[tokio::test]
 async fn idle_pc_is_sent_to_sleep() {
     let s = setup(true, |c| c.idle_timeout = Duration::from_millis(400)).await;
-    post_json(&s.url, "/v1/messages", json!({})).await;
+    post_json(&s, "/v1/messages", json!({})).await;
     tokio::time::sleep(Duration::from_millis(1000)).await;
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
     assert!(!s.pc.up());
     assert_eq!(s.state.pc_state(), PcState::Asleep);
 
     // The next request wakes it again.
-    let resp = post_json(&s.url, "/v1/messages", json!({})).await;
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
     assert_eq!(resp.status(), 200);
     assert!(s.pc.wol_packets.load(Ordering::SeqCst) >= 1);
 }
@@ -112,10 +107,10 @@ async fn idle_pc_is_sent_to_sleep() {
 #[tokio::test]
 async fn running_stream_keeps_pc_awake() {
     let s = setup(true, |c| c.idle_timeout = Duration::from_millis(300)).await;
-    let url = s.url.clone();
+    let client = s.clone();
     let stream = tokio::spawn(async move {
         post_json(
-            &url,
+            &client,
             "/v1/messages",
             json!({"stream": true, "pause_ms": 1200}),
         )
@@ -136,12 +131,7 @@ async fn running_stream_keeps_pc_awake() {
 #[tokio::test]
 async fn pings_fill_long_pauses_between_events() {
     let s = setup(true, |c| c.ping_interval = Duration::from_millis(150)).await;
-    let resp = post_json(
-        &s.url,
-        "/v1/messages",
-        json!({"stream": true, "pause_ms": 700}),
-    )
-    .await;
+    let resp = post_json(&s, "/v1/messages", json!({"stream": true, "pause_ms": 700})).await;
     let text = resp.text().await.unwrap();
     let start = text.find("message_start").unwrap();
     let delta = text.find("content_block_delta").unwrap();
@@ -182,7 +172,7 @@ async fn keep_awake_blocks_sleep() {
 #[tokio::test]
 async fn concurrent_requests_share_one_wake_up() {
     let s = setup(false, |c| c.wol_resend = Duration::from_secs(5)).await;
-    let calls = (0..5).map(|_| post_json(&s.url, "/v1/messages", json!({})));
+    let calls = (0..5).map(|_| post_json(&s, "/v1/messages", json!({})));
     for resp in futures_util::future::join_all(calls).await {
         assert_eq!(resp.status(), 200);
     }

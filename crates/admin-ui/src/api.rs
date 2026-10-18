@@ -112,6 +112,55 @@ pub async fn reset_setting(key: String) -> Result<(), ServerFnError> {
     backend().reset_setting(&key).map_err(bad_request)
 }
 
+/// A client's API key, without the secret.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiKeyInfo {
+    pub name: String,
+    /// The start of the key, to match it with a client's configuration.
+    pub prefix: String,
+    /// Unix time in seconds.
+    pub created: u64,
+    /// Unix time in seconds of the last request with this key.
+    pub last_used: Option<u64>,
+    /// `created` as the NAS shows times, e.g. `17.10. 14:03`.
+    pub created_text: String,
+    pub last_used_text: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiKeysView {
+    /// False without `DATA_DIR`: keys are lost on restart.
+    pub persistent: bool,
+    pub keys: Vec<ApiKeyInfo>,
+}
+
+/// A new key; the only time it is shown in full.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreatedKey {
+    pub key: String,
+    pub info: ApiKeyInfo,
+}
+
+#[server(prefix = "/admin/api", endpoint = "api-keys")]
+pub async fn get_api_keys() -> Result<ApiKeysView, ServerFnError> {
+    require_login(false).await?;
+    Ok(backend().api_keys())
+}
+
+#[server(prefix = "/admin/api", endpoint = "create-api-key")]
+pub async fn create_api_key(name: String) -> Result<CreatedKey, ServerFnError> {
+    require_login(false).await?;
+    backend().create_api_key(&name).map_err(bad_request)
+}
+
+#[server(prefix = "/admin/api", endpoint = "revoke-api-key")]
+pub async fn revoke_api_key(name: String, prefix: String) -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()
+        .revoke_api_key(&name, &prefix)
+        .map_err(bad_request)
+}
+
 #[cfg(feature = "ssr")]
 fn bad_request(message: String) -> ServerFnError {
     expect_context::<leptos_axum::ResponseOptions>()
@@ -167,6 +216,9 @@ pub enum EventKind {
     SettingReset,
     /// The PC service reported a new MAC address (detail: the address).
     MacLearned,
+    /// Detail: the key's name, never the key.
+    ApiKeyCreated,
+    ApiKeyRevoked,
     // Buttons on the overview. Wake and sleep are recorded when pressed, their
     // outcome as above; the others once they took effect.
     WakeRequested,
@@ -183,7 +235,11 @@ impl EventKind {
     pub fn is_admin(self) -> bool {
         matches!(
             self,
-            Self::PasswordChanged | Self::SettingSaved | Self::SettingReset
+            Self::PasswordChanged
+                | Self::SettingSaved
+                | Self::SettingReset
+                | Self::ApiKeyCreated
+                | Self::ApiKeyRevoked
         )
     }
 }

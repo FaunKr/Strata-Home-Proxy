@@ -16,7 +16,7 @@ use axum::{
     Json, Router,
     body::{Body, Bytes},
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -42,6 +42,12 @@ pub struct FakePc {
     pub last_mac: Mutex<Option<[u8; 6]>>,
     /// MAC the fake PC service reports in `/status`.
     pub report_mac: Mutex<Option<String>>,
+    /// `authorization` and `x-api-key` of the last API request Strata got.
+    pub api_auth: Mutex<Option<SeenCredentials>>,
+    /// The same for the last `/health` call.
+    pub health_auth: Mutex<Option<SeenCredentials>>,
+    /// Strata answers API requests with 401 unless they carry this key.
+    pub strata_key: Mutex<Option<String>>,
     /// Strata's process runs but does not answer yet (starting).
     pub starting: AtomicBool,
     /// Strata answers, but its model is not in memory (`"loaded": false`).
@@ -52,6 +58,23 @@ pub struct FakePc {
     pub metrics_requests: AtomicUsize,
     /// `Authorization` header of the last metrics request.
     pub metrics_auth: Mutex<Option<String>>,
+}
+
+/// Credential headers as Strata saw them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SeenCredentials {
+    pub authorization: Option<String>,
+    pub x_api_key: Option<String>,
+}
+
+impl SeenCredentials {
+    fn of(headers: &HeaderMap) -> Self {
+        let get = |name: &str| headers.get(name).map(|v| v.to_str().unwrap().to_string());
+        Self {
+            authorization: get("authorization"),
+            x_api_key: get("x-api-key"),
+        }
+    }
 }
 
 impl FakePc {
@@ -71,7 +94,8 @@ impl FakePc {
 pub type Pc = Arc<FakePc>;
 
 /// Like Strata: 200 with `loaded`; a stand-in 503 when it would not answer.
-pub async fn health(State(pc): State<Pc>) -> Response {
+pub async fn health(State(pc): State<Pc>, headers: HeaderMap) -> Response {
+    *pc.health_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
     if pc.strata_up() {
         let loaded = !pc.unloaded.load(Ordering::SeqCst);
         Json(json!({"status": "ok", "loaded": loaded, "service": "strata"})).into_response()
@@ -101,9 +125,19 @@ pub fn sse(events: Vec<String>, pause_after_first: Duration) -> Response {
         .unwrap()
 }
 
-pub async fn messages(State(pc): State<Pc>, Json(body): Json<Value>) -> Response {
+pub async fn messages(
+    State(pc): State<Pc>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
     if !pc.strata_up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    *pc.api_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
+    if let Some(key) = pc.strata_key.lock().unwrap().clone()
+        && SeenCredentials::of(&headers).authorization != Some(format!("Bearer {key}"))
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
     }
     pc.api_requests.fetch_add(1, Ordering::SeqCst);
     let pause = Duration::from_millis(body["pause_ms"].as_u64().unwrap_or(0));
@@ -120,9 +154,15 @@ pub async fn messages(State(pc): State<Pc>, Json(body): Json<Value>) -> Response
     Json(json!({"type": "message", "content": [{"type": "text", "text": "Hallo"}]})).into_response()
 }
 
-pub async fn chat(State(pc): State<Pc>, Json(body): Json<Value>) -> Response {
+pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
     if !pc.strata_up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    *pc.api_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
+    if let Some(key) = pc.strata_key.lock().unwrap().clone()
+        && SeenCredentials::of(&headers).authorization != Some(format!("Bearer {key}"))
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
     }
     pc.api_requests.fetch_add(1, Ordering::SeqCst);
     if body["stream"].as_bool() == Some(true) {
@@ -252,10 +292,13 @@ pub async fn serve_strata(pc: Pc) -> SocketAddr {
     .await
 }
 
+#[derive(Clone)]
 pub struct Setup {
     pub pc: Pc,
     pub state: Arc<AppState>,
     pub url: String,
+    /// An API key the proxy accepts; `post_json` sends it.
+    pub key: String,
 }
 
 pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
@@ -295,18 +338,21 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     tweak(&mut cfg);
     let state = AppState::new(cfg);
     state.overview.set_poll(Duration::from_millis(100));
+    let (key, _) = state.api_keys.create("Test").unwrap();
     state.spawn_idle_loop();
     let proxy = serve(api_router(state.clone())).await;
     Setup {
         pc,
         state,
         url: format!("http://{proxy}"),
+        key,
     }
 }
 
-pub async fn post_json(url: &str, path: &str, body: Value) -> reqwest::Response {
+pub async fn post_json(s: &Setup, path: &str, body: Value) -> reqwest::Response {
     reqwest::Client::new()
-        .post(format!("{url}{path}"))
+        .post(format!("{}{path}", s.url))
+        .bearer_auth(&s.key)
         .json(&body)
         .send()
         .await
@@ -395,6 +441,17 @@ pub async fn logged_in(base: &str) -> Browser {
             .status(),
         200
     );
+    b
+}
+
+/// A browser logged in with the password `logged_in` set before, e.g. after
+/// a restart with the same `DATA_DIR`.
+pub async fn logged_in_again(base: &str) -> Browser {
+    let mut b = Browser::new(base);
+    let resp = b
+        .call("login", &[("password", "ein eigenes Passwort")])
+        .await;
+    assert_eq!(resp.status(), 200);
     b
 }
 

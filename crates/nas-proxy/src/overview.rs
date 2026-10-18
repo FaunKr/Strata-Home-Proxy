@@ -191,8 +191,8 @@ async fn metrics(state: &AppState) -> Option<Metrics> {
     // and each scrape resets that window for other scrapers.
     let url = format!("{}/metrics?format=prometheus", cfg.strata_url.as_ref()?);
     let mut req = state.probe_client().get(url);
-    if let Some(key) = &cfg.strata_api_key {
-        req = req.bearer_auth(key);
+    if let Some(auth) = cfg.strata_authorization() {
+        req = req.header(reqwest::header::AUTHORIZATION, auth);
     }
     let resp = req.send().await.ok()?;
     if !resp.status().is_success() {

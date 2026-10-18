@@ -20,7 +20,7 @@ pub fn label(key: &str) -> Label {
         ),
         "STRATA_API_KEY" => (
             "API-Key von Strata",
-            "Derselbe Key wie in Strata. Der Proxy nutzt ihn für seine eigenen Aufrufe bei Strata, z. B. für laufende und wartende Anfragen und Token/s auf der Übersicht. Wird nie angezeigt.",
+            "Derselbe Key wie in Strata. Der Proxy setzt ihn bei jeder Anfrage an Strata ein und nutzt ihn für seine eigenen Aufrufe (z. B. die Übersicht); Clients nutzen ihre eigenen API-Keys. Wird nie angezeigt.",
         ),
         "PC_MAC" => (
             "MAC-Adresse des PCs",
@@ -101,6 +101,8 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::GamingRejected => "Anfrage abgewiesen: Gaming-Modus",
         EventKind::PasswordChanged => "Passwort geändert",
         EventKind::SettingSaved => "Einstellung gespeichert",
+        EventKind::ApiKeyCreated => "API-Key angelegt",
+        EventKind::ApiKeyRevoked => "API-Key widerrufen",
         EventKind::SettingReset => "Einstellung zurückgesetzt",
         EventKind::MacLearned => "MAC-Adresse gemeldet",
         EventKind::WakeRequested => "Wecken angefordert",

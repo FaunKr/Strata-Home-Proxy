@@ -9,8 +9,9 @@ use leptos_router::{
 
 use crate::{
     api::{
-        ChangePassword, Login, Logout, ResetSetting, SaveSetting, Session, SettingEntry, Source,
-        error_text, get_session, get_settings,
+        ApiKeyInfo, ChangePassword, CreateApiKey, CreatedKey, Login, Logout, ResetSetting,
+        RevokeApiKey, SaveSetting, Session, SettingEntry, Source, error_text, get_api_keys,
+        get_session, get_settings,
     },
     labels::label,
     overview::OverviewPage,
@@ -84,6 +85,10 @@ pub fn App() -> impl IntoView {
                         view=|| view! { <Protected><SettingsPage /></Protected> }
                     />
                     <Route
+                        path=path!("/admin/api-keys")
+                        view=|| view! { <Protected><ApiKeysPage /></Protected> }
+                    />
+                    <Route
                         path=path!("/admin/password")
                         view=|| view! { <Protected><PasswordPage /></Protected> }
                     />
@@ -100,6 +105,7 @@ fn Nav() -> impl IntoView {
         <nav>
             <A href="/admin/">"Übersicht"</A>
             <A href="/admin/settings">"Einstellungen"</A>
+            <A href="/admin/api-keys">"API-Keys"</A>
             <A href="/admin/password">"Passwort"</A>
         </nav>
         <ActionForm action=logout>
@@ -328,7 +334,7 @@ fn SettingRow(entry: SettingEntry) -> impl IntoView {
             .unwrap_or_default()
     };
     let placeholder = if entry.secret {
-        "Neues Token (leer = entfernen)"
+        "Neuer Wert (leer = entfernen)"
     } else if entry.optional {
         "leer lassen = nicht gesetzt"
     } else {
@@ -389,6 +395,139 @@ fn SettingRow(entry: SettingEntry) -> impl IntoView {
             {action_error(save.value())}
             {action_error(reset.value())}
             <p class="hint key">{key}</p>
+        </section>
+    }
+}
+
+#[component]
+fn ApiKeysPage() -> impl IntoView {
+    let create = ServerAction::<CreateApiKey>::new();
+    let revoke = ServerAction::<RevokeApiKey>::new();
+    provide_context(revoke);
+    let keys = Resource::new(
+        move || (create.version().get(), revoke.version().get()),
+        |_| get_api_keys(),
+    );
+    // The new key stays visible until the next revoke, so it does not linger
+    // for a key that no longer exists.
+    let shown = RwSignal::<Option<CreatedKey>>::new(None);
+    // A failed create hides the previous key, so it does not sit next to the error.
+    Effect::new(move |_| match create.value().get() {
+        Some(Ok(c)) => shown.set(Some(c)),
+        Some(Err(_)) => shown.set(None),
+        None => {}
+    });
+    Effect::new(move |_| {
+        if revoke.version().get() > 0 {
+            shown.set(None);
+        }
+    });
+    let created = move || {
+        shown.get().map(|c| {
+            view! {
+                <section class="panel created" role="status">
+                    <h2>{format!("Neuer Key für „{}“", c.info.name)}</h2>
+                    <label for="new-key">"Key"</label>
+                    <input id="new-key" type="text" readonly value=c.key />
+                    <p class="hint">
+                        "Jetzt kopieren und im Client eintragen. Der Key wird nicht wieder angezeigt."
+                    </p>
+                </section>
+            }
+        })
+    };
+    let create_error = move || {
+        create
+            .value()
+            .get()
+            .and_then(|r| r.err())
+            .map(|e| view! { <p class="error" role="alert">{error_text(&e)}</p> })
+    };
+    view! {
+        <h1>"API-Keys"</h1>
+        <p class="hint">
+            "Jeder Client (Claude Code, Open WebUI, …) bekommt einen eigenen Key und schickt ihn als „Authorization: Bearer …“ oder „x-api-key“. Ohne gültigen Key antwortet der Proxy mit 401 und weckt den PC nicht."
+        </p>
+        {created}
+        <section class="panel">
+            <h2>"Neuer Key"</h2>
+            <ActionForm action=create attr:class="edit">
+                <label for="key-name" class="visually-hidden">"Name des Clients"</label>
+                <input
+                    id="key-name"
+                    type="text"
+                    name="name"
+                    placeholder="z. B. Claude Code Laptop"
+                    maxlength="64"
+                    autocomplete="off"
+                    required
+                />
+                <button type="submit">"Anlegen"</button>
+            </ActionForm>
+            {create_error}
+        </section>
+        {action_error(revoke.value())}
+        <Transition fallback=|| view! { <p>"Lädt …"</p> }>
+            {move || Suspend::new(async move {
+                match keys.await {
+                    Ok(view) => {
+                        let empty = view.keys.is_empty();
+                        view! {
+                            {(!view.persistent)
+                                .then(|| {
+                                    view! {
+                                        <p class="warning" role="status">
+                                            "DATA_DIR ist nicht gesetzt: Keys gehen beim nächsten Neustart verloren."
+                                        </p>
+                                    }
+                                })}
+                            {empty
+                                .then(|| {
+                                    view! {
+                                        <p class="warning" role="status">
+                                            "Noch kein Key angelegt: bis dahin bekommt jeder Client 401."
+                                        </p>
+                                    }
+                                })}
+                            {view
+                                .keys
+                                .into_iter()
+                                .map(|key| view! { <ApiKeyRow key /> })
+                                .collect_view()}
+                        }
+                            .into_any()
+                    }
+                    Err(e) => view! { <p class="error">{error_text(&e)}</p> }.into_any(),
+                }
+            })}
+        </Transition>
+    }
+}
+
+#[component]
+fn ApiKeyRow(key: ApiKeyInfo) -> impl IntoView {
+    let revoke = expect_context::<ServerAction<RevokeApiKey>>();
+    let used = key.last_used_text.as_deref().map_or_else(
+        || "noch nie benutzt".to_string(),
+        |t| format!("zuletzt benutzt {t}"),
+    );
+    let confirm_id = format!("confirm-{}", key.prefix);
+    view! {
+        <section class="panel api-key">
+            <h2>{key.name.clone()}</h2>
+            <p class="current">
+                <code>{format!("{}…", key.prefix)}</code>
+            </p>
+            <p class="hint">{format!("Angelegt {}, {used}", key.created_text)}</p>
+            <ActionForm action=revoke attr:class="revoke">
+                <input type="hidden" name="name" value=key.name />
+                <input type="hidden" name="prefix" value=key.prefix.clone() />
+                <input id=confirm_id.clone() type="checkbox" required />
+                <label for=confirm_id class="inline">
+                    "Ja, widerrufen: dieser Client bekommt danach 401"
+                </label>
+                <button type="submit" class="secondary">"Widerrufen"</button>
+            </ActionForm>
         </section>
     }
 }

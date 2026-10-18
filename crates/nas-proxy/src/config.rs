@@ -12,8 +12,9 @@ pub struct Config {
     /// Base URL of Strata on the PC, e.g. `http://192.168.1.50:8080` (`STRATA_URL`).
     /// Without it the proxy is not set up yet and answers API requests with 503.
     pub strata_url: Option<String>,
-    /// Strata's API key (`STRATA_API_KEY`): the one key for the proxy's own
-    /// calls to Strata, so far reading `/metrics/prometheus` for the overview.
+    /// Strata's API key (`STRATA_API_KEY`). The proxy sends it with every call
+    /// to Strata, forwarded or its own; clients never see it and use their own
+    /// keys instead.
     pub strata_api_key: Option<String>,
     /// MAC address of the PC's network card (`PC_MAC`). Without it the PC
     /// cannot be woken.
@@ -179,7 +180,7 @@ impl Config {
         match key {
             "LISTEN_ADDR" => self.listen_addr = address(raw)?,
             "STRATA_URL" => self.strata_url = text.map(|u| url(&u)).transpose()?,
-            "STRATA_API_KEY" => self.strata_api_key = text,
+            "STRATA_API_KEY" => self.strata_api_key = text.map(|k| header_safe(&k)).transpose()?,
             "PC_MAC" => self.pc_mac = text.map(|m| parse_mac(&m)).transpose()?,
             "WOL_ADDR" => self.wol_addr = address(raw)?,
             "PC_AGENT_URL" => self.pc_agent_url = text.map(|u| url(&u)).transpose()?,
@@ -197,6 +198,12 @@ impl Config {
             _ => unreachable!("every field in FIELDS is handled"),
         }
         Ok(())
+    }
+
+    /// The `authorization` header for calls to Strata, if a Strata key is set.
+    pub fn strata_authorization(&self) -> Option<reqwest::header::HeaderValue> {
+        let key = self.strata_api_key.as_deref()?;
+        reqwest::header::HeaderValue::from_str(&format!("Bearer {key}")).ok()
     }
 
     /// The text form of one value, as `apply` reads it; `None` when unset.
@@ -253,6 +260,14 @@ fn positive(d: Duration) -> Result<Duration> {
         bail!("muss größer als 0 sein");
     }
     Ok(d)
+}
+
+/// A key that can go into an HTTP header as is.
+fn header_safe(raw: &str) -> Result<String> {
+    if reqwest::header::HeaderValue::from_str(&format!("Bearer {raw}")).is_err() {
+        bail!("enthält Zeichen, die in keinem HTTP-Header erlaubt sind");
+    }
+    Ok(raw.to_string())
 }
 
 fn url(raw: &str) -> Result<String> {
@@ -322,6 +337,7 @@ mod tests {
         assert!(cfg.apply("STRATA_URL", "pc:8080").is_err());
         assert!(cfg.apply("WOL_ADDR", "255.255.255.255").is_err());
         assert!(cfg.apply("DATA_DIR", "/data").is_err());
+        assert!(cfg.apply("STRATA_API_KEY", "a\u{7f}b").is_err());
         cfg.apply("PC_AGENT_URL", "http://pc").unwrap();
         cfg.apply("PC_AGENT_URL", "").unwrap();
         assert_eq!(cfg.pc_agent_url, None);

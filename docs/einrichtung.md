@@ -102,5 +102,11 @@ Passwort vergessen: `/data/admin-password.json` löschen und den Container neu
 starten. Danach gilt wieder `admin` (bzw. `UI_PASSWORD`), alle alten
 Anmeldungen sind ungültig und beim ersten Login wird ein neues Passwort verlangt.
 
-- [ ] Claude Code / Skill `local-agent`: `STRATA_URLS` auf `http://<NAS-IP>:8080`
-- [ ] Open WebUI (falls genutzt) auf die NAS-Adresse
+- [ ] Unter *Einstellungen* den API-Key von Strata als `STRATA_API_KEY` eintragen (den Wert von `--api-key` aus Schritt 5)
+- [ ] Unter *API-Keys* für jeden Client einen eigenen Key anlegen und sofort kopieren; er wird nicht wieder angezeigt
+- [ ] Skill `local-agent`: `STRATA_URLS` auf `http://<NAS-IP>:8080`, und dort, wo bisher der Strata-Key stand, den Key aus der Weboberfläche
+- [ ] Claude Code direkt gegen Strata (falls genutzt): `ANTHROPIC_BASE_URL=http://<NAS-IP>:8080` und `ANTHROPIC_API_KEY=<Key aus der Weboberfläche>` (geht als `x-api-key` raus)
+- [ ] Open WebUI (falls genutzt): *Admin-Einstellungen → Verbindungen → OpenAI API*, URL `http://<NAS-IP>:8080/v1`, als Key den Key aus der Weboberfläche
+
+Ohne gültigen Key antwortet der Proxy mit `401` und weckt den PC nicht. Der
+Strata-Key bleibt auf dem NAS; Clients brauchen ihn nicht mehr.

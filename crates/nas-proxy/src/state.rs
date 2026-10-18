@@ -19,6 +19,7 @@ use strata_admin_ui::{
 
 use crate::{
     agent::{AgentClient, PcStatus, SleepAnswer},
+    api_keys::ApiKeys,
     auth::Auth,
     clock,
     config::{Config, format_mac, parse_mac},
@@ -194,6 +195,8 @@ pub struct AppState {
     pub settings: Settings,
     /// Password and sessions of the web UI.
     pub auth: Auth,
+    /// The clients' keys for the API.
+    pub api_keys: ApiKeys,
     /// For forwarding; no overall timeout, since answers can take very long.
     pub upstream: Client,
     /// For `/health` and the PC service, rebuilt when `PROBE_TIMEOUT_MS` changes.
@@ -239,6 +242,7 @@ impl AppState {
             .filter(|t| *t > SystemTime::now());
         Arc::new(Self {
             auth: Auth::new(cfg.data_dir.clone(), cfg.ui_password.clone()),
+            api_keys: ApiKeys::new(cfg.data_dir.clone()),
             events: EventLog::new(cfg.data_dir.clone()),
             upstream,
             overview: Monitor::default(),
@@ -373,8 +377,11 @@ impl AppState {
         let Some(strata) = &cfg.strata_url else {
             return Health::Down;
         };
-        let url = format!("{strata}/health");
-        let health = match self.probe(&cfg).get(url).send().await {
+        let mut req = self.probe(&cfg).get(format!("{strata}/health"));
+        if let Some(auth) = cfg.strata_authorization() {
+            req = req.header(reqwest::header::AUTHORIZATION, auth);
+        }
+        let health = match req.send().await {
             Ok(r) if r.status().is_success() => Health::Up {
                 // Strata says `{"status": "ok", "loaded": ...}`; other builds may not.
                 loaded: r.json::<HealthBody>().await.map_or(true, |b| b.loaded),
@@ -641,6 +648,7 @@ impl AppState {
                 // Read each round, so a changed IDLE_CHECK_SECS applies at once.
                 tokio::time::sleep(state.cfg().idle_check).await;
                 state.idle_tick().await;
+                state.api_keys.flush_last_used();
             }
         });
     }

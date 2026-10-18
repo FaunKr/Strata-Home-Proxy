@@ -1,8 +1,9 @@
 # Auf dem NAS: Werte in .env eintragen (Vorlage: env.example), dann
-#   docker compose up -d --build
+#   docker compose pull && docker compose up -d
 services:
   strata-proxy:
-    build: ..
+    image: ghcr.io/faunkr/strata-home-proxy:latest
+    # Alternativ selbst bauen statt laden: die Zeile oben durch "build: .." ersetzen.
     container_name: strata-proxy
     restart: unless-stopped
     # Host-Netz ist nötig: das Weckpaket ist ein Broadcast und kommt aus

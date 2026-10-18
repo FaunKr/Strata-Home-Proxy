@@ -50,11 +50,13 @@ Get-NetAdapterAdvancedProperty -Name "Ethernet" | Where-Object DisplayName -matc
 Bevor irgendetwas anderes gebaut wird, muss das hier klappen:
 
 1. PC über Start → Energie → *Energie sparen* in Standby schicken. Lüfter aus, Power-LED blinkt oder ist aus.
-2. Vom NAS aus ein Weckpaket schicken. Dafür kann der Proxy schon vorher
-   gebaut werden (siehe README, `.env` ausfüllen), dann per SSH auf dem NAS:
+2. Vom NAS aus ein Weckpaket schicken. Dafür reicht das Image des Proxys,
+   Strata muss noch nicht laufen. Per SSH auf dem NAS (MAC und Broadcast
+   anpassen):
    ```sh
-   cd deploy
-   docker compose run --rm strata-proxy wake
+   docker run --rm --network host -e STRATA_URL=http://unbenutzt \
+     -e PC_MAC=AA-BB-CC-DD-EE-FF -e WOL_ADDR=192.168.1.255:9 \
+     ghcr.io/faunkr/strata-home-proxy:latest wake
    ```
 3. Zeit stoppen, bis der Bildschirm wieder da ist.
 

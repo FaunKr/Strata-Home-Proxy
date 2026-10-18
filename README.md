@@ -36,11 +36,15 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 
 ## Auf dem NAS starten
 
+Das Image baut die CI bei jedem Push: `ghcr.io/faunkr/strata-home-proxy:latest`.
+
 ```sh
-git clone https://github.com/FaunKr/Strata-Home-Proxy.git
-cd Strata-Home-Proxy/deploy
-cp env.example .env      # Werte eintragen
-docker compose up -d --build
+mkdir -p strata-proxy && cd strata-proxy
+curl -fsSLO https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/claude/project-thread-6vnmvd/deploy/docker-compose.yml
+curl -fsSL -o .env https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/claude/project-thread-6vnmvd/deploy/env.example
+nano .env                # Werte eintragen
+docker compose pull
+docker compose up -d
 docker compose logs -f
 ```
 

@@ -159,6 +159,13 @@ einrichtet (`400`). Was Setup aus dem alten Kontext abgeleitet hat
 bleibt. Ein Modell aus dem Katalog, das nicht installiert ist, ist ein
 `409`. Die Änderungszeit bleibt wie bei `set_speed_projection`.
 
+Beim aktiven Modell wartet der Vorgang nach dem Neustart, bis Strata auf
+`/health` antwortet. Endet Strata vorher oder antwortet es nicht innerhalb
+von `context_start_secs` (Standard 600), schreibt er die alten `args` zurück,
+startet Strata damit neu und scheitert; die letzten Zeilen der
+Strata-Ausgabe stehen dann in `lines` des Vorgangs. Im Gaming-Modus startet
+Strata nicht neu, und es wird nicht gewartet.
+
 ### `GET /strata/job`
 
 Der laufende oder letzte Vorgang: `state` (`running`, `done`, `failed`,

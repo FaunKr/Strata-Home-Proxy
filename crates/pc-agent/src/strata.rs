@@ -1005,27 +1005,72 @@ fn write_speed_projection(dir: &Path, id: &str, on: bool) -> Result<(), String> 
             }
         }
     })
+    .map(drop)
 }
 
 /// Sets a model's context in its config, without setup; the settings setup
 /// derived from the old one stay. The active model restarts with it once
-/// Strata has no request at work.
+/// Strata has no request at work; if it does not come up, its old args come
+/// back and Strata starts with those.
 async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Option<String>, Step> {
     set_step(agent, "Konfiguration ändern");
+    let old = change_args(agent, id, move |args| with_context(args, context)).await?;
+    if active_model(agent).as_deref() != Some(id) {
+        return Ok(None);
+    }
+    wait_idle(agent).await?;
+    set_step(agent, "Strata neu starten");
+    agent.stop_strata();
+    restart_strata(agent).await;
+    if agent.gaming() || started_with_new_args(agent).await? {
+        return Ok(None);
+    }
+    let output = agent.output.last_lines(KEPT_LINES);
+    set_step(agent, "Alten Kontext zurückholen");
+    change_args(agent, id, move |args| *args = old).await?;
+    agent.stop_strata();
+    restart_strata(agent).await;
+    if let Some(job) = agent.jobs.inner.lock().unwrap().current.as_mut() {
+        job.lines = output;
+    }
+    Err(Step::Failed(format!(
+        "Strata ist mit {}K Kontext nicht angelaufen; der alte Kontext gilt wieder",
+        context / 1024
+    )))
+}
+
+/// `rewrite_args` for a job.
+async fn change_args(
+    agent: &Agent,
+    id: &str,
+    change: impl FnOnce(&mut Vec<serde_json::Value>) + Send + 'static,
+) -> Result<Vec<serde_json::Value>, Step> {
     let dir = agent.cfg.strata_dir.clone();
     let model = id.to_string();
-    tokio::task::spawn_blocking(move || {
-        rewrite_args(&dir, &model, |args| with_context(args, context))
-    })
-    .await
-    .map_err(|e| Step::Failed(e.to_string()))??;
-    if active_model(agent).as_deref() == Some(id) {
-        wait_idle(agent).await?;
-        set_step(agent, "Strata neu starten");
-        agent.stop_strata();
-        restart_strata(agent).await;
+    tokio::task::spawn_blocking(move || rewrite_args(&dir, &model, change))
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))?
+        .map_err(Step::Failed)
+}
+
+/// Whether the restarted Strata answers: `false` once it has ended or not
+/// answered within `context_start_secs`.
+async fn started_with_new_args(agent: &Agent) -> Result<bool, Step> {
+    set_step(agent, "Warten, bis Strata bereit ist");
+    let limit = Duration::from_secs(agent.cfg.context_start_secs);
+    let started = Instant::now();
+    loop {
+        if agent.jobs.inner.lock().unwrap().cancelled {
+            return Err(Step::Cancelled);
+        }
+        if agent.strata_healthy().await {
+            return Ok(true);
+        }
+        if !agent.output.reading() || started.elapsed() >= limit {
+            return Ok(false);
+        }
+        tokio::time::sleep(POLL).await;
     }
-    Ok(None)
 }
 
 /// `args` with this `--max-context`, in its place, and without the rope
@@ -1056,16 +1101,19 @@ fn with_context(args: &mut Vec<serde_json::Value>, context: u32) {
     *args = kept;
 }
 
-/// Changes `args` in a model's config; everything else in it stays.
+/// Changes `args` in a model's config; everything else in it stays. Gives
+/// the args from before.
 fn rewrite_args(
     dir: &Path,
     id: &str,
     change: impl FnOnce(&mut Vec<serde_json::Value>),
-) -> Result<(), String> {
+) -> Result<Vec<serde_json::Value>, String> {
     let path = config_path(dir, id);
     let (_, mut cfg) = read_config(&path)?
         .ok_or_else(|| format!("{} ist keine Modell-Konfiguration", path.display()))?;
-    change(cfg["args"].as_array_mut().expect("read_config checks args"));
+    let args = cfg["args"].as_array_mut().expect("read_config checks args");
+    let before = args.clone();
+    change(args);
     // Without its own start script Strata starts the config touched last:
     // the change keeps the time, so the same model stays active.
     let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
@@ -1080,7 +1128,7 @@ fn rewrite_args(
             tracing::warn!("Änderungszeit von {} nicht behalten: {e}", path.display());
         }
     }
-    Ok(())
+    Ok(before)
 }
 
 /// Takes setup's speed projection flags out of `args`, each with its values,

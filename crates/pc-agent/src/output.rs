@@ -156,6 +156,23 @@ impl StrataOutput {
         self.inner.lock().unwrap().reading
     }
 
+    /// The last `n` lines kept, oldest first.
+    pub fn last_lines(&self, n: usize) -> Vec<String> {
+        let inner = self.inner.lock().unwrap();
+        let mut lines: Vec<String> = inner
+            .entries
+            .iter()
+            .rev()
+            .map_while(|e| match e {
+                Entry::Line(text) => Some(text.clone()),
+                Entry::Started(_) => None,
+            })
+            .take(n)
+            .collect();
+        lines.reverse();
+        lines
+    }
+
     /// The kept output, and everything that follows it.
     pub fn subscribe(&self) -> (Vec<Message>, broadcast::Receiver<Message>) {
         let inner = self.inner.lock().unwrap();

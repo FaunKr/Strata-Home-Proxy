@@ -81,7 +81,7 @@ pub struct Agent {
     pub(crate) updates: UpdateCheck,
     /// An update of this program is under way.
     pub(crate) updating: AtomicBool,
-    output: Arc<StrataOutput>,
+    pub(crate) output: Arc<StrataOutput>,
 }
 
 struct Watchdog {

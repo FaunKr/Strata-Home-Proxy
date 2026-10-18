@@ -1147,3 +1147,93 @@ async fn switching_the_active_models_context_restarts_strata_after_the_running_r
     assert_eq!(model(&view, "IQ3_XXS")["context"], 131072, "{view}");
     assert_eq!(model(&view, "IQ3_XXS")["active"], true, "{view}");
 }
+
+// --- #104 a context the active model does not start with ---
+
+/// IQ3_XXS active at 512K, its start script a Strata that writes `lines`
+/// and keeps running (`hang`) or ends; gives its args.
+fn active_at_512k(s: &Setup, lines: &[&str], hang: bool) -> Value {
+    installed(s);
+    config_with_args(
+        s,
+        "iq3_xxs",
+        json!([
+            "--native",
+            "a.gguf",
+            "--max-context",
+            "524288",
+            "--rope-scaling",
+            "yarn",
+            "--rope-scale",
+            "2"
+        ]),
+    );
+    s.fake.command(
+        "run-iq3_xxs.bat",
+        FakeCommand {
+            lines: self::lines(lines),
+            hang,
+            exit: (!hang).then_some(1),
+            ..Default::default()
+        },
+    );
+    args_of(s, "iq3_xxs")
+}
+
+#[tokio::test]
+async fn a_context_strata_never_answers_with_goes_back() {
+    let s = setup("models-context-no-answer").await;
+    let before = active_at_512k(&s, &["lade Modell"], true);
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    let done = job(
+        &s,
+        json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144}),
+    )
+    .await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(
+        done["lines"].to_string().contains("lade Modell"),
+        "Strata's output: {done}"
+    );
+    assert_eq!(args_of(&s, "iq3_xxs"), before, "the old args");
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 2, "started again");
+}
+
+#[tokio::test]
+async fn a_strata_that_ends_with_the_new_context_does_not_wait_out_the_limit() {
+    let s = setup_with("models-context-exit", |c| c.context_start_secs = 600).await;
+    let before = active_at_512k(&s, &["out of VRAM"], false);
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    let started = std::time::Instant::now();
+    let done = job(
+        &s,
+        json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144}),
+    )
+    .await;
+    assert!(started.elapsed() < Duration::from_secs(60));
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(done["lines"].to_string().contains("out of VRAM"), "{done}");
+    assert_eq!(args_of(&s, "iq3_xxs"), before, "the old args");
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 2, "started again");
+}
+
+#[tokio::test]
+async fn a_context_strata_answers_with_after_a_while_stays() {
+    let s = setup_with("models-context-slow", |c| c.context_start_secs = 600).await;
+    active_at_512k(&s, &[], true);
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144});
+    assert_eq!(post(&s, "/strata/jobs", body).await.0, 202);
+    job_until(&s, "Warten auf Strata", |j| {
+        j["step"].as_str().is_some_and(|t| t.contains("bereit"))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    s.fake.strata_up.store(true, Ordering::SeqCst);
+    assert_eq!(finished(&s).await["state"], "done");
+    assert_eq!(
+        args_of(&s, "iq3_xxs"),
+        json!(["--native", "a.gguf", "--max-context", "262144"])
+    );
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+}

@@ -49,6 +49,8 @@ pub struct Fake {
     pub starts: AtomicUsize,
     pub stops: AtomicUsize,
     pub strata_up: AtomicBool,
+    /// A started Strata does not answer `/health`.
+    pub strata_stays_down: AtomicBool,
     pub strata_busy: AtomicBool,
     pub mac: Mutex<Option<[u8; 6]>>,
     pub mac_lookups: AtomicUsize,
@@ -192,7 +194,9 @@ impl Platform for FakePlatform {
     fn start_strata(&self, program: &Path, args: &[String]) -> anyhow::Result<Running> {
         *self.0.started.lock().unwrap() = Some((program.to_path_buf(), args.to_vec()));
         self.0.starts.fetch_add(1, Ordering::SeqCst);
-        self.0.strata_up.store(true, Ordering::SeqCst);
+        if !self.0.strata_stays_down.load(Ordering::SeqCst) {
+            self.0.strata_up.store(true, Ordering::SeqCst);
+        }
         let run = self.fake_run(&file_name(program));
         *self.0.strata_cancel.lock().unwrap() = Some(run.canceller());
         Ok(run)
@@ -313,6 +317,7 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         fresh_strata_after_standby: false,
         restart_after_secs: 0,
         load_time_secs: 1,
+        context_start_secs: 1,
         state_dir: Some(dir.to_path_buf()),
         mac: None,
         nas_url: None,

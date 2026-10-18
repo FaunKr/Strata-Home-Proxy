@@ -70,6 +70,60 @@ ins Heimnetz. Alle Einstellungen stehen mit Erklärung in
 
 Nur ein Weckpaket senden, zum Testen: `docker compose run --rm strata-proxy wake`
 
+## Automatische Updates (TrueNAS)
+
+[deploy/truenas-auto-update.sh](deploy/truenas-auto-update.sh) holt alle 15
+Minuten das Image. Ist es neu, sichert das Skript `/data`, rollt die App über
+die TrueNAS-Middleware neu aus und wartet, bis `/admin/` antwortet. Klappt das
+nicht innerhalb von 2 Minuten, stellt es die Sicherung wieder her, startet das
+alte Image und merkt sich das neue als fehlerhaft; erst ein neueres Image wird
+wieder versucht.
+
+Voraussetzungen: die App heißt `strata-proxy` und ist aus
+[deploy/truenas-app.yaml](deploy/truenas-app.yaml) installiert, mit
+`pull_policy: missing` (sonst holt das Zurückrollen das fehlerhafte Image
+erneut), und root ist bei ghcr.io angemeldet (`sudo docker login ghcr.io`, wie
+oben in der YAML-Datei).
+
+1. Skript in ein eigenes Verzeichnis auf dem Pool legen, nicht in das
+   Datenverzeichnis der App. Dort landen auch Log und Sicherungen.
+   ```sh
+   sudo mkdir -p /mnt/POOL/apps/strata-proxy-update
+   cd /mnt/POOL/apps/strata-proxy-update
+   sudo curl -fsSLO https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/main/deploy/truenas-auto-update.sh
+   sudo chmod 700 truenas-auto-update.sh
+   sudo ./truenas-auto-update.sh   # einmal von Hand: ohne neues Image passiert nichts
+   ```
+2. *System → Advanced Settings → Cron Jobs → Add*:
+   - Command: `/mnt/POOL/apps/strata-proxy-update/truenas-auto-update.sh`
+   - Run As User: `root`
+   - Schedule: Custom, `*/15 * * * *`
+   - *Hide Standard Output* an, *Hide Standard Error* aus
+3. Optional: eine Home-Assistant-Webhook-URL in die Datei `auto-update.webhook`
+   neben dem Skript schreiben. Bei einem gescheiterten Update geht dorthin
+   `{"event":"nas_update_failed","data":{"app":"strata-proxy","from":…,"to":…,"rolled_back":true}}`.
+
+Anderer App-Name, Port oder Pfad: als Variablen vor den Befehl im Cron Job,
+z. B. `STRATA_PROXY_APP_NAME=proxy STRATA_PROXY_HEALTH_URL=http://127.0.0.1:9000/admin/ /mnt/…/truenas-auto-update.sh`.
+Alle Variablen stehen oben im Skript. Das Datenverzeichnis liest es aus dem
+Container (Mount auf `/data`).
+
+Neben dem Skript liegen:
+
+- `auto-update.log`: jedes Update und jeder Fehler (ab 200 KB nach
+  `auto-update.log.1`).
+- `backups/data-*.tar.gz`: die letzten 10 Sicherungen von `/data`, mit
+  Passwort-Hash und API-Keys, daher nur für root lesbar.
+- `auto-update.bad-images`: Images, die nicht hochkamen. Eine Zeile löschen,
+  damit das Image noch einmal versucht wird.
+- `failed-data-*`: die Daten so, wie das fehlerhafte Image sie hinterließ.
+
+Steht im Log `ROLLBACK FAILED`, von Hand zurück: App unter *Apps* stoppen, den
+Inhalt des Datenverzeichnisses durch die letzte Sicherung ersetzen
+(`sudo tar -C /mnt/POOL/apps/strata-proxy --numeric-owner -xzpf backups/data-….tar.gz`),
+`sudo docker tag ghcr.io/faunkr/strata-home-proxy:previous ghcr.io/faunkr/strata-home-proxy:latest`,
+App starten.
+
 ## Weboberfläche
 
 Unter `http://<NAS-IP>:8080/admin/`, also auf demselben Port wie die API.

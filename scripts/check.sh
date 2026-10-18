@@ -19,6 +19,8 @@ fi
 if command -v pwsh >/dev/null; then
   pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("deploy/windows/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
 fi
+# Das Update-Skript für TrueNAS, gegen nachgebildete docker, midclt und curl.
+scripts/test-truenas-auto-update.sh
 # Erst bauen, dann mit Zeitlimit testen: ein hängender Test bricht ab, statt
 # den Lauf endlos zu blockieren. Welcher hängt, steht in der Ausgabe
 # ("has been running for over 60 seconds").

@@ -1,4 +1,4 @@
-//! Die Leistung der Messsteckdose on the overview, against the simulated PC
+//! The Leistung of the Messsteckdose on the overview, against the simulated PC
 //! and its plug.
 
 mod common;
@@ -123,6 +123,7 @@ async fn a_hanging_plug_holds_back_neither_pc_nor_strata() {
         .until("nicht erreichbar", |v| v["power"] == "Unreachable")
         .await;
     assert_eq!(v["pc"], "Awake");
+    assert_eq!(v["strata"], "Ready");
     s.pc.gaming.store(true, Ordering::SeqCst);
     let v = live.until("Gaming", |v| v["pc"] == "Gaming").await;
     assert_eq!(v["power"], "Unreachable");

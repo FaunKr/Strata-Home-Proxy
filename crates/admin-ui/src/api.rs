@@ -289,7 +289,7 @@ pub struct Overview {
     pub power: PowerView,
 }
 
-/// Die Leistung der Messsteckdose for the overview; independent of the PC's
+/// The Leistung of the Messsteckdose for the overview; independent of the PC's
 /// state, since the plug also answers while the PC sleeps.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PowerView {

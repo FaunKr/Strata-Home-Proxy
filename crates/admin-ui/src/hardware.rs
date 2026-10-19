@@ -1,5 +1,5 @@
 //! The Hardware card on the overview: the Hardwarewerte of GPU and CPU, and
-//! die Leistung der Messsteckdose.
+//! the Leistung of the Messsteckdose.
 
 use leptos::prelude::*;
 
@@ -50,7 +50,8 @@ pub fn HardwareCard(hardware: Option<HardwareView>, pc: PcView, power: PowerView
 fn PowerRow(power: PowerView) -> impl IntoView {
     let (value, note) = match power {
         PowerView::NotConfigured => return None,
-        PowerView::Watts(w) => (format!("{w:.0} W"), None),
+        // A plug can report a hair below zero at standby.
+        PowerView::Watts(w) => (format!("{:.0} W", w.max(0.0)), None),
         PowerView::Unreachable => (NONE.to_string(), Some("Plug not reachable")),
     };
     Some(view! {

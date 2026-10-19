@@ -13,11 +13,18 @@ pub async fn power(client: &Client, base: &str) -> Option<f64> {
         .send()
         .await
         .ok()?;
-    if gen2.status().is_success() {
-        return gen2.json::<Value>().await.ok()?["apower"].as_f64();
+    if gen2.status().is_success()
+        && let Some(watts) = gen2
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|v| v["apower"].as_f64())
+    {
+        return Some(watts);
     }
     // Gen1 plugs answer the RPC with an error. A plug that did not answer at
-    // all is not asked twice, so a hanging one costs one timeout only.
+    // all is not asked twice, so a hanging one costs one timeout only; hence
+    // no shared helper with `get` for the first call.
     get(client, &format!("{base}/status")).await?["meters"][0]["power"].as_f64()
 }
 

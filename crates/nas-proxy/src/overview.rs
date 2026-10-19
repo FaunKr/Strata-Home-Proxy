@@ -48,8 +48,8 @@ struct Probe {
     pc: Option<PcStatus>,
     /// The running Strata job, asked for only while one runs.
     job: Option<StrataJob>,
-    /// Die Leistung der Messsteckdose, if one is set up and answered.
-    power: Option<f64>,
+    /// The Leistung of the Messsteckdose.
+    power: PowerView,
 }
 
 pub struct Monitor {
@@ -191,16 +191,31 @@ async fn run(state: &Arc<AppState>) {
 
 async fn probe(state: &AppState) -> Probe {
     // The plug alongside, so a slow one holds up nothing else.
-    let (probe, power) = tokio::join!(probe_pc(state), power(state));
-    Probe { power, ..probe }
+    let ((health, metrics, pc, job), power) = tokio::join!(probe_pc(state), power(state));
+    Probe {
+        health,
+        metrics,
+        pc,
+        job,
+        power,
+    }
 }
 
-async fn power(state: &AppState) -> Option<f64> {
-    let url = state.cfg().shelly_url.clone()?;
-    crate::plug::power(&state.probe_client(), &url).await
+/// Judged from the setting at the time of asking, so a plug set up a moment
+/// ago is not shown as unreachable before it was asked.
+async fn power(state: &AppState) -> PowerView {
+    let Some(url) = state.cfg().shelly_url.clone() else {
+        return PowerView::NotConfigured;
+    };
+    match crate::plug::power(&state.probe_client(), &url).await {
+        Some(watts) => PowerView::Watts(watts),
+        None => PowerView::Unreachable,
+    }
 }
 
-async fn probe_pc(state: &AppState) -> Probe {
+async fn probe_pc(
+    state: &AppState,
+) -> (Health, Option<Metrics>, Option<PcStatus>, Option<StrataJob>) {
     let health = state.strata_health().await;
     let up = matches!(health, Health::Up { .. });
     let (metrics, pc) = tokio::join!(metrics(state), state.check_pc(up));
@@ -212,13 +227,7 @@ async fn probe_pc(state: &AppState) -> Probe {
             .filter(|j| j.state == strata_admin_ui::api::StrataJobState::Running),
         _ => None,
     };
-    Probe {
-        health,
-        metrics,
-        pc,
-        job,
-        power: None,
-    }
+    (health, metrics, pc, job)
 }
 
 async fn metrics(state: &AppState) -> Option<Metrics> {
@@ -371,11 +380,7 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
         events,
         pc_service,
         hardware: hardware_view(pc, probe.pc.as_ref()),
-        power: match (&cfg.shelly_url, probe.power) {
-            (None, _) => PowerView::NotConfigured,
-            (Some(_), Some(watts)) => PowerView::Watts(watts),
-            (Some(_), None) => PowerView::Unreachable,
-        },
+        power: probe.power.clone(),
     }
 }
 

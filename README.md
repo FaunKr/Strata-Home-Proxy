@@ -95,7 +95,9 @@ Minuten das Image. Ist es neu, sichert das Skript `/data`, rollt die App über
 die TrueNAS-Middleware neu aus und wartet, bis `/admin/` antwortet. Klappt das
 nicht innerhalb von 2 Minuten, stellt es die Sicherung wieder her, startet das
 alte Image und merkt sich das neue als fehlerhaft; erst ein neueres Image wird
-wieder versucht.
+wieder versucht. Danach holt es das Image des Code-Benchmarks (Dienst
+`code-bench`) und rollt die App neu aus, wenn es neu ist; ohne Sicherung und
+Zurückrollen, denn der Dienst hat keine Daten und der Proxy läuft ohne ihn.
 
 Voraussetzungen: die App heißt `strata-proxy` und ist aus
 [deploy/truenas-app.yaml](deploy/truenas-app.yaml) installiert, mit

@@ -23,6 +23,10 @@ neben dem Proxy ein zweiter Container, `code-bench`:
   Link-Local- und CGNAT-Netze, also NAS und Heimnetz, und IPv6. Dafür braucht
   der Container `NET_ADMIN`; ohne verweigert der Runner Läufe und die Karte
   nennt den Grund.
+- Vor jedem Lauf und bei jeder Abfrage von `/health` prüft der Runner, ob
+  unter `PROXY_URL` wirklich der Proxy antwortet (dessen Anmeldeseite, die den
+  PC nie weckt). Antwortet dort ein anderer Dienst oder keiner, verweigert er
+  Läufe und die Karte nennt Adresse und Antwort.
 
 Gemessen wird pro Aufgabe: Gesamtzeit, Schritte des Modells, Ein- und
 Ausgabe-Tokens, Ausgabe-Tokens pro Sekunde (über die Zeit der Schritte) und

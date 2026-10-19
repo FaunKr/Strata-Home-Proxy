@@ -242,6 +242,32 @@ test_fallback_proxy_unreachable() {
   expect_fallback "unreachable" "LOCAL_AGENT_URL"
 }
 
+test_fallback_mid_run_keeps_work() {
+  export FAKE_CLAUDE_MODE=crash
+  la run "task"
+  [[ $code == 3 ]] || fail "exit $code statt 3: $out"
+  local id
+  id=$(run_id)
+  git show "local-agent/$id:README" | grep -qx "half done" || fail "Arbeit des Workers fehlt auf dem Branch"
+  [[ -d $(cat "$FAKE_CLAUDE_RECORD/cwd") ]] || fail "Worktree entfernt"
+  la result "$id"
+  contains "$out" "fallback"
+  contains "$out" "mid-run"
+  contains "$out" "API Error: 503"
+  contains "$out" "## Log summary"
+  contains "$out" "Edit README"
+  contains "$out" "+half done"
+}
+
+test_fallback_mid_run_gaming() {
+  export FAKE_CLAUDE_MODE=crash-gaming
+  la run "task"
+  [[ $code == 3 ]] || fail "exit $code statt 3: $out"
+  la result "$(run_id)"
+  contains "$out" "mid-run"
+  contains "$out" "Gaming-Modus"
+}
+
 tests=("$@")
 if ((${#tests[@]} == 0)); then
   # shellcheck disable=SC2207 # test names have no spaces

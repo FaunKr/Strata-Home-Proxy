@@ -189,6 +189,43 @@ preflight() {
     "raise Strata's context to at least 64K ($min_context tokens), e.g. in the Strata section of the Proxy's web UI"
 }
 
+# Turns the worker's stream-json log (stdin) into one line per step.
+steps() {
+  jq -Rr 'fromjson? |
+    if .type == "assistant" then
+      .message.content[]? | select(.type == "tool_use") |
+      "\(.name) \(.input.file_path // .input.path // .input.command // .input.pattern // "" | tostring | .[0:100])"
+    elif .type == "system" and .subtype == "init" then "started"
+    elif .type == "system" and .subtype == "compact_boundary" then "context compacted"
+    elif .type == "result" then "finished" + (if .is_error then " with an error" else "" end)
+    else empty end'
+}
+
+# After the worker died partway: keeps its work, writes what a fallback agent
+# needs to continue, and falls back.
+fail_mid_run() {
+  local error
+  error=$(jq -Rr 'fromjson? | select(.type == "result") | .result' "$run_dir/log.jsonl" | tail -1)
+  [[ -n $error ]] || error=$(tail -1 "$run_dir/stderr" 2>/dev/null)
+  [[ -n $error ]] || error="the worker exited with code $1"
+  {
+    echo "Error: $error"
+    if [[ -n $(meta_get "$run_dir" branch) ]]; then
+      commit_leftovers "$(meta_get "$run_dir" worktree)" "$(meta_get "$run_dir" id)"
+      echo "Changed files, committed on $(meta_get "$run_dir" branch):"
+      git -C "$(meta_get "$run_dir" repo)" diff --name-only "$(meta_get "$run_dir" base)" "$(meta_get "$run_dir" branch)" | sed 's/^/  /'
+    fi
+    echo "Last steps:"
+    steps <"$run_dir/log.jsonl" | tail -10 | sed 's/^/  /'
+  } >"$run_dir/handoff"
+  # A quick look whether the PC went into Gaming-Modus meanwhile.
+  probe 15
+  if [[ $probe_tag == gaming ]]; then
+    fall_back "Strata failed mid-run: the PC switched to Gaming-Modus"
+  fi
+  fall_back "Strata failed mid-run: $error"
+}
+
 instructions="You are a local-agent worker: a Claude Code session running unattended for another session.
 Nobody can answer questions or permission prompts. If a tool or command is denied, work around it or say so in your summary.
 Work only in the current directory."
@@ -256,6 +293,7 @@ cmd_run() {
   local prompt=$instructions$'\n'$write_instructions
   ((read_only)) && prompt=$instructions$'\n'$read_only_instructions
   meta_set state running
+  local rc=0
 
   (
     cd "$workdir"
@@ -268,9 +306,15 @@ cmd_run() {
     exec claude -p --output-format stream-json --verbose \
       --append-system-prompt "$prompt" --permission-mode "$mode" \
       --allowedTools "${allowed[@]}" --disallowedTools "${disallowed[@]}"
-  ) <"$run_dir/task" >"$run_dir/log.jsonl" 2>"$run_dir/stderr" || true
+  ) <"$run_dir/task" >"$run_dir/log.jsonl" 2>"$run_dir/stderr" || rc=$?
 
-  jq -r 'select(.type == "result") | .result' "$run_dir/log.jsonl" 2>/dev/null >"$run_dir/summary" || true
+  # A worker that exits badly, ends on an error or never ends counts as failed.
+  local outcome
+  outcome=$(jq -Rr 'fromjson? | select(.type == "result") | .is_error' "$run_dir/log.jsonl" | tail -1)
+  if ((rc != 0)) || [[ $outcome != false ]]; then
+    fail_mid_run "$rc"
+  fi
+  jq -Rr 'fromjson? | select(.type == "result") | .result' "$run_dir/log.jsonl" >"$run_dir/summary"
   ((read_only)) || commit_leftovers "$workdir" "$id"
   meta_set ended "$(date +%s)"
   meta_set state "done"
@@ -298,9 +342,19 @@ cmd_result() {
   hint=$(meta_get "$run_dir" hint)
   [[ -z $reason ]] || echo "reason: $reason"
   [[ -z $hint ]] || echo "to fix: $hint"
-  echo
-  echo "## Summary"
-  cat "$run_dir/summary" 2>/dev/null || true
+  local worktree
+  worktree=$(meta_get "$run_dir" worktree)
+  [[ -z $worktree ]] || echo "worktree: $worktree (branch $(meta_get "$run_dir" branch))"
+  if [[ -f $run_dir/summary ]]; then
+    echo
+    echo "## Summary"
+    cat "$run_dir/summary"
+  fi
+  if [[ -f $run_dir/handoff ]]; then
+    echo
+    echo "## Log summary"
+    cat "$run_dir/handoff"
+  fi
   branch=$(meta_get "$run_dir" branch)
   if [[ -n $branch ]]; then
     repo=$(meta_get "$run_dir" repo)

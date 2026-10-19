@@ -191,3 +191,12 @@ async fn a_page_finishes_while_another_router_is_built() {
     drop(stop);
     builder.join().unwrap();
 }
+
+/// A server function a stale part of the page still runs, after the page was
+/// drawn again and its context went: an error, not a panic that would keep
+/// the response open forever.
+#[tokio::test]
+async fn a_server_function_without_its_context_fails_without_a_panic() {
+    assert!(strata_admin_ui::api::get_settings().await.is_err());
+    assert!(strata_admin_ui::api::get_setup().await.is_err());
+}

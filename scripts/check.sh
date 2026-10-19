@@ -53,12 +53,14 @@ fi
 # install.ps1 parses, as the workflow windows.yml checks it; only where
 # PowerShell is installed. The NAS proxy serves the script, the PC service runs it.
 if (selected strata-pc-agent || selected strata-nas-proxy) && command -v pwsh >/dev/null; then
+  # shellcheck disable=SC2016 # PowerShell variables, for pwsh to expand.
   pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("deploy/windows/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
 fi
 # Die Versionsprüfung des Docker-Baus, an einer Beispieldatei: ein voller
 # Commit-Hash passt zur gekürzten ID in der .exe, ein anderer nicht.
 sample="$(mktemp)"
 trap 'rm -f "$sample"' EXIT
+# shellcheck disable=SC2016 # the backticks are part of the sample.
 printf 'MZ strata-pc-agent-version:called `unwrap()`\nstrata-pc-agent-version:0.1.0+5e8b9f1\n' > "$sample"
 scripts/check-exe-version.sh "$sample" 5e8b9f13827f6f68bb56ea7e3e91c7654e0023b4
 if scripts/check-exe-version.sh "$sample" aaaaaaa3827f6f68bb56ea7e3e91c7654e0023b4 2>/dev/null; then
@@ -68,10 +70,18 @@ fi
 # Das Update-Skript für TrueNAS, gegen nachgebildete docker, midclt und curl.
 scripts/test-truenas-auto-update.sh
 # Der Runner des Skills local-agent, gegen einen nachgebildeten Proxy und claude.
+# Und die Skripte des Repos selbst.
 if command -v shellcheck >/dev/null; then
-  shellcheck tools/local-agent/local-agent tools/local-agent/install.sh tools/local-agent/test.sh tools/local-agent/testdata/fake-claude
+  shellcheck tools/local-agent/local-agent tools/local-agent/install.sh tools/local-agent/test.sh tools/local-agent/testdata/fake-claude \
+    scripts/*.sh .claude/hooks/*.sh
 else
-  echo "WARNUNG: shellcheck fehlt, tools/local-agent ungeprüft" >&2
+  echo "WARNUNG: shellcheck fehlt, tools/local-agent und scripts ungeprüft" >&2
+fi
+# Die Workflows: jeder kaputte Push daran kostet einen vollen CI-Lauf.
+if command -v actionlint >/dev/null; then
+  actionlint
+else
+  echo "WARNUNG: actionlint fehlt, .github/workflows ungeprüft (scripts/install-actionlint.sh)" >&2
 fi
 tools/local-agent/test.sh
 # Der Runner des Code-Benchmarks, gegen ein nachgebildetes opencode.

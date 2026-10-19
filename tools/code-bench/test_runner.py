@@ -2,6 +2,8 @@
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -12,10 +14,14 @@ from pathlib import Path
 from threading import Thread
 
 HERE = Path(__file__).parent
-os.environ["OPENCODE_BIN"] = str(HERE / "testdata" / "fake-opencode")
 os.environ["WORK_DIR"] = tempfile.mkdtemp()
 # Like /tmp in the image: the agent reaches its task folders.
 os.chmod(os.environ["WORK_DIR"], 0o755)
+# Like opencode in the image, where the agent can run it; the checkout may
+# sit under a home folder the agent can't enter (CI's runner).
+_bin = tempfile.mkdtemp()
+os.chmod(_bin, 0o755)
+os.environ["OPENCODE_BIN"] = shutil.copy(HERE / "testdata" / "fake-opencode", _bin)
 sys.path.insert(0, str(HERE))
 import runner  # noqa: E402
 
@@ -96,8 +102,29 @@ class RunnerTest(unittest.TestCase):
         for net in ["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]:
             self.assertIn(f"iptables -w -A {chain} -d {net} -j REJECT", rules)
         self.assertEqual(rules[-1], f"iptables -w -A OUTPUT -m owner --uid-owner 1001 -j {chain}")
+        # Docker's DNS on its port only.
+        self.assertEqual([r for r in rules if runner.DOCKER_DNS in r], [
+            f"iptables -w -A {chain} -d {runner.DOCKER_DNS} -p {p} --dport 53 -j ACCEPT" for p in ("udp", "tcp")
+        ])
         # Nothing rejects all: the internet stays open.
         self.assertFalse([r for r in rules if r.endswith("-j REJECT") and " -d " not in r])
+
+    @unittest.skipUnless(
+        os.geteuid() == 0 and shutil.which("unshare") and shutil.which("iptables"),
+        "needs root, unshare and iptables for a network namespace",
+    )
+    def test_the_firewall_keeps_the_agent_to_the_relay_on_loopback(self):
+        out = subprocess.run(
+            ["unshare", "--net", sys.executable, "-I", str(HERE / "testdata" / "firewall-probe.py")],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(
+            json.loads(out.stdout),
+            {"problem": None, "agent_relay": True, "agent_other": False, "root_other": True},
+        )
 
     def test_links_the_agent_leaves_are_not_followed(self):
         target = Path(os.environ["WORK_DIR"], "outside.py")

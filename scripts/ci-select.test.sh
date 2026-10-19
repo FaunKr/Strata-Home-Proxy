@@ -32,24 +32,25 @@ expect_selects() {
 package_of() { sed -n 's/^name *= *"\(.*\)"/\1/p' "$1/Cargo.toml" | head -1; }
 
 # Fixed cases.
-all="test=true packages= image=true bench=true"
-expect "test=false packages= image=false bench=false" README.md docs/strata-api.md
+all="test=true packages= image=true bench=true ui=true"
+expect "test=false packages= image=false bench=false ui=false" README.md docs/strata-api.md
 expect "$all" Cargo.lock
 expect "$all" .github/workflows/ci.yml
 expect "$all" scripts/check-exe-version.sh
 # Code alone runs the tests of its crates; the images build only when their
 # build definition changes.
-expect "test=true packages=strata-pc-agent image=false bench=false" crates/pc-agent/src/agent.rs
-expect "test=true packages=strata-admin-ui strata-nas-proxy image=false bench=false" crates/admin-ui/src/app.rs
-expect "test=true packages=strata-nas-proxy image=false bench=false" deploy/windows/install.ps1
-expect "test=false packages= image=true bench=false" Dockerfile
-expect "test=false packages= image=true bench=false" .dockerignore
-expect "test=false packages= image=false bench=false" deploy/docker-compose.yml
-expect "test=true packages= image=false bench=false" tools/local-agent/local-agent
-expect "test=true packages= image=false bench=true" tools/code-bench/runner.py
-expect "test=true packages= image=false bench=true" tools/code-bench/Dockerfile
-expect "test=true packages= image=false bench=false" tools/code-bench/test_runner.py
-expect "test=true packages=strata-nas-proxy image=false bench=false" tools/code-bench/tasks/roman/TASK.md
+expect "test=true packages=strata-pc-agent image=false bench=false ui=false" crates/pc-agent/src/agent.rs
+expect "test=true packages=strata-admin-ui strata-nas-proxy image=false bench=false ui=true" crates/admin-ui/src/app.rs
+expect "test=true packages=strata-nas-proxy image=false bench=false ui=false" deploy/windows/install.ps1
+expect "test=true packages=strata-nas-proxy image=false bench=false ui=true" crates/nas-proxy/src/admin.rs
+expect "test=false packages= image=true bench=false ui=true" Dockerfile
+expect "test=false packages= image=true bench=false ui=false" .dockerignore
+expect "test=false packages= image=false bench=false ui=false" deploy/docker-compose.yml
+expect "test=true packages= image=false bench=false ui=false" tools/local-agent/local-agent
+expect "test=true packages= image=false bench=true ui=false" tools/code-bench/runner.py
+expect "test=true packages= image=false bench=true ui=false" tools/code-bench/Dockerfile
+expect "test=true packages= image=false bench=false ui=false" tools/code-bench/test_runner.py
+expect "test=true packages=strata-nas-proxy image=false bench=false ui=false" tools/code-bench/tasks/roman/TASK.md
 [[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$all " ]] || fail "--all -> nicht alles"
 
 # Every crate selects itself.
@@ -113,6 +114,20 @@ for script in scripts/check.sh $(used_by scripts/check.sh | grep '^scripts/.*\.s
     [[ -e $path ]] && expect_selects "$path" test true
   done
 done
+
+# Every doc, comment or script that names a CI job or workflow names one that
+# exists, so removing a job can't leave stale mentions behind.
+jobs=" $(awk '/^jobs:/ { in_jobs = 1; next } /^[^ #]/ { in_jobs = 0 } in_jobs && /^  [A-Za-z0-9_-]+:/ { sub(/:.*/, ""); printf "%s ", $1 }' .github/workflows/*.yml)"
+# The backticks are literal (Markdown code spans), not substitutions.
+# shellcheck disable=SC2016
+while IFS= read -r mention; do
+  file=${mention%%:*}
+  name=$(sed -E 's/.*`([^`]+)`.*/\1/' <<<"$mention")
+  case $mention in
+    *orkflow*) [[ -e .github/workflows/$name ]] || fail "$file nennt den Workflow $name, den es nicht gibt" ;;
+    *) [[ $jobs == *" $name "* ]] || fail "$file nennt den CI-Job $name, den es nicht gibt" ;;
+  esac
+done < <(git ls-files -z | xargs -0 grep -oIE '(CI[- ][Jj]ob|[Jj]ob|[Ww]orkflow) `[A-Za-z0-9_.-]+`' 2>/dev/null || true)
 
 if ((failures)); then
   echo "ci-select: $failures Fehler; die Zuordnung steht in scripts/ci-select.sh" >&2

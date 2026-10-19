@@ -10,17 +10,8 @@ fi
 cd "$CLAUDE_PROJECT_DIR"
 
 rustup target add wasm32-unknown-unknown
-# cargo-leptos for scripts/ui-check.sh: the release the Dockerfile pins, with
-# its checksum, so the version lives in one place.
-if ! cargo leptos --version >/dev/null 2>&1; then
-  leptos_url=$(sed -n 's|.*\(https://github.com/leptos-rs/cargo-leptos/[^ ]*\.tar\.gz\).*|\1|p' Dockerfile)
-  leptos_sum=$(grep -B1 "$leptos_url" Dockerfile | sed -n 's/.*--checksum=sha256:\([0-9a-f]*\).*/\1/p')
-  leptos_tmp=$(mktemp)
-  if curl -fsSL -o "$leptos_tmp" "$leptos_url" && echo "$leptos_sum  $leptos_tmp" | sha256sum -c --quiet; then
-    tar xzf "$leptos_tmp" -C "$HOME/.cargo/bin" --strip-components=1 || true
-  fi
-  rm -f "$leptos_tmp"
-fi
+# cargo-leptos for scripts/ui-check.sh.
+scripts/install-cargo-leptos.sh || true
 cargo test --no-run --quiet
 # The same arguments as scripts/check.sh, or clippy checks again; a warning
 # here is for the session to fix, not a reason to fail the start.
@@ -36,7 +27,16 @@ fi
 if ! command -v pwsh >/dev/null; then
   pwsh_dir="$HOME/.local/share/pwsh"
   mkdir -p "$pwsh_dir" "$HOME/.local/bin"
-  curl -fsSL https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell-7.4.6-linux-x64.tar.gz \
-    | tar xz -C "$pwsh_dir" && chmod +x "$pwsh_dir/pwsh" && ln -sf "$pwsh_dir/pwsh" "$HOME/.local/bin/pwsh" || true
+  if curl -fsSL https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell-7.4.6-linux-x64.tar.gz \
+    | tar xz -C "$pwsh_dir"; then
+    chmod +x "$pwsh_dir/pwsh" && ln -sf "$pwsh_dir/pwsh" "$HOME/.local/bin/pwsh"
+  fi
+fi
+# The linters shellcheck and actionlint for the lint steps in scripts/check.sh.
+if ! command -v shellcheck >/dev/null; then
+  (apt-get install -y -q shellcheck || (apt-get update -q && apt-get install -y -q shellcheck)) >/dev/null 2>&1 || true
+fi
+if ! command -v actionlint >/dev/null; then
+  scripts/install-actionlint.sh || true
 fi
 cargo clippy -p strata-pc-agent --all-targets --target x86_64-pc-windows-gnu --quiet -- -D warnings || true

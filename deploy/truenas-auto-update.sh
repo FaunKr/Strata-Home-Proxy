@@ -4,6 +4,8 @@
 # "Automatische Updates (TrueNAS)". Holds no secrets: an optional Home Assistant webhook URL
 # comes from the environment or from the file <base dir>/auto-update.webhook.
 #
+# Then the same for the code benchmark's image, without backup or rollback (update_bench).
+#
 # Flow: pull the image; same image ID as the running container -> quiet exit. Otherwise back up
 # the data directory, redeploy through the TrueNAS middleware, wait for health. On failure: stop,
 # restore the backup, retag the old image as :latest, redeploy without pulling, remember the
@@ -37,6 +39,9 @@ WEBHOOK_URL="${STRATA_PROXY_UPDATE_WEBHOOK_URL:-}"
 WEBHOOK_FILE="${STRATA_PROXY_UPDATE_WEBHOOK_FILE:-$BASE_DIR/auto-update.webhook}"
 PRUNE_UNTIL="${STRATA_PROXY_PRUNE_UNTIL:-168h}"
 PREVIOUS_TAG="${IMAGE%:*}:previous"
+# The code benchmark's service in the same app; empty: leave it alone.
+BENCH_SERVICE="${STRATA_PROXY_BENCH_SERVICE:-code-bench}"
+BENCH_IMAGE="${STRATA_PROXY_BENCH_IMAGE:-ghcr.io/faunkr/strata-code-bench:latest}"
 
 log() {
   local line
@@ -82,16 +87,17 @@ tn_redeploy() {
 
 # --- helpers -------------------------------------------------------------------------------------
 
-# The container ID changes with every redeploy, so this is looked up each time.
+# The container ID changes with every redeploy, so this is looked up each time. $1: another
+# service of the app than the proxy's.
 container() {
   local id
-  if [ -n "$CONTAINER" ]; then
+  if [ -z "${1:-}" ] && [ -n "$CONTAINER" ]; then
     printf '%s' "$CONTAINER"
     return 0
   fi
   id="$(docker ps -aq \
     --filter "label=com.docker.compose.project=ix-$APP_NAME" \
-    --filter "label=com.docker.compose.service=$SERVICE" | head -n 1)"
+    --filter "label=com.docker.compose.service=${1:-$SERVICE}" | head -n 1)"
   [ -n "$id" ] || return 1
   printf '%s' "$id"
 }
@@ -255,6 +261,27 @@ run() {
   rollback "$old_id" "$new_id" "$backup"
 }
 
+# The code benchmark keeps no data and the proxy works without it, so a new image of it needs
+# no backup or rollback: pull, redeploy. With `pull_policy: missing` nothing else ever pulls it.
+update_bench() {
+  local id running new_id
+  [ -n "$BENCH_SERVICE" ] || return 0
+  id="$(container "$BENCH_SERVICE" 2>/dev/null)" || return 0
+  running="$(docker inspect "$id" --format '{{.Image}}')"
+  if ! docker pull -q "$BENCH_IMAGE" >/dev/null 2>&1; then
+    log "docker pull of $BENCH_IMAGE failed, will retry next run"
+    return 0
+  fi
+  new_id="$(docker image inspect "$BENCH_IMAGE" --format '{{.Id}}')"
+  [ "$new_id" != "$running" ] || return 0
+  log "new code-bench image $(short_id "$new_id") (running $(short_id "$running")), redeploying $APP_NAME"
+  if ! tn_redeploy; then
+    log "redeploy call failed, will retry next run"
+    return 0
+  fi
+  log "code-bench update ok: now $(short_id "$new_id")"
+}
+
 main() {
   mkdir -p "$(dirname "$LOG_FILE")"
   rotate_log
@@ -268,7 +295,9 @@ main() {
     fi
     return "$rc"
   fi
-  run
+  # After a failed update or rollback the app is left alone.
+  run || return $?
+  update_bench
 }
 
 main "$@"

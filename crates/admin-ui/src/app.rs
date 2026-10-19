@@ -69,6 +69,8 @@ pub fn App() -> impl IntoView {
     provide_context(session);
     view! {
         <Stylesheet id="admin" href="/admin/pkg/admin-ui.css" />
+        // The code benchmark's runner recognises the proxy by this title
+        // (PROXY_MARK in tools/code-bench/runner.py).
         <Title text="Strata Proxy" />
         <Router>
             <Routes fallback=NotFound>

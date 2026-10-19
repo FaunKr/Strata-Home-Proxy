@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs deploy/truenas-auto-update.sh against a faked docker, midclt and curl: no update, a
 # healthy update, a failed update with rollback, a failed rollback, a known bad image, an
-# unreachable registry.
+# unreachable registry, a new code-bench image.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 script="$PWD/deploy/truenas-auto-update.sh"
@@ -16,16 +16,26 @@ cat >"$work/bin/docker" <<'EOF'
 set -eu
 echo "docker $*" >>"$FAKE/calls.log"
 case "$1 ${2:-}" in
-  "ps -aq") echo cid ;;
+  "ps -aq")
+    case "$*" in
+      *service=code-bench*) [ ! -e "$FAKE/bench-running" ] || echo bid ;;
+      *) echo cid ;;
+    esac ;;
+  "inspect bid") cat "$FAKE/bench-running" ;;
   "inspect cid")
     case "$*" in
       *.Image*) cat "$FAKE/running" ;;
       *.Mounts*) cat "$FAKE/mount" ;;
       *.State.Status*) echo running ;;
     esac ;;
-  "pull -q") [ ! -e "$FAKE/registry-down" ] && cp "$FAKE/registry" "$FAKE/latest" ;;
+  "pull -q")
+    case "$3" in
+      *code-bench*) cp "$FAKE/bench-registry" "$FAKE/bench-latest" ;;
+      *) [ ! -e "$FAKE/registry-down" ] && cp "$FAKE/registry" "$FAKE/latest" ;;
+    esac ;;
   "image inspect")
     case "$*" in
+      *code-bench*) cat "$FAKE/bench-latest" ;;
       *.Id*) cat "$FAKE/latest" ;;
       *) echo abc123 ;;
     esac ;;
@@ -41,6 +51,7 @@ echo "midclt $*" >>"$FAKE/calls.log"
 case "$3" in
   app.redeploy | app.start)
     cp "$FAKE/latest" "$FAKE/running"
+    [ ! -e "$FAKE/bench-latest" ] || cp "$FAKE/bench-latest" "$FAKE/bench-running"
     # The bad image changes the data on its first start, as a broken migration would.
     if grep -qxF "$(cat "$FAKE/running")" "$FAKE/unhealthy" 2>/dev/null; then
       echo migrated >"$(cat "$FAKE/mount")/settings.json"
@@ -132,5 +143,17 @@ setup old new registry-down
 touch "$FAKE/registry-down"
 update || fail "exit code $? with the registry down"
 grep -q app.redeploy "$FAKE/calls.log" && fail "redeployed without a pull"
+
+setup old old bench-same
+echo sha256:b1 | tee "$FAKE/bench-running" "$FAKE/bench-latest" >"$FAKE/bench-registry"
+update || fail "exit code $?"
+grep -q app.redeploy "$FAKE/calls.log" && fail "redeployed without a new code-bench image"
+
+setup old old bench-new
+echo sha256:b1 | tee "$FAKE/bench-running" >"$FAKE/bench-latest"
+echo sha256:b2 >"$FAKE/bench-registry"
+update || fail "exit code $?"
+[ "$(cat "$FAKE/bench-running")" = sha256:b2 ] || fail "code-bench not on the new image"
+[ ! -e "$base/backups" ] || fail "backed up for a code-bench image"
 
 echo "truenas-auto-update: all cases passed"

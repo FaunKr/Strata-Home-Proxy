@@ -38,16 +38,37 @@ TASK = {
 }
 
 
+def fake_server(status, body):
+    """A server that answers every GET with status and body; its URL."""
+
+    class Answer(runner.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(status)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Answer)
+    Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_port}"
+
+
 class RunnerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), runner.Handler)
         cls.url = f"http://127.0.0.1:{cls.server.server_port}"
         Thread(target=cls.server.serve_forever, daemon=True).start()
+        # The proxy's sign-in page, as the runner checks PROXY_URL with it.
+        cls.proxy, runner.PROXY_URL = fake_server(200, b"<html><title>Strata Proxy</title></html>")
 
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.proxy.shutdown()
 
     def setUp(self):
         os.environ.pop("FAKE_MODE", None)
@@ -90,6 +111,29 @@ class RunnerTest(unittest.TestCase):
             self.assertEqual((code, answer["reason"]), (503, "no firewall"))
         finally:
             runner.PROBLEM = None
+
+    def test_another_service_at_proxy_url_is_a_problem(self):
+        other, url = fake_server(404, b'{"detail":"Not Found"}')
+        proxy_url, runner.PROXY_URL = runner.PROXY_URL, url
+        try:
+            problem = self.call("GET", "/health")[1]["problem"]
+            code, answer = self.call(
+                "POST", "/runs", {"model": "IQ3_XXS", "api_key": "shp_k", "tasks": [TASK]}
+            )
+        finally:
+            runner.PROXY_URL = proxy_url
+            other.shutdown()
+        self.assertIn("not as the Strata proxy", problem)
+        self.assertIn('{"detail":"Not Found"}', problem)
+        self.assertEqual((code, answer["reason"]), (503, problem))
+
+    def test_no_answer_at_proxy_url_is_a_problem(self):
+        proxy_url, runner.PROXY_URL = runner.PROXY_URL, "http://127.0.0.1:9"
+        try:
+            problem = self.call("GET", "/health")[1]["problem"]
+        finally:
+            runner.PROXY_URL = proxy_url
+        self.assertIn("does not answer", problem)
 
     def test_the_firewall_lets_the_agent_reach_the_proxy_and_the_internet_only(self):
         rules = [" ".join(r) for r in runner.firewall_rules(1001, "127.0.0.1", 8097)]

@@ -6,7 +6,7 @@ their hidden tests. For each task opencode works in a fresh folder against
 the proxy's OpenAI endpoint; afterwards the hidden tests score what it left.
 The proxy asks for the state until the run has ended.
 
-  GET  /health               {"opencode": "<version>"}
+  GET  /health               {"opencode": "<version>", "problem": <why runs can't start, or null>}
   POST /runs                 starts a run; 409 while one runs
   GET  /runs/current         the running or last run, 404 before the first
   POST /runs/current/cancel  ends the running task's opencode and the run
@@ -110,6 +110,39 @@ def _ask_version():
         return out.stdout.strip() or None
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+# What the proxy's own page carries; a page without it is someone else's.
+PROXY_MARK = b"<title>Strata Proxy</title>"
+
+
+def proxy_problem():
+    """Why PROXY_URL is not the Strata proxy, or None. Asks its web UI's page,
+    which never wakes the PC: another service on that address would answer
+    the agent's model requests with its own errors."""
+    url = urlsplit(PROXY_URL)
+    conn_class = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
+    conn = conn_class(url.hostname, url.port, timeout=10)
+    try:
+        conn.request("GET", url.path.rstrip("/") + "/admin")
+        resp = conn.getresponse()
+        body = resp.read(256 * 1024)
+    except OSError as e:
+        return f"The proxy at PROXY_URL ({PROXY_URL}) does not answer: {e}."
+    finally:
+        conn.close()
+    if resp.status == 200 and PROXY_MARK in body:
+        return None
+    sample = body[:200].decode(errors="replace").strip()
+    return (
+        f"PROXY_URL ({PROXY_URL}) answers, but not as the Strata proxy (HTTP {resp.status}: {sample}). "
+        "Set PROXY_URL in the code-bench service to the proxy's address and port (its LISTEN_ADDR)."
+    )
+
+
+def problem():
+    """Why runs can't start now, or None."""
+    return PROBLEM or proxy_problem()
 
 
 def config(model, api_key):
@@ -593,10 +626,11 @@ class Runner:
             timeout = int(body.get("timeout_secs") or DEFAULT_TIMEOUT)
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             return 400, {"reason": f"bad run: {e}"}
-        if PROBLEM:
-            return 503, {"reason": PROBLEM}
         if not tasks or not model or "/" in model:
             return 400, {"reason": "bad run: no tasks or no model"}
+        reason = problem()
+        if reason:
+            return 503, {"reason": reason}
         with self.lock:
             if self.run is not None and self.run.view()["state"] == "running":
                 return 409, {"reason": "A code benchmark is running already."}
@@ -672,7 +706,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self.answer(200, {"opencode": opencode_version(), "problem": PROBLEM})
+            self.answer(200, {"opencode": opencode_version(), "problem": problem()})
         elif self.path == "/runs/current":
             run = RUNNER.run
             if run is None:

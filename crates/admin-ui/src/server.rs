@@ -102,8 +102,14 @@ pub trait Backend: Send + Sync + 'static {
 
 pub type SharedBackend = Arc<dyn Backend>;
 
-pub fn backend() -> SharedBackend {
-    expect_context::<SharedBackend>()
+/// The backend from the request's context. A server function that a resource
+/// runs while the page renders can lose it: when the part of the page that
+/// made the resource is drawn again during the same request, its old owner
+/// goes and takes the context with it. That call must end with an error, not
+/// a panic: a panicking resource never resolves, and the response with it.
+pub fn backend() -> Result<SharedBackend, ServerFnError> {
+    use_context::<SharedBackend>()
+        .ok_or_else(|| ServerFnError::new("The page was drawn again; this request is obsolete."))
 }
 
 /// The session token from the request's cookie.
@@ -141,7 +147,7 @@ pub async fn client_ip() -> IpAddr {
 /// session with the default password through (only for changing it).
 pub async fn require_login(allow_must_change: bool) -> Result<String, ServerFnError> {
     let token = token().await;
-    match backend().session(token.as_deref()) {
+    match backend()?.session(token.as_deref()) {
         Session::Ready => Ok(token.unwrap_or_default()),
         Session::MustChange if allow_must_change => Ok(token.unwrap_or_default()),
         Session::MustChange => {

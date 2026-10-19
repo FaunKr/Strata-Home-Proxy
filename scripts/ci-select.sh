@@ -3,12 +3,12 @@
 #
 # Usage: <changed paths, one per line> | scripts/ci-select.sh
 #        scripts/ci-select.sh --all
-# Prints test=, packages=, windows= and image= for $GITHUB_OUTPUT. An empty
+# Prints test=, packages=, windows=, image= and ui= for $GITHUB_OUTPUT. An empty
 # package list means the whole workspace (scripts/check.sh without arguments).
 # scripts/ci-select.test.sh checks this mapping against the workspace.
 set -euo pipefail
 
-all() { printf '%s\n' test=true packages= windows=true image=true; }
+all() { printf '%s\n' test=true packages= windows=true image=true ui=true; }
 if [[ ${1:-} == --all ]]; then
   all
   exit 0
@@ -18,6 +18,8 @@ packages=()
 tools=false
 windows=false
 image=false
+# The browser check (scripts/ui-check.sh): the web UI and the proxy that serves it.
+ui=false
 while IFS= read -r path; do
   case $path in
     # Shared: whatever changes here can break any job. check.sh also runs the
@@ -27,8 +29,8 @@ while IFS= read -r path; do
       exit 0
       ;;
     # The NAS proxy links the web UI.
-    crates/admin-ui/*) packages+=(strata-admin-ui strata-nas-proxy) image=true ;;
-    crates/nas-proxy/*) packages+=(strata-nas-proxy) image=true ;;
+    crates/admin-ui/*) packages+=(strata-admin-ui strata-nas-proxy) image=true ui=true ;;
+    crates/nas-proxy/*) packages+=(strata-nas-proxy) image=true ui=true ;;
     crates/pc-agent/*) packages+=(strata-pc-agent) windows=true image=true ;;
     # The image builds every crate.
     crates/*) image=true ;;
@@ -50,3 +52,4 @@ echo "test=$([[ -n $packages || $tools == true ]] && echo true || echo false)"
 echo "packages=$packages"
 echo "windows=$windows"
 echo "image=$image"
+echo "ui=$ui"

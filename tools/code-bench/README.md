@@ -31,3 +31,21 @@ hat, wird trotzdem geprüft.
 
 Tests: `python3 tools/code-bench/test_runner.py` (mit einem nachgebildeten
 opencode; `scripts/check.sh` führt sie aus).
+
+## Bedrohungsmodell
+
+Was opencode, die Befehle des Modells und der Code in den Aufgabenordnern
+tun, ist fremder Code. Er erreicht nicht:
+
+| Was | Geschützt durch |
+| --- | --- |
+| die API des Runners (Läufe abbrechen oder starten) | Nutzer `agent`, Firewall sperrt Loopback außer dem Relay |
+| NAS, Heimnetz, Weboberfläche des Proxys | Firewall sperrt private, Link-Local- und CGNAT-Netze und IPv6; das Relay gibt nur `/v1/*` weiter |
+| andere Keys als den des Laufs | der Proxy legt pro Lauf einen Key an und widerruft nur diesen |
+| Dateien des Runners und anderer Aufgaben | Nutzer `agent` besitzt nur den eigenen Aufgabenordner |
+| die Wertung | versteckte Tests erst nach opencode, `python -I`, eigene Prozessgruppe; Schreiben ohne Symlinks zu folgen (`O_NOFOLLOW`); Marke nur aus stdout |
+| Prozesse über das Ende der Aufgabe hinaus | opencodes Prozessgruppe endet mit opencode, die der Tests nach der Wertung |
+
+Bekannte Lücke: Der geprüfte Code läuft im Prozess des Testlaufs und kann
+beim Beenden selbst eine Marke ausgeben. Das lässt sich in diesem Prozess
+nicht verhindern; die Wertung ist ein Maß, keine Prüfung gegen Betrug.

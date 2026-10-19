@@ -23,6 +23,14 @@ Schon entschiedene Fragen: `docs/adr/`.
   Ressource anhält, die währenddessen startet (#69). Neuer Code, der das
   bei jedem Router-Bau wiederholt, braucht denselben `OnceLock` wie
   `server::router`.
+- **Eine Ressource entsteht nicht im Inhalt eines `Suspend`.** Wird sie dort
+  angelegt, hydratisiert die Seite nicht („expected a marker node“). Die
+  Komponente legt sie an und zeigt sie neben dem `Suspend`, wie
+  `CodeBenchCard` neben `with_page`.
+- **Server-Funktionen lesen Kontext ohne Panik** (`backend()?`, `use_context`).
+  Der Server zeichnet den Inhalt einer `Transition` pro Anfrage mehrmals; die
+  Ressourcen der verworfenen Durchläufe laufen weiter, ohne Kontext. Eine
+  Panik dort lässt die Antwort nie enden.
 
 ## Proxy und PC
 
@@ -49,6 +57,13 @@ Schon entschiedene Fragen: `docs/adr/`.
 - **Wird ein Feld optional, geht das Review jeden Leser durch.** Wer bisher
   einen Wert voraussetzte, braucht einen Weg für „fehlt“, der zum Zustand
   passt (fehlendes Startskript heißt nicht „PC schläft“).
+
+## Code-Benchmark (`tools/code-bench`)
+
+- **Jede Änderung am Runner oder an seinem Aufruf durch den Proxy geht durch
+  das Bedrohungsmodell** in `tools/code-bench/README.md`: Erreicht fremder Code
+  danach etwas aus der Tabelle, oder fällt eine der Schranken weg? Ein neuer
+  Zugang (Port, Pfad, Nutzer, Mount) bekommt eine Zeile mit seiner Schranke.
 
 ## Installationsskript (`deploy/windows/install.ps1`)
 

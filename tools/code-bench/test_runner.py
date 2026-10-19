@@ -2,6 +2,8 @@
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -98,6 +100,23 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(rules[-1], f"iptables -w -A OUTPUT -m owner --uid-owner 1001 -j {chain}")
         # Nothing rejects all: the internet stays open.
         self.assertFalse([r for r in rules if r.endswith("-j REJECT") and " -d " not in r])
+
+    @unittest.skipUnless(
+        os.geteuid() == 0 and shutil.which("unshare") and shutil.which("iptables"),
+        "needs root, unshare and iptables for a network namespace",
+    )
+    def test_the_firewall_keeps_the_agent_to_the_relay_on_loopback(self):
+        out = subprocess.run(
+            ["unshare", "--net", sys.executable, "-I", str(HERE / "testdata" / "firewall-probe.py")],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(
+            json.loads(out.stdout),
+            {"problem": None, "agent_relay": True, "agent_other": False, "root_other": True},
+        )
 
     def test_links_the_agent_leaves_are_not_followed(self):
         target = Path(os.environ["WORK_DIR"], "outside.py")

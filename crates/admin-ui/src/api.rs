@@ -19,16 +19,18 @@ pub enum Session {
 
 #[server(prefix = "/admin/api", endpoint = "session")]
 pub async fn get_session() -> Result<Session, ServerFnError> {
-    Ok(backend().session(token().await.as_deref()))
+    Ok(backend()?.session(token().await.as_deref()))
 }
 
 #[server(prefix = "/admin/api", endpoint = "login")]
 pub async fn login(password: String) -> Result<(), ServerFnError> {
-    let token = backend().login(&password, client_ip().await).map_err(|e| {
-        expect_context::<leptos_axum::ResponseOptions>()
-            .set_status(axum::http::StatusCode::UNAUTHORIZED);
-        ServerFnError::new(e)
-    })?;
+    let token = backend()?
+        .login(&password, client_ip().await)
+        .map_err(|e| {
+            expect_context::<leptos_axum::ResponseOptions>()
+                .set_status(axum::http::StatusCode::UNAUTHORIZED);
+            ServerFnError::new(e)
+        })?;
     set_cookie(&token);
     Ok(())
 }
@@ -36,7 +38,7 @@ pub async fn login(password: String) -> Result<(), ServerFnError> {
 #[server(prefix = "/admin/api", endpoint = "logout")]
 pub async fn logout() -> Result<(), ServerFnError> {
     if let Some(token) = token().await {
-        backend().logout(&token);
+        backend()?.logout(&token);
     }
     clear_cookie();
     Ok(())
@@ -52,7 +54,7 @@ pub async fn change_password(
     if new != repeat {
         return Err(ServerFnError::new("The two new passwords do not match."));
     }
-    let token = backend()
+    let token = backend()?
         .change_password(&token, &current, &new, client_ip().await)
         .map_err(ServerFnError::new)?;
     set_cookie(&token);
@@ -101,7 +103,7 @@ pub struct SettingsView {
 #[server(prefix = "/admin/api", endpoint = "settings")]
 pub async fn get_settings() -> Result<SettingsView, ServerFnError> {
     require_login(false).await?;
-    Ok(backend().settings())
+    Ok(backend()?.settings())
 }
 
 /// One value of a settings section, as the page sends it.
@@ -116,7 +118,7 @@ pub struct SettingValue {
 #[server(prefix = "/admin/api", endpoint = "save-settings", input = server_fn::codec::Json)]
 pub async fn save_settings(values: Vec<SettingValue>) -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend()
+    backend()?
         .save_settings(&values)
         .map_err(|(key, message)| match key {
             Some(key) => bad_request(format!("{key}: {message}")),
@@ -139,7 +141,7 @@ pub fn setting_error(text: &str) -> (Option<&str>, &str) {
 #[server(prefix = "/admin/api", endpoint = "reset-setting")]
 pub async fn reset_setting(key: String) -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().reset_setting(&key).map_err(bad_request)
+    backend()?.reset_setting(&key).map_err(bad_request)
 }
 
 /// A client's API key, without the secret.
@@ -174,19 +176,19 @@ pub struct CreatedKey {
 #[server(prefix = "/admin/api", endpoint = "api-keys")]
 pub async fn get_api_keys() -> Result<ApiKeysView, ServerFnError> {
     require_login(false).await?;
-    Ok(backend().api_keys())
+    Ok(backend()?.api_keys())
 }
 
 #[server(prefix = "/admin/api", endpoint = "create-api-key")]
 pub async fn create_api_key(name: String) -> Result<CreatedKey, ServerFnError> {
     require_login(false).await?;
-    backend().create_api_key(&name).map_err(bad_request)
+    backend()?.create_api_key(&name).map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "revoke-api-key")]
 pub async fn revoke_api_key(name: String, prefix: String) -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend()
+    backend()?
         .revoke_api_key(&name, &prefix)
         .map_err(bad_request)
 }
@@ -207,7 +209,7 @@ pub struct PcSetupCommand {
 pub async fn new_pc_setup_command() -> Result<PcSetupCommand, ServerFnError> {
     require_login(false).await?;
     let host = request_host().await;
-    backend()
+    backend()?
         .pc_setup_command(host.as_deref().unwrap_or_default())
         .map_err(bad_request)
 }
@@ -258,7 +260,7 @@ impl Setup {
 #[server(prefix = "/admin/api", endpoint = "setup")]
 pub async fn get_setup() -> Result<Setup, ServerFnError> {
     require_login(false).await?;
-    Ok(backend().setup())
+    Ok(backend()?.setup())
 }
 
 /// What the overview shows; sent as a whole on every change.
@@ -550,19 +552,19 @@ pub struct EventView {
 #[server(prefix = "/admin/api", endpoint = "wake")]
 pub async fn wake() -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().wake().map_err(bad_request)
+    backend()?.wake().map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "sleep-now")]
 pub async fn sleep_now() -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().sleep_now().await.map_err(bad_request)
+    backend()?.sleep_now().await.map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "gaming")]
 pub async fn set_gaming(enabled: bool) -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().set_gaming(enabled).await.map_err(bad_request)
+    backend()?.set_gaming(enabled).await.map_err(bad_request)
 }
 
 /// Updates the PC service to the program the NAS carries; only while the PC
@@ -570,13 +572,13 @@ pub async fn set_gaming(enabled: bool) -> Result<(), ServerFnError> {
 #[server(prefix = "/admin/api", endpoint = "pc-service-update")]
 pub async fn update_pc_service() -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().update_pc_service().await.map_err(bad_request)
+    backend()?.update_pc_service().await.map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "keep-awake")]
 pub async fn keep_awake(choice: KeepAwakeChoice) -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().keep_awake(choice).map_err(bad_request)
+    backend()?.keep_awake(choice).map_err(bad_request)
 }
 
 // --- Strata on the PC: setup, models, update, benchmark ---
@@ -760,7 +762,7 @@ pub struct StrataPage {
 #[server(prefix = "/admin/api", endpoint = "strata")]
 pub async fn get_strata() -> Result<StrataPage, ServerFnError> {
     require_login(false).await?;
-    Ok(backend().strata().await)
+    Ok(backend()?.strata().await)
 }
 
 /// Starts a job on the PC, waking it first if it sleeps. The proxy adds the
@@ -783,13 +785,13 @@ pub async fn start_strata_job(
         model,
         speed_projection: speed_projection.unwrap_or(false),
     };
-    backend().start_strata_job(form).await.map_err(bad_request)
+    backend()?.start_strata_job(form).await.map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "strata-cancel")]
 pub async fn cancel_strata_job() -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().cancel_strata_job().await.map_err(bad_request)
+    backend()?.cancel_strata_job().await.map_err(bad_request)
 }
 
 // --- The code benchmark, run by the container code-bench on the NAS ---
@@ -870,7 +872,7 @@ pub struct CodeBenchPage {
 #[server(prefix = "/admin/api", endpoint = "code-bench")]
 pub async fn get_code_bench() -> Result<CodeBenchPage, ServerFnError> {
     require_login(false).await?;
-    Ok(backend().code_bench().await)
+    Ok(backend()?.code_bench().await)
 }
 
 /// Lets the active model solve the three tasks; the PC wakes with the
@@ -878,13 +880,13 @@ pub async fn get_code_bench() -> Result<CodeBenchPage, ServerFnError> {
 #[server(prefix = "/admin/api", endpoint = "code-bench-start")]
 pub async fn start_code_bench() -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().start_code_bench().await.map_err(bad_request)
+    backend()?.start_code_bench().await.map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "code-bench-cancel")]
 pub async fn cancel_code_bench() -> Result<(), ServerFnError> {
     require_login(false).await?;
-    backend().cancel_code_bench().await.map_err(bad_request)
+    backend()?.cancel_code_bench().await.map_err(bad_request)
 }
 
 /// A job as the page asks for it.
@@ -999,5 +1001,5 @@ pub struct HistoryView {
 #[server(prefix = "/admin/api", endpoint = "history")]
 pub async fn get_history(range: String) -> Result<HistoryView, ServerFnError> {
     require_login(false).await?;
-    Ok(backend().history(range).await)
+    Ok(backend()?.history(range).await)
 }

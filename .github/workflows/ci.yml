@@ -30,6 +30,7 @@ jobs:
       packages: ${{ steps.select.outputs.packages }}
       windows: ${{ steps.select.outputs.windows }}
       image: ${{ steps.select.outputs.image }}
+      ui: ${{ steps.select.outputs.ui }}
     steps:
       - uses: actions/checkout@v4
       - id: select
@@ -71,6 +72,32 @@ jobs:
       - run: scripts/check.sh $PACKAGES
         env:
           PACKAGES: ${{ needs.changes.outputs.packages }}
+      # How close the job is to the runner's disk limit, before the linker
+      # dies of it again.
+      - name: Free disk space left
+        if: always()
+        run: df -h /
+  ui:
+    # The web UI in a real browser (scripts/ui-check.sh): only there does a
+    # page that fails to hydrate show up.
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: scripts/install-cargo-leptos.sh
+      # The Playwright version of the cloud sessions.
+      - run: npm install -g playwright@1.56.1 && npx playwright install --with-deps chromium
+      - run: SHOTS=1 scripts/ui-check.sh
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-check
+          path: target/ui-check/
   windows:
     # Builds the PC service and offers it as a download (strata-pc-agent-windows).
     # Runs alongside test: it lints and tests the agent on its own.
@@ -173,7 +200,7 @@ jobs:
     # The one check that sums up a run, for branch protection: jobs a pull
     # request doesn't need are skipped, and skipped counts as passed.
     if: always()
-    needs: [changes, test, windows, image]
+    needs: [changes, test, windows, image, ui]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

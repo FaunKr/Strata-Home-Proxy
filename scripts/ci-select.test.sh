@@ -39,6 +39,7 @@ expect "$all" .github/workflows/ci.yml
 expect "test=true packages=strata-pc-agent windows=true image=true" crates/pc-agent/src/agent.rs
 expect "test=true packages=strata-admin-ui strata-nas-proxy windows=false image=true" crates/admin-ui/src/app.rs
 expect "test=false packages= windows=false image=false" deploy/docker-compose.yml
+expect "test=true packages= windows=false image=false" tools/local-agent/local-agent
 [[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$all " ]] || fail "--all -> nicht alles"
 
 # Every crate selects itself and the image.
@@ -82,7 +83,7 @@ done < <(sed -e ':a' -e '/\\$/N' -e 's/\\\n//' -e 'ta' Dockerfile | grep -E '^(C
 
 # Every file check.sh uses, and every file the scripts it runs use, runs the
 # test job.
-used_by() { grep -oE '(scripts|deploy)/[A-Za-z0-9._/-]+' "$1" | sort -u; }
+used_by() { grep -oE '(scripts|deploy|tools)/[A-Za-z0-9._/-]+' "$1" | sort -u; }
 for script in scripts/check.sh $(used_by scripts/check.sh | grep '^scripts/.*\.sh$' | grep -v ci-select); do
   for path in $(used_by "$script"); do
     [[ -e $path ]] && expect_selects "$path" test true

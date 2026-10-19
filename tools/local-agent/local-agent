@@ -1,0 +1,683 @@
+#!/usr/bin/env bash
+# local-agent: hands a Claude Code task to Strata. Starts a headless
+# `claude -p` whose API is the Proxy on the NAS, so Strata runs the whole agent
+# loop, in its own git worktree. The skill of the same name drives it; the
+# design is in issue #107.
+#
+# Needs only Bash (3.2, as on macOS), git, jq and curl.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: local-agent run [--read-only] [--watch] [--allow RULE]... [--timeout TIME] [TASK]
+       local-agent status [RUN]
+       local-agent result [RUN]
+       local-agent discard RUN
+       local-agent check
+       local-agent prune
+
+run reads TASK from stdin when it isn't given. Exit codes of run:
+  0  done: review the result (local-agent result RUN)
+  3  fall back to a normal agent; the reason is in local-agent result RUN
+  4  timed out; the worktree and log are kept
+  1  error of local-agent itself, 2 wrong usage or configuration
+
+Configuration: ~/.config/local-agent/env (chmod 600) with
+  LOCAL_AGENT_URL=http://<NAS>:<port>   the Proxy
+  LOCAL_AGENT_KEY=<key from Access in the Proxy's web UI>
+EOF
+}
+
+config_file=${XDG_CONFIG_HOME:-$HOME/.config}/local-agent/env
+state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/local-agent
+runs_dir=$state_dir/runs
+queue_dir=$state_dir/queue
+
+# What Claude Code assumes as the context window once the 1M window is off.
+assumed_window=200000
+# Compaction starts at this share of Strata's window, in percent
+# (LOCAL_AGENT_COMPACT_SHARE in the configuration).
+compact_share=75
+output_tokens=8192
+# Seconds between looks at the Proxy during a run, for Gaming-Modus
+# (LOCAL_AGENT_PROBE_INTERVAL, mainly for the tests).
+probe_interval=${LOCAL_AGENT_PROBE_INTERVAL:-60}
+# Claude Code's own prompt is about 25K tokens; below 64K a run barely starts.
+min_context=65536
+
+die() {
+  echo "local-agent: $*" >&2
+  exit 1
+}
+usage_error() {
+  echo "local-agent: $*" >&2
+  exit 2
+}
+
+load_config() {
+  [[ -f $config_file ]] || usage_error "no configuration in $config_file (LOCAL_AGENT_URL and LOCAL_AGENT_KEY, chmod 600)"
+  # The file holds a key: group and others must not read it.
+  local mode
+  # shellcheck disable=SC2012 # one known file; stat differs between macOS and Linux
+  mode=$(ls -l "$config_file" | cut -c5-10)
+  [[ $mode == ------ ]] || usage_error "$config_file can be read by others; run: chmod 600 $config_file"
+  # shellcheck source=/dev/null
+  . "$config_file"
+  [[ -n ${LOCAL_AGENT_URL:-} && -n ${LOCAL_AGENT_KEY:-} ]] ||
+    usage_error "$config_file needs LOCAL_AGENT_URL and LOCAL_AGENT_KEY"
+  LOCAL_AGENT_URL=${LOCAL_AGENT_URL%/}
+  # Strata ignores the model name, but Claude Code only accepts names it knows.
+  model=${LOCAL_AGENT_MODEL:-claude-sonnet-4-5}
+  compact_share=${LOCAL_AGENT_COMPACT_SHARE:-$compact_share}
+}
+
+# Prints a duration like 90, 90s, 30m or 2h in seconds.
+seconds() {
+  [[ $1 =~ ^([0-9]+)([smh]?)$ ]] || return 1
+  case ${BASH_REMATCH[2]} in
+    m) echo $((10#${BASH_REMATCH[1]} * 60)) ;;
+    h) echo $((10#${BASH_REMATCH[1]} * 3600)) ;;
+    *) echo $((10#${BASH_REMATCH[1]})) ;;
+  esac
+}
+
+# Run metadata: one key=value per line in <run>/meta.
+meta_set() {
+  local file=$run_dir/meta
+  { grep -v "^$1=" "$file" 2>/dev/null || true; } >"$file.tmp"
+  printf '%s=%s\n' "$1" "$2" >>"$file.tmp"
+  mv "$file.tmp" "$file"
+}
+meta_get() { sed -n "s/^$2=//p" "$1/meta" 2>/dev/null | tail -1; }
+
+# A run's state; a queued or running run whose runner is gone is "stopped".
+run_state() {
+  local state
+  state=$(meta_get "$1" state)
+  if [[ $state == queued || $state == running ]] && ! kill -0 "$(meta_get "$1" pid)" 2>/dev/null; then
+    state=stopped
+  fi
+  echo "$state"
+}
+
+# Sets run_dir for a run id, or for the latest run of the current repo (of
+# any repo outside one) when no id is given.
+resolve_run() {
+  if [[ -n ${1:-} ]]; then
+    run_dir=$runs_dir/$1
+    [[ -f $run_dir/meta ]] || usage_error "unknown run: $1"
+    return
+  fi
+  local top dir latest=
+  top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  for dir in "$runs_dir"/*/; do
+    [[ -f $dir/meta ]] || continue
+    if [[ -z $top || $(meta_get "$dir" repo) == "$top" ]]; then latest=${dir%/}; fi
+  done
+  [[ -n $latest ]] || usage_error "no runs yet"
+  run_dir=$latest
+}
+
+# The queue lets one run at a time talk to Strata, across all repos. Each
+# waiting or active run holds a file named by a growing number, holding the
+# runner's pid; the lowest number of a live runner goes first.
+enqueue() {
+  mkdir -p "$queue_dir"
+  # A directory as mutex for the counter: mkdir is atomic.
+  local lock=$state_dir/counter.lock n
+  until mkdir "$lock" 2>/dev/null; do
+    # A runner killed while holding it would block everyone.
+    [[ -z $(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null) ]] || rmdir "$lock" 2>/dev/null || true
+    sleep 0.1
+  done
+  n=$(($(cat "$state_dir/counter" 2>/dev/null || echo 0) + 1))
+  echo "$n" >"$state_dir/counter"
+  rmdir "$lock"
+  ticket=$queue_dir/$(printf %010d "$n")-$1
+  # Written whole and then moved, so a reader never sees it without the pid.
+  echo $$ >"$queue_dir/.new-$1"
+  mv "$queue_dir/.new-$1" "$ticket"
+  trap 'rm -f "$ticket"' EXIT
+}
+
+# Waits until this run's ticket is the first one of a live runner.
+wait_turn() {
+  local file pid name said=0
+  while true; do
+    for file in "$queue_dir"/*; do
+      [[ -f $file ]] || continue
+      pid=$(cat "$file" 2>/dev/null || true)
+      if [[ -z $pid ]] || ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$file"
+        continue
+      fi
+      [[ $file == "$ticket" ]] && return
+      break
+    done
+    if ((!said)); then
+      name=${file##*/}
+      echo "local-agent: waiting for run ${name#*-} to finish"
+      said=1
+    fi
+    sleep 1
+  done
+}
+
+# Asks the Proxy for Strata's /health; the Proxy wakes the PC for it. Sets
+# probe_status (000 when the Proxy didn't answer), probe_tag (its
+# x-strata-proxy-status) and probe_context (Strata's max_context).
+probe() {
+  local headers=$run_dir/health.headers body=$run_dir/health.json
+  rm -f "$headers" "$body"
+  # The key goes in on stdin, so it never shows in the process list.
+  probe_status=$(printf 'x-api-key: %s\n' "$LOCAL_AGENT_KEY" |
+    curl -sS --max-time "${1:-330}" -H @- -D "$headers" -o "$body" -w '%{http_code}' \
+      "$LOCAL_AGENT_URL/health" 2>"$run_dir/health.err") || probe_status=000
+  probe_tag=$(tr -d '\r' <"$headers" 2>/dev/null | sed -n 's/^[Xx]-[Ss]trata-[Pp]roxy-[Ss]tatus: *//p' | tail -1)
+  probe_context=$(jq -r '.max_context // empty' "$body" 2>/dev/null || true)
+}
+
+# Tools the worker may use without asking, before the repo's own allow rules.
+read_tools=(Read Glob Grep TodoWrite "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)"
+  "Bash(git show:*)" "Bash(ls:*)" "Bash(grep:*)")
+edit_tools=(Edit MultiEdit Write NotebookEdit)
+write_tools=("${edit_tools[@]}" "Bash(git add:*)" "Bash(git commit:*)")
+# Never allowed, whatever the repo or --allow say: pushing, and the usual
+# network tools. A deny list can't catch every program that talks to the
+# network; it keeps the common ways closed.
+denied_tools=(WebFetch WebSearch "Bash(git push:*)" "Bash(curl:*)" "Bash(wget:*)" "Bash(ssh:*)"
+  "Bash(scp:*)" "Bash(rsync:*)" "Bash(nc:*)")
+
+# True when a rule is one of denied_tools or narrows one of them:
+# "Bash(git push --force)" narrows "Bash(git push:*)", "WebFetch(domain:x)"
+# narrows "WebFetch"; "Bash(ncdu:*)" doesn't narrow "Bash(nc:*)".
+is_denied() {
+  local denied command
+  for denied in "${denied_tools[@]}"; do
+    [[ $1 == "$denied" ]] && return 0
+    if [[ $denied == *":*)" ]]; then
+      command=${denied%:\*)}
+      [[ $1 == "$command)" || $1 == "$command:"* || $1 == "$command "* ]] && return 0
+    else
+      [[ $1 == "$denied("* ]] && return 0
+    fi
+  done
+  return 1
+}
+
+# Fills allowed and disallowed for the worker: the base tools, the repo's
+# allow rules (.claude/settings.json; not for read-only runs) and
+# extra_allow, minus denied ones.
+build_permissions() {
+  local repo=$1 read_only=$2 rule candidates
+  candidates=("${read_tools[@]}")
+  ((read_only)) || candidates+=("${write_tools[@]}")
+  # A read-only run works in the user's checkout, where the repo's rules could
+  # allow writing commands; it gets only the read tools and --allow.
+  if ((!read_only)) && [[ -f $repo/.claude/settings.json ]]; then
+    while IFS= read -r rule; do
+      [[ -n $rule ]] && candidates+=("$rule")
+    done < <(jq -r '.permissions.allow[]? // empty' "$repo/.claude/settings.json" 2>/dev/null || true)
+  fi
+  candidates+=(${extra_allow[@]+"${extra_allow[@]}"})
+  allowed=()
+  for rule in "${candidates[@]}"; do
+    is_denied "$rule" && continue
+    ((read_only)) && [[ " ${edit_tools[*]} " == *" ${rule%%(*} "* ]] && continue
+    allowed+=("$rule")
+  done
+  disallowed=("${denied_tools[@]}")
+  ((read_only)) && disallowed+=("${edit_tools[@]}" "Bash(git add:*)" "Bash(git commit:*)")
+  return 0
+}
+
+# Ends a run that Strata can't take: exit 3 tells the skill to hand the task
+# to a normal agent. $1 is the reason, $2 an optional hint on what to fix.
+fall_back() {
+  meta_set state fallback
+  meta_set reason "$1"
+  [[ -z ${2:-} ]] || meta_set hint "$2"
+  meta_set ended "$(date +%s)"
+  echo "local-agent: run $(meta_get "$run_dir" id) falls back to a normal agent: $1" >&2
+  [[ -z ${2:-} ]] || echo "local-agent: to fix: $2" >&2
+  exit 3
+}
+
+# Checks that Strata can take a run, waking the PC; calls $on_failure (a
+# function taking a reason and a hint, fall_back by default) otherwise. A
+# wake timeout gets one more try. Sets probe_context.
+preflight() {
+  local on_fail=${on_failure:-fall_back}
+  probe
+  if [[ $probe_status == 504 && $probe_tag == wake_timeout ]]; then
+    probe
+  fi
+  case $probe_status/$probe_tag in
+    200/*) ;;
+    503/gaming) "$on_fail" "Strata is off: the PC is in Gaming-Modus" ;;
+    504/wake_timeout) "$on_fail" "the PC did not wake up in time (tried twice)" ;;
+    401/strata_unauthorized)
+      "$on_fail" "Strata refused the Proxy's own key" "set the Strata key in the Proxy's web UI (Strata section)"
+      ;;
+    401/*) "$on_fail" "the Proxy did not accept the key" "check LOCAL_AGENT_KEY in $config_file against Access in the Proxy's web UI" ;;
+    503/not_configured)
+      "$on_fail" "the Proxy is not set up: it has no address for Strata" "set Strata's address in the Proxy's web UI (Strata section)"
+      ;;
+    503/no_mac)
+      "$on_fail" "the Proxy cannot wake the PC: it knows no MAC address" "start the PC once so the PC-Dienst reports its MAC, or set PC_MAC on the Proxy"
+      ;;
+    000/*) "$on_fail" "the Proxy is unreachable at $LOCAL_AGENT_URL ($(tail -1 "$run_dir/health.err"))" "check LOCAL_AGENT_URL in $config_file and that this machine reaches the NAS" ;;
+    *) "$on_fail" "the Proxy answered HTTP $probe_status${probe_tag:+ ($probe_tag)}" ;;
+  esac
+  [[ $probe_context =~ ^[0-9]+$ ]] || "$on_fail" "Strata's /health named no max_context"
+  ((probe_context >= min_context)) || "$on_fail" "Strata's context is $probe_context tokens, less than the $min_context a run needs" \
+    "raise Strata's context to at least 64K ($min_context tokens), e.g. in the Strata section of the Proxy's web UI"
+}
+
+# Prints a field of the worker's final result event, e.g. result or is_error.
+result_field() {
+  jq -Rr --arg field "$1" 'fromjson? | select(.type == "result") | .[$field]' "$run_dir/log.jsonl" | tail -1
+}
+
+# Turns the worker's stream-json log (stdin) into one line per step.
+steps() {
+  jq -Rr 'fromjson? |
+    if .type == "assistant" then
+      .message.content[]? | select(.type == "tool_use") |
+      "\(.name) \(.input.file_path // .input.path // .input.command // .input.pattern // "" | tostring | .[0:100])"
+    elif .type == "system" and .subtype == "init" then "started"
+    elif .type == "system" and .subtype == "compact_boundary" then "context compacted"
+    elif .type == "result" then "finished" + (if .is_error then " with an error" else "" end)
+    else empty end'
+}
+
+# Appends the steps of log lines after line $1 to the progress file, for
+# --watch; prints the number of lines read. Only whole lines count.
+follow() {
+  local total
+  if [[ ! -f $run_dir/log.jsonl ]]; then
+    echo "$1"
+    return
+  fi
+  total=$(wc -l <"$run_dir/log.jsonl" | tr -d ' ')
+  if ((total > $1)); then
+    sed -n "$(($1 + 1)),${total}p" "$run_dir/log.jsonl" | steps >>"$run_dir/progress"
+  fi
+  echo "$total"
+}
+
+# Stops the worker and every command it started (its process group).
+stop_worker() {
+  kill -TERM -- "-$worker" 2>/dev/null || return 0
+  local _
+  for _ in 1 2 3 4; do
+    kill -0 "$worker" 2>/dev/null || return 0
+    sleep 0.5
+  done
+  kill -KILL -- "-$worker" 2>/dev/null || true
+}
+
+# After the worker died partway: keeps its work, writes what a fallback agent
+# needs to continue, and falls back.
+fail_mid_run() {
+  local error
+  error=$(result_field result)
+  [[ -n $error ]] || error=$(tail -1 "$run_dir/stderr" 2>/dev/null)
+  [[ -n $error ]] || error="the worker exited with code $1"
+  {
+    echo "Error: $error"
+    if [[ -n $(meta_get "$run_dir" branch) ]]; then
+      commit_leftovers "$(meta_get "$run_dir" worktree)" "$(meta_get "$run_dir" id)"
+      echo "Changed files, committed on $(meta_get "$run_dir" branch):"
+      git -C "$(meta_get "$run_dir" repo)" diff --name-only "$(meta_get "$run_dir" base)" "$(meta_get "$run_dir" branch)" | sed 's/^/  /'
+    fi
+    echo "Last steps:"
+    steps <"$run_dir/log.jsonl" | tail -10 | sed 's/^/  /'
+  } >"$run_dir/handoff"
+  # A quick look whether the PC went into Gaming-Modus meanwhile.
+  probe 15
+  if [[ $probe_tag == gaming ]]; then
+    fall_back "Strata failed mid-run: the PC switched to Gaming-Modus"
+  fi
+  fall_back "Strata failed mid-run: $error"
+}
+
+# Points Claude Code at the Proxy and fits auto-compaction into Strata's
+# context: Claude Code assumes 200K (with the 1M window off) and compacts at
+# compact_share of Strata's window. Output stays small enough for the
+# compaction call itself to fit. Needs probe_context.
+worker_env() {
+  unset ANTHROPIC_API_KEY
+  export ANTHROPIC_BASE_URL=$LOCAL_AGENT_URL ANTHROPIC_AUTH_TOKEN=$LOCAL_AGENT_KEY
+  export ANTHROPIC_MODEL=$model ANTHROPIC_DEFAULT_HAIKU_MODEL=$model
+  export CLAUDE_CODE_DISABLE_1M_CONTEXT=1
+  export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=$((compact_share * probe_context / assumed_window))
+  export CLAUDE_CODE_MAX_OUTPUT_TOKENS=$output_tokens
+  export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 API_TIMEOUT_MS=900000
+}
+
+instructions="You are a local-agent worker: a Claude Code session running unattended for another session.
+Nobody can answer questions or permission prompts. If a tool or command is denied, work around it or say so in your summary.
+Work only in the current directory."
+write_instructions="When you are done, commit your changes with a short message.
+End with a short summary: what you changed, how you checked it, and what is left open."
+read_only_instructions="This run is read-only: you cannot change files. Answer from what you read.
+End with your answer and the files it rests on."
+
+cmd_run() {
+  local task='' arg read_only=0 timeout=2h watch=0
+  extra_allow=()
+  while (($#)); do
+    arg=$1
+    shift
+    case $arg in
+      --read-only) read_only=1 ;;
+      --watch) watch=1 ;;
+      --timeout)
+        (($#)) || usage_error "--timeout needs a time, e.g. --timeout 30m"
+        timeout=$1
+        shift
+        ;;
+      --allow)
+        (($#)) || usage_error "--allow needs a rule, e.g. --allow 'Bash(cargo test:*)'"
+        extra_allow+=("$1")
+        shift
+        ;;
+      --) task="$*" && break ;;
+      -*) usage_error "unknown option: $arg" ;;
+      *) task="$arg${*:+ $*}" && break ;;
+    esac
+  done
+  local limit
+  limit=$(seconds "$timeout") || usage_error "--timeout takes seconds, or a number with s, m or h: $timeout"
+  load_config
+  [[ -n $task ]] || task=$(cat)
+  [[ -n $task ]] || usage_error "no task"
+  local repo
+  repo=$(git rev-parse --show-toplevel 2>/dev/null) || usage_error "not inside a git repository"
+
+  local id
+  id=$(date +%Y%m%d-%H%M%S)-$(printf %04x $((RANDOM)))
+  run_dir=$runs_dir/$id
+  mkdir -p "$run_dir"
+  chmod 700 "$state_dir"
+  printf '%s\n' "$task" >"$run_dir/task"
+  meta_set id "$id"
+  meta_set repo "$repo"
+  meta_set state queued
+  meta_set pid $$
+  meta_set started "$(date +%s)"
+  echo "local-agent: run $id ($run_dir)"
+  if ((watch)); then
+    : >"$run_dir/progress"
+    echo "local-agent: progress in $run_dir/progress"
+  fi
+
+  enqueue "$id"
+  wait_turn
+  preflight
+
+  # A writing run gets its own branch and worktree; a read-only one reads
+  # the repo as it is.
+  local workdir=$repo mode=acceptEdits
+  if ((read_only)); then
+    mode=default
+    meta_set mode read-only
+  else
+    local base branch=local-agent/$id
+    base=$(git -C "$repo" rev-parse HEAD)
+    workdir=$state_dir/$(basename "$repo")/$id
+    git -C "$repo" worktree add -q -b "$branch" "$workdir" "$base"
+    meta_set mode write
+    meta_set base "$base"
+    meta_set branch "$branch"
+    meta_set worktree "$workdir"
+  fi
+  build_permissions "$repo" "$read_only"
+  local prompt=$instructions$'\n'$write_instructions
+  ((read_only)) && prompt=$instructions$'\n'$read_only_instructions
+  meta_set state running
+  meta_set started "$(date +%s)"
+  local rc=0
+
+  # The worker gets its own process group (set -m), so a timeout stops the
+  # commands it started too.
+  set -m
+  (
+    cd "$workdir"
+    worker_env
+    exec claude -p --output-format stream-json --verbose \
+      --append-system-prompt "$prompt" --permission-mode "$mode" \
+      --allowedTools "${allowed[@]}" --disallowedTools "${disallowed[@]}"
+  ) <"$run_dir/task" >"$run_dir/log.jsonl" 2>"$run_dir/stderr" &
+  worker=$!
+  set +m
+  # Stopping the runner stops the worker too: it sits in its own group.
+  trap 'stop_worker; meta_set state stopped; meta_set ended "$(date +%s)"; exit 130' INT TERM HUP
+  local deadline=$((SECONDS + limit)) next_probe=$((SECONDS + probe_interval)) timed_out=0 gaming=0 seen=0
+  while kill -0 "$worker" 2>/dev/null; do
+    ((watch)) && seen=$(follow "$seen")
+    if ((SECONDS >= deadline)); then
+      timed_out=1
+      stop_worker
+      break
+    fi
+    # Claude Code retries a 503 for a long time; Gaming-Modus ends the run
+    # sooner.
+    if ((SECONDS >= next_probe)); then
+      next_probe=$((SECONDS + probe_interval))
+      probe 10
+      if [[ $probe_tag == gaming ]]; then
+        gaming=1
+        stop_worker
+        break
+      fi
+    fi
+    sleep 1
+  done
+  wait "$worker" 2>/dev/null || rc=$?
+  trap - INT TERM HUP
+  ((watch)) && follow "$seen" >/dev/null
+
+  if ((timed_out)); then
+    ((read_only)) || commit_leftovers "$workdir" "$id"
+    meta_set state timeout
+    meta_set reason "stopped after the time limit of $timeout"
+    meta_set ended "$(date +%s)"
+    echo "local-agent: run $id stopped after $timeout; see local-agent result $id" >&2
+    exit 4
+  fi
+
+  # A worker that exits badly, ends on an error or never ends counts as failed.
+  local outcome
+  outcome=$(result_field is_error)
+  if ((gaming || rc != 0)) || [[ $outcome != false ]]; then
+    fail_mid_run "$rc"
+  fi
+  result_field result >"$run_dir/summary"
+  ((read_only)) || commit_leftovers "$workdir" "$id"
+  meta_set ended "$(date +%s)"
+  meta_set state "done"
+  echo "local-agent: run $id done; review it with: local-agent result $id"
+}
+
+# Commits what the worker left uncommitted, so the branch holds all its work.
+commit_leftovers() {
+  [[ -n $(git -C "$1" status --porcelain) ]] || return 0
+  git -C "$1" add -A
+  git -C "$1" commit -qm "local-agent: uncommitted changes of run $2"
+}
+
+# Removes a run's worktree and branch, if it has them.
+remove_worktree() {
+  local repo worktree branch
+  repo=$(meta_get "$1" repo)
+  worktree=$(meta_get "$1" worktree)
+  branch=$(meta_get "$1" branch)
+  [[ -n $branch && -d $repo ]] || return 0
+  [[ ! -d $worktree ]] || git -C "$repo" worktree remove --force "$worktree"
+  git -C "$repo" worktree prune
+  ! git -C "$repo" rev-parse -q --verify "refs/heads/$branch" >/dev/null || git -C "$repo" branch -qD "$branch"
+}
+
+# True when a run's branch is merged: it has commits, and another local
+# branch contains its tip.
+merged() {
+  local repo branch
+  repo=$(meta_get "$1" repo)
+  branch=$(meta_get "$1" branch)
+  [[ -n $branch && -d $repo ]] || return 1
+  git -C "$repo" rev-parse -q --verify "refs/heads/$branch" >/dev/null || return 1
+  # A branch without commits of its own is contained everywhere; keep it.
+  [[ $(git -C "$repo" rev-parse "refs/heads/$branch") != "$(meta_get "$1" base)" ]] || return 1
+  local containing
+  containing=$(git -C "$repo" for-each-ref --contains "refs/heads/$branch" --format='%(refname:short)' refs/heads/)
+  grep -qv '^local-agent/' <<<"$containing"
+}
+
+cmd_discard() {
+  [[ -n ${1:-} ]] || usage_error "discard needs a run id"
+  resolve_run "$1"
+  case $(run_state "$run_dir") in
+    queued | running) usage_error "run $1 is still running" ;;
+  esac
+  remove_worktree "$run_dir"
+  meta_set state discarded
+  echo "local-agent: discarded run $1"
+}
+
+# Removes the worktrees of merged runs, and run folders older than 14 days
+# whose worktree is gone. Unmerged work is never removed.
+cmd_prune() {
+  local dir state
+  for dir in "$runs_dir"/*/; do
+    dir=${dir%/}
+    [[ -f $dir/meta ]] || continue
+    state=$(run_state "$dir")
+    [[ $state == queued || $state == running ]] && continue
+    if merged "$dir"; then
+      remove_worktree "$dir"
+    fi
+    if [[ -n $(find "$dir/meta" -mtime +14) ]] && [[ ! -d $(meta_get "$dir" worktree) ]]; then
+      rm -rf "$dir"
+      echo "local-agent: pruned run ${dir##*/}"
+    fi
+  done
+}
+
+check_failed() {
+  echo "FAIL $check_step: $1"
+  [[ -z ${2:-} ]] || echo "     to fix: $2"
+  exit 2
+}
+
+# Checks the setup step by step, as far as it gets.
+cmd_check() {
+  load_config
+  echo "ok   config $config_file"
+  run_dir=$(mktemp -d)
+  trap 'rm -rf "$run_dir"' EXIT
+  check_step=proxy
+  on_failure=check_failed preflight
+  echo "ok   proxy: Strata answers with $probe_context tokens of context"
+
+  check_step="tool call"
+  local marker
+  marker=local-agent-check-$(printf %04x $((RANDOM)))
+  mkdir "$run_dir/work"
+  (
+    cd "$run_dir/work"
+    worker_env
+    exec claude -p --output-format stream-json --verbose --allowedTools "Bash(echo:*)"
+  ) <<<"Run this command with the Bash tool, then reply with its output: echo $marker" \
+    >"$run_dir/log.jsonl" 2>"$run_dir/stderr" || true
+  jq -Rr 'fromjson? | select(.type == "user") | .message.content[]? | select(.type == "tool_result") |
+    .content | if type == "array" then map(.text? // "") | join("") else tostring end' \
+    "$run_dir/log.jsonl" | grep -qF "$marker" ||
+    check_failed "the worker made no working tool call ($(tail -1 "$run_dir/stderr" 2>/dev/null))" \
+      "look at Strata's log on the PC; Claude Code needs Strata 0.1.17 or newer"
+  echo "ok   tool call through Strata"
+}
+
+cmd_status() {
+  resolve_run "${1:-}"
+  local state started ended elapsed
+  state=$(run_state "$run_dir")
+  started=$(meta_get "$run_dir" started)
+  ended=$(meta_get "$run_dir" ended)
+  elapsed=$((${ended:-$(date +%s)} - started))
+  echo "run $(meta_get "$run_dir" id): $state ($((elapsed / 60))m$((elapsed % 60))s)"
+  echo "repo: $(meta_get "$run_dir" repo)"
+  echo "task: $(head -1 "$run_dir/task")"
+  local reason
+  reason=$(meta_get "$run_dir" reason)
+  [[ -z $reason ]] || echo "reason: $reason"
+  if [[ -s $run_dir/log.jsonl ]]; then
+    echo "last steps:"
+    steps <"$run_dir/log.jsonl" | tail -8 | sed 's/^/  /'
+  fi
+}
+
+cmd_result() {
+  resolve_run "${1:-}"
+  local id state branch repo base
+  id=$(meta_get "$run_dir" id)
+  state=$(run_state "$run_dir")
+  echo "run $id: $state"
+  case $state in
+    fallback) echo "next: fall back to a normal agent" ;;
+    timeout) echo "next: report the timeout; no fallback" ;;
+  esac
+  local reason hint
+  reason=$(meta_get "$run_dir" reason)
+  hint=$(meta_get "$run_dir" hint)
+  [[ -z $reason ]] || echo "reason: $reason"
+  [[ -z $hint ]] || echo "to fix: $hint"
+  local worktree
+  worktree=$(meta_get "$run_dir" worktree)
+  [[ -z $worktree ]] || echo "worktree: $worktree (branch $(meta_get "$run_dir" branch))"
+  if [[ -f $run_dir/summary ]]; then
+    echo
+    echo "## Summary"
+    cat "$run_dir/summary"
+  fi
+  if [[ $state == timeout ]]; then
+    echo
+    echo "## Last steps"
+    steps <"$run_dir/log.jsonl" | tail -10
+  fi
+  if [[ -f $run_dir/handoff ]]; then
+    echo
+    echo "## Log summary"
+    cat "$run_dir/handoff"
+  fi
+  branch=$(meta_get "$run_dir" branch)
+  if [[ -n $branch ]]; then
+    repo=$(meta_get "$run_dir" repo)
+    base=$(meta_get "$run_dir" base)
+    echo
+    echo "## Changes on $branch"
+    git -C "$repo" --no-pager diff --stat "$base" "$branch"
+    git -C "$repo" --no-pager diff "$base" "$branch"
+  fi
+}
+
+main() {
+  local cmd=${1:-}
+  (($#)) && shift
+  case $cmd in
+    run) cmd_run "$@" ;;
+    status) cmd_status "$@" ;;
+    discard) cmd_discard "$@" ;;
+    prune) cmd_prune "$@" ;;
+    check) cmd_check "$@" ;;
+    result) cmd_result "$@" ;;
+    -h | --help | help) usage ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

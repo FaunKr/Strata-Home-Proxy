@@ -89,6 +89,13 @@ impl StrataState {
     }
 }
 
+impl StrataState {
+    /// Whether a Strata job the proxy started or saw is still running.
+    pub fn job_running(&self) -> bool {
+        self.job_running.load(Ordering::SeqCst)
+    }
+}
+
 /// The Strata page; asks the PC service but never wakes the PC.
 pub async fn page(state: &Arc<AppState>) -> StrataPage {
     let agent = state.agent();
@@ -121,7 +128,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             update: None,
         };
     };
-    if let Some(bench) = info.benchmark.as_mut() {
+    for bench in info.benchmark.iter_mut().chain(info.benchmarks.iter_mut()) {
         bench.at_text = clock::local_text(bench.at);
     }
     *state.strata.last.lock().unwrap() = Some(info.clone());
@@ -154,6 +161,10 @@ pub async fn start_job(state: &AppState, form: StrataJobForm) -> Result<(), Stri
     let agent = state.agent();
     if !agent.configured() {
         return Err(NO_AGENT.into());
+    }
+    // A job could switch the model the code benchmark measures.
+    if state.code_bench.busy() {
+        return Err("A code benchmark is running. Strata jobs wait until it ends.".into());
     }
     if state.pc_status(&agent).await.is_none() {
         wake(state).await?;
@@ -235,7 +246,10 @@ fn body(form: &StrataJobForm, key: Option<&str>) -> serde_json::Value {
             put("model", json!(form.model));
             put("context", json!(form.context));
         }
-        StrataJobKind::Update | StrataJobKind::Benchmark | StrataJobKind::SetKey => {}
+        StrataJobKind::Update
+        | StrataJobKind::Benchmark
+        | StrataJobKind::SetKey
+        | StrataJobKind::CompareModels => {}
     }
     if let Some(key) = key {
         put("api_key", json!(key));

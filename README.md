@@ -59,10 +59,17 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 
 Das Image baut die CI bei jedem Push auf main: `ghcr.io/faunkr/strata-home-proxy:latest`.
 
+Das Repo ist privat, Dateien daraus lädt `curl` daher nur mit einem
+GitHub-Token (fein granular, *Contents: Read-only* für dieses Repo):
+
 ```sh
 mkdir -p strata-proxy && cd strata-proxy
-curl -fsSLO https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/main/deploy/docker-compose.yml
-curl -fsSL -o .env https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/main/deploy/env.example
+read -rs TOKEN           # Token einfügen, Enter
+gh_file() { curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/FaunKr/Strata-Home-Proxy/contents/$1"; }
+gh_file deploy/docker-compose.yml >docker-compose.yml
+gh_file deploy/env.example >.env
+unset TOKEN
 nano .env                # Werte eintragen
 docker compose pull
 docker compose up -d
@@ -75,6 +82,11 @@ ins Heimnetz. Alle Einstellungen stehen mit Erklärung in
 [crates/nas-proxy/src/config.rs](crates/nas-proxy/src/config.rs).
 
 Nur ein Weckpaket senden, zum Testen: `docker compose run --rm strata-proxy wake`
+
+Der zweite Dienst `code-bench` (Image `ghcr.io/faunkr/strata-code-bench:latest`)
+ist nur für den Code-Benchmark da; ohne ihn läuft alles andere genauso. Das
+Update-Skript für TrueNAS aktualisiert ihn nicht, dafür einmal
+`docker pull ghcr.io/faunkr/strata-code-bench:latest` und die App neu starten.
 
 ## Automatische Updates (TrueNAS)
 
@@ -93,10 +105,16 @@ oben in der YAML-Datei).
 
 1. Skript in ein eigenes Verzeichnis auf dem Pool legen, nicht in das
    Datenverzeichnis der App. Dort landen auch Log und Sicherungen.
+   Das Repo ist privat, daher mit einem GitHub-Token (fein granular,
+   *Contents: Read-only* für dieses Repo):
    ```sh
    sudo mkdir -p /mnt/POOL/apps/strata-proxy-update
    cd /mnt/POOL/apps/strata-proxy-update
-   sudo curl -fsSLO https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/main/deploy/truenas-auto-update.sh
+   read -rs TOKEN   # Token einfügen, Enter
+   sudo curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" \
+     -o truenas-auto-update.sh \
+     https://api.github.com/repos/FaunKr/Strata-Home-Proxy/contents/deploy/truenas-auto-update.sh
+   unset TOKEN
    sudo chmod 700 truenas-auto-update.sh
    sudo ./truenas-auto-update.sh   # einmal von Hand: ohne neues Image passiert nichts
    ```
@@ -185,6 +203,18 @@ ist englisch und in fünf Bereiche gegliedert: *Overview*, *PC*, *Strata*
   und einmal. Die .exe liegt im Image und ist ohne Anmeldung unter
   `/admin/agent/strata-pc-agent.exe` abrufbar. Details:
   [docs/pc-dienst.md](docs/pc-dienst.md).
+- **Benchmark** (*Strata → Version & benchmark*): *Run benchmark* misst das
+  aktive Modell, *Compare models* jedes installierte nacheinander (je etwa
+  10 min, Anfragen warten so lange) und aktiviert danach wieder das vorher
+  aktive. Die Liste zeigt pro Modell Decode- und Prompt-Tokens/s, mit
+  welchem Kontext, welcher Speed-Projection und welcher Strata-Version
+  gemessen wurde, das schnellste zuerst, mit *Make active*.
+- **Code benchmark** (gleicher Reiter): Das aktive Modell löst mit opencode
+  drei Python-Aufgaben im Container `code-bench` neben dem Proxy (in beiden
+  Compose-Dateien; `CODE_BENCH_URL` zeigt darauf). Versteckte Tests bewerten
+  das Ergebnis; gezeigt werden Tests, Zeit, Schritte, Tokens und Tokens/s je
+  Aufgabe, aufklappbar mit Code und Testausgabe. Details:
+  [tools/code-bench/README.md](tools/code-bench/README.md).
 - **API-Keys** (Bereich *Access*): Einen Key pro Client anlegen. Er wird nur direkt nach dem
   Anlegen vollständig angezeigt und nur als Hash in `/data/api-keys.json`
   gespeichert. Die Liste zeigt Anfang, Erstellung und letzte Nutzung; ein

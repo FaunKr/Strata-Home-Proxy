@@ -38,6 +38,10 @@ while IFS= read -r path; do
     # The local-agent runner: check.sh runs its tests and shellcheck. It is no
     # crate, so the test job runs without a package list, i.e. unscoped.
     tools/local-agent | tools/local-agent/*) tools=true ;;
+    # The code benchmark: the proxy embeds its tasks (include_str!), the
+    # image job also builds its runner's image, check.sh runs its tests.
+    tools/code-bench/tasks/*) packages+=(strata-nas-proxy) tools=true image=true ;;
+    tools/code-bench | tools/code-bench/*) tools=true image=true ;;
   esac
 done
 

@@ -17,6 +17,8 @@ fi
 
 data="$(mktemp -d)"
 trap 'rm -rf "$data"' EXIT
+# A finished code benchmark, as the proxy keeps it.
+cp scripts/ui-check-code-bench.json "$data/code-bench.json"
 # A Verlauf from an earlier run, imported at the start, so the history shows
 # bars and energy: asleep for two days, then awake until the proxy stopped.
 now=$(date +%s)
@@ -33,7 +35,7 @@ node scripts/fake-pc.js "$pc_port" &
 pc=$!
 trap 'kill $plug $pc 2>/dev/null; rm -rf "$data"' EXIT
 LISTEN_ADDR="127.0.0.1:$port" DATA_DIR="$data" LEPTOS_SITE_ROOT=target/site \
-  SHELLY_URL="127.0.0.1:$plug_port" \
+  SHELLY_URL="127.0.0.1:$plug_port" CODE_BENCH_URL="http://127.0.0.1:$pc_port" \
   STRATA_URL="http://127.0.0.1:$pc_port" PC_AGENT_URL="http://127.0.0.1:$pc_port" PC_MAC=10:20:30:40:50:60 \
   target/debug/strata-nas-proxy >"$data/proxy.log" 2>&1 &
 proxy=$!

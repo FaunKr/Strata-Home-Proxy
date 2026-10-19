@@ -152,6 +152,14 @@ Ein älterer PC-Dienst lässt das Feld weg.
 `null`, wenn das Flag fehlt oder sein Wert keine Zahl ist. Ein älterer
 PC-Dienst lässt das Feld weg.
 
+`benchmarks` hält den letzten Lauf jedes Modells: `decode_tps` (`chat decode
+tok/s`), `prompt_tps` (`4K prompt tok/s`, fehlt, wenn der Benchmark die Zeile
+nicht druckt), dazu `context`, `speed_projection` und `version` (Strata-Commit)
+zur Zeit des Laufs. Ein Modell, das im Vergleich nicht anlief oder nichts
+meldete, hat statt der Werte `error`. `benchmark` bleibt der letzte
+erfolgreiche Lauf, für Proxys, die nur einen kennen. Ein älterer PC-Dienst
+lässt `benchmarks` weg.
+
 ### `POST /strata/jobs`
 
 Startet einen Vorgang, Antwort `202` mit dem Vorgang. `400 {"reason": …}`
@@ -166,6 +174,7 @@ geht (Gaming an, ein Vorgang läuft, zu wenig Platz, aktives Modell löschen).
 | `delete` | `model` | löscht Modellordner, Pack, Konfiguration, Startskript und Log dieses Modells |
 | `update` | – | `git pull --ff-only`, dann `START-HERE.bat --update` bei beendetem Strata, startet neu |
 | `benchmark` | – | `BENCH.bat --config <aktives Modell>`, behält Tokens/s mit Modell und Datum |
+| `compare_models` | – | `benchmark` für jedes installierte Modell nacheinander, jedes wie es eingerichtet ist; aktiviert dafür das jeweilige Modell und am Ende (auch nach Abbrechen) wieder das vorher aktive |
 | `set_key` | `api_key` | trägt den Key in alle Modell-Konfigurationen ein und startet Strata neu |
 | `set_speed_projection` | `model`, `on` | schaltet die Speed-Projection in der Konfiguration dieses Modells ein oder aus, ohne Setup; beim aktiven Modell wartet er, bis Strata keine Anfrage bearbeitet, und startet es neu |
 | `set_context` | `model`, `context` | setzt den Kontext in der Konfiguration dieses Modells, ohne Setup; beim aktiven Modell wartet er, bis Strata keine Anfrage bearbeitet, und startet es neu |

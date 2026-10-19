@@ -9,9 +9,10 @@ const areas = ['/admin', '/admin/pc', '/admin/pc/history', '/admin/strata', '/ad
 // scripts/fake-shelly.js, its Hardware card from scripts/fake-pc.js.
 const expected = {
   '/admin': ['87 W', 'Awake', '11.8 / 16.0 GB', '0 rpm', '41 % of limit', 'Last 7 days', 'kWh'],
-  // The first visit starts the summary; the fake Strata answers at once.
-  '/admin/strata/version': ['Update available', 'Show 3 changes', 'Compare on GitHub'],
   '/admin/pc/history': ['Awake and asleep', 'Last 7 days', 'Last 12 months', 'From', 'Energy', 'Saved', "today's price"],
+  // Benchmarks from scripts/fake-pc.js, the code benchmark from
+  // scripts/ui-check-code-bench.json.
+  '/admin/strata/version': ['Update available', 'Show 3 changes', 'Compare on GitHub', 'Fastest', 'Decode 52.3 tok/s', 'Compare models', 'Total: 19/24 tests', 'Run code benchmark'],
 };
 const views = [['desk', { width: 1280, height: 900 }, 'light'], ['phone', { width: 390, height: 844 }, 'dark']];
 // The same markers as crates/nas-proxy/tests/ui_language.rs.

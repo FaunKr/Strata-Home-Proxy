@@ -22,6 +22,8 @@ services:
       # PC_AGENT_TOKEN: dasselbe-geheimnis-wie-in-strata-pc-agent.toml
       # Für Uhrzeiten auf der Übersicht und "Wach halten bis morgen 8 Uhr".
       TZ: Europe/Berlin
+      # Der Code-Benchmark im Dienst code-bench unten.
+      CODE_BENCH_URL: http://127.0.0.1:8096
       IDLE_TIMEOUT_SECS: "900"
       WAKE_TIMEOUT_SECS: "240"
       # Startpasswort der Weboberfläche (sonst "admin"), beim ersten Login ändern.
@@ -29,3 +31,24 @@ services:
     # Hier liegen Einstellungen, Passwort und gemerkte MAC.
     volumes:
       - /mnt/POOL/apps/strata-proxy:/data
+  # Der Code-Benchmark (tools/code-bench): opencode löst darin Aufgaben gegen
+  # den Proxy. Ohne diesen Dienst fehlt nur der Code-Benchmark.
+  code-bench:
+    image: ghcr.io/faunkr/strata-code-bench:latest
+    restart: unless-stopped
+    # Nur der Proxy auf dem NAS erreicht den Runner.
+    ports:
+      - 127.0.0.1:8096:8096
+    # Der Proxy läuft im Host-Netz; so erreicht opencode ihn.
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    environment:
+      # Port wie LISTEN_ADDR oben.
+      PROXY_URL: http://host.docker.internal:8080
+    # Damit der Runner dem Agenten NAS, Heimnetz und die eigene API sperrt;
+    # ohne verweigert er Läufe.
+    cap_add:
+      - NET_ADMIN
+    # Der Agent führt hier Befehle aus: Grenzen gegen Ausreißer.
+    mem_limit: 4g
+    pids_limit: 512

@@ -361,8 +361,52 @@ async fn shows_the_last_benchmark_with_its_local_time() {
         "{v}"
     );
     let html = b.page("/admin/strata/version").await;
-    assert!(html.contains("38.5 Token/s with IQ3_XXS"), "{html}");
+    assert!(html.contains("38.5 Token/s"), "{html}");
     assert!(html.contains("Update available"), "{html}");
+}
+
+#[tokio::test]
+async fn shows_each_models_benchmark_fastest_first() {
+    let s = setup(true, |_| {}).await;
+    let mut info = strata_info(true);
+    info["models"] = json!([
+        {"id": "IQ3_XXS", "family": "qwen", "size": "IQ3_XXS", "disk_bytes": 1, "active": true},
+        {"id": "coder-IQ1_M", "family": "coder", "size": "IQ1_M", "disk_bytes": 1, "active": false},
+        {"id": "swift-IQ2_XS", "family": "swift", "size": "IQ2_XS", "disk_bytes": 1, "active": false},
+    ]);
+    info["benchmarks"] = json!([
+        {"model": "IQ3_XXS", "result": "38.5 Token/s", "at": 1_760_000_000u64,
+         "decode_tps": 38.5, "prompt_tps": 612.0, "context": 65536,
+         "speed_projection": false, "version": "477ac13"},
+        {"model": "coder-IQ1_M", "result": "52 Token/s", "at": 1_760_000_000u64,
+         "decode_tps": 52.0, "context": 32768, "speed_projection": true},
+        {"model": "swift-IQ2_XS", "result": "", "at": 1_760_000_000u64,
+         "error": "Strata kam nicht hoch"},
+    ]);
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata/version").await;
+    let coder = html.find("coder-IQ1_M").unwrap();
+    let qwen = html.find("Decode 38.5 tok/s").unwrap();
+    let swift = html.find("No result: Strata kam nicht hoch").unwrap();
+    assert!(coder < qwen && qwen < swift, "{html}");
+    assert!(html.contains("Decode 52 tok/s · Prompt –"), "{html}");
+    assert!(html.contains("Prompt 612 tok/s"), "{html}");
+    assert!(html.contains("32K context · speed projection on"), "{html}");
+    assert!(html.contains("Strata 477ac13"), "{html}");
+    assert!(html.contains("Fastest"), "{html}");
+    // The fastest, inactive model can be made active; the failed one not.
+    assert_eq!(html.matches("Make active").count(), 1, "{html}");
+    assert!(html.contains("Compare models"), "{html}");
+}
+
+#[tokio::test]
+async fn comparing_models_reaches_the_pc_service() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = b.call("strata-job", &[("kind", "compare_models")]).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(last_body(&s), json!({"kind": "compare_models"}));
 }
 
 #[tokio::test]
@@ -440,8 +484,9 @@ async fn connection_tab_holds_exactly_the_strata_settings() {
     let html = b.page("/admin/strata/connection").await;
     assert!(html.contains("id=\"setting-STRATA_URL\""), "{html}");
     assert!(html.contains("id=\"setting-STRATA_API_KEY\""), "{html}");
+    assert!(html.contains("id=\"setting-CODE_BENCH_URL\""), "{html}");
     let fields = html.matches("id=\"setting-").count();
-    assert_eq!(fields, 2, "{html}");
+    assert_eq!(fields, 3, "{html}");
     let models = b.page("/admin/strata").await;
     assert!(!models.contains("id=\"setting-"), "{models}");
 }

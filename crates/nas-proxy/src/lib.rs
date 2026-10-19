@@ -5,6 +5,7 @@ pub mod agent;
 pub mod api_keys;
 pub mod auth;
 pub mod clock;
+pub mod code_bench;
 pub mod config;
 pub mod events;
 pub mod files;
@@ -75,6 +76,7 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     state.spawn_idle_loop();
     state.spawn_plug_loop();
     state.spawn_beat_loop();
+    code_bench::resume(&state);
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!("API-Proxy hört auf {listen}");
     // The client address is needed to slow down password guessing.

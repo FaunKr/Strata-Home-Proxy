@@ -45,7 +45,10 @@ fn installable(s: &Setup) {
                 "  Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf: 37.9 / 75.8 GB (50%)",
             ]),
             creates: vec![
-                (strata.join("strata-iq3_xxs.json"), "{}".into()),
+                (
+                    strata.join("strata-iq3_xxs.json"),
+                    json!({"exe": "strata.exe", "args": ["--native"]}).to_string(),
+                ),
                 (strata.join("run-iq3_xxs.bat"), String::new()),
                 (
                     data.join("models").join("IQ3_XXS").join("a.gguf"),
@@ -146,6 +149,19 @@ async fn install_runs_setup_with_the_fixed_values_and_starts_strata() {
     assert_eq!(view["models"][0]["active"], true);
     assert_eq!(view["models"][0]["disk_bytes"], 10);
     assert!(!view.to_string().contains(KEY));
+}
+
+#[tokio::test]
+async fn install_sets_loop_recovery_in_the_new_config() {
+    let s = setup("strata-install-loop").await;
+    installable(&s);
+    let (code, job) = post(&s, "/strata/jobs", install()).await;
+    assert_eq!(code, 202, "{job}");
+    assert_eq!(finished(&s).await["state"], "done");
+    let text = std::fs::read_to_string(s.agent.cfg.strata_dir.join("strata-iq3_xxs.json")).unwrap();
+    let cfg: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(cfg["reasoning_loop_recovery"], "recover", "{cfg}");
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

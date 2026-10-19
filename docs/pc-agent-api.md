@@ -152,6 +152,22 @@ Ein älterer PC-Dienst lässt das Feld weg.
 `null`, wenn das Flag fehlt oder sein Wert keine Zahl ist. Ein älterer
 PC-Dienst lässt das Feld weg.
 
+`loop_recovery` ist `reasoning_loop_recovery` aus seiner Konfiguration, wie
+Strata es liest: `recover` (auch `true`), `stop` oder `off` (fehlt der Wert
+oder ist er unbekannt). Ein älterer PC-Dienst lässt das Feld weg.
+
+`sampling` sagt, was eine Anfrage ohne Sampling-Felder bekommt: `support`
+ist `model_card`, `config` oder `none` (dieses Strata liest keins und ist
+greedy), `thinking` und `instruct` sind Listen von `{"name", "value",
+"source"}` mit `source` `model_card`, `config` oder `chat_settings`, in der
+Reihenfolge temperature, top_p, top_k, min_p, presence_penalty,
+repetition_penalty, frequency_penalty. Eine leere Liste ist greedy. Aus den
+Chat-Einstellungen (`strata-<id>.shared-settings.json`, Stratas Web-App)
+zählen temperature, top_p und top_k; der PC-Dienst liest die Datei nur und
+nimmt eine, die kein gültiges JSON ist, wie Strata als leer. `sampling` ist
+`null`, solange `serve/server.py` nicht lesbar ist. Ein älterer PC-Dienst
+lässt das Feld weg.
+
 `benchmarks` hält den letzten Lauf jedes Modells: `decode_tps` (`chat decode
 tok/s`), `prompt_tps` (`4K prompt tok/s`, fehlt, wenn der Benchmark die Zeile
 nicht druckt), dazu `context`, `speed_projection` und `version` (Strata-Commit)
@@ -159,6 +175,22 @@ zur Zeit des Laufs. Ein Modell, das im Vergleich nicht anlief oder nichts
 meldete, hat statt der Werte `error`. `benchmark` bleibt der letzte
 erfolgreiche Lauf, für Proxys, die nur einen kennen. Ein älterer PC-Dienst
 lässt `benchmarks` weg.
+
+### Was der PC-Dienst in den Modell-Konfigurationen hält
+
+Beim Start des PC-Dienstes, nach `install`, `add_model` und `update` setzt er
+in jeder `strata-<id>.json` `"reasoning_loop_recovery": "recover"` (siehe
+[strata-api.md](strata-api.md)) und überschreibt einen anderen Wert. Den
+Block `sampling` setzt er auf den Denk-Satz der Modellkarte, wenn das
+installierte Strata nur den Block kennt; kennt es die Modellkarte oder den
+Block nicht, nimmt er ihn heraus. Ein Block von Hand wird dabei ersetzt.
+Ist `serve/server.py` nicht lesbar, bleibt der Block, wie er ist. Seine
+Änderungen macht er beim Start, bevor er Vorgänge annimmt. Alles
+andere in der Konfiguration bleibt, auch ihre Änderungszeit. Eine
+Konfiguration, die er nicht lesen oder schreiben kann, steht im Log und
+bleibt, wie sie ist. Ändert sich die Konfiguration des aktiven Modells,
+während Strata läuft, startet er Strata neu, sobald es keine Anfrage
+bearbeitet; nach `install` und `update` startet Strata ohnehin mit ihr.
 
 ### `POST /strata/jobs`
 

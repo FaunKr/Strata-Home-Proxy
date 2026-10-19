@@ -8,9 +8,10 @@ use leptos_router::components::{A, Outlet};
 use crate::{
     api::{
         CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
-        StartCodeBench, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob, StrataJobKind,
-        StrataJobState, StrataModel, StrataPage, StrataSize, StrataUpdate, UpdateSummary,
-        error_text, get_code_bench, get_strata,
+        SamplingField, SamplingSource, SamplingSupport, StartCodeBench, StartStrataJob,
+        StrataBenchmark, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
+        StrataPage, StrataSampling, StrataSize, StrataUpdate, UpdateSummary, error_text,
+        get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
     labels::{STRATA_CONNECTION, strata_job_label},
@@ -620,10 +621,20 @@ fn Models(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl Int
             }
         })
         .collect_view();
+    // Only with word from the PC service on the sampling: an older one does not say.
+    let sampling_note = info.models.iter().any(|m| m.sampling.is_some()).then(|| {
+        view! {
+            <p class="hint">
+                "Sampling for requests that send none, from the model card unless marked. "
+                "A client's own sampling fields still win."
+            </p>
+        }
+    });
     view! {
         <section class="card">
             <h2>"Installed models"</h2>
             <ul class="list">{models}</ul>
+            {sampling_note}
         </section>
         <section class="card">
             <h2>"Load another model"</h2>
@@ -672,43 +683,52 @@ fn ModelRow(
     if let Some(context) = model.context {
         meta.push_str(&format!(" · {}K context", context / 1024));
     }
-    let buttons = (!model.active).then(|| {
-        let activate = model.id.clone();
+    if let Some(recovery) = &model.loop_recovery {
+        meta.push_str(match recovery.as_str() {
+            "recover" => " · loop recovery on",
+            "stop" => " · loop recovery stops the reply",
+            _ => " · loop recovery off",
+        });
+    }
+    let activate = (!model.active).then(|| {
+        let id = model.id.clone();
+        view! {
+            <button
+                type="button"
+                class="secondary"
+                disabled=move || blocked.get()
+                on:click=move |_| actions.model_job(StrataJobKind::Activate, id.clone())
+            >
+                "Make active"
+            </button>
+        }
+    });
+    let delete = (!model.active).then(|| {
         let delete = model.id.clone();
         let title = format!("Delete {}?", model.id);
         let text = format!("This frees {size} on the PC. You can load it again later.");
         let confirm = expect_context::<Confirm>();
         view! {
-            <span class="actions inline">
-                <button
-                    type="button"
-                    class="secondary"
-                    disabled=move || blocked.get()
-                    on:click=move |_| actions.model_job(StrataJobKind::Activate, activate.clone())
-                >
-                    "Make active"
-                </button>
-                <button
-                    type="button"
-                    class="ghost-danger"
-                    disabled=move || blocked.get()
-                    on:click=move |_| {
-                        let delete = delete.clone();
-                        confirm
-                            .ask(
-                                Question {
-                                    title: title.clone(),
-                                    text: text.clone(),
-                                    confirm: "Delete model",
-                                    danger: true,
-                                },
-                                move || actions.model_job(StrataJobKind::Delete, delete.clone()),
-                            );
-                    }
-                >
-                    "Delete"
-                </button>
-            </span>
+            <button
+                type="button"
+                class="ghost-danger push"
+                disabled=move || blocked.get()
+                on:click=move |_| {
+                    let delete = delete.clone();
+                    confirm
+                        .ask(
+                            Question {
+                                title: title.clone(),
+                                text: text.clone(),
+                                confirm: "Delete model",
+                                danger: true,
+                            },
+                            move || actions.model_job(StrataJobKind::Delete, delete.clone()),
+                        );
+                }
+            >
+                "Delete"
+            </button>
         }
     });
     // Only with word from the PC service on its state: an older one does not say.
@@ -750,36 +770,76 @@ fn ModelRow(
             </button>
         }
     });
+    let sampling = model.sampling.as_ref().map(sampling_lines);
+    // Name and state on top, what it runs with below, then the context and
+    // one row of buttons in the same order for each model; Delete stands apart.
     view! {
-        <li>
-            <div class="grow">
+        <li class="model">
+            <div class="model-head">
                 <p class="strong">{model.id.clone()}</p>
-                <p class="muted small">{meta}</p>
+                {model
+                    .active
+                    .then(|| {
+                        view! {
+                            <span class="badge is-ok">
+                                <span class="dot"></span>
+                                "Active"
+                            </span>
+                        }
+                    })}
+                {(model.speed_projection == Some(true))
+                    .then(|| {
+                        view! {
+                            <span class="badge is-warn">
+                                <span class="dot"></span>
+                                "Speed projection on"
+                            </span>
+                        }
+                    })}
             </div>
-            {(model.speed_projection == Some(true))
-                .then(|| {
-                    view! {
-                        <span class="badge is-warn">
-                            <span class="dot"></span>
-                            "Speed projection on"
-                        </span>
-                    }
-                })}
-            {model
-                .active
-                .then(|| {
-                    view! {
-                        <span class="badge is-ok">
-                            <span class="dot"></span>
-                            "Active"
-                        </span>
-                    }
-                })}
-            {projection}
-            {buttons}
+            <p class="muted small">{meta}</p>
+            {sampling}
             {switch}
+            <div class="model-actions">{activate}{projection}{delete}</div>
         </li>
     }
+}
+
+/// What a request without sampling fields gets, with and without thinking.
+fn sampling_lines(sampling: &StrataSampling) -> impl IntoView + use<> {
+    if sampling.support == SamplingSupport::None {
+        return view! {
+            <p class="muted small">"This Strata version ignores sampling; update it."</p>
+        }
+        .into_any();
+    }
+    let line = |label: &str, fields: &[SamplingField]| {
+        let text = if fields.is_empty() {
+            "greedy".to_string()
+        } else {
+            fields
+                .iter()
+                .map(sampling_text)
+                .collect::<Vec<_>>()
+                .join(" · ")
+        };
+        view! { <p class="muted small">{format!("{label}: {text}")}</p> }
+    };
+    view! {
+        {line("With thinking", &sampling.thinking)}
+        {line("Without thinking", &sampling.instruct)}
+    }
+    .into_any()
+}
+
+/// `temperature 0.6 (config)`; a value from the model card is unmarked.
+fn sampling_text(field: &SamplingField) -> String {
+    let source = match field.source {
+        SamplingSource::ModelCard => "",
+        SamplingSource::Config => " (config)",
+        SamplingSource::ChatSettings => " (Chat settings)",
+    };
+    format!("{} {}{source}", field.name, field.value)
 }
 
 /// The longest context the switch offers: the model's trained length. Past
@@ -843,9 +903,9 @@ fn ContextSwitch(
         confirm.ask(question, move || actions.set_context(id.clone(), context));
     };
     view! {
-        <div class="row-form">
-            <label for=picker.clone() class="visually-hidden">
-                "New context"
+        <div class="inline-form">
+            <label for=picker.clone() class="muted small">
+                "Context"
             </label>
             <select
                 id=picker

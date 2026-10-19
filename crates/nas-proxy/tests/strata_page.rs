@@ -714,3 +714,113 @@ async fn the_active_model_offers_to_change_its_context_too() {
     let html = b.page("/admin/strata").await;
     assert_eq!(html.matches("Change context").count(), 2, "{html}");
 }
+
+// --- #158 loop recovery of installed models ---
+
+#[tokio::test]
+async fn an_installed_model_shows_its_loop_recovery() {
+    let s = setup(true, |_| {}).await;
+    let mut info = with_two_models(None);
+    info["models"][0]["loop_recovery"] = json!("recover");
+    info["models"][1]["loop_recovery"] = json!("off");
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("loop recovery on"), "{html}");
+    assert!(html.contains("loop recovery off"), "{html}");
+}
+
+#[tokio::test]
+async fn without_word_from_the_pc_service_no_loop_recovery_shows() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_two_models(None));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("IQ3_XXS"), "{html}");
+    assert!(!html.contains("loop recovery"), "{html}");
+}
+
+// --- #159 the sampling of installed models ---
+
+fn sampling_field(name: &str, value: f64, source: &str) -> Value {
+    json!({"name": name, "value": value, "source": source})
+}
+
+#[tokio::test]
+async fn an_installed_model_shows_its_sampling_and_its_sources() {
+    let s = setup(true, |_| {}).await;
+    let mut info = with_two_models(None);
+    info["models"][0]["sampling"] = json!({
+        "support": "model_card",
+        "thinking": [sampling_field("temperature", 1.0, "model_card"),
+                     sampling_field("top_p", 0.95, "model_card"),
+                     sampling_field("top_k", 20.0, "model_card")],
+        "instruct": [sampling_field("temperature", 0.6, "config"),
+                     sampling_field("presence_penalty", 1.5, "model_card")],
+    });
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(
+        html.contains("With thinking: temperature 1 · top_p 0.95 · top_k 20"),
+        "{html}"
+    );
+    assert!(
+        html.contains("Without thinking: temperature 0.6 (config) · presence_penalty 1.5"),
+        "{html}"
+    );
+    assert!(html.contains("from the model card"), "{html}");
+    assert!(html.contains("own sampling fields still win"), "{html}");
+}
+
+#[tokio::test]
+async fn a_strata_that_ignores_sampling_says_to_update_it() {
+    let s = setup(true, |_| {}).await;
+    let mut info = with_two_models(None);
+    info["models"][0]["sampling"] = json!({"support": "none", "thinking": [], "instruct": []});
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(
+        html.contains("This Strata version ignores sampling; update it."),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn without_word_from_the_pc_service_no_sampling_shows() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_two_models(None));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(!html.contains("thinking:"), "{html}");
+    assert!(!html.contains("still win"), "{html}");
+}
+
+// --- #160 Chat settings over the recommended sampling ---
+
+#[tokio::test]
+async fn sampling_from_chat_settings_is_marked_as_such() {
+    let s = setup(true, |_| {}).await;
+    let mut info = with_two_models(None);
+    info["models"][0]["sampling"] = json!({
+        "support": "model_card",
+        "thinking": [sampling_field("temperature", 0.3, "chat_settings"),
+                     sampling_field("top_k", 20.0, "model_card")],
+        "instruct": [],
+    });
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(
+        html.contains("With thinking: temperature 0.3 (Chat settings) · top_k 20"),
+        "{html}"
+    );
+    assert!(html.contains("Without thinking: greedy"), "{html}");
+}

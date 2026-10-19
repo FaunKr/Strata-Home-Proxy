@@ -9,6 +9,7 @@ pub mod hardware;
 pub mod managed;
 pub mod output;
 pub mod platform;
+pub mod sampling;
 pub mod strata;
 pub mod update;
 
@@ -70,6 +71,8 @@ pub async fn run(agent: Arc<Agent>) -> anyhow::Result<()> {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });
+    // Before the first job can change a config too.
+    tokio::spawn(strata::manage_configs_at_start(&agent).await);
     agent.spawn_watchdog(WATCHDOG_EVERY);
     tracing::info!("PC-Dienst {VERSION} hört auf {}", agent.cfg.listen);
     axum::serve(

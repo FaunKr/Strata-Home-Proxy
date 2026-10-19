@@ -658,6 +658,51 @@ pub struct StrataModel {
     /// not say, or a config without it.
     #[serde(default)]
     pub context: Option<u32>,
+    /// Strata's recovery from repeated reasoning passages: `off`, `stop` or
+    /// `recover`; `None` from an older PC service, which does not say.
+    #[serde(default)]
+    pub loop_recovery: Option<String>,
+    /// What a request without sampling fields gets; `None` from an older
+    /// PC service, which does not say.
+    #[serde(default)]
+    pub sampling: Option<StrataSampling>,
+}
+
+/// Which defaults the PC's Strata applies to a request without sampling
+/// fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SamplingSupport {
+    /// The model card's sets, then the config and the Chat settings.
+    ModelCard,
+    /// Only the config's block and the Chat settings.
+    Config,
+    /// None: Strata decodes greedily.
+    None,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SamplingSource {
+    ModelCard,
+    Config,
+    ChatSettings,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SamplingField {
+    pub name: String,
+    pub value: f64,
+    pub source: SamplingSource,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StrataSampling {
+    pub support: SamplingSupport,
+    /// With thinking; empty means greedy.
+    pub thinking: Vec<SamplingField>,
+    /// Without thinking.
+    pub instruct: Vec<SamplingField>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

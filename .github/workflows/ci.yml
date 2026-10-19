@@ -72,6 +72,11 @@ jobs:
       - run: scripts/check.sh $PACKAGES
         env:
           PACKAGES: ${{ needs.changes.outputs.packages }}
+      # The code-bench tests that need root (the agent user, the firewall in
+      # its own network namespace); check.sh runs them as the runner's user,
+      # where they are skipped.
+      - name: Code-bench tests as root
+        run: sudo python3 -I tools/code-bench/test_runner.py
       # How close the job is to the runner's disk limit, before the linker
       # dies of it again.
       - name: Free disk space left
@@ -91,7 +96,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: scripts/install-cargo-leptos.sh
       # The Playwright version of the cloud sessions.
-      - run: npm install -g playwright@1.56.1 && npx playwright install --with-deps chromium
+      # The browsers of exactly that version, through its own command.
+      - run: npm install -g playwright@1.56.1 && "$(npm root -g)/playwright/cli.js" install --with-deps chromium
       - run: SHOTS=1 scripts/ui-check.sh
       - if: failure()
         uses: actions/upload-artifact@v4

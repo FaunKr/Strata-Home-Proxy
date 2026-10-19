@@ -98,6 +98,10 @@ class RunnerTest(unittest.TestCase):
         for net in ["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]:
             self.assertIn(f"iptables -w -A {chain} -d {net} -j REJECT", rules)
         self.assertEqual(rules[-1], f"iptables -w -A OUTPUT -m owner --uid-owner 1001 -j {chain}")
+        # Docker's DNS on its port only.
+        self.assertEqual([r for r in rules if runner.DOCKER_DNS in r], [
+            f"iptables -w -A {chain} -d {runner.DOCKER_DNS} -p {p} --dport 53 -j ACCEPT" for p in ("udp", "tcp")
+        ])
         # Nothing rejects all: the internet stays open.
         self.assertFalse([r for r in rules if r.endswith("-j REJECT") and " -d " not in r])
 

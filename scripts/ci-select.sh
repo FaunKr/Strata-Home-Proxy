@@ -36,7 +36,9 @@ while IFS= read -r path; do
     crates/*) image=true ;;
     # The proxy embeds the install script (include_str!), the image copies it.
     deploy/windows/*) packages+=(strata-nas-proxy) windows=true image=true ;;
-    Dockerfile | .dockerignore) image=true ;;
+    # The ui job takes cargo-leptos's pin from the Dockerfile.
+    Dockerfile) image=true ui=true ;;
+    .dockerignore) image=true ;;
     # The local-agent runner: check.sh runs its tests and shellcheck. It is no
     # crate, so the test job runs without a package list, i.e. unscoped.
     tools/local-agent | tools/local-agent/*) tools=true ;;

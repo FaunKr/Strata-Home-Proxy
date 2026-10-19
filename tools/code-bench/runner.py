@@ -410,7 +410,8 @@ def firewall_rules(uid, relay_ip, relay_port):
     rules = [
         chain + ["-N", FIREWALL_CHAIN],
         chain + ["-F", FIREWALL_CHAIN],
-        chain + ["-A", FIREWALL_CHAIN, "-d", DOCKER_DNS, "-j", "ACCEPT"],
+        chain + ["-A", FIREWALL_CHAIN, "-d", DOCKER_DNS, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
+        chain + ["-A", FIREWALL_CHAIN, "-d", DOCKER_DNS, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
         chain + ["-A", FIREWALL_CHAIN, "-d", relay_ip, "-p", "tcp", "--dport", str(relay_port), "-j", "ACCEPT"],
     ]
     for net in BLOCKED_NETS:

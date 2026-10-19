@@ -27,8 +27,7 @@ pub async fn login(password: String) -> Result<(), ServerFnError> {
     let token = backend()?
         .login(&password, client_ip().await)
         .map_err(|e| {
-            expect_context::<leptos_axum::ResponseOptions>()
-                .set_status(axum::http::StatusCode::UNAUTHORIZED);
+            crate::server::set_status(axum::http::StatusCode::UNAUTHORIZED);
             ServerFnError::new(e)
         })?;
     set_cookie(&token);
@@ -216,8 +215,7 @@ pub async fn new_pc_setup_command() -> Result<PcSetupCommand, ServerFnError> {
 
 #[cfg(feature = "ssr")]
 fn bad_request(message: String) -> ServerFnError {
-    expect_context::<leptos_axum::ResponseOptions>()
-        .set_status(axum::http::StatusCode::BAD_REQUEST);
+    crate::server::set_status(axum::http::StatusCode::BAD_REQUEST);
     ServerFnError::new(message)
 }
 

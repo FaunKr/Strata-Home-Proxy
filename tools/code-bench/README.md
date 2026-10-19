@@ -39,7 +39,7 @@ tun, ist fremder Code. Er erreicht nicht:
 
 | Was | Geschützt durch |
 | --- | --- |
-| die API des Runners (Läufe abbrechen oder starten) | Nutzer `agent`, Firewall sperrt Loopback außer dem Relay |
+| die API des Runners (Läufe abbrechen oder starten) | Nutzer `agent`, Firewall sperrt Loopback außer dem Relay und Port 53 von Dockers DNS (127.0.0.11) |
 | NAS, Heimnetz, Weboberfläche des Proxys | Firewall sperrt private, Link-Local- und CGNAT-Netze und IPv6; das Relay gibt nur `/v1/*` weiter |
 | andere Keys als den des Laufs | der Proxy legt pro Lauf einen Key an und widerruft nur diesen |
 | Dateien des Runners und anderer Aufgaben | Nutzer `agent` besitzt nur den eigenen Aufgabenordner |

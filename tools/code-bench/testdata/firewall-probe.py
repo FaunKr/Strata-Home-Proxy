@@ -5,6 +5,7 @@ connections got through, as JSON."""
 import fcntl
 import json
 import os
+import pwd
 import socket
 import struct
 import subprocess
@@ -42,7 +43,9 @@ PROBE = (
 
 
 def reaches(port, user=None):
-    out = subprocess.run([sys.executable, "-I", "-c", PROBE, str(port)], user=user, capture_output=True, text=True)
+    # Like the runner's agent: its own user and group, no others.
+    ids = {"user": user, "group": pwd.getpwnam(user).pw_gid, "extra_groups": []} if user else {}
+    out = subprocess.run([sys.executable, "-I", "-c", PROBE, str(port)], capture_output=True, text=True, **ids)
     return out.stdout.strip() == "yes"
 
 

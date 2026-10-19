@@ -40,6 +40,7 @@ expect "test=true packages=strata-pc-agent windows=true image=true ui=false" cra
 expect "test=true packages=strata-admin-ui strata-nas-proxy windows=false image=true ui=true" crates/admin-ui/src/app.rs
 expect "test=true packages=strata-nas-proxy windows=false image=true ui=true" crates/nas-proxy/src/admin.rs
 expect "test=false packages= windows=false image=false ui=false" deploy/docker-compose.yml
+expect "test=false packages= windows=false image=true ui=true" Dockerfile
 expect "test=true packages= windows=false image=false ui=false" tools/local-agent/local-agent
 expect "test=true packages= windows=false image=true ui=false" tools/code-bench/runner.py
 expect "test=true packages=strata-nas-proxy windows=false image=true ui=false" tools/code-bench/tasks/roman/TASK.md

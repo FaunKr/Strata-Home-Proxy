@@ -23,7 +23,7 @@ use crate::{
     auth::Auth,
     clock,
     config::{Config, format_mac, parse_mac},
-    events::{EventKind, EventLog},
+    events::{EventKind, History, Sample},
     overview::Monitor,
     settings::Settings,
     wol,
@@ -201,7 +201,7 @@ pub struct AppState {
     pub upstream: Client,
     /// For `/health` and the PC service, rebuilt when `PROBE_TIMEOUT_MS` changes.
     probe: Mutex<(Duration, Client)>,
-    pub events: EventLog,
+    pub events: History,
     /// Live state for the overview page.
     pub overview: Monitor,
     /// Strata jobs on the PC and the Strata key.
@@ -247,7 +247,7 @@ impl AppState {
         Arc::new(Self {
             auth: Auth::new(cfg.data_dir.clone(), cfg.ui_password.clone()),
             api_keys: ApiKeys::new(cfg.data_dir.clone()),
-            events: EventLog::new(cfg.data_dir.clone()),
+            events: History::new(cfg.data_dir.clone()),
             upstream,
             overview: Monitor::default(),
             strata: crate::strata::StrataState::new(cfg.data_dir.clone()),
@@ -665,6 +665,33 @@ impl AppState {
                 state.api_keys.flush_last_used();
             }
         });
+    }
+
+    /// Records the Leistung of the Messsteckdose every `PLUG_SAMPLE_SECS`
+    /// while one is set up. A read that fails stores nothing; a hanging plug
+    /// costs this loop one probe timeout and holds up nothing else.
+    pub fn spawn_plug_loop(self: &Arc<Self>) {
+        let state = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                // Read each round, so a changed SHELLY_URL or PLUG_SAMPLE_SECS
+                // applies at once.
+                let started = Instant::now();
+                let cfg = state.cfg();
+                if let Some(url) = &cfg.shelly_url {
+                    state.sample_plug(&cfg, url).await;
+                }
+                tokio::time::sleep(cfg.plug_sample.saturating_sub(started.elapsed())).await;
+            }
+        });
+    }
+
+    async fn sample_plug(&self, cfg: &Config, url: &str) {
+        let ts = clock::unix_now();
+        match crate::plug::power(&self.probe(cfg), url).await {
+            Some(watts) => self.events.record_sample(Sample { ts, watts }),
+            None => tracing::debug!("Steckdose {url} ohne Messwert"),
+        }
     }
 }
 

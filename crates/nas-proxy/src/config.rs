@@ -29,6 +29,9 @@ pub struct Config {
     /// Base URL of the Messsteckdose the PC is plugged into, a Shelly plug
     /// (`SHELLY_URL`). Without it the overview shows no Leistung.
     pub shelly_url: Option<String>,
+    /// How often the Leistung of the Messsteckdose is recorded for the Verlauf
+    /// (`PLUG_SAMPLE_SECS`).
+    pub plug_sample: Duration,
     /// Time without requests before the PC is asked to sleep (`IDLE_TIMEOUT_SECS`).
     pub idle_timeout: Duration,
     /// Longest time a request waits for the PC to wake up (`WAKE_TIMEOUT_SECS`).
@@ -103,6 +106,7 @@ pub const FIELDS: &[Field] = &[
         ..optional("PC_AGENT_TOKEN")
     },
     optional("SHELLY_URL"),
+    field("PLUG_SAMPLE_SECS"),
     field("IDLE_TIMEOUT_SECS"),
     field("WAKE_TIMEOUT_SECS"),
     field("WOL_RESEND_SECS"),
@@ -134,6 +138,7 @@ impl Default for Config {
             pc_agent_url: None,
             pc_agent_token: None,
             shelly_url: None,
+            plug_sample: Duration::from_secs(60),
             idle_timeout: Duration::from_secs(900),
             wake_timeout: Duration::from_secs(240),
             wol_resend: Duration::from_secs(10),
@@ -191,6 +196,7 @@ impl Config {
             "PC_AGENT_URL" => self.pc_agent_url = text.map(|u| url(&u)).transpose()?,
             "PC_AGENT_TOKEN" => self.pc_agent_token = text,
             "SHELLY_URL" => self.shelly_url = text.map(|u| plug_url(&u)).transpose()?,
+            "PLUG_SAMPLE_SECS" => self.plug_sample = positive(secs(raw)?)?,
             "IDLE_TIMEOUT_SECS" => self.idle_timeout = secs(raw)?,
             "WAKE_TIMEOUT_SECS" => self.wake_timeout = secs(raw)?,
             "WOL_RESEND_SECS" => self.wol_resend = positive(secs(raw)?)?,
@@ -225,6 +231,7 @@ impl Config {
             "PC_AGENT_URL" => self.pc_agent_url.clone(),
             "PC_AGENT_TOKEN" => self.pc_agent_token.clone(),
             "SHELLY_URL" => self.shelly_url.clone(),
+            "PLUG_SAMPLE_SECS" => secs(self.plug_sample),
             "IDLE_TIMEOUT_SECS" => secs(self.idle_timeout),
             "WAKE_TIMEOUT_SECS" => secs(self.wake_timeout),
             "WOL_RESEND_SECS" => secs(self.wol_resend),
@@ -352,6 +359,7 @@ mod tests {
         assert!(cfg.apply("IDLE_TIMEOUT_SECS", "zehn").is_err());
         assert!(cfg.apply("IDLE_TIMEOUT_SECS", "").is_err());
         assert!(cfg.apply("IDLE_CHECK_SECS", "0").is_err());
+        assert!(cfg.apply("PLUG_SAMPLE_SECS", "0").is_err());
         assert!(cfg.apply("STRATA_URL", "pc:8080").is_err());
         assert!(cfg.apply("WOL_ADDR", "255.255.255.255").is_err());
         assert!(cfg.apply("DATA_DIR", "/data").is_err());

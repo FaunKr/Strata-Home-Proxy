@@ -57,7 +57,7 @@ Was der PC-Dienst über Last, Temperatur, Speicher und Lüfter von Grafikkarte u
 _Avoid_: Stats, Telemetrie
 
 **Messsteckdose**:
-Die Shelly-Steckdose, an der der PC hängt. Der Proxy fragt sie nur für die Übersicht und nur, wenn sie eingerichtet ist (`SHELLY_URL`); auf Wecken und Schlafen hat sie keinen Einfluss.
+Die Shelly-Steckdose, an der der PC hängt. Der Proxy fragt sie nur, wenn sie eingerichtet ist (`SHELLY_URL`): für die Übersicht und einmal pro Minute für den Verlauf (`PLUG_SAMPLE_SECS`). Auf Wecken und Schlafen hat sie keinen Einfluss.
 _Avoid_: Shelly, Smart Plug (nur im Code)
 
 **Leistung**:

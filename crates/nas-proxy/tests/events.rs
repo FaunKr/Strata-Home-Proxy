@@ -1,9 +1,10 @@
-//! The store of the Verlauf: Ereignisse in SQLite in `DATA_DIR`, in memory
-//! without one. An existing `events.jsonl` is imported once.
+//! The store of the Verlauf: Ereignisse and the Leistung of the Messsteckdose
+//! in SQLite in `DATA_DIR`, in memory without one. An existing `events.jsonl`
+//! is imported once.
 
 use std::path::{Path, PathBuf};
 
-use strata_nas_proxy::events::{Event, EventKind, EventLog};
+use strata_nas_proxy::events::{Event, EventKind, History, Sample};
 
 /// An empty directory of its own for each test.
 fn fresh_dir(tag: &str) -> PathBuf {
@@ -13,7 +14,7 @@ fn fresh_dir(tag: &str) -> PathBuf {
     dir
 }
 
-fn kinds(log: &EventLog) -> Vec<EventKind> {
+fn kinds(log: &History) -> Vec<EventKind> {
     log.recent().into_iter().map(|e| e.kind).collect()
 }
 
@@ -31,17 +32,17 @@ fn database(dir: &Path, sql: &str) {
 fn events_survive_a_restart() {
     let d = fresh_dir("restart");
     {
-        let log = EventLog::new(Some(d.clone()));
+        let log = History::new(Some(d.clone()));
         log.record(EventKind::WakeSent, None);
         log.record(EventKind::Awake, Some("after 1.2 s".into()));
         // The first log is still open, as when the proxy is killed.
-        let restarted = EventLog::new(Some(d.clone()));
+        let restarted = History::new(Some(d.clone()));
         assert_eq!(
             kinds(&restarted),
             vec![EventKind::WakeSent, EventKind::Awake]
         );
     }
-    let log = EventLog::new(Some(d.clone()));
+    let log = History::new(Some(d.clone()));
     assert_eq!(kinds(&log), vec![EventKind::WakeSent, EventKind::Awake]);
     assert_eq!(log.recent()[1].detail.as_deref(), Some("after 1.2 s"));
     // The database holds the history; `events.jsonl` is no longer written.
@@ -55,7 +56,7 @@ fn events_survive_a_restart() {
 fn only_the_owner_can_read_the_database() {
     use std::os::unix::fs::PermissionsExt;
     let d = fresh_dir("mode");
-    let log = EventLog::new(Some(d.clone()));
+    let log = History::new(Some(d.clone()));
     log.record(EventKind::WakeSent, None);
     for entry in std::fs::read_dir(&d).unwrap() {
         let entry = entry.unwrap();
@@ -77,11 +78,11 @@ fn events_jsonl_is_imported_once() {
     // Unreadable lines and unknown kinds are skipped, the rest imported.
     let expected = vec![EventKind::WakeSent, EventKind::SleepAccepted];
     {
-        let log = EventLog::new(Some(d.clone()));
+        let log = History::new(Some(d.clone()));
         assert_eq!(kinds(&log), expected);
     }
     // A second start does not import the file again.
-    let log = EventLog::new(Some(d.clone()));
+    let log = History::new(Some(d.clone()));
     assert_eq!(kinds(&log), expected);
     assert_eq!(log.recent()[1].detail.as_deref(), Some("benutzer inaktiv"));
     // The file stays as it was, as a backup.
@@ -106,7 +107,7 @@ fn an_import_that_did_not_happen_is_made_up_later_in_order() {
         "{\"ts\":100,\"kind\":\"wake_sent\"}\n{\"ts\":200,\"kind\":\"sleep_accepted\"}\n",
     )
     .unwrap();
-    let log = EventLog::new(Some(d.clone()));
+    let log = History::new(Some(d.clone()));
     assert_eq!(
         stamps(log.recent()),
         vec![100, 200, 500],
@@ -124,7 +125,7 @@ async fn range_reads_all_events_in_a_time_window() {
                  {\"ts\":200,\"kind\":\"sleep_accepted\"}\n\
                  {\"ts\":300,\"kind\":\"wake_sent\"}\n";
     std::fs::write(d.join("events.jsonl"), jsonl).unwrap();
-    let log = EventLog::new(Some(d.clone()));
+    let log = History::new(Some(d.clone()));
     assert_eq!(stamps(log.range(0, u64::MAX).await), vec![100, 200, 300]);
     // The boundaries belong to the window.
     assert_eq!(stamps(log.range(100, 300).await), vec![100, 200, 300]);
@@ -150,7 +151,7 @@ async fn a_row_of_an_unknown_kind_hides_no_other_rows() {
          INSERT INTO events VALUES (150, 'zeitreise', NULL);
          INSERT INTO events VALUES (200, 'awake', NULL);",
     );
-    let log = EventLog::new(Some(d.clone()));
+    let log = History::new(Some(d.clone()));
     assert_eq!(kinds(&log), vec![EventKind::WakeSent, EventKind::Awake]);
     assert_eq!(stamps(log.range(0, u64::MAX).await), vec![100, 200]);
     drop(log);
@@ -165,7 +166,7 @@ fn an_unusable_database_falls_back_to_memory() {
         "keine Datenbank, nur Text, lang genug für einen Kopf",
     )
     .unwrap();
-    let log = EventLog::new(Some(d.clone()));
+    let log = History::new(Some(d.clone()));
     log.record(EventKind::WakeSent, None);
     assert_eq!(kinds(&log), vec![EventKind::WakeSent]);
     drop(log);
@@ -175,21 +176,93 @@ fn an_unusable_database_falls_back_to_memory() {
 #[test]
 fn no_data_dir_keeps_the_store_in_memory() {
     {
-        let log = EventLog::new(None);
+        let log = History::new(None);
         log.record(EventKind::WakeSent, None);
         assert_eq!(kinds(&log), vec![EventKind::WakeSent]);
     }
-    let log = EventLog::new(None);
+    let log = History::new(None);
     assert!(log.recent().is_empty());
 }
 
 #[test]
 fn latest_pc_skips_events_about_the_web_ui() {
-    let log = EventLog::new(None);
+    let log = History::new(None);
     log.record(EventKind::WakeSent, None);
     log.record(EventKind::PasswordChanged, None);
     log.record(EventKind::Awake, None);
     let pc: Vec<EventKind> = log.latest_pc(10).into_iter().map(|e| e.kind).collect();
     // Newest first, as the overview shows them.
     assert_eq!(pc, vec![EventKind::Awake, EventKind::WakeSent]);
+}
+
+fn sample(ts: u64, watts: f64) -> Sample {
+    Sample { ts, watts }
+}
+
+fn sample_stamps(samples: Vec<Sample>) -> Vec<u64> {
+    samples.into_iter().map(|s| s.ts).collect()
+}
+
+#[tokio::test]
+async fn samples_survive_a_restart() {
+    let d = fresh_dir("samples-restart");
+    {
+        let history = History::new(Some(d.clone()));
+        history.record_sample(sample(100, 87.4));
+        history.record_sample(sample(160, 1.5));
+        // Still open, as when the proxy is killed.
+        let restarted = History::new(Some(d.clone()));
+        assert_eq!(
+            restarted.samples(0, u64::MAX).await,
+            vec![sample(100, 87.4), sample(160, 1.5)]
+        );
+    }
+    let history = History::new(Some(d.clone()));
+    assert_eq!(
+        history.samples(0, u64::MAX).await,
+        vec![sample(100, 87.4), sample(160, 1.5)]
+    );
+    // A sample is no Ereignis.
+    assert!(history.recent().is_empty());
+    assert!(history.range(0, u64::MAX).await.is_empty());
+    drop(history);
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[tokio::test]
+async fn samples_reads_a_time_window_with_its_bounds() {
+    let history = History::new(None);
+    // Recorded out of order; read back by time.
+    for (ts, watts) in [(300, 3.0), (100, 1.0), (200, 2.0)] {
+        history.record_sample(sample(ts, watts));
+    }
+    assert_eq!(
+        sample_stamps(history.samples(0, u64::MAX).await),
+        vec![100, 200, 300]
+    );
+    // The boundaries belong to the window.
+    assert_eq!(
+        sample_stamps(history.samples(100, 300).await),
+        vec![100, 200, 300]
+    );
+    assert_eq!(sample_stamps(history.samples(101, 299).await), vec![200]);
+    assert!(history.samples(1000, 2000).await.is_empty());
+}
+
+#[tokio::test]
+async fn an_events_database_from_before_gets_the_samples_table() {
+    let d = fresh_dir("samples-upgrade");
+    // As the version without samples left it.
+    database(
+        &d,
+        "CREATE TABLE events (ts INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT);
+         INSERT INTO events VALUES (100, 'wake_sent', NULL);
+         PRAGMA user_version = 1;",
+    );
+    let history = History::new(Some(d.clone()));
+    history.record_sample(sample(200, 42.0));
+    assert_eq!(history.samples(0, u64::MAX).await, vec![sample(200, 42.0)]);
+    assert_eq!(kinds(&history), vec![EventKind::WakeSent]);
+    drop(history);
+    std::fs::remove_dir_all(&d).unwrap();
 }

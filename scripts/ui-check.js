@@ -12,8 +12,14 @@ const expected = {
   '/admin/pc/history': ['Awake and asleep', 'Last 7 days', 'Last 12 months', 'From', 'Energy', 'Saved', "today's price"],
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
-  '/admin/strata/version': ['Update available', 'Show 3 changes', 'Compare on GitHub', 'Fastest', 'Decode 52.3 tok/s', 'Compare models', 'Total: 19/24 tests', 'Run code benchmark'],
+  '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', 'Decode 52.3 tok/s', 'Compare models', 'Total: 19/24 tests', 'Run code benchmark'],
 };
+// After the areas, scripts/fake-pc.js moves upstream on and holds or refuses
+// the summary, so the Version tab shows the other two summary states.
+const summaryStates = [
+  ['writing', 'hold', ['Strata is writing a summary', 'Show 3 changes']],
+  ['unavailable', 'fail', ["Summary not available: Strata isn't ready", 'Show 3 changes']],
+];
 const views = [['desk', { width: 1280, height: 900 }, 'light'], ['phone', { width: 390, height: 844 }, 'dark']];
 // The same markers as crates/nas-proxy/tests/ui_language.rs.
 const german = /[äöüßÄÖÜ]|\b(nicht|und|oder|der|das|ist|wird|bitte|keine?|Abgelehnt|Einstellung|Fehler|Passwort)\b/;
@@ -37,6 +43,42 @@ async function login(page) {
   await page.waitForSelector('#repeat', { state: 'detached' });
 }
 
+// Visits one area and prints its line; returns the number of findings.
+async function check(page, errors, name, area, texts, shot) {
+  errors.length = 0;
+  await page.goto(base + area.split(' ')[0], { waitUntil: 'domcontentloaded' });
+  // The overview stream stays open, so the network is never idle; this
+  // gives hydration and the first stream update time.
+  await page.waitForTimeout(1500);
+  const r = await page.evaluate(() => ({
+    overflow: document.documentElement.scrollWidth - window.innerWidth,
+    unlabeled: [...document.querySelectorAll('input:not([type=hidden]), select, textarea')]
+      .filter(e => !e.labels?.length && !e.getAttribute('aria-label') && !e.getAttribute('aria-labelledby'))
+      .map(e => e.id || e.name || e.type),
+    small: [...document.querySelectorAll('main button, main a, nav a')]
+      .filter(e => { const b = e.getBoundingClientRect(); return b.width > 0 && b.height < 24; })
+      .map(e => e.textContent.trim().slice(0, 20)),
+    signedOut: !!document.querySelector('#password'),
+    text: document.body.innerText,
+  }));
+  const de = r.text.split('\n').filter(l => german.test(l));
+  const issues = [];
+  for (const text of texts) {
+    if (!r.text.includes(text)) issues.push(`missing "${text}"`);
+  }
+  if (r.signedOut) issues.push('shows the sign-in form, so nothing behind it was checked');
+  if (r.overflow > 0) issues.push(`scrolls sideways by ${r.overflow}px`);
+  if (r.unlabeled.length) issues.push(`no label: ${r.unlabeled.join(', ')}`);
+  if (r.small.length) issues.push(`under 24px: ${r.small.join(', ')}`);
+  if (de.length) issues.push(`German: ${de.slice(0, 3).join(' / ')}`);
+  if (errors.length) issues.push(`JS error: ${errors[0]}`);
+  console.log(`${issues.length ? 'FAIL' : 'ok  '} ${name} ${area}${issues.length ? '\n     ' + issues.join('\n     ') : ''}`);
+  if (process.env.SHOTS === '1') {
+    await page.screenshot({ path: `${process.env.OUT}/${name}${shot}.jpg`, type: 'jpeg', quality: 60, fullPage: true });
+  }
+  return issues.length;
+}
+
 (async () => {
   const browser = await chromium.launch();
   let findings = 0;
@@ -55,38 +97,18 @@ async function login(page) {
       }
     }
     for (const area of areas) {
-      errors.length = 0;
-      await page.goto(base + area, { waitUntil: 'domcontentloaded' });
-      // The overview stream stays open, so the network is never idle; this
-      // gives hydration and the first stream update time.
-      await page.waitForTimeout(1500);
-      const r = await page.evaluate(() => ({
-        overflow: document.documentElement.scrollWidth - window.innerWidth,
-        unlabeled: [...document.querySelectorAll('input:not([type=hidden]), select, textarea')]
-          .filter(e => !e.labels?.length && !e.getAttribute('aria-label') && !e.getAttribute('aria-labelledby'))
-          .map(e => e.id || e.name || e.type),
-        small: [...document.querySelectorAll('main button, main a, nav a')]
-          .filter(e => { const b = e.getBoundingClientRect(); return b.width > 0 && b.height < 24; })
-          .map(e => e.textContent.trim().slice(0, 20)),
-        signedOut: !!document.querySelector('#password'),
-        text: document.body.innerText,
-      }));
-      const de = r.text.split('\n').filter(l => german.test(l));
-      const issues = [];
-      for (const text of expected[area] ?? []) {
-        if (!r.text.includes(text)) issues.push(`missing "${text}"`);
+      findings += await check(page, errors, name, area, expected[area] ?? [], area.replace(/\//g, '_'));
+    }
+    if (name === 'desk') {
+      for (const [state, mode, texts] of summaryStates) {
+        const upstream = state.padEnd(40, '0');
+        await fetch(`${process.env.FAKE_PC}/fake/summary?mode=${mode}&upstream=${upstream}`, { method: 'POST' });
+        // The first visit starts the summary; a refused one shows on the next.
+        if (mode === 'fail') await page.goto(base + '/admin/strata/version', { waitUntil: 'domcontentloaded' });
+        findings += await check(page, errors, name, `/admin/strata/version (${state})`, texts, `_admin_strata_version-${state}`);
       }
-      if (r.signedOut) issues.push('shows the sign-in form, so nothing behind it was checked');
-      if (r.overflow > 0) issues.push(`scrolls sideways by ${r.overflow}px`);
-      if (r.unlabeled.length) issues.push(`no label: ${r.unlabeled.join(', ')}`);
-      if (r.small.length) issues.push(`under 24px: ${r.small.join(', ')}`);
-      if (de.length) issues.push(`German: ${de.slice(0, 3).join(' / ')}`);
-      if (errors.length) issues.push(`JS error: ${errors[0]}`);
-      findings += issues.length;
-      console.log(`${issues.length ? 'FAIL' : 'ok  '} ${name} ${area}${issues.length ? '\n     ' + issues.join('\n     ') : ''}`);
-      if (process.env.SHOTS === '1') {
-        await page.screenshot({ path: `${process.env.OUT}/${name}${area.replace(/\//g, '_')}.jpg`, type: 'jpeg', quality: 60, fullPage: true });
-      }
+      // The phone pass starts again from the first upstream and a written summary.
+      await fetch(`${process.env.FAKE_PC}/fake/summary?mode=answer`, { method: 'POST' });
     }
     await ctx.close();
   }

@@ -64,6 +64,12 @@ const PROMPT_FILES: usize = 100;
 const LIMIT: Duration = Duration::from_secs(120);
 /// After a failed attempt, the same upstream commit waits this long.
 const RETRY_AFTER: Duration = Duration::from_secs(3600);
+
+/// How long Strata may take, and how long a failed upstream commit waits.
+struct Timing {
+    limit: Duration,
+    retry_after: Duration,
+}
 /// Strata's context when `/health` does not say.
 const DEFAULT_CONTEXT: u64 = 8192;
 
@@ -103,6 +109,8 @@ pub struct UpdateSummaries {
     writing: Mutex<Option<String>>,
     /// The last failed attempt.
     failed: Mutex<Option<(String, Instant)>>,
+    /// `LIMIT` and `RETRY_AFTER`; shorter in tests.
+    timing: Mutex<Timing>,
 }
 
 /// What the Strata page needs to know about Strata right now.
@@ -170,6 +178,10 @@ impl UpdateSummaries {
             written: Mutex::new(written),
             writing: Mutex::new(None),
             failed: Mutex::new(None),
+            timing: Mutex::new(Timing {
+                limit: LIMIT,
+                retry_after: RETRY_AFTER,
+            }),
         }
     }
 
@@ -247,12 +259,22 @@ impl UpdateSummaries {
         }
     }
 
+    /// Changes how long Strata may take and how long a failure waits; for tests.
+    fn limit(&self) -> Duration {
+        self.timing.lock().unwrap().limit
+    }
+
+    pub fn set_timing(&self, limit: Duration, retry_after: Duration) {
+        *self.timing.lock().unwrap() = Timing { limit, retry_after };
+    }
+
     fn recently_failed(&self, upstream: &str) -> bool {
+        let retry_after = self.timing.lock().unwrap().retry_after;
         self.failed
             .lock()
             .unwrap()
             .as_ref()
-            .is_some_and(|(u, at)| u == upstream && at.elapsed() < RETRY_AFTER)
+            .is_some_and(|(u, at)| u == upstream && at.elapsed() < retry_after)
     }
 
     fn fail(&self, upstream: &str, why: &str) {
@@ -345,7 +367,7 @@ async fn ask(state: &AppState, incoming: &Incoming) -> Result<(Vec<String>, Stri
     let mut req = state
         .upstream
         .post(format!("{strata}/v1/chat/completions"))
-        .timeout(LIMIT)
+        .timeout(state.strata.update.limit())
         .json(&body);
     if let Some(auth) = auth {
         req = req.header(reqwest::header::AUTHORIZATION, auth);

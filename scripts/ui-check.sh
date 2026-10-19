@@ -49,5 +49,5 @@ done
 
 mkdir -p target/ui-check
 # The proxy's log goes with the data directory; a failure shows its end.
-BASE="http://127.0.0.1:$port" OUT=target/ui-check node scripts/ui-check.js ||
+BASE="http://127.0.0.1:$port" FAKE_PC="http://127.0.0.1:$pc_port" OUT=target/ui-check node scripts/ui-check.js ||
   { echo "--- proxy.log" >&2; tail -n 200 "$data/proxy.log" >&2; exit 1; }

@@ -41,6 +41,11 @@ Schon entschiedene Fragen: `docs/adr/`.
   Timer abläuft (Leerlaufzeit, Nachlauf), liegt der Timer mindestens 2 s
   dahinter; der CI-Runner ist langsamer als die Session. Knappe Timer nur,
   wenn der Test danach nur noch wartet.
+- **Wartezeiten, die ein Test abwarten müsste, sind einstellbar.** Eine Grenze
+  oder Wiederholzeit, von der Verhalten abhängt, kommt aus `Config` (wie
+  `idle_timeout`) oder über einen Setter für Tests (wie `Monitor::set_poll`,
+  `UpdateSummaries::set_timing`), nicht aus einer festen `const`. Sonst bleibt
+  das Verhalten ungetestet.
 - **Vorrang der Einstellungen:** vom PC gemeldete MAC, dann Wert von der
   Seite, dann Umgebungsvariable, dann Standardwert. Neue Einstellungen folgen
   derselben Reihenfolge und werden live über `AppState::cfg()` gelesen. Das

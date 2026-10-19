@@ -1,6 +1,6 @@
 ---
 name: steward
-description: PR in diesem Repo zum Merge bringen. Lesen bei jedem CI- oder Review-Ereignis und vor jedem Merge.
+description: PR in diesem Repo zum Merge bringen. Lesen beim Öffnen eines PRs, bei jedem CI- oder Review-Ereignis und vor jedem Merge.
 ---
 
 1. **Mergebar zuerst.** Vor dem Warten auf CI und vor dem Merge `mergeable_state` des PRs lesen. Bei `dirty` `origin/main` per Merge-Commit einmischen, nie per Rebase, und `scripts/check.sh` ausführen. Danach pushen und erst dann auf CI warten. Ein CI-Lauf auf einem Kopf mit Konflikt zählt nicht.

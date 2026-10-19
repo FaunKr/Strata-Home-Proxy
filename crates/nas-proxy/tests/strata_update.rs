@@ -388,3 +388,27 @@ async fn a_summary_of_older_commits_is_not_shown_for_newer_ones() {
     assert_eq!(strata_nas_proxy::strata::page(&state).await.update, None);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[tokio::test]
+async fn a_slow_strata_hits_the_limit_and_is_asked_again_later() {
+    let s = ready().await;
+    s.state.strata.update.set_timing(
+        std::time::Duration::from_millis(200),
+        std::time::Duration::from_millis(2500),
+    );
+    *s.pc.chat_pause.lock().unwrap() = std::time::Duration::from_millis(1000);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let v = settled(&mut b).await;
+    assert_eq!(v["update"]["summary"]["state"], "unavailable", "{v}");
+    // Not again right away …
+    page(&mut b).await;
+    assert_eq!(s.pc.chat_bodies.lock().unwrap().len(), 1);
+    // … but once the wait is over, and now Strata answers in time.
+    *s.pc.chat_pause.lock().unwrap() = std::time::Duration::ZERO;
+    tokio::time::sleep(std::time::Duration::from_millis(2600)).await;
+    page(&mut b).await;
+    let v = settled(&mut b).await;
+    assert_eq!(v["update"]["summary"]["state"], "written", "{v}");
+    assert_eq!(s.pc.chat_bodies.lock().unwrap().len(), 2);
+}

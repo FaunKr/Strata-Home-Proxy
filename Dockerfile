@@ -57,6 +57,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 # Der Proxy liefert das Installationsskript des PC-Dienstes aus (include_str!).
 COPY deploy/windows/install.ps1 ./deploy/windows/
+# Die Aufgaben des Code-Benchmarks schickt der Proxy an dessen Runner (include_str!).
+COPY tools/code-bench/tasks ./tools/code-bench/tasks
 RUN cargo leptos build --release --project admin-ui
 # Der Commit kommt in die Version des PC-Dienstes (crates/pc-agent/build.rs);
 # daran erkennt die Übersicht, ob ein Update verfügbar ist.

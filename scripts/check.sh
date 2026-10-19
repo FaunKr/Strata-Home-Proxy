@@ -32,7 +32,8 @@ cargo clippy "${package_args[@]}" --all-targets -- -D warnings
 if selected strata-admin-ui; then
   cargo clippy -p strata-admin-ui --target wasm32-unknown-unknown --no-default-features --features hydrate -- -D warnings
 fi
-# The PC service's Windows code, as the CI job `windows` checks it; only
+# The PC service's Windows code; CI checks it here instead of on a Windows
+# runner (the manual workflow windows.yml runs it on real Windows). Only
 # where the target is installed (rustup target add x86_64-pc-windows-gnu).
 if selected strata-pc-agent; then
   if rustup target list --installed 2>/dev/null | grep -qx x86_64-pc-windows-gnu; then
@@ -41,8 +42,8 @@ if selected strata-pc-agent; then
     echo "WARNUNG: Windows-Prüfung des PC-Dienstes übersprungen (rustup target add x86_64-pc-windows-gnu)" >&2
   fi
 fi
-# install.ps1 parses, as the CI job `windows` checks it; only where PowerShell
-# is installed. The NAS proxy serves the script, the PC service runs it.
+# install.ps1 parses, as the workflow windows.yml checks it; only where
+# PowerShell is installed. The NAS proxy serves the script, the PC service runs it.
 if (selected strata-pc-agent || selected strata-nas-proxy) && command -v pwsh >/dev/null; then
   pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("deploy/windows/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
 fi
@@ -65,6 +66,8 @@ else
   echo "WARNUNG: shellcheck fehlt, tools/local-agent ungeprüft" >&2
 fi
 tools/local-agent/test.sh
+# Der Runner des Code-Benchmarks, gegen ein nachgebildetes opencode.
+python3 tools/code-bench/test_runner.py
 # Erst bauen, dann mit Zeitlimit testen: ein hängender Test bricht ab, statt
 # den Lauf endlos zu blockieren. Welcher hängt, steht in der Ausgabe
 # ("has been running for over 60 seconds").

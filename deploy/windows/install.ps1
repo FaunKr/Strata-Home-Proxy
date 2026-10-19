@@ -5,7 +5,7 @@
 #   irm http://<NAS>:<Port>/admin/agent/install.ps1?uninstall | iex
 # Der NAS setzt NasUrl, Code und Uninstall unten ein.
 #
-# Ohne NAS, im entpackten Ordner mit strata-pc-agent.exe (Download aus der CI):
+# Ohne NAS, im Ordner mit einer selbst gebauten strata-pc-agent.exe:
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -NasIp 192.168.1.10
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
 param(

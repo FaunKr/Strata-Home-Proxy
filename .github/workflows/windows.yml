@@ -1,0 +1,24 @@
+name: Windows
+# The PC service on real Windows, started by hand (Actions → Windows → Run
+# workflow). CI lints its Windows code on Linux instead; this also runs the
+# tests that only exist on Windows. Not part of ci-ok.
+on:
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy -p strata-pc-agent --all-targets -- -D warnings
+      - run: cargo test -p strata-pc-agent
+      - name: install.ps1 parses
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD\deploy\windows\install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors; exit 1 }
+        shell: powershell

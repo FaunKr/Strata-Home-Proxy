@@ -7,8 +7,10 @@ use leptos_router::components::{A, Outlet};
 
 use crate::{
     api::{
-        CancelStrataJob, StartStrataJob, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
-        StrataModel, StrataPage, StrataSize, error_text, get_strata,
+        CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
+        StartCodeBench, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob, StrataJobKind,
+        StrataJobState, StrataModel, StrataPage, StrataSize, StrataUpdate, UpdateSummary,
+        error_text, get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
     labels::{STRATA_CONNECTION, strata_job_label},
@@ -265,15 +267,30 @@ pub fn ModelsTab() -> impl IntoView {
 
 #[component]
 pub fn VersionTab() -> impl IntoView {
-    with_page(|area, page| {
-        let blocked = area.blocked(&page);
-        let actions = area.actions;
-        match page.info {
-            None => ().into_any(),
-            Some(info) if !info.installed => not_installed().into_any(),
-            Some(info) => view! { <Version info actions blocked /> }.into_any(),
-        }
-    })
+    // The code benchmark loads on its own, outside the page's Suspend: a
+    // resource created inside it does not hydrate.
+    view! {
+        {with_page(|area, page| {
+            let blocked = area.blocked(&page);
+            let actions = area.actions;
+            let update = page.update;
+            match page.info {
+                None => update
+                    .map(|update| {
+                        view! {
+                            <section class="card">
+                                <h2>"Update"</h2>
+                                <Changes update />
+                            </section>
+                        }
+                    })
+                    .into_any(),
+                Some(info) if !info.installed => not_installed().into_any(),
+                Some(info) => view! { <Version info update actions blocked /> }.into_any(),
+            }
+        })}
+        <CodeBenchCard />
+    }
 }
 
 #[component]
@@ -853,7 +870,12 @@ fn ContextSwitch(
 }
 
 #[component]
-fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+fn Version(
+    info: StrataInfo,
+    update: Option<StrataUpdate>,
+    actions: Actions,
+    blocked: Signal<bool>,
+) -> impl IntoView {
     let confirm = expect_context::<Confirm>();
     let version = info
         .version
@@ -864,10 +886,6 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
         Some(false) => ("Up to date", "badge is-ok"),
         None => ("Not known", "badge is-idle"),
     };
-    let bench = info.benchmark.clone().map_or_else(
-        || "No benchmark has run yet.".to_string(),
-        |b| format!("Last: {} with {}, {}.", b.result, b.model, b.at_text),
-    );
     view! {
         <section class="card">
             <div class="card-head">
@@ -881,6 +899,9 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
                 <dt>"Installed"</dt>
                 <dd>{version}</dd>
             </dl>
+            {update
+                .filter(|_| info.update_available == Some(true))
+                .map(|update| view! { <Changes update /> })}
             <div class="actions">
                 <button
                     type="button"
@@ -903,10 +924,373 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
                 </button>
             </div>
         </section>
+        <Benchmarks info actions blocked />
+    }
+}
+
+/// How often the card asks again while a code benchmark runs.
+#[cfg(feature = "hydrate")]
+const CODE_BENCH_POLL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The code benchmark: start, progress and each model's last result.
+#[component]
+fn CodeBenchCard() -> impl IntoView {
+    let start = ServerAction::<StartCodeBench>::new();
+    let cancel = ServerAction::<CancelCodeBench>::new();
+    let tick = RwSignal::new(0u32);
+    let page = Resource::new(
+        move || (tick.get(), start.version().get(), cancel.version().get()),
+        |_| get_code_bench(),
+    );
+    let running = Memo::new(move |_| {
+        page.get()
+            .and_then(|p| p.ok())
+            .and_then(|p| p.run)
+            .is_some_and(|r| r.state == CodeBenchState::Running)
+    });
+    #[cfg(feature = "hydrate")]
+    {
+        let ticker = set_interval_with_handle(
+            move || {
+                if running.get_untracked() {
+                    tick.update(|n| *n += 1);
+                }
+            },
+            CODE_BENCH_POLL,
+        )
+        .ok();
+        on_cleanup(move || {
+            if let Some(t) = ticker {
+                t.clear();
+            }
+        });
+    }
+    let confirm = expect_context::<Confirm>();
+    let run = move |_| {
+        confirm.ask(
+            Question {
+                title: "Run the code benchmark?".into(),
+                text: format!(
+                    "The active model solves {} Python tasks with opencode, up to {} minutes each. The PC wakes with the first request; other requests keep working meanwhile.",
+                    CODE_BENCH_TASKS, CODE_BENCH_TASK_MINUTES
+                ),
+                confirm: "Run code benchmark",
+                danger: false,
+            },
+            move || {
+                start.dispatch(StartCodeBench {});
+            },
+        );
+    };
+    view! {
+        <section class="card">
+            <h2>"Code benchmark"</h2>
+            <p class="muted small">
+                "The active model solves three Python tasks with opencode in the code-bench container on the NAS. Hidden tests score what it leaves."
+            </p>
+            {action_error(start.value())}
+            {action_error(cancel.value())}
+            <Transition>
+                {move || Suspend::new(async move {
+                    match page.await {
+                        Err(e) => view! { <p class="error">{error_text(&e)}</p> }.into_any(),
+                        Ok(p) => {
+                            let problem = p
+                                .problem
+                                .clone()
+                                .map(|text| view! { <p class="warning" role="status">{text}</p> });
+                            let blocked = p.problem.is_some();
+                            let current = p.run.clone().map(|r| view! { <CodeBenchCurrent run=r cancel /> });
+                            let mut results = p.results.clone();
+                            results.sort_by(|a, b| {
+                                let (pa, ta) = run_totals(a);
+                                let (pb, tb) = run_totals(b);
+                                pb.cmp(&pa).then(ta.total_cmp(&tb))
+                            });
+                            let results = if results.is_empty() {
+                                view! { <p>"No code benchmark has run yet."</p> }.into_any()
+                            } else {
+                                results
+                                    .into_iter()
+                                    .map(|r| view! { <CodeBenchResult run=r /> })
+                                    .collect_view()
+                                    .into_any()
+                            };
+                            view! {
+                                {problem}
+                                {current}
+                                {results}
+                                <div class="actions">
+                                    <button
+                                        type="button"
+                                        class="secondary"
+                                        disabled=move || {
+                                            blocked || running.get() || start.pending().get()
+                                        }
+                                        on:click=run
+                                    >
+                                        "Run code benchmark"
+                                    </button>
+                                </div>
+                            }
+                                .into_any()
+                        }
+                    }
+                })}
+            </Transition>
+        </section>
+    }
+}
+
+const CODE_BENCH_TASKS: usize = 3;
+const CODE_BENCH_TASK_MINUTES: usize = 30;
+
+/// Hidden tests passed and seconds in total.
+fn run_totals(run: &CodeBenchRun) -> (u32, f64) {
+    (
+        run.tasks.iter().map(|t| t.passed).sum(),
+        run.tasks.iter().filter_map(|t| t.total_secs).sum(),
+    )
+}
+
+/// `754.2` → `12:34 min`, `42.5` → `43 s`.
+fn duration_text(secs: f64) -> String {
+    let secs = secs.round() as u64;
+    if secs < 60 {
+        format!("{secs} s")
+    } else {
+        format!("{}:{:02} min", secs / 60, secs % 60)
+    }
+}
+
+/// The running run, or the last one that ended without a result.
+#[component]
+fn CodeBenchCurrent(run: CodeBenchRun, cancel: ServerAction<CancelCodeBench>) -> impl IntoView {
+    let confirm = expect_context::<Confirm>();
+    match run.state {
+        CodeBenchState::Running => {
+            let at = run
+                .tasks
+                .iter()
+                .position(|t| t.state == "running")
+                .unwrap_or(0);
+            let task = run.tasks.get(at).cloned();
+            let mut figures = vec![format!("Task {} of {}", at + 1, run.tasks.len())];
+            if let Some(t) = &task {
+                figures.push(t.title.clone());
+                figures.push(format!("{} model steps", t.steps));
+                if let Some(secs) = t.total_secs {
+                    figures.push(duration_text(secs));
+                }
+            }
+            view! {
+                <div class="job" role="status">
+                    <p class="strong">{format!("Running with {}", run.model)}</p>
+                    <p class="hint">{figures.join(" · ")}</p>
+                    <div class="actions">
+                        <button
+                            type="button"
+                            class="secondary"
+                            disabled=move || cancel.pending().get()
+                            on:click=move |_| {
+                                confirm
+                                    .ask(
+                                        Question {
+                                            title: "Cancel the code benchmark?".into(),
+                                            text: "The task that runs now ends, the others do not start."
+                                                .into(),
+                                            confirm: "Cancel",
+                                            danger: true,
+                                        },
+                                        move || {
+                                            cancel.dispatch(CancelCodeBench {});
+                                        },
+                                    );
+                            }
+                        >
+                            "Cancel code benchmark"
+                        </button>
+                    </div>
+                </div>
+            }
+                .into_any()
+        }
+        CodeBenchState::Cancelled => view! {
+            <p class="hint">{format!("The last run with {} was cancelled.", run.model)}</p>
+        }
+        .into_any(),
+        // A done run is among the results.
+        CodeBenchState::Done => ().into_any(),
+        CodeBenchState::Failed => {
+            let why = run
+                .error
+                .clone()
+                .unwrap_or_else(|| "no reason given".into());
+            view! {
+                <p class="error">{format!("The last run with {} failed: {why}", run.model)}</p>
+            }
+            .into_any()
+        }
+    }
+}
+
+/// A model's last finished run: the total, then each task.
+#[component]
+fn CodeBenchResult(run: CodeBenchRun) -> impl IntoView {
+    let (passed, secs) = run_totals(&run);
+    let total: u32 = run.tasks.iter().map(|t| t.total).sum();
+    let output: u64 = run.tasks.iter().map(|t| t.output_tokens).sum();
+    // The time the model spent, from each task's speed.
+    let model_secs: f64 = run
+        .tasks
+        .iter()
+        .filter_map(|t| Some(t.output_tokens as f64 / t.output_tps.filter(|v| *v > 0.0)?))
+        .sum();
+    let mut summary = vec![
+        format!("{passed}/{total} tests"),
+        duration_text(secs),
+        format!("{output} output tokens"),
+    ];
+    if model_secs > 0.0 {
+        summary.push(tps((output as f64 / model_secs * 10.0).round() / 10.0));
+    }
+    let tasks = run
+        .tasks
+        .into_iter()
+        .map(|t| view! { <CodeBenchTaskRow task=t /> })
+        .collect_view();
+    view! {
+        <div class="bench-run">
+            <h3>{run.model.clone()}</h3>
+            <p>{format!("Total: {}", summary.join(" · "))}</p>
+            <p class="muted small">{run.at_text.clone()}</p>
+            <ul class="list">{tasks}</ul>
+        </div>
+    }
+}
+
+#[component]
+fn CodeBenchTaskRow(task: CodeBenchTask) -> impl IntoView {
+    let mut figures = vec![format!("{}/{} tests", task.passed, task.total)];
+    if let Some(secs) = task.total_secs {
+        figures.push(duration_text(secs));
+    }
+    figures.push(format!("{} steps", task.steps));
+    figures.push(format!(
+        "{} in / {} out tokens",
+        task.input_tokens, task.output_tokens
+    ));
+    if let Some(v) = task.output_tps {
+        figures.push(tps(v));
+    }
+    let class = if task.total > 0 && task.passed == task.total {
+        "badge is-ok"
+    } else if task.passed > 0 {
+        "badge is-warn"
+    } else {
+        "badge is-bad"
+    };
+    let badge = if task.timed_out {
+        "Time limit".to_string()
+    } else {
+        format!("{}/{}", task.passed, task.total)
+    };
+    let files = task
+        .files
+        .iter()
+        .map(|(path, text)| {
+            view! {
+                <p class="small strong">{path.clone()}</p>
+                <pre class="lines">{text.clone()}</pre>
+            }
+        })
+        .collect_view();
+    let no_files = task
+        .files
+        .is_empty()
+        .then(|| view! { <p class="hint">"The agent left no Python file."</p> });
+    view! {
+        <li>
+            <div class="grow">
+                <p class="strong">{task.title.clone()}</p>
+                <p class="muted small">{figures.join(" · ")}</p>
+                {task.error.clone().map(|e| view! { <p class="error small">{e}</p> })}
+                <details class="advanced">
+                    <summary>"Code and test output"</summary>
+                    {files}
+                    {no_files}
+                    <p class="small strong">"Hidden tests"</p>
+                    <pre class="lines">{task.test_output.clone()}</pre>
+                </details>
+            </div>
+            <span class=class>
+                <span class="dot"></span>
+                {badge}
+            </span>
+        </li>
+    }
+}
+
+/// About how long one benchmark takes, as the PC service says.
+const BENCH_MINUTES: usize = 10;
+
+/// Each model's last benchmark, fastest first, and the buttons that run one
+/// or compare them all.
+#[component]
+fn Benchmarks(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+    let confirm = expect_context::<Confirm>();
+    let mut rows: Vec<StrataBenchmark> = info.benchmarks.clone();
+    // An older PC service keeps only the last run.
+    if rows.is_empty() {
+        rows.extend(info.benchmark.clone());
+    }
+    rows.sort_by(|a, b| {
+        b.decode_tps
+            .unwrap_or(-1.0)
+            .total_cmp(&a.decode_tps.unwrap_or(-1.0))
+            .then_with(|| a.model.cmp(&b.model))
+    });
+    let active = info.models.iter().find(|m| m.active).map(|m| m.id.clone());
+    let installed: Vec<String> = info.models.iter().map(|m| m.id.clone()).collect();
+    let fastest = rows
+        .first()
+        .filter(|r| r.decode_tps.is_some())
+        .map(|r| r.model.clone());
+    let list = if rows.is_empty() {
+        view! { <p>"No benchmark has run yet."</p> }.into_any()
+    } else {
+        let items = rows
+            .into_iter()
+            .map(|row| {
+                let is_active = active.as_deref() == Some(row.model.as_str());
+                let is_fastest = fastest.as_deref() == Some(row.model.as_str());
+                let can_activate =
+                    !is_active && row.decode_tps.is_some() && installed.contains(&row.model);
+                view! { <BenchRow row is_active is_fastest can_activate actions blocked /> }
+            })
+            .collect_view();
+        view! { <ul class="list">{items}</ul> }.into_any()
+    };
+    let runs = info.models.len();
+    let compare = move |_| {
+        let question = Question {
+            title: "Compare all models?".into(),
+            text: format!(
+                "{runs} runs, about {} minutes. Strata switches between the models, and requests wait meanwhile. The active model comes back at the end.",
+                runs * BENCH_MINUTES
+            ),
+            confirm: "Compare models",
+            danger: false,
+        };
+        confirm.ask(question, move || actions.job(StrataJobKind::CompareModels));
+    };
+    view! {
         <section class="card">
             <h2>"Benchmark"</h2>
-            <p>{bench}</p>
-            <p class="muted small">"Measures the active model. Requests wait while it runs."</p>
+            {list}
+            <p class="muted small">
+                "Run benchmark measures the active model. Requests wait while it runs."
+            </p>
             <div class="actions">
                 <button
                     type="button"
@@ -916,8 +1300,193 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
                 >
                     "Run benchmark"
                 </button>
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || blocked.get() || runs < 2
+                    on:click=compare
+                >
+                    "Compare models"
+                </button>
             </div>
         </section>
+    }
+}
+
+/// What an update brings: the summary, then the commits it is based on.
+#[component]
+fn Changes(update: StrataUpdate) -> impl IntoView {
+    let (lines, note, by_strata) = match update.summary {
+        UpdateSummary::Written { lines, model } => {
+            (lines, format!("Summary by Strata ({model})"), true)
+        }
+        UpdateSummary::Writing { fallback } => {
+            (fallback, "Strata is writing a summary…".to_string(), false)
+        }
+        UpdateSummary::Unavailable { fallback } => (
+            fallback,
+            "Summary not available: Strata isn't ready".to_string(),
+            false,
+        ),
+    };
+    let count = update.commits.len() as u64 + update.left_out;
+    let more = (update.left_out > 0).then(|| format!("and {} more", update.left_out));
+    view! {
+        <div class="update-changes">
+            {if by_strata {
+                view! {
+                    <ul class="update-summary">
+                        {lines.into_iter().map(|l| view! { <li>{l}</li> }).collect_view()}
+                    </ul>
+                }
+                    .into_any()
+            } else {
+                lines.into_iter().map(|l| view! { <p>{l}</p> }).collect_view().into_any()
+            }}
+            <p class="muted small">{note}</p>
+            {(!update.commits.is_empty())
+                .then(|| {
+                    view! {
+                        <details class="update-commits">
+                            <summary>
+                                {format!("Show {count} change{}", if count == 1 { "" } else { "s" })}
+                            </summary>
+                            <ul>
+                                {update
+                                    .commits
+                                    .into_iter()
+                                    .map(|c| {
+                                        let short = match c.url {
+                                            Some(url) => {
+                                                view! {
+                                                    <a href=url target="_blank" rel="noopener noreferrer">
+                                                        <code>{c.short}</code>
+                                                    </a>
+                                                }
+                                                    .into_any()
+                                            }
+                                            None => view! { <code>{c.short}</code> }.into_any(),
+                                        };
+                                        view! {
+                                            <li>
+                                                {short}
+                                                " "
+                                                <span>{c.subject}</span>
+                                                " "
+                                                <span class="muted small">{c.date_text}</span>
+                                            </li>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </ul>
+                            {more.map(|m| view! { <p class="muted small">{m}</p> })}
+                        </details>
+                    }
+                })}
+            {update
+                .compare_url
+                .map(|url| {
+                    view! {
+                        <p class="small">
+                            <a href=url target="_blank" rel="noopener noreferrer">
+                                "Compare on GitHub"
+                            </a>
+                        </p>
+                    }
+                })}
+        </div>
+    }
+}
+
+/// `38.5` → `38.5 tok/s`.
+fn tps(v: f64) -> String {
+    format!("{v} tok/s")
+}
+
+#[component]
+fn BenchRow(
+    row: StrataBenchmark,
+    is_active: bool,
+    is_fastest: bool,
+    can_activate: bool,
+    actions: Actions,
+    blocked: Signal<bool>,
+) -> impl IntoView {
+    // A failed run keeps the model's last measurement, if it had one.
+    let speeds = match (&row.error, row.decode_tps) {
+        (Some(error), None) => {
+            view! { <p class="error small">{format!("No result: {error}")}</p> }.into_any()
+        }
+        (error, Some(decode)) => {
+            let mut text = format!("Decode {}", tps(decode));
+            text.push_str(&match row.prompt_tps {
+                Some(prompt) => format!(" · Prompt {}", tps(prompt)),
+                None => " · Prompt –".into(),
+            });
+            let failed = error
+                .clone()
+                .map(|e| view! { <p class="error small">{format!("Last run failed: {e}")}</p> });
+            view! {
+                <p>{text}</p>
+                {failed}
+            }
+            .into_any()
+        }
+        (None, None) => view! { <p>{row.result.clone()}</p> }.into_any(),
+    };
+    let mut with = Vec::new();
+    if let Some(context) = row.context {
+        with.push(format!("{}K context", context / 1024));
+    }
+    match row.speed_projection {
+        Some(true) => with.push("speed projection on".into()),
+        Some(false) => with.push("speed projection off".into()),
+        None => {}
+    }
+    if let Some(version) = &row.version {
+        with.push(format!("Strata {version}"));
+    }
+    with.push(row.at_text.clone());
+    let id = row.model.clone();
+    view! {
+        <li>
+            <div class="grow">
+                <p class="strong">{row.model.clone()}</p>
+                {speeds}
+                <p class="muted small">{with.join(" · ")}</p>
+            </div>
+            {is_fastest
+                .then(|| {
+                    view! {
+                        <span class="badge is-ok">
+                            <span class="dot"></span>
+                            "Fastest"
+                        </span>
+                    }
+                })}
+            {is_active
+                .then(|| {
+                    view! {
+                        <span class="badge is-idle">
+                            <span class="dot"></span>
+                            "Active"
+                        </span>
+                    }
+                })}
+            {can_activate
+                .then(|| {
+                    view! {
+                        <button
+                            type="button"
+                            class="secondary"
+                            disabled=move || blocked.get()
+                            on:click=move |_| actions.model_job(StrataJobKind::Activate, id.clone())
+                        >
+                            "Make active"
+                        </button>
+                    }
+                })}
+        </li>
     }
 }
 

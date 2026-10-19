@@ -59,7 +59,8 @@ pub struct Fake {
     pub started: Mutex<Option<(PathBuf, Vec<String>)>>,
     /// What the last stop was told to end.
     pub stopped: Mutex<Option<Vec<String>>>,
-    /// Fake commands by program name without `.exe` (`git`, `START-HERE.bat`).
+    /// Fake commands by program name without `.exe` (`git`, `START-HERE.bat`);
+    /// `git <subcommand>` answers that subcommand only, ahead of `git`.
     pub commands: Mutex<HashMap<String, FakeCommand>>,
     /// Every command run, in order.
     pub ran: Mutex<Vec<CommandSpec>>,
@@ -222,6 +223,12 @@ impl Platform for FakePlatform {
         }
         if name == "winget" {
             fake.git_missing.store(false, Ordering::SeqCst);
+        }
+        if name == "git"
+            && let Some(sub) = spec.args.first().map(|a| format!("git {a}"))
+            && fake.commands.lock().unwrap().contains_key(&sub)
+        {
+            return Ok(self.fake_run(&sub));
         }
         Ok(self.fake_run(&name))
     }

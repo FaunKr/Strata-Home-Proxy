@@ -1,5 +1,5 @@
 //! Strata management for the web UI: what is installed, and jobs that set up,
-//! add, switch, delete, update or benchmark models. At most one job runs at a
+//! add, switch, delete, update, benchmark or compare models. At most one job runs at a
 //! time; it keeps the PC awake and the watchdog away. Every job runs fixed
 //! programs with values from [`crate::catalog`]; requests carry no commands.
 
@@ -21,7 +21,10 @@ use crate::{
 };
 
 const JOB_FILE: &str = "strata-job.json";
+/// The last benchmark run, as older services kept it alone.
 const BENCH_FILE: &str = "strata-benchmark.json";
+/// The last benchmark of each model.
+const BENCHES_FILE: &str = "strata-benchmarks.json";
 /// How often the page's visits ask Git whether Strata has a newer version.
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
 /// How often a job looks again while it waits for Strata.
@@ -70,6 +73,7 @@ pub enum JobKind {
     SetKey,
     SetSpeedProjection,
     SetContext,
+    CompareModels,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +164,7 @@ pub enum JobRequest {
         model: String,
         context: u32,
     },
+    CompareModels,
 }
 
 /// Why a job was not started: a value outside the catalog (400), or a state
@@ -205,6 +210,11 @@ enum Plan {
         id: String,
         context: u32,
     },
+    /// Benchmarks `ids` in turn, then `active` is the active model again.
+    CompareModels {
+        ids: Vec<String>,
+        active: String,
+    },
 }
 
 impl Plan {
@@ -219,6 +229,7 @@ impl Plan {
             Self::SetKey { .. } => JobKind::SetKey,
             Self::SetSpeedProjection { .. } => JobKind::SetSpeedProjection,
             Self::SetContext { .. } => JobKind::SetContext,
+            Self::CompareModels { .. } => JobKind::CompareModels,
         }
     }
 
@@ -230,7 +241,7 @@ impl Plan {
             | Self::Benchmark { id }
             | Self::SetSpeedProjection { id, .. }
             | Self::SetContext { id, .. } => Some(id.clone()),
-            Self::Update | Self::SetKey { .. } => None,
+            Self::Update | Self::SetKey { .. } | Self::CompareModels { .. } => None,
         }
     }
 }
@@ -249,8 +260,10 @@ struct JobsInner {
     progress: Progress,
     /// The key on the running command's line, kept out of its stored output.
     secret: Option<String>,
-    /// A benchmark's chat decode speed, read as its output comes.
-    bench: Option<f64>,
+    /// A benchmark's speeds, read as its output comes.
+    bench: BenchReading,
+    /// Goes before each step, e.g. which model of a comparison.
+    step_prefix: Option<String>,
 }
 
 impl Jobs {
@@ -366,7 +379,8 @@ pub fn start(agent: &Arc<Agent>, request: JobRequest) -> Result<Job, Refusal> {
         inner.cancelled = false;
         inner.progress = Progress::default();
         inner.secret = None;
-        inner.bench = None;
+        inner.bench = BenchReading::default();
+        inner.step_prefix = None;
         job
     };
     save_job(agent);
@@ -502,6 +516,17 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             let id = installed_model(dir, &model)?;
             Ok(Plan::SetContext { id, context })
         }
+        JobRequest::CompareModels => {
+            strata_installed(dir)?;
+            let active = active_model(agent).ok_or_else(|| {
+                Refusal::Conflict("Kein aktives Modell bekannt; erst ein Modell aktivieren".into())
+            })?;
+            let mut ids: Vec<String> = installed_models(dir)
+                .map(|id| catalog::by_id(&id).map_or(id, Size::id))
+                .collect();
+            ids.sort();
+            Ok(Plan::CompareModels { ids, active })
+        }
     }
 }
 
@@ -621,6 +646,7 @@ async fn run(agent: &Arc<Agent>, plan: Plan) -> Outcome {
         Plan::SetKey { api_key } => set_key(agent, api_key).await,
         Plan::SetSpeedProjection { id, on } => set_speed_projection(agent, &id, on).await,
         Plan::SetContext { id, context } => set_context(agent, &id, context).await,
+        Plan::CompareModels { ids, active } => compare_models(agent, &ids, &active).await,
     };
     match result {
         Ok(result) => Outcome::Done(result),
@@ -839,23 +865,82 @@ async fn update(agent: &Arc<Agent>) -> Result<Option<String>, Step> {
     let updated = command(agent, spec, true).await;
     restart_strata(agent).await;
     updated?;
-    agent.updates.found(Some(false));
+    agent.updates.found(Some(false), None);
     Ok(None)
 }
 
-/// The last benchmark run.
+/// A model's last benchmark run.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Benchmark {
     pub model: String,
-    /// Tokens per second while answering, e.g. `38.5 Token/s`.
+    /// Tokens per second while answering, e.g. `38.5 Token/s`; empty when
+    /// the run failed.
     pub result: String,
     /// Unix seconds.
     pub at: u64,
+    /// Chat decode tokens per second; missing from older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decode_tps: Option<f64>,
+    /// Tokens per second reading a 4K prompt, if the benchmark said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tps: Option<f64>,
+    /// What it was measured with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_projection: Option<bool>,
+    /// Short commit of the Strata folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Why the run in a comparison gave no result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
-/// Runs Strata's `BENCH.bat` against the running Strata and keeps its chat
-/// decode speed.
+/// The speeds a benchmark printed so far.
+#[derive(Clone, Copy, Debug, Default)]
+struct BenchReading {
+    decode: Option<f64>,
+    prompt: Option<f64>,
+}
+
+impl BenchReading {
+    /// From the short table `tools/strata_bench.py` prints at the end.
+    fn read(&mut self, line: &str) {
+        if let Some(tps) = table_value(line, "chat decode tok/s") {
+            self.decode = Some(tps);
+        } else if let Some(tps) = table_value(line, "4K prompt tok/s") {
+            self.prompt = Some(tps);
+        }
+    }
+}
+
+/// `  chat decode tok/s     38.50   (37.10 - 39.20, n=3)` → 38.5 for
+/// `chat decode tok/s`.
+fn table_value(line: &str, name: &str) -> Option<f64> {
+    line.trim()
+        .strip_prefix(name)?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
+/// Runs Strata's `BENCH.bat` against the running Strata and keeps its
+/// speeds for the model.
 async fn benchmark(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
+    let record = measure(agent, id).await?;
+    let result = record.result.clone();
+    keep_benchmark(agent, record);
+    Ok(Some(result))
+}
+
+/// One benchmark of the running model `id`.
+async fn measure(agent: &Arc<Agent>, id: &str) -> Result<Benchmark, Step> {
     // A Strata that is still loading gets no second start; one that hangs
     // ends first.
     if !agent.strata_healthy().await && !agent.strata_loading() {
@@ -870,49 +955,149 @@ async fn benchmark(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step>
     )
     .await?;
     set_step(agent, "Benchmark läuft (etwa 10 min)");
+    agent.jobs.inner.lock().unwrap().bench = BenchReading::default();
     let dir = agent.cfg.strata_dir.clone();
     let config = config_path(&dir, id);
     let spec = CommandSpec {
         program: dir.join("BENCH.bat"),
         args: vec!["--config".into(), config.display().to_string()],
-        dir: Some(dir),
+        dir: Some(dir.clone()),
     };
     command(agent, spec, false).await?;
-    let tps = agent
-        .jobs
-        .inner
-        .lock()
-        .unwrap()
-        .bench
+    let reading = agent.jobs.inner.lock().unwrap().bench;
+    let tps = reading
+        .decode
         .ok_or_else(|| "Der Benchmark hat keine Tokens/s gemeldet".to_string())?;
-    let result = format!("{} Token/s", (tps * 10.0).round() / 10.0);
-    let record = Benchmark {
+    Ok(Benchmark {
         model: id.to_string(),
-        result: result.clone(),
+        result: format!("{} Token/s", round1(tps)),
         at: unix_now(),
-    };
-    let path = agent.cfg.state_dir().join(BENCH_FILE);
-    let text = serde_json::to_string_pretty(&record).expect("benchmark serializes");
-    if let Err(e) = crate::write_replacing(&path, &text) {
-        tracing::warn!("{BENCH_FILE} nicht gespeichert: {e}");
+        decode_tps: Some(round1(tps)),
+        prompt_tps: reading.prompt.map(round1),
+        context: model_context(&dir, id),
+        speed_projection: Some(has_speed_projection(&dir, id)),
+        version: git_commit(&dir),
+        error: None,
+    })
+}
+
+/// Benchmarks each model in turn, each as it is set up, and makes `active`
+/// the active model again at the end, also after a cancel. A model that
+/// does not come up or report keeps its error and the next one follows.
+async fn compare_models(
+    agent: &Arc<Agent>,
+    ids: &[String],
+    active: &str,
+) -> Result<Option<String>, Step> {
+    let mut outcome = Ok(());
+    for (i, id) in ids.iter().enumerate() {
+        agent.jobs.inner.lock().unwrap().step_prefix =
+            Some(format!("{}/{}: {id}", i + 1, ids.len()));
+        let measured = async {
+            if active_model(agent).as_deref() != Some(id.as_str()) {
+                activate(agent, id).await?;
+            }
+            measure(agent, id).await
+        }
+        .await;
+        match measured {
+            Ok(record) => keep_benchmark(agent, record),
+            Err(Step::Cancelled) => {
+                outcome = Err(Step::Cancelled);
+                break;
+            }
+            Err(Step::Failed(error)) => {
+                tracing::warn!("Vergleich: {id} ohne Ergebnis: {error}");
+                keep_benchmark(
+                    agent,
+                    Benchmark {
+                        model: id.clone(),
+                        result: String::new(),
+                        at: unix_now(),
+                        decode_tps: None,
+                        prompt_tps: None,
+                        context: model_context(&agent.cfg.strata_dir, id),
+                        speed_projection: Some(has_speed_projection(&agent.cfg.strata_dir, id)),
+                        version: git_commit(&agent.cfg.strata_dir),
+                        error: Some(error),
+                    },
+                );
+            }
+        }
     }
-    Ok(Some(result))
+    agent.jobs.inner.lock().unwrap().step_prefix = None;
+    if active_model(agent).as_deref() != Some(active) {
+        // Back to the model from before, also after a cancel: the job's
+        // own cancel is spent, the switch must not end on it.
+        agent.jobs.inner.lock().unwrap().cancelled = false;
+        set_step(agent, &format!("{active} wieder aktivieren"));
+        activate(agent, active).await?;
+    }
+    outcome?;
+    let benches = load_benchmarks(agent);
+    let fastest = benches
+        .iter()
+        .filter(|b| ids.contains(&b.model))
+        .filter_map(|b| Some((b, b.decode_tps?)))
+        // The first of equal ones.
+        .reduce(|a, b| if b.1 > a.1 { b } else { a });
+    Ok(fastest.map(|(b, _)| format!("Am schnellsten: {} mit {}", b.model, b.result)))
 }
 
-/// `  chat decode tok/s     38.50   (37.10 - 39.20, n=3)` → 38.5, from the
-/// short table `tools/strata_bench.py` prints at the end.
-fn parse_bench(line: &str) -> Option<f64> {
-    line.trim()
-        .strip_prefix("chat decode tok/s")?
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()
+/// Keeps a model's record in place of its last one; the newest also goes
+/// to the file older services read.
+fn keep_benchmark(agent: &Agent, mut record: Benchmark) {
+    let dir = agent.cfg.state_dir();
+    let mut all = load_benchmarks(agent);
+    // A failed run keeps the model's last measurement next to its error, so
+    // one failure does not wipe a good result.
+    if record.error.is_some()
+        && let Some(last) = all
+            .iter()
+            .find(|b| b.model.eq_ignore_ascii_case(&record.model) && b.decode_tps.is_some())
+    {
+        record = Benchmark {
+            error: record.error,
+            ..last.clone()
+        };
+    }
+    all.retain(|b| !b.model.eq_ignore_ascii_case(&record.model));
+    if record.error.is_none() {
+        let text = serde_json::to_string_pretty(&record).expect("benchmark serializes");
+        if let Err(e) = crate::write_replacing(&dir.join(BENCH_FILE), &text) {
+            tracing::warn!("{BENCH_FILE} nicht gespeichert: {e}");
+        }
+    }
+    all.push(record);
+    let text = serde_json::to_string_pretty(&all).expect("benchmarks serialize");
+    if let Err(e) = crate::write_replacing(&dir.join(BENCHES_FILE), &text) {
+        tracing::warn!("{BENCHES_FILE} nicht gespeichert: {e}");
+    }
 }
 
+/// The last successful run, of any model.
 fn load_benchmark(agent: &Agent) -> Option<Benchmark> {
     let text = std::fs::read_to_string(agent.cfg.state_dir().join(BENCH_FILE)).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// Each model's last run; before the first run of this version, the one
+/// run an older service kept.
+fn load_benchmarks(agent: &Agent) -> Vec<Benchmark> {
+    match std::fs::read_to_string(agent.cfg.state_dir().join(BENCHES_FILE)) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => load_benchmark(agent)
+            .map(|mut b| {
+                b.decode_tps = b.decode_tps.or_else(|| {
+                    b.result
+                        .split_whitespace()
+                        .next()
+                        .and_then(|v| v.parse().ok())
+                });
+                vec![b]
+            })
+            .unwrap_or_default(),
+    }
 }
 
 /// Puts the key into every model's config and restarts Strata with it.
@@ -1213,11 +1398,51 @@ struct UpdateState {
     checked: Option<Instant>,
     asking: bool,
     available: Option<bool>,
+    incoming: Option<Incoming>,
 }
+
+/// What an update would bring: the commits Strata's Git source has and this
+/// folder lacks, for the Proxy's summary.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Incoming {
+    /// Full hash of the upstream commit.
+    pub upstream: String,
+    /// All incoming commits; `commits` holds at most `MAX_COMMITS` of them.
+    pub total: u64,
+    /// Newest first.
+    pub commits: Vec<IncomingCommit>,
+    pub files: Vec<ChangedFile>,
+    /// URL of the upstream remote.
+    pub remote: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IncomingCommit {
+    pub hash: String,
+    /// Commit time, Unix seconds.
+    pub time: u64,
+    pub subject: String,
+    pub body: String,
+}
+
+/// A file the incoming commits change; binary files count 0 lines.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChangedFile {
+    pub path: String,
+    pub added: u64,
+    pub removed: u64,
+}
+
+/// Most incoming commits the page carries.
+const MAX_COMMITS: usize = 200;
 
 impl UpdateCheck {
     pub fn available(&self) -> Option<bool> {
         self.inner.lock().unwrap().available
+    }
+
+    pub fn incoming(&self) -> Option<Incoming> {
+        self.inner.lock().unwrap().incoming.clone()
     }
 
     /// Claims the next check, if one is due.
@@ -1234,11 +1459,12 @@ impl UpdateCheck {
         true
     }
 
-    fn found(&self, available: Option<bool>) {
+    fn found(&self, available: Option<bool>, incoming: Option<Incoming>) {
         let mut state = self.inner.lock().unwrap();
         state.asking = false;
         state.checked = Some(Instant::now());
         state.available = available;
+        state.incoming = incoming;
     }
 }
 
@@ -1251,28 +1477,87 @@ pub fn check_for_update(agent: &Arc<Agent>) {
     }
     let agent = Arc::clone(agent);
     tokio::spawn(async move {
-        let available = commits_behind(&agent).await.map(|n| n > 0);
-        agent.updates.found(available);
+        let found = incoming_commits(&agent).await;
+        let available = found.as_ref().map(|i| i.is_some());
+        agent.updates.found(available, found.flatten());
     });
 }
 
-async fn commits_behind(agent: &Agent) -> Option<u64> {
+/// `None` if Git cannot tell; `Some(None)` when nothing is incoming.
+async fn incoming_commits(agent: &Agent) -> Option<Option<Incoming>> {
     let git = find_git(agent).await?;
     let dir = agent.cfg.strata_dir.clone();
-    let run = |args: &[&str]| CommandSpec {
-        program: git.clone(),
-        args: args.iter().map(|a| a.to_string()).collect(),
-        dir: Some(dir.clone()),
+    let run = |args: &[&str]| {
+        let spec = CommandSpec {
+            program: git.clone(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            dir: Some(dir.clone()),
+        };
+        async move {
+            let (code, lines) = output(agent, &spec).await?;
+            (code == 0).then_some(lines)
+        }
     };
-    let (code, _) = output(agent, &run(&["fetch", "--quiet"])).await?;
-    if code != 0 {
-        return None;
+    run(&["fetch", "--quiet"]).await?;
+    let total: u64 = run(&["rev-list", "--count", "HEAD..@{u}"])
+        .await?
+        .iter()
+        .find_map(|l| l.trim().parse().ok())?;
+    if total == 0 {
+        return Some(None);
     }
-    let (code, lines) = output(agent, &run(&["rev-list", "--count", "HEAD..@{u}"])).await?;
-    if code != 0 {
-        return None;
-    }
-    lines.iter().find_map(|l| l.trim().parse().ok())
+    let upstream = run(&["rev-parse", "@{u}"])
+        .await?
+        .first()?
+        .trim()
+        .to_string();
+    let max = MAX_COMMITS.to_string();
+    let log = run(&[
+        "log",
+        "-n",
+        &max,
+        "--format=%H%x1f%ct%x1f%s%x1f%b%x1e",
+        "HEAD..@{u}",
+    ])
+    .await?;
+    let numstat = run(&["diff", "--numstat", "HEAD..@{u}"]).await?;
+    let remote = run(&["ls-remote", "--get-url"])
+        .await
+        .and_then(|l| l.first().map(|u| u.trim().to_string()))
+        .filter(|u| !u.is_empty());
+    Some(Some(Incoming {
+        upstream,
+        total,
+        commits: parse_log(&log.join("\n")),
+        files: numstat.iter().filter_map(|l| parse_numstat(l)).collect(),
+        remote,
+    }))
+}
+
+/// Records of `%H %ct %s %b`, fields split by 0x1f, records ended by 0x1e.
+fn parse_log(text: &str) -> Vec<IncomingCommit> {
+    text.split('\u{1e}')
+        .filter_map(|record| {
+            let mut fields = record.trim_start_matches('\n').splitn(4, '\u{1f}');
+            Some(IncomingCommit {
+                hash: fields.next()?.trim().to_string(),
+                time: fields.next()?.trim().parse().ok()?,
+                subject: fields.next()?.trim().to_string(),
+                body: fields.next().unwrap_or_default().trim().to_string(),
+            })
+        })
+        .collect()
+}
+
+/// `added<TAB>removed<TAB>path`; binary files show `-` for both.
+fn parse_numstat(line: &str) -> Option<ChangedFile> {
+    let mut fields = line.splitn(3, '\t');
+    let count = |f: Option<&str>| f.map(|n| n.parse().unwrap_or(0));
+    Some(ChangedFile {
+        added: count(fields.next())?,
+        removed: count(fields.next())?,
+        path: fields.next()?.to_string(),
+    })
 }
 
 /// Runs Strata's setup without questions, with the fixed values and the key.
@@ -1428,21 +1713,26 @@ async fn command(agent: &Arc<Agent>, spec: CommandSpec, progress: bool) -> Resul
                 progress: p,
                 secret,
                 bench,
+                step_prefix,
                 ..
             } = &mut *inner;
             let line = match secret.as_deref() {
                 Some(key) => line.replace(key, "***"),
                 None => line,
             };
-            if let Some(tps) = parse_bench(&line) {
-                *bench = Some(tps);
-            }
+            bench.read(&line);
             let Some(job) = current.as_mut() else {
                 continue;
             };
             let before = job.step.clone();
             if progress {
                 p.read(&line, job);
+                // In a comparison: which model the step belongs to.
+                if job.step != before
+                    && let (Some(prefix), Some(step)) = (step_prefix.as_deref(), job.step.as_mut())
+                {
+                    *step = format!("{prefix} · {step}");
+                }
             }
             let mut lines: VecDeque<String> = std::mem::take(&mut job.lines).into();
             lines.push_back(line);
@@ -1486,10 +1776,16 @@ async fn command(agent: &Arc<Agent>, spec: CommandSpec, progress: bool) -> Resul
 }
 
 fn set_step(agent: &Agent, step: &str) {
-    agent.jobs.update(|job| {
-        job.step = Some(step.to_string());
+    let mut inner = agent.jobs.inner.lock().unwrap();
+    let step = match &inner.step_prefix {
+        Some(prefix) => format!("{prefix} · {step}"),
+        None => step.to_string(),
+    };
+    if let Some(job) = inner.current.as_mut() {
+        job.step = Some(step);
         job.percent = None;
-    });
+    }
+    drop(inner);
     save_job(agent);
 }
 
@@ -1630,6 +1926,7 @@ fn kind_text(kind: JobKind) -> &'static str {
         JobKind::SetKey => "Strata-Key setzen",
         JobKind::SetSpeedProjection => "Speed-Projection umschalten",
         JobKind::SetContext => "Kontext ändern",
+        JobKind::CompareModels => "Modelle vergleichen",
     }
 }
 
@@ -1647,6 +1944,9 @@ pub struct StrataView {
     pub version: Option<String>,
     /// Whether Strata's source has newer commits; `None` until known.
     pub update_available: Option<bool>,
+    /// What the newer commits bring, while there are some.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<Incoming>,
     pub models: Vec<InstalledModel>,
     pub families: Vec<FamilyView>,
     pub catalog: Vec<CatalogEntry>,
@@ -1656,7 +1956,10 @@ pub struct StrataView {
     pub ram_gb: f64,
     pub disk_free_gb: Option<f64>,
     pub data_dir: String,
+    /// The last successful run, for proxies that know only one.
     pub benchmark: Option<Benchmark>,
+    /// Each model's last run.
+    pub benchmarks: Vec<Benchmark>,
     pub job: Option<Job>,
 }
 
@@ -1722,6 +2025,7 @@ pub fn view(agent: &Agent) -> StrataView {
         installed: dir.join("setup.py").is_file(),
         version: git_commit(dir),
         update_available: agent.updates.available(),
+        update: agent.updates.incoming(),
         models,
         families: catalog::FAMILIES
             .iter()
@@ -1753,6 +2057,7 @@ pub fn view(agent: &Agent) -> StrataView {
             .map(|b| b as f64 / 1e9),
         data_dir: cfg.strata_data_dir.display().to_string(),
         benchmark: load_benchmark(agent),
+        benchmarks: load_benchmarks(agent),
         job: agent.jobs.current(),
     }
 }

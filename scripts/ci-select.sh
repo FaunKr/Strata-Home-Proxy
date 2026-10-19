@@ -48,8 +48,8 @@ while IFS= read -r path; do
   esac
 done
 
-packages=$(printf '%s\n' ${packages[@]+"${packages[@]}"} | sort -u | xargs)
-echo "test=$([[ -n $packages || $unscoped == true ]] && echo true || echo false)"
-echo "packages=$packages"
+package_list=$(printf '%s\n' ${packages[@]+"${packages[@]}"} | sort -u | xargs)
+echo "test=$([[ -n $package_list || $unscoped == true ]] && echo true || echo false)"
+echo "packages=$package_list"
 echo "image=$image"
 echo "bench=$bench"

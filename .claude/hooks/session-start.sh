@@ -36,7 +36,16 @@ fi
 if ! command -v pwsh >/dev/null; then
   pwsh_dir="$HOME/.local/share/pwsh"
   mkdir -p "$pwsh_dir" "$HOME/.local/bin"
-  curl -fsSL https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell-7.4.6-linux-x64.tar.gz \
-    | tar xz -C "$pwsh_dir" && chmod +x "$pwsh_dir/pwsh" && ln -sf "$pwsh_dir/pwsh" "$HOME/.local/bin/pwsh" || true
+  if curl -fsSL https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell-7.4.6-linux-x64.tar.gz \
+    | tar xz -C "$pwsh_dir"; then
+    chmod +x "$pwsh_dir/pwsh" && ln -sf "$pwsh_dir/pwsh" "$HOME/.local/bin/pwsh"
+  fi
+fi
+# The linters shellcheck and actionlint for the lint steps in scripts/check.sh.
+if ! command -v shellcheck >/dev/null; then
+  (apt-get install -y -q shellcheck || (apt-get update -q && apt-get install -y -q shellcheck)) >/dev/null 2>&1 || true
+fi
+if ! command -v actionlint >/dev/null; then
+  scripts/install-actionlint.sh || true
 fi
 cargo clippy -p strata-pc-agent --all-targets --target x86_64-pc-windows-gnu --quiet -- -D warnings || true

@@ -10,6 +10,17 @@ fi
 cd "$CLAUDE_PROJECT_DIR"
 
 rustup target add wasm32-unknown-unknown
+# cargo-leptos for scripts/ui-check.sh: the release the Dockerfile pins, with
+# its checksum, so the version lives in one place.
+if ! cargo leptos --version >/dev/null 2>&1; then
+  leptos_url=$(sed -n 's|.*\(https://github.com/leptos-rs/cargo-leptos/[^ ]*\.tar\.gz\).*|\1|p' Dockerfile)
+  leptos_sum=$(grep -B1 "$leptos_url" Dockerfile | sed -n 's/.*--checksum=sha256:\([0-9a-f]*\).*/\1/p')
+  leptos_tmp=$(mktemp)
+  if curl -fsSL -o "$leptos_tmp" "$leptos_url" && echo "$leptos_sum  $leptos_tmp" | sha256sum -c --quiet; then
+    tar xzf "$leptos_tmp" -C "$HOME/.cargo/bin" --strip-components=1 || true
+  fi
+  rm -f "$leptos_tmp"
+fi
 cargo test --no-run --quiet
 # The same arguments as scripts/check.sh, or clippy checks again; a warning
 # here is for the session to fix, not a reason to fail the start.

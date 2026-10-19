@@ -2,6 +2,8 @@
 
 Ein Proxy auf dem NAS, der Anfragen an Strata auf dem PC weiterleitet, den PC dafür weckt und ihn nach einer Leerlaufzeit schlafen schickt.
 
+Die _Avoid_-Listen gelten für Doku, Issues, Code-Bezeichner und deutsche Texte. Die englische Weboberfläche darf Produkte beim Namen nennen, wo der Nutzer das Gerät daran erkennt (z. B. „Shelly plug“).
+
 ## Beteiligte
 
 **Strata**:

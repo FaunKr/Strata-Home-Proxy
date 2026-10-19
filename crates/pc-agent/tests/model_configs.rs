@@ -61,7 +61,7 @@ async fn at_start_every_model_config_gets_loop_recovery_and_keeps_the_rest() {
     installed(&s);
     let before = modified(&s, "iq3_xxs");
     tokio::time::sleep(Duration::from_millis(20)).await;
-    strata::manage_configs_at_start(&s.agent).await;
+    strata::manage_configs_at_start(&s.agent).await.await;
     for id in ["iq3_xxs", "qwen36-q8_0"] {
         let cfg = read_config(&s, id);
         assert_eq!(cfg["reasoning_loop_recovery"], "recover", "{id}: {cfg}");
@@ -84,7 +84,7 @@ async fn at_start_strata_restarts_after_its_request_and_only_on_a_change() {
     installed(&s);
     s.fake.strata_busy.store(true, Ordering::SeqCst);
     let agent = s.agent.clone();
-    let start = tokio::spawn(async move { strata::manage_configs_at_start(&agent).await });
+    let start = tokio::spawn(async move { strata::manage_configs_at_start(&agent).await.await });
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(
         s.fake.stops.load(Ordering::SeqCst),
@@ -96,7 +96,7 @@ async fn at_start_strata_restarts_after_its_request_and_only_on_a_change() {
     assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
 
-    strata::manage_configs_at_start(&s.restarted()).await;
+    strata::manage_configs_at_start(&s.restarted()).await.await;
     assert_eq!(
         s.fake.stops.load(Ordering::SeqCst),
         1,
@@ -109,7 +109,7 @@ async fn a_config_that_cannot_be_read_is_left_and_the_others_change() {
     let s = setup("configs-broken").await;
     installed(&s);
     write(config_path(&s, "qwen36-q8_0"), "{ kaputt");
-    strata::manage_configs_at_start(&s.agent).await;
+    strata::manage_configs_at_start(&s.agent).await.await;
     assert_eq!(
         read_config(&s, "iq3_xxs")["reasoning_loop_recovery"],
         "recover"
@@ -199,7 +199,7 @@ async fn the_page_shows_each_models_loop_recovery() {
         "stop",
         "{view}"
     );
-    strata::manage_configs_at_start(&s.agent).await;
+    strata::manage_configs_at_start(&s.agent).await.await;
     let view = get(&s, "/strata").await;
     assert_eq!(
         model(&view, "IQ3_XXS")["loop_recovery"],
@@ -237,7 +237,7 @@ async fn a_strata_without_model_card_sampling_gets_the_thinking_set_in_the_confi
     installed(&s);
     strata_knows(&s, true, false);
     set_sampling(&s, "iq3_xxs", json!({"temperature": 0.2, "seed": 7}));
-    strata::manage_configs_at_start(&s.agent).await;
+    strata::manage_configs_at_start(&s.agent).await.await;
     assert_eq!(
         read_config(&s, "iq3_xxs")["sampling"],
         json!({"temperature": 1.0, "top_p": 0.95, "top_k": 20})
@@ -259,7 +259,7 @@ async fn a_strata_with_model_card_sampling_gets_no_block_in_the_config() {
         json!({"temperature": 1.0, "top_p": 0.95, "top_k": 20}),
     );
     set_sampling(&s, "qwen36-q8_0", json!({"temperature": 0.2}));
-    strata::manage_configs_at_start(&s.agent).await;
+    strata::manage_configs_at_start(&s.agent).await.await;
     for id in ["iq3_xxs", "qwen36-q8_0"] {
         let cfg = read_config(&s, id);
         assert!(cfg.get("sampling").is_none(), "{id}: {cfg}");
@@ -272,7 +272,7 @@ async fn a_strata_that_reads_no_sampling_gets_no_block() {
     let s = setup("configs-sampling-old").await;
     installed(&s);
     strata_knows(&s, false, false);
-    strata::manage_configs_at_start(&s.agent).await;
+    strata::manage_configs_at_start(&s.agent).await.await;
     assert!(read_config(&s, "iq3_xxs").get("sampling").is_none());
 }
 
@@ -281,7 +281,7 @@ async fn an_update_to_model_card_sampling_takes_the_block_out() {
     let s = setup("configs-sampling-update").await;
     installed(&s);
     strata_knows(&s, true, false);
-    strata::manage_configs_at_start(&s.agent).await;
+    strata::manage_configs_at_start(&s.agent).await.await;
     assert!(read_config(&s, "iq3_xxs")["sampling"].is_object());
     let server = s.agent.cfg.strata_dir.join("serve").join("server.py");
     std::fs::remove_file(&server).unwrap();
@@ -358,9 +358,28 @@ async fn the_page_shows_the_sampling_each_model_gets_and_where_it_comes_from() {
 }
 
 #[tokio::test]
+async fn an_unreadable_strata_version_leaves_the_block() {
+    let s = setup("configs-sampling-unknown").await;
+    installed(&s);
+    set_sampling(&s, "iq3_xxs", json!({"temperature": 0.2}));
+    strata::manage_configs_at_start(&s.agent).await.await;
+    assert_eq!(
+        read_config(&s, "iq3_xxs")["sampling"],
+        json!({"temperature": 0.2})
+    );
+    assert_eq!(
+        read_config(&s, "iq3_xxs")["reasoning_loop_recovery"],
+        "recover"
+    );
+    let view = get(&s, "/strata").await;
+    assert!(model(&view, "IQ3_XXS")["sampling"].is_null(), "{view}");
+}
+
+#[tokio::test]
 async fn a_strata_that_reads_no_sampling_shows_none() {
     let s = setup("configs-view-old").await;
     installed(&s);
+    strata_knows(&s, false, false);
     let view = get(&s, "/strata").await;
     let sampling = &model(&view, "IQ3_XXS")["sampling"];
     assert_eq!(sampling["support"], "none", "{view}");
@@ -384,7 +403,7 @@ async fn chat_settings_show_as_overriding_and_stay_untouched() {
     let chat = r#"{"temperature": 0.3, "reasoning_effort": "high", "max_tokens": 4096}"#;
     write(chat_settings_path(&s, "iq3_xxs"), chat);
     write(chat_settings_path(&s, "qwen36-q8_0"), "{ kaputt");
-    strata::manage_configs_at_start(&s.agent).await;
+    strata::manage_configs_at_start(&s.agent).await.await;
     let view = get(&s, "/strata").await;
     let qwen = &model(&view, "IQ3_XXS")["sampling"];
     for set in ["thinking", "instruct"] {

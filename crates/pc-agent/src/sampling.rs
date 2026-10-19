@@ -25,18 +25,19 @@ const MODEL_CARD_NAME: &str = "MODEL_CARD_SAMPLING";
 const CONFIG_BLOCK_NAME: &str = "sampling_defaults_from_config";
 
 impl Support {
-    /// What the Strata in `strata_dir` applies; one that cannot be read
-    /// applies none.
-    pub fn of(strata_dir: &std::path::Path) -> Self {
-        let server =
-            std::fs::read_to_string(strata_dir.join("serve").join("server.py")).unwrap_or_default();
-        if server.contains(MODEL_CARD_NAME) {
+    /// What the Strata in `strata_dir` applies; `None` while its
+    /// `serve/server.py` cannot be read, so a passing error changes nothing.
+    pub fn of(strata_dir: &std::path::Path) -> Option<Self> {
+        let server = std::fs::read_to_string(strata_dir.join("serve").join("server.py"))
+            .inspect_err(|e| tracing::debug!("serve/server.py nicht lesbar: {e}"))
+            .ok()?;
+        Some(if server.contains(MODEL_CARD_NAME) {
             Self::ModelCard
         } else if server.contains(CONFIG_BLOCK_NAME) {
             Self::Config
         } else {
             Self::None
-        }
+        })
     }
 }
 

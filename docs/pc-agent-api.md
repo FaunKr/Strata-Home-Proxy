@@ -164,8 +164,9 @@ Reihenfolge temperature, top_p, top_k, min_p, presence_penalty,
 repetition_penalty, frequency_penalty. Eine leere Liste ist greedy. Aus den
 Chat-Einstellungen (`strata-<id>.shared-settings.json`, Stratas Web-App)
 zählen temperature, top_p und top_k; der PC-Dienst liest die Datei nur und
-nimmt eine, die kein gültiges JSON ist, wie Strata als leer. Ein älterer
-PC-Dienst lässt das Feld weg.
+nimmt eine, die kein gültiges JSON ist, wie Strata als leer. `sampling` ist
+`null`, solange `serve/server.py` nicht lesbar ist. Ein älterer PC-Dienst
+lässt das Feld weg.
 
 `benchmarks` hält den letzten Lauf jedes Modells: `decode_tps` (`chat decode
 tok/s`), `prompt_tps` (`4K prompt tok/s`, fehlt, wenn der Benchmark die Zeile
@@ -182,7 +183,9 @@ in jeder `strata-<id>.json` `"reasoning_loop_recovery": "recover"` (siehe
 [strata-api.md](strata-api.md)) und überschreibt einen anderen Wert. Den
 Block `sampling` setzt er auf den Denk-Satz der Modellkarte, wenn das
 installierte Strata nur den Block kennt; kennt es die Modellkarte oder den
-Block nicht, nimmt er ihn heraus. Ein Block von Hand wird dabei ersetzt. Alles
+Block nicht, nimmt er ihn heraus. Ein Block von Hand wird dabei ersetzt.
+Ist `serve/server.py` nicht lesbar, bleibt der Block, wie er ist. Seine
+Änderungen macht er beim Start, bevor er Vorgänge annimmt. Alles
 andere in der Konfiguration bleibt, auch ihre Änderungszeit. Eine
 Konfiguration, die er nicht lesen oder schreiben kann, steht im Log und
 bleibt, wie sie ist. Ändert sich die Konfiguration des aktiven Modells,

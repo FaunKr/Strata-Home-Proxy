@@ -1350,14 +1350,17 @@ fn write_config(path: &Path, cfg: ConfigFields) -> Result<(), String> {
 
 /// Sets what the service keeps in a model config: loop recovery, and the
 /// `sampling` block as [`sampling::managed_block`] has it for this Strata,
-/// over a hand-set one. Whether that changed the config.
-fn manage_config(cfg: &mut ConfigFields, support: Support) -> bool {
+/// over a hand-set one; the block stays while Strata's version is unknown.
+/// Whether that changed the config.
+fn manage_config(cfg: &mut ConfigFields, support: Option<Support>) -> bool {
     let before = cfg.clone();
     cfg.insert(LOOP_RECOVERY_KEY.into(), LOOP_RECOVERY.into());
-    match sampling::managed_block(support, cfg) {
-        Some(block) => cfg.insert(SAMPLING_KEY.into(), block),
-        None => cfg.remove(SAMPLING_KEY),
-    };
+    if let Some(support) = support {
+        match sampling::managed_block(support, cfg) {
+            Some(block) => cfg.insert(SAMPLING_KEY.into(), block),
+            None => cfg.remove(SAMPLING_KEY),
+        };
+    }
     *cfg != before
 }
 
@@ -1400,24 +1403,27 @@ fn active_changed(agent: &Agent, changed: &[String]) -> bool {
     active_model(agent).is_some_and(|a| changed.iter().any(|id| id.eq_ignore_ascii_case(&a)))
 }
 
-/// At the service's start: brings every model config to what the service
-/// keeps in it. A running Strata whose active model's config changed starts
-/// again with it, once it has no request at work; a job that runs by then
-/// restarts it anyway.
-pub async fn manage_configs_at_start(agent: &Arc<Agent>) {
+/// At the service's start, before it takes jobs: brings every model config
+/// to what the service keeps in it. Gives what is left to do: a running
+/// Strata whose active model's config changed starts again with it, once it
+/// has no request at work; a job that runs by then restarts it anyway.
+pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output = ()> + use<> {
     let changed = manage(agent).await;
-    if changed.is_empty() || !active_changed(agent, &changed) || !agent.strata_healthy().await {
-        return;
+    let agent = Arc::clone(agent);
+    async move {
+        if !active_changed(&agent, &changed) || !agent.strata_healthy().await {
+            return;
+        }
+        while agent.strata_busy().await {
+            tokio::time::sleep(POLL).await;
+        }
+        if agent.gaming() || agent.jobs.running() {
+            return;
+        }
+        tracing::info!("Konfiguration des aktiven Modells angepasst, Strata startet neu");
+        agent.stop_strata();
+        restart_strata(&agent).await;
     }
-    while agent.strata_busy().await {
-        tokio::time::sleep(POLL).await;
-    }
-    if agent.gaming() || agent.jobs.running() {
-        return;
-    }
-    tracing::info!("Konfiguration des aktiven Modells angepasst, Strata startet neu");
-    agent.stop_strata();
-    restart_strata(agent).await;
 }
 
 /// Takes setup's speed projection flags out of `args`, each with its values,
@@ -2083,8 +2089,9 @@ pub struct InstalledModel {
     /// Strata's recovery from repeated reasoning passages, as its config
     /// sets it: `off`, `stop` or `recover`.
     pub loop_recovery: String,
-    /// What a request without sampling fields gets.
-    pub sampling: ModelSampling,
+    /// What a request without sampling fields gets; `None` while Strata's
+    /// version cannot be read.
+    pub sampling: Option<ModelSampling>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2117,7 +2124,7 @@ pub fn view(agent: &Agent) -> StrataView {
                 speed_projection: has_speed_projection(dir, &id),
                 context: model_context(dir, &id),
                 loop_recovery: loop_recovery(dir, &id).into(),
-                sampling: model_sampling(dir, &id, support),
+                sampling: support.map(|support| model_sampling(dir, &id, support)),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,

@@ -1,22 +1,19 @@
 # Verlauf in SQLite
 
-Die Ereignisse liegen in einer SQLite-Datenbank (`events.db`) in `DATA_DIR`,
-nicht mehr in `events.jsonl`. Der Proxy nutzt `rusqlite` mit gebündeltem
-SQLite. Schreiben und Bereichsabfragen laufen auf einem eigenen Thread, nie auf
-den Threads des async-Runtimes: `record` stellt nur in die Warteschlange, `range`
-wartet asynchron. Die letzten 1000 Ereignisse für die Übersicht hält der Log
-zusätzlich im Speicher. Ohne `DATA_DIR` liegt der Store im Speicher.
+Die Ereignisse liegen in einer SQLite-Datenbank (`events.db`, `rusqlite` mit
+gebündeltem SQLite) in `DATA_DIR`, nicht mehr in `events.jsonl`. Der Verlauf
+fragt Zeitbereiche bis zum ersten Ereignis ab und soll später Minutenwerte der
+Messsteckdose halten; eine JSONL-Datei müsste dafür jedes Mal ganz gelesen
+werden, die Datenbank liefert Bereiche über einen Index.
 
-Der Verlauf soll ab dem nächsten Ticket Bereiche abfragen (Tage, Wochen) und
-später Minutensamples bilden. Ein JSONL-File müsste dafür jedes Mal vollständig
-gelesen werden; die Datenbank liefert Zeitbereiche über einen Index und zählt
-ohne Lesen ganzer Dateien.
+`events.jsonl` wird einmal in einer Transaktion übernommen und danach nur als
+Sicherung behalten, nie wieder geschrieben. Ein gescheiterter Import wird beim
+nächsten Start wiederholt.
 
-Ein vorhandenes `events.jsonl` wird beim ersten Start in eine leere Datenbank
-in einer Transaktion importiert; unlesbare Zeilen und unbekannte Arten
-überspringt der Import wie zuvor. Die Datei bleibt danach unverändert und wird
-nur noch als Sicherung behalten, nie wieder geschrieben.
+`record` schreibt sofort, wie vorher das Anhängen an die Datei, damit ein
+beendeter Proxy nichts verliert; im WAL-Modus kostet ein Eintrag kein Sync auf
+die Platte. Bereichsabfragen laufen auf einem Blocking-Thread, nicht auf dem
+async-Runtime.
 
-Die Schnittstelle des Logs (`record`, `recent`, `latest_pc`) bleibt unverändert;
-dazu kommt das Lesen von Zeitbereichen. Die Übersicht und alle Aufrufer verhalten
-sich wie bisher.
+Wer im Review den kurzen Schreibzugriff in `record` meldet: entschieden.
+Ändern nur, wenn er messbar bremst.

@@ -13,7 +13,7 @@ use std::{
 
 use futures_util::{StreamExt, stream::BoxStream};
 use strata_admin_ui::api::{
-    EventView, HardwareView, Overview, PcView, Setup, SleepView, StrataJob, StrataView,
+    EventView, HardwareView, Overview, PcView, PowerView, Setup, SleepView, StrataJob, StrataView,
 };
 use tokio::sync::{Notify, watch};
 
@@ -48,6 +48,8 @@ struct Probe {
     pc: Option<PcStatus>,
     /// The running Strata job, asked for only while one runs.
     job: Option<StrataJob>,
+    /// Die Leistung der Messsteckdose, if one is set up and answered.
+    power: Option<f64>,
 }
 
 pub struct Monitor {
@@ -188,6 +190,17 @@ async fn run(state: &Arc<AppState>) {
 }
 
 async fn probe(state: &AppState) -> Probe {
+    // The plug alongside, so a slow one holds up nothing else.
+    let (probe, power) = tokio::join!(probe_pc(state), power(state));
+    Probe { power, ..probe }
+}
+
+async fn power(state: &AppState) -> Option<f64> {
+    let url = state.cfg().shelly_url.clone()?;
+    crate::plug::power(&state.probe_client(), &url).await
+}
+
+async fn probe_pc(state: &AppState) -> Probe {
     let health = state.strata_health().await;
     let up = matches!(health, Health::Up { .. });
     let (metrics, pc) = tokio::join!(metrics(state), state.check_pc(up));
@@ -204,6 +217,7 @@ async fn probe(state: &AppState) -> Probe {
         metrics,
         pc,
         job,
+        power: None,
     }
 }
 
@@ -357,6 +371,11 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
         events,
         pc_service,
         hardware: hardware_view(pc, probe.pc.as_ref()),
+        power: match (&cfg.shelly_url, probe.power) {
+            (None, _) => PowerView::NotConfigured,
+            (Some(_), Some(watts)) => PowerView::Watts(watts),
+            (Some(_), None) => PowerView::Unreachable,
+        },
     }
 }
 

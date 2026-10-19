@@ -286,6 +286,19 @@ pub struct Overview {
     /// since the proxy started.
     pub pc_service: Option<PcServiceView>,
     pub hardware: HardwareView,
+    pub power: PowerView,
+}
+
+/// Die Leistung der Messsteckdose for the overview; independent of the PC's
+/// state, since the plug also answers while the PC sleeps.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum PowerView {
+    /// No Messsteckdose is set up (`SHELLY_URL`).
+    NotConfigured,
+    /// The Messsteckdose did not answer usefully.
+    Unreachable,
+    /// The current Leistung in watts.
+    Watts(f64),
 }
 
 /// The Hardwarewerte for the overview.

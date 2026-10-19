@@ -54,6 +54,14 @@ _Avoid_: Settling (nur im Code)
 Was der PC-Dienst über Last, Temperatur, Speicher und Lüfter von Grafikkarte und CPU meldet; die Übersicht zeigt sie.
 _Avoid_: Stats, Telemetrie
 
+**Messsteckdose**:
+Die Shelly-Steckdose, an der der PC hängt. Der Proxy fragt sie nur für die Übersicht und nur, wenn sie eingerichtet ist (`SHELLY_URL`); auf Wecken und Schlafen hat sie keinen Einfluss.
+_Avoid_: Shelly, Smart Plug (nur im Code)
+
+**Leistung**:
+Was die Messsteckdose als aktuelle Leistungsaufnahme des PCs meldet, in Watt; die Übersicht zeigt sie im Bereich Hardware als *Power*, auch während der PC schläft.
+_Avoid_: Stromverbrauch, Energie
+
 **Gaming-Modus**:
 Ein Zustand des PCs, in dem Strata beendet ist, Anfragen abgewiesen werden und der Proxy den PC nicht schlafen schickt.
 _Avoid_: Spielemodus

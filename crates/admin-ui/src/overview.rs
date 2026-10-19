@@ -6,8 +6,8 @@ use leptos::prelude::*;
 
 use crate::{
     api::{
-        KeepAwake, KeepAwakeChoice, Overview, PcServiceView, PcView, SetGaming, Setup, SleepNow,
-        SleepView, StrataView, Wake, error_text, get_setup,
+        KeepAwake, KeepAwakeChoice, Overview, PcServiceView, PcView, PowerView, SetGaming, Setup,
+        SleepNow, SleepView, StrataView, Wake, error_text, get_setup,
     },
     confirm::{Confirm, Question},
     hardware::HardwareCard,
@@ -184,9 +184,14 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
         }
     });
     let events = overview.events.clone();
-    let hardware = overview.setup.agent_configured.then(|| {
-        view! { <HardwareCard hardware=overview.hardware.clone() pc=overview.pc /> }
-    });
+    let hardware = (overview.setup.agent_configured || overview.power != PowerView::NotConfigured)
+        .then(|| {
+            let hardware = overview
+                .setup
+                .agent_configured
+                .then(|| overview.hardware.clone());
+            view! { <HardwareCard hardware pc=overview.pc power=overview.power.clone() /> }
+        });
     view! {
         {lost}
         {job}

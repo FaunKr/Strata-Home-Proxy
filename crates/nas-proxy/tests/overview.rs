@@ -521,7 +521,14 @@ async fn keep_awake_rejects_unknown_choices() {
         b.call("keep-awake", &[("choice", "off")]).await.status(),
         200
     );
-    assert!(s.state.events.latest_pc(10).is_empty());
+    // Nur was der Proxy selbst bemerkt (Start, Zustand des PCs) steht da.
+    assert!(
+        s.state.events.latest_pc(10).iter().all(|e| e.kind
+            == strata_nas_proxy::events::EventKind::ProxyStarted
+            || format!("{:?}", e.kind).starts_with("PcSeen")),
+        "{:?}",
+        s.state.events.latest_pc(10)
+    );
 }
 
 // --- Review follow-ups ---
@@ -564,6 +571,7 @@ async fn lists_events_from_before_a_restart() {
         .latest_pc(10)
         .into_iter()
         .map(|e| format!("{:?}", e.kind))
+        .filter(|k| k != "ProxyStarted" && !k.starts_with("PcSeen"))
         .collect();
     assert_eq!(kinds, ["SleepAccepted", "SleepRequested"], "{kinds:?}");
     std::fs::remove_dir_all(&dir).unwrap();

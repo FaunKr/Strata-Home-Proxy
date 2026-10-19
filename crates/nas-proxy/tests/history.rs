@@ -12,6 +12,9 @@ use strata_nas_proxy::{clock, events::EventKind};
 
 /// Die Geschichte, die die Seite für die letzten `days` Tage bekäme.
 async fn history(b: &mut Browser, days: u32) -> Value {
+    // Die Geschichte zählt in ganzen Sekunden: ohne diese Pause liegt das
+    // letzte Ereignis noch in der Sekunde von "jetzt" und hat keine Dauer.
+    tokio::time::sleep(Duration::from_millis(2100)).await;
     let resp = b.call("history", &[("days", &days.to_string())]).await;
     assert_eq!(resp.status(), 200, "history({days})");
     resp.json().await.unwrap()
@@ -39,6 +42,7 @@ async fn a_pc_woken_by_hand_counts_as_awake() {
     let mut b = logged_in(&s.url).await;
     // Der Proxy sieht den schlafenden PC, ohne etwas dazu getan zu haben.
     seen(&s, EventKind::PcSeenAsleep).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     // Jemand weckt den PC am Tisch.
     s.pc.awake.store(true, Ordering::SeqCst);
     seen(&s, EventKind::PcSeenAwake).await;
@@ -53,6 +57,7 @@ async fn a_pc_put_to_sleep_by_hand_counts_as_sleep() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     seen(&s, EventKind::PcSeenAwake).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     // Jemand schickt den PC von Hand schlafen.
     s.pc.awake.store(false, Ordering::SeqCst);
     seen(&s, EventKind::PcSeenAsleep).await;

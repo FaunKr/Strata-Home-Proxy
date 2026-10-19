@@ -47,7 +47,7 @@ pub fn HistoryPage() -> impl IntoView {
                                 <div class="chips" role="group" aria-label="Range">
                                     {RANGES
                                         .iter()
-                                        .map(|(days, name)| preset(range, *days, *name))
+                                        .map(|(days, name)| preset(range, *days, name))
                                         .collect::<Vec<_>>()}
                                 </div>
                                 {shown(view)}

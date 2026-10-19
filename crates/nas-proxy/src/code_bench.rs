@@ -320,7 +320,7 @@ pub async fn cancel(state: &AppState) -> Result<(), String> {
 }
 
 /// The model the PC service reports as active, now or when it last answered.
-async fn active_model(state: &AppState) -> Result<String, String> {
+async fn active_model(state: &std::sync::Arc<AppState>) -> Result<String, String> {
     let page = crate::strata::page(state).await;
     page.info
         .and_then(|info| info.models.into_iter().find(|m| m.active))

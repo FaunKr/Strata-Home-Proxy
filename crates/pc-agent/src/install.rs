@@ -113,9 +113,7 @@ impl Installation {
     }
 
     fn with_chat(&self, id: &str, fields: ConfigFields) -> Model {
-        let path = self
-            .dir
-            .join(format!("strata-{}.shared-settings.json", lower(id)));
+        let path = self.chat_path(id);
         let chat = std::fs::read_to_string(&path).ok().and_then(|text| {
             serde_json::from_str::<ConfigFields>(&text)
                 .inspect_err(|e| tracing::debug!("{} is not valid JSON: {e}", path.display()))
@@ -223,7 +221,7 @@ impl Installation {
         vec![
             self.data.join("models").join(id),
             self.data.join("packs").join(&lower),
-            self.dir.join(format!("strata-{lower}.log")),
+            self.log_path(id),
             self.run_script(id),
             // The config last: until it is gone, the model is listed and can be deleted again.
             self.config_path(id),
@@ -280,6 +278,16 @@ impl Installation {
     /// A model's config file, for Strata's programs that take one.
     pub fn config_path(&self, id: &str) -> PathBuf {
         self.dir.join(format!("strata-{}.json", lower(id)))
+    }
+
+    /// A model's Chat settings from Strata's web app.
+    fn chat_path(&self, id: &str) -> PathBuf {
+        self.dir
+            .join(format!("strata-{}.shared-settings.json", lower(id)))
+    }
+
+    fn log_path(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("strata-{}.log", lower(id)))
     }
 }
 
@@ -517,10 +525,16 @@ pub mod testing {
     impl SetupLeaves {
         /// Setup's own files (`setup.py`, a Git checkout at this commit).
         pub fn new(strata_dir: &Path, data_dir: &Path, commit: &str) -> Self {
-            let install = Installation::new(strata_dir, data_dir);
             write(strata_dir.join("setup.py"), "");
             write(strata_dir.join(".git").join("HEAD"), &format!("{commit}\n"));
-            Self { install }
+            Self::at(strata_dir, data_dir)
+        }
+
+        /// The folders as they are, to add to or look at.
+        pub fn at(strata_dir: &Path, data_dir: &Path) -> Self {
+            Self {
+                install: Installation::new(strata_dir, data_dir),
+            }
         }
 
         pub fn installation(&self) -> &Installation {
@@ -551,21 +565,13 @@ pub mod testing {
 
         /// A model's Chat settings file with exactly this text.
         pub fn chat_settings(&self, id: &str, text: &str) -> &Self {
-            write(
-                self.install
-                    .dir
-                    .join(format!("strata-{}.shared-settings.json", lower(id))),
-                text,
-            );
+            write(self.install.chat_path(id), text);
             self
         }
 
         /// A model's log.
         pub fn log(&self, id: &str, text: &str) -> &Self {
-            write(
-                self.install.dir.join(format!("strata-{}.log", lower(id))),
-                text,
-            );
+            write(self.install.log_path(id), text);
             self
         }
 
@@ -611,6 +617,11 @@ pub mod testing {
             std::fs::metadata(self.install.config_path(id))
                 .and_then(|m| m.modified())
                 .unwrap()
+        }
+
+        /// A model's Chat settings as they are on disk.
+        pub fn chat_text(&self, id: &str) -> String {
+            std::fs::read_to_string(self.install.chat_path(id)).unwrap()
         }
 
         /// A model config's text as it is on disk.

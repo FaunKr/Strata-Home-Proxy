@@ -7,7 +7,7 @@ use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 
 use common::*;
 use serde_json::{Value, json};
-use strata_pc_agent::{managed::Managed, strata};
+use strata_pc_agent::{install::testing::SetupLeaves, managed::Managed, strata};
 
 const OLD_KEY: &str = "alter-key-0123456789";
 const NEW_KEY: &str = "neuer-key-0123456789abcdef";
@@ -22,51 +22,42 @@ fn write(path: PathBuf, content: &str) {
 }
 
 /// A config as the service leaves it after its start.
-fn config_json(gguf: &str) -> String {
+fn config_json(gguf: &str) -> Value {
     json!({"exe": "C:/Strata/engine/strata.exe", "args": ["--native", gguf], "port": 8080,
         "api_key": OLD_KEY, "reasoning_loop_recovery": "recover"})
-    .to_string()
+}
+
+/// The service's Strata-Ordner, to add to or look at.
+fn strata_dir(s: &Setup) -> SetupLeaves {
+    SetupLeaves::at(&s.agent.cfg.strata_dir, &s.agent.cfg.strata_data_dir)
 }
 
 /// Strata as setup leaves it with IQ3_XXS (active) and coder-IQ1_M.
 fn installed(s: &Setup) {
-    let strata = s.agent.cfg.strata_dir.clone();
-    let data = s.agent.cfg.strata_data_dir.clone();
-    write(strata.join("setup.py"), "");
-    write(strata.join(".git").join("HEAD"), "0123456789abcdef\n");
-    write(strata.join("strata-iq3_xxs.json"), &config_json("a.gguf"));
-    write(strata.join("run-iq3_xxs.bat"), "");
-    write(
-        strata.join("strata-coder-iq1_m.json"),
-        &config_json("b.gguf"),
-    );
-    write(strata.join("run-coder-iq1_m.bat"), "");
-    write(strata.join("strata-coder-iq1_m.log"), "log");
-    write(
-        data.join("models").join("IQ3_XXS").join("a.gguf"),
-        "0123456789",
-    );
-    write(
-        data.join("models").join("coder-IQ1_M").join("b.gguf"),
-        "01234",
-    );
-    write(
-        data.join("packs")
-            .join("coder-iq1_m")
-            .join("tokenizer")
-            .join("vocab.json"),
-        "abc",
-    );
-    write(data.join("packs").join("iq3_xxs").join("vocab.json"), "abc");
-    write(data.join("mtp").join("rt").join("experts.bin"), "shared");
+    let cfg = &s.agent.cfg;
+    let setup = SetupLeaves::new(&cfg.strata_dir, &cfg.strata_data_dir, "0123456789abcdef");
+    setup
+        .model("iq3_xxs", config_json("a.gguf"))
+        .model("coder-iq1_m", config_json("b.gguf"))
+        .log("coder-iq1_m", "log")
+        .download("IQ3_XXS", "a.gguf", "0123456789")
+        .download("coder-IQ1_M", "b.gguf", "01234")
+        .pack("coder-iq1_m", "tokenizer/vocab.json", "abc")
+        .pack("iq3_xxs", "vocab.json", "abc")
+        .shared("mtp/rt/experts.bin", "shared");
     s.agent
         .set_managed(Managed {
-            strata_start: Some(strata.join("run-iq3_xxs.bat")),
+            strata_start: Some(setup.installation().run_script("iq3_xxs")),
             strata_args: vec![],
-            strata_processes: Some(vec![format!("{}/", strata.display())]),
+            strata_processes: Some(vec![format!("{}/", cfg.strata_dir.display())]),
             strata_api_key: Some(OLD_KEY.into()),
         })
         .unwrap();
+}
+
+fn read_config(s: &Setup, id: &str) -> Value {
+    let model = strata_dir(s).installation().model(id).unwrap();
+    Value::Object(model.fields().clone())
 }
 
 fn model<'a>(view: &'a Value, id: &str) -> &'a Value {
@@ -699,9 +690,8 @@ async fn a_new_key_goes_into_every_model_and_strata_restarts() {
     let done = job(&s, json!({"kind": "set_key", "api_key": NEW_KEY})).await;
     assert_eq!(done["state"], "done", "{done}");
     assert!(!done.to_string().contains(NEW_KEY));
-    for name in ["strata-iq3_xxs.json", "strata-coder-iq1_m.json"] {
-        let text = std::fs::read_to_string(s.agent.cfg.strata_dir.join(name)).unwrap();
-        let cfg: Value = serde_json::from_str(&text).unwrap();
+    for name in ["iq3_xxs", "coder-iq1_m"] {
+        let cfg = read_config(&s, name);
         assert_eq!(cfg["api_key"], NEW_KEY, "{name}");
         assert_eq!(cfg["port"], 8080, "{name}: other values stay");
         assert!(cfg["args"].is_array(), "{name}");
@@ -819,10 +809,7 @@ async fn the_benchmark_result_is_found_before_much_more_output() {
 async fn a_damaged_model_config_stops_the_key_change() {
     let s = setup("models-key-damaged").await;
     installed(&s);
-    write(
-        s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json"),
-        "{\"exe\": \"x\",",
-    );
+    strata_dir(&s).config_text("coder-iq1_m", "{\"exe\": \"x\",");
     let done = job(&s, json!({"kind": "set_key", "api_key": NEW_KEY})).await;
     assert_eq!(done["state"], "failed", "{done}");
     assert_eq!(s.agent.managed().strata_api_key.as_deref(), Some(OLD_KEY));
@@ -838,10 +825,7 @@ async fn with_strata_started_by_start_here_the_model_used_last_is_active() {
     installed(&s);
     s.agent.set_managed(Managed::default()).unwrap();
     std::thread::sleep(Duration::from_millis(20));
-    write(
-        s.agent.cfg.strata_dir.join("strata-iq3_xxs.json"),
-        &config_json("a.gguf"),
-    );
+    strata_dir(&s).config("iq3_xxs", config_json("a.gguf"));
     let (code, answer) = post(
         &s,
         "/strata/jobs",
@@ -934,12 +918,11 @@ const ESP_FLAGS: [&str; 7] = [
     "per-layer",
 ];
 
-/// `strata-<id>.json` with these engine args.
+/// A model config with these engine args.
 fn config_with_args(s: &Setup, id: &str, args: Value) {
-    write(
-        s.agent.cfg.strata_dir.join(format!("strata-{id}.json")),
-        &json!({"exe": "C:/Strata/engine/strata.exe", "args": args, "port": 8080, "api_key": OLD_KEY})
-            .to_string(),
+    strata_dir(s).config(
+        id,
+        json!({"exe": "C:/Strata/engine/strata.exe", "args": args, "port": 8080, "api_key": OLD_KEY}),
     );
 }
 
@@ -966,21 +949,13 @@ async fn the_page_shows_whether_a_model_has_the_speed_projection() {
 
 /// Strata's own vector, where setup expects it; its path as setup writes it.
 fn vector(s: &Setup) -> String {
-    let path = s
-        .agent
-        .cfg
-        .strata_dir
-        .join("data")
-        .join("experimental-speed-projection")
-        .join("Qwen3.8-Flash-Next-experimental-speed-projection.gguf");
-    write(path.clone(), "vector");
-    format!("{}:1.0", path.display())
+    let strata = strata_dir(s);
+    strata.speed_projection_vector();
+    format!("{}:1.0", strata.vector().display())
 }
 
 fn args_of(s: &Setup, id: &str) -> Value {
-    let text =
-        std::fs::read_to_string(s.agent.cfg.strata_dir.join(format!("strata-{id}.json"))).unwrap();
-    let cfg: Value = serde_json::from_str(&text).unwrap();
+    let cfg = read_config(s, id);
     assert_eq!(cfg["api_key"], OLD_KEY, "other values stay: {cfg}");
     assert_eq!(cfg["port"], 8080, "other values stay: {cfg}");
     cfg["args"].clone()
@@ -1063,10 +1038,7 @@ async fn switching_on_twice_keeps_one_set_of_flags() {
 async fn switching_the_speed_projection_is_refused_where_it_does_not_fit() {
     let s = setup("models-esp-refused").await;
     installed(&s);
-    write(
-        s.agent.cfg.strata_dir.join("strata-swift-iq2_xs.json"),
-        &config_json("c.gguf"),
-    );
+    strata_dir(&s).config("swift-iq2_xs", config_json("c.gguf"));
     for (body, status) in [
         (
             json!({"kind": "set_speed_projection", "model": "swift-IQ2_XS", "on": true}),
@@ -1105,8 +1077,7 @@ async fn switching_the_speed_projection_is_refused_where_it_does_not_fit() {
 async fn without_strata_s_vector_switching_on_fails_and_changes_nothing() {
     let s = setup("models-esp-no-vector").await;
     installed(&s);
-    let before =
-        std::fs::read_to_string(s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json")).unwrap();
+    let before = strata_dir(&s).text("coder-iq1_m");
     let done = job(
         &s,
         json!({"kind": "set_speed_projection", "model": "coder-IQ1_M", "on": true}),
@@ -1120,8 +1091,7 @@ async fn without_strata_s_vector_switching_on_fails_and_changes_nothing() {
             .contains("experimental-speed-projection"),
         "{done}"
     );
-    let after =
-        std::fs::read_to_string(s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json")).unwrap();
+    let after = strata_dir(&s).text("coder-iq1_m");
     assert_eq!(before, after);
 }
 
@@ -1177,10 +1147,7 @@ async fn switching_a_model_keeps_the_model_start_here_starts() {
     s.agent.set_managed(Managed::default()).unwrap();
     vector(&s);
     std::thread::sleep(Duration::from_millis(20));
-    write(
-        s.agent.cfg.strata_dir.join("strata-iq3_xxs.json"),
-        &config_json("a.gguf"),
-    );
+    strata_dir(&s).config("iq3_xxs", config_json("a.gguf"));
     std::thread::sleep(Duration::from_millis(20));
     let done = job(
         &s,
@@ -1243,7 +1210,7 @@ async fn switching_the_context_rewrites_only_max_context() {
             "int8"
         ]),
     );
-    let path = s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json");
+    let path = strata_dir(&s).installation().config_path("coder-iq1_m");
     let old = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
     std::fs::File::options()
         .write(true)
@@ -1318,8 +1285,7 @@ async fn switching_down_from_past_256k_removes_the_rope_scaling() {
 async fn switching_the_context_is_refused_outside_what_it_takes() {
     let s = setup("models-context-refused").await;
     installed(&s);
-    let before =
-        std::fs::read_to_string(s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json")).unwrap();
+    let before = strata_dir(&s).text("coder-iq1_m");
     for (body, status) in [
         (
             json!({"kind": "set_context", "model": "coder-IQ1_M", "context": 393216}),
@@ -1345,8 +1311,7 @@ async fn switching_the_context_is_refused_outside_what_it_takes() {
         let (code, answer) = post(&s, "/strata/jobs", body.clone()).await;
         assert_eq!(code, status, "{body}: {answer}");
     }
-    let after =
-        std::fs::read_to_string(s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json")).unwrap();
+    let after = strata_dir(&s).text("coder-iq1_m");
     assert_eq!(before, after);
 }
 

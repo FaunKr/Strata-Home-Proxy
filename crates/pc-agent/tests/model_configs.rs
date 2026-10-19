@@ -7,50 +7,46 @@ use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 
 use common::*;
 use serde_json::{Value, json};
-use strata_pc_agent::{managed::Managed, strata};
+use strata_pc_agent::{install::testing::SetupLeaves, managed::Managed, strata};
 
 fn write(path: PathBuf, content: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, content).unwrap();
 }
 
-fn config_path(s: &Setup, id: &str) -> PathBuf {
-    s.agent.cfg.strata_dir.join(format!("strata-{id}.json"))
+/// The service's Strata-Ordner, to add to or look at.
+fn strata_dir(s: &Setup) -> SetupLeaves {
+    SetupLeaves::at(&s.agent.cfg.strata_dir, &s.agent.cfg.strata_data_dir)
 }
 
 fn read_config(s: &Setup, id: &str) -> Value {
-    serde_json::from_str(&std::fs::read_to_string(config_path(s, id)).unwrap()).unwrap()
+    let model = strata_dir(s).installation().model(id).unwrap();
+    Value::Object(model.fields().clone())
 }
 
 /// Strata with IQ3_XXS (active) and qwen36-Q8_0, as setup writes them.
 fn installed(s: &Setup) {
-    let strata = s.agent.cfg.strata_dir.clone();
-    write(strata.join("setup.py"), "");
-    write(strata.join(".git").join("HEAD"), "0123456789abcdef\n");
+    let cfg = &s.agent.cfg;
+    let setup = SetupLeaves::new(&cfg.strata_dir, &cfg.strata_data_dir, "0123456789abcdef");
     for (id, arch) in [("iq3_xxs", "qwen4exp"), ("qwen36-q8_0", "qwen35moe")] {
-        write(
-            strata.join(format!("strata-{id}.json")),
-            &json!({"exe": "C:/Strata/engine/strata.exe", "args": ["--native", "a.gguf"],
-                "port": 8080, "api_key": "key-0123456789abcdef", "arch": arch})
-            .to_string(),
+        setup.model(
+            id,
+            json!({"exe": "C:/Strata/engine/strata.exe", "args": ["--native", "a.gguf"],
+                "port": 8080, "api_key": "key-0123456789abcdef", "arch": arch}),
         );
-        write(strata.join(format!("run-{id}.bat")), "");
     }
     s.agent
         .set_managed(Managed {
-            strata_start: Some(strata.join("run-iq3_xxs.bat")),
+            strata_start: Some(setup.installation().run_script("iq3_xxs")),
             strata_args: vec![],
-            strata_processes: Some(vec![format!("{}/", strata.display())]),
+            strata_processes: Some(vec![format!("{}/", cfg.strata_dir.display())]),
             strata_api_key: Some("key-0123456789abcdef".into()),
         })
         .unwrap();
 }
 
 fn modified(s: &Setup, id: &str) -> std::time::SystemTime {
-    std::fs::metadata(config_path(s, id))
-        .unwrap()
-        .modified()
-        .unwrap()
+    strata_dir(s).modified(id)
 }
 
 // --- #158 loop recovery ---
@@ -74,7 +70,7 @@ async fn at_start_every_model_config_gets_loop_recovery_and_keeps_the_rest() {
         before,
         "the active model stays the one touched last"
     );
-    let text = std::fs::read_to_string(config_path(&s, "iq3_xxs")).unwrap();
+    let text = strata_dir(&s).text("iq3_xxs");
     assert!(text.starts_with("{\n \""), "Strata's indent of one: {text}");
 }
 
@@ -108,16 +104,13 @@ async fn at_start_strata_restarts_after_its_request_and_only_on_a_change() {
 async fn a_config_that_cannot_be_read_is_left_and_the_others_change() {
     let s = setup("configs-broken").await;
     installed(&s);
-    write(config_path(&s, "qwen36-q8_0"), "{ kaputt");
+    strata_dir(&s).config_text("qwen36-q8_0", "{ kaputt");
     strata::manage_configs_at_start(&s.agent).await.await;
     assert_eq!(
         read_config(&s, "iq3_xxs")["reasoning_loop_recovery"],
         "recover"
     );
-    assert_eq!(
-        std::fs::read_to_string(config_path(&s, "qwen36-q8_0")).unwrap(),
-        "{ kaputt"
-    );
+    assert_eq!(strata_dir(&s).text("qwen36-q8_0"), "{ kaputt");
 }
 
 #[tokio::test]
@@ -142,14 +135,11 @@ async fn an_update_sets_loop_recovery_before_strata_starts() {
 async fn a_model_added_gets_loop_recovery() {
     let s = setup("configs-add").await;
     installed(&s);
-    let strata = s.agent.cfg.strata_dir.clone();
+    let config = strata_dir(&s).installation().config_path("swift-iq2_xs");
     s.fake.command(
         "START-HERE.bat",
         FakeCommand {
-            creates: vec![(
-                strata.join("strata-swift-iq2_xs.json"),
-                json!({"exe": "strata.exe", "args": []}).to_string(),
-            )],
+            creates: vec![(config, json!({"exe": "strata.exe", "args": []}).to_string())],
             ..FakeCommand::default()
         },
     );
@@ -191,7 +181,7 @@ async fn the_page_shows_each_models_loop_recovery() {
     installed(&s);
     let mut cfg = read_config(&s, "qwen36-q8_0");
     cfg["reasoning_loop_recovery"] = json!("stop");
-    write(config_path(&s, "qwen36-q8_0"), &cfg.to_string());
+    strata_dir(&s).config("qwen36-q8_0", cfg);
     let view = get(&s, "/strata").await;
     assert_eq!(model(&view, "IQ3_XXS")["loop_recovery"], "off", "{view}");
     assert_eq!(
@@ -228,7 +218,7 @@ fn strata_knows(s: &Setup, config_block: bool, model_card: bool) {
 fn set_sampling(s: &Setup, id: &str, block: Value) {
     let mut cfg = read_config(s, id);
     cfg["sampling"] = block;
-    write(config_path(s, id), &cfg.to_string());
+    strata_dir(s).config(id, cfg);
 }
 
 #[tokio::test]
@@ -388,21 +378,15 @@ async fn a_strata_that_reads_no_sampling_shows_none() {
 
 // --- #160 Chat settings over the recommended sampling ---
 
-fn chat_settings_path(s: &Setup, id: &str) -> PathBuf {
-    s.agent
-        .cfg
-        .strata_dir
-        .join(format!("strata-{id}.shared-settings.json"))
-}
-
 #[tokio::test]
 async fn chat_settings_show_as_overriding_and_stay_untouched() {
     let s = setup("configs-chat").await;
     installed(&s);
     strata_knows(&s, true, true);
     let chat = r#"{"temperature": 0.3, "reasoning_effort": "high", "max_tokens": 4096}"#;
-    write(chat_settings_path(&s, "iq3_xxs"), chat);
-    write(chat_settings_path(&s, "qwen36-q8_0"), "{ kaputt");
+    strata_dir(&s)
+        .chat_settings("iq3_xxs", chat)
+        .chat_settings("qwen36-q8_0", "{ kaputt");
     strata::manage_configs_at_start(&s.agent).await.await;
     let view = get(&s, "/strata").await;
     let qwen = &model(&view, "IQ3_XXS")["sampling"];
@@ -428,8 +412,5 @@ async fn chat_settings_show_as_overriding_and_stay_untouched() {
         field(&q36["thinking"], "temperature"),
         (1.0, "model_card".into())
     );
-    assert_eq!(
-        std::fs::read_to_string(chat_settings_path(&s, "iq3_xxs")).unwrap(),
-        chat
-    );
+    assert_eq!(strata_dir(&s).chat_text("iq3_xxs"), chat);
 }

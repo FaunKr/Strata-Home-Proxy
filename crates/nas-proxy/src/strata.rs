@@ -63,7 +63,7 @@ impl StrataState {
             last: Mutex::new(None),
             job_running: AtomicBool::new(pending.is_some()),
             pending: Mutex::new(pending),
-            update: UpdateSummaries::default(),
+            update: UpdateSummaries::new(data_dir.clone()),
             dir: data_dir,
         }
     }
@@ -109,7 +109,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             gaming: false,
             stale: info.is_some(),
             info,
-            update: None,
+            update: state.strata.update.stale(),
         };
     };
     let Some((mut info, incoming)) = agent.strata().await else {

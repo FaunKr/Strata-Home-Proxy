@@ -6,18 +6,23 @@
 //! request is housekeeping, so it never wakes the PC, restarts the
 //! Leerlaufzeit or writes an Ereignis. It asks only an idle Strata with its
 //! model loaded, once per upstream commit, and after a failure not again
-//! for an hour.
+//! for an hour. The summary is kept in `DATA_DIR` until the update is
+//! installed, so it survives a restart and shows while the PC sleeps.
 
 use std::{
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use strata_admin_ui::api::{StrataUpdate, UpdateCommit, UpdateSummary};
 
-use crate::{clock, overview, state::AppState};
+use crate::{clock, files::write_private, overview, state::AppState};
+
+/// The summary for the newest upstream commit, in `DATA_DIR`.
+const FILE: &str = "strata-update-summary.json";
 
 /// The PC service's account of the incoming commits (`update` on `/strata`).
 #[derive(Clone, Debug, Deserialize)]
@@ -68,15 +73,19 @@ each line starting with \"- \". Put first anything they have to do themselves, s
 running setup again, downloading models again or changing settings. No headings, no other text.";
 
 /// A summary Strata wrote.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Written {
+    /// The installed version it was written for.
+    installed: Option<String>,
     upstream: String,
     lines: Vec<String>,
     model: String,
+    /// Unix seconds.
+    written_at: u64,
 }
 
-#[derive(Default)]
 pub struct UpdateSummaries {
+    dir: Option<PathBuf>,
     /// The last incoming commits with the installed version they were
     /// reported for.
     last: Mutex<Option<(Option<String>, Incoming)>>,
@@ -104,6 +113,7 @@ pub fn noted(
     incoming: Option<Incoming>,
 ) -> Option<StrataUpdate> {
     let summaries = &state.strata.update;
+    summaries.drop_installed(now.installed, now.update_available);
     let incoming = incoming.filter(|_| now.update_available == Some(true));
     let Some(incoming) = incoming else {
         *summaries.last.lock().unwrap() = None;
@@ -130,14 +140,103 @@ pub fn noted(
     } else if now.gaming || now.job {
         summaries.fail(upstream, "Strata is ended or a job runs");
         UpdateSummary::Unavailable { fallback }
-    } else {
-        start(state, incoming.clone());
+    } else if start(state, now.installed, incoming.clone()) {
         UpdateSummary::Writing { fallback }
+    } else {
+        UpdateSummary::Unavailable { fallback }
     };
     Some(view(now.installed, &incoming, summary))
 }
 
 impl UpdateSummaries {
+    pub fn new(dir: Option<PathBuf>) -> Self {
+        let written = dir
+            .as_ref()
+            .and_then(|dir| std::fs::read(dir.join(FILE)).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        Self {
+            dir,
+            last: Mutex::new(None),
+            written: Mutex::new(written),
+            writing: Mutex::new(None),
+            failed: Mutex::new(None),
+        }
+    }
+
+    /// What the Version tab shows while the PC does not answer: the stored
+    /// summary, with the commits if they are still in memory.
+    pub fn stale(&self) -> Option<StrataUpdate> {
+        let last = self.last.lock().unwrap().clone();
+        let written = self.written.lock().unwrap().clone();
+        match (written, last) {
+            (Some(w), Some((installed, incoming))) if w.upstream == incoming.upstream => {
+                Some(view(
+                    installed.as_deref(),
+                    &incoming,
+                    UpdateSummary::Written {
+                        lines: w.lines,
+                        model: w.model,
+                    },
+                ))
+            }
+            (Some(w), _) => Some(StrataUpdate {
+                summary: UpdateSummary::Written {
+                    lines: w.lines,
+                    model: w.model,
+                },
+                commits: Vec::new(),
+                left_out: 0,
+                compare_url: None,
+            }),
+            (None, Some((installed, incoming))) => Some(view(
+                installed.as_deref(),
+                &incoming,
+                UpdateSummary::Unavailable {
+                    fallback: fallback(&incoming),
+                },
+            )),
+            (None, None) => None,
+        }
+    }
+
+    /// Forgets the summary once its update is installed.
+    fn drop_installed(&self, installed: Option<&str>, update_available: Option<bool>) {
+        let mut written = self.written.lock().unwrap();
+        let done = written.as_ref().is_some_and(|w| {
+            update_available == Some(false)
+                || installed.is_some_and(|i| !i.is_empty() && w.upstream.starts_with(i))
+        });
+        if done {
+            *written = None;
+            self.save(None);
+        }
+    }
+
+    fn keep(&self, w: Written) {
+        self.save(Some(&w));
+        *self.written.lock().unwrap() = Some(w);
+    }
+
+    fn save(&self, w: Option<&Written>) {
+        let Some(dir) = &self.dir else {
+            return;
+        };
+        let saved = match w {
+            Some(w) => write_private(
+                dir,
+                FILE,
+                &serde_json::to_vec(w).expect("summary serializes"),
+            ),
+            None => std::fs::remove_file(dir.join(FILE)).or_else(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => Ok(()),
+                _ => Err(e),
+            }),
+        };
+        if let Err(e) = saved {
+            tracing::error!("{FILE} nicht gespeichert: {e}");
+        }
+    }
+
     fn recently_failed(&self, upstream: &str) -> bool {
         self.failed
             .lock()
@@ -152,29 +251,32 @@ impl UpdateSummaries {
     }
 }
 
-fn start(state: &Arc<AppState>, incoming: Incoming) {
+/// Starts writing the summary; false while another one is being written.
+fn start(state: &Arc<AppState>, installed: Option<&str>, incoming: Incoming) -> bool {
     {
         let mut writing = state.strata.update.writing.lock().unwrap();
         if writing.is_some() {
-            return;
+            return false;
         }
         *writing = Some(incoming.upstream.clone());
     }
     let state = Arc::clone(state);
+    let installed = installed.map(String::from);
     tokio::spawn(async move {
         let summaries = &state.strata.update;
         match ask(&state, &incoming).await {
-            Ok((lines, model)) => {
-                *summaries.written.lock().unwrap() = Some(Written {
-                    upstream: incoming.upstream.clone(),
-                    lines,
-                    model,
-                })
-            }
+            Ok((lines, model)) => summaries.keep(Written {
+                installed,
+                upstream: incoming.upstream.clone(),
+                lines,
+                model,
+                written_at: clock::unix_now(),
+            }),
             Err(why) => summaries.fail(&incoming.upstream, &why),
         }
         *summaries.writing.lock().unwrap() = None;
     });
+    true
 }
 
 /// Strata's `/health` as far as the summary needs it.
@@ -300,8 +402,8 @@ fn prompt(incoming: &Incoming, context: u64) -> String {
     }
 }
 
-/// The bullet points of an answer, without their markers; the rest of the
-/// text and any thinking before `</think>` is left out.
+/// The bullet points of an answer, without their markers and bold; the rest
+/// of the text and any thinking before `</think>` is left out.
 fn bullets(content: &str) -> Vec<String> {
     let answer = content.rsplit("</think>").next().unwrap_or(content);
     answer
@@ -315,6 +417,8 @@ fn bullets(content: &str) -> Vec<String> {
                     let (n, rest) = line.split_once(". ")?;
                     n.chars().all(|c| c.is_ascii_digit()).then_some(rest)
                 })?;
+            // Shown as plain text, so Markdown emphasis would show as stars.
+            let rest = rest.replace("**", "").replace("__", "");
             let rest = rest.trim();
             (!rest.is_empty()).then(|| rest.to_string())
         })

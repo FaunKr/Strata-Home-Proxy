@@ -18,6 +18,7 @@ use crate::{
     catalog::{self, Size},
     command::{Cancel, CommandSpec},
     managed::Managed,
+    sampling::{self, ModelSampling, Support},
 };
 
 const JOB_FILE: &str = "strata-job.json";
@@ -59,6 +60,8 @@ const PROJECTION_FLAGS: [(&str, &[&str]); 3] = [
 /// service sets it in every model config.
 const LOOP_RECOVERY_KEY: &str = "reasoning_loop_recovery";
 const LOOP_RECOVERY: &str = "recover";
+/// The config's defaults for requests without sampling fields.
+const SAMPLING_KEY: &str = "sampling";
 /// Strata's vector, in the Strata folder.
 const PROJECTION_VECTOR: [&str; 3] = [
     "data",
@@ -1345,10 +1348,16 @@ fn write_config(path: &Path, cfg: ConfigFields) -> Result<(), String> {
     Ok(())
 }
 
-/// Sets what the service keeps in a model config; whether that changed it.
-fn manage_config(cfg: &mut ConfigFields) -> bool {
+/// Sets what the service keeps in a model config: loop recovery, and the
+/// `sampling` block as [`sampling::managed_block`] has it for this Strata,
+/// over a hand-set one. Whether that changed the config.
+fn manage_config(cfg: &mut ConfigFields, support: Support) -> bool {
     let before = cfg.clone();
     cfg.insert(LOOP_RECOVERY_KEY.into(), LOOP_RECOVERY.into());
+    match sampling::managed_block(support, cfg) {
+        Some(block) => cfg.insert(SAMPLING_KEY.into(), block),
+        None => cfg.remove(SAMPLING_KEY),
+    };
     *cfg != before
 }
 
@@ -1356,12 +1365,13 @@ fn manage_config(cfg: &mut ConfigFields) -> bool {
 /// ids whose config changed. One that cannot be read or written is logged
 /// and left as it is; the others still change.
 fn manage_configs(dir: &Path) -> Vec<String> {
+    let support = Support::of(dir);
     installed_models(dir)
         .filter(|id| {
             let path = config_path(dir, id);
             let written = read_config(&path).and_then(|found| match found {
                 Some((_, mut cfg)) => {
-                    if manage_config(&mut cfg) {
+                    if manage_config(&mut cfg, support) {
                         write_config(&path, cfg).map(|()| true)
                     } else {
                         Ok(false)
@@ -2073,6 +2083,8 @@ pub struct InstalledModel {
     /// Strata's recovery from repeated reasoning passages, as its config
     /// sets it: `off`, `stop` or `recover`.
     pub loop_recovery: String,
+    /// What a request without sampling fields gets.
+    pub sampling: ModelSampling,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2094,6 +2106,7 @@ pub fn view(agent: &Agent) -> StrataView {
     let dir = &cfg.strata_dir;
     let ram_gb = agent.platform().ram_bytes() as f64 / (1u64 << 30) as f64;
     let active = active_model(agent);
+    let support = Support::of(dir);
     let mut models: Vec<InstalledModel> = installed_models(dir)
         .map(|id| {
             let size = catalog::by_id(&id);
@@ -2104,6 +2117,7 @@ pub fn view(agent: &Agent) -> StrataView {
                 speed_projection: has_speed_projection(dir, &id),
                 context: model_context(dir, &id),
                 loop_recovery: loop_recovery(dir, &id).into(),
+                sampling: model_sampling(dir, &id, support),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,
@@ -2186,6 +2200,17 @@ fn loop_recovery(dir: &Path, id: &str) -> &'static str {
         Some(v) if v == "stop" => "stop",
         _ => "off",
     }
+}
+
+/// The sampling a model's config gives it with this Strata; a config that
+/// cannot be read counts as one without settings.
+fn model_sampling(dir: &Path, id: &str, support: Support) -> ModelSampling {
+    let cfg = read_config(&config_path(dir, id))
+        .ok()
+        .flatten()
+        .map(|(_, cfg)| cfg)
+        .unwrap_or_default();
+    sampling::effective(support, &cfg)
 }
 
 fn dir_size(dir: &Path) -> u64 {

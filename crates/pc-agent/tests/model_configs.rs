@@ -207,3 +207,162 @@ async fn the_page_shows_each_models_loop_recovery() {
         "{view}"
     );
 }
+
+// --- #159 recommended sampling by Strata's version ---
+
+/// Strata's `serve/server.py`, with the names the service looks for.
+fn strata_knows(s: &Setup, config_block: bool, model_card: bool) {
+    let mut text = String::from("import os\n");
+    if config_block {
+        text.push_str("def sampling_defaults_from_config(cfg: dict) -> dict:\n    ...\n");
+    }
+    if model_card {
+        text.push_str("MODEL_CARD_SAMPLING = {}\n");
+    }
+    write(
+        s.agent.cfg.strata_dir.join("serve").join("server.py"),
+        &text,
+    );
+}
+
+fn set_sampling(s: &Setup, id: &str, block: Value) {
+    let mut cfg = read_config(s, id);
+    cfg["sampling"] = block;
+    write(config_path(s, id), &cfg.to_string());
+}
+
+#[tokio::test]
+async fn a_strata_without_model_card_sampling_gets_the_thinking_set_in_the_config() {
+    let s = setup("configs-sampling-block").await;
+    installed(&s);
+    strata_knows(&s, true, false);
+    set_sampling(&s, "iq3_xxs", json!({"temperature": 0.2, "seed": 7}));
+    strata::manage_configs_at_start(&s.agent).await;
+    assert_eq!(
+        read_config(&s, "iq3_xxs")["sampling"],
+        json!({"temperature": 1.0, "top_p": 0.95, "top_k": 20})
+    );
+    assert_eq!(
+        read_config(&s, "qwen36-q8_0")["sampling"],
+        json!({"temperature": 1.0, "top_p": 0.95, "top_k": 20, "presence_penalty": 1.5})
+    );
+}
+
+#[tokio::test]
+async fn a_strata_with_model_card_sampling_gets_no_block_in_the_config() {
+    let s = setup("configs-sampling-card").await;
+    installed(&s);
+    strata_knows(&s, true, true);
+    set_sampling(
+        &s,
+        "iq3_xxs",
+        json!({"temperature": 1.0, "top_p": 0.95, "top_k": 20}),
+    );
+    set_sampling(&s, "qwen36-q8_0", json!({"temperature": 0.2}));
+    strata::manage_configs_at_start(&s.agent).await;
+    for id in ["iq3_xxs", "qwen36-q8_0"] {
+        let cfg = read_config(&s, id);
+        assert!(cfg.get("sampling").is_none(), "{id}: {cfg}");
+        assert_eq!(cfg["reasoning_loop_recovery"], "recover", "{id}");
+    }
+}
+
+#[tokio::test]
+async fn a_strata_that_reads_no_sampling_gets_no_block() {
+    let s = setup("configs-sampling-old").await;
+    installed(&s);
+    strata_knows(&s, false, false);
+    strata::manage_configs_at_start(&s.agent).await;
+    assert!(read_config(&s, "iq3_xxs").get("sampling").is_none());
+}
+
+#[tokio::test]
+async fn an_update_to_model_card_sampling_takes_the_block_out() {
+    let s = setup("configs-sampling-update").await;
+    installed(&s);
+    strata_knows(&s, true, false);
+    strata::manage_configs_at_start(&s.agent).await;
+    assert!(read_config(&s, "iq3_xxs")["sampling"].is_object());
+    let server = s.agent.cfg.strata_dir.join("serve").join("server.py");
+    std::fs::remove_file(&server).unwrap();
+    s.fake.command(
+        "START-HERE.bat",
+        FakeCommand {
+            creates: vec![(
+                server,
+                "def sampling_defaults_from_config(cfg):\nMODEL_CARD_SAMPLING = {}\n".into(),
+            )],
+            ..FakeCommand::default()
+        },
+    );
+    let (code, answer) = post(&s, "/strata/jobs", json!({"kind": "update"})).await;
+    assert_eq!(code, 202, "{answer}");
+    assert_eq!(finished(&s).await["state"], "done");
+    assert!(read_config(&s, "iq3_xxs").get("sampling").is_none());
+}
+
+fn field(set: &Value, name: &str) -> (f64, String) {
+    let f = set
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == name)
+        .unwrap_or_else(|| panic!("{name} fehlt: {set}"));
+    (
+        f["value"].as_f64().unwrap(),
+        f["source"].as_str().unwrap().into(),
+    )
+}
+
+#[tokio::test]
+async fn the_page_shows_the_sampling_each_model_gets_and_where_it_comes_from() {
+    let s = setup("configs-view-sampling").await;
+    installed(&s);
+    strata_knows(&s, true, true);
+    set_sampling(
+        &s,
+        "qwen36-q8_0",
+        json!({"temperature": 0.6, "repeat_penalty": 1.1}),
+    );
+    let view = get(&s, "/strata").await;
+    let qwen = &model(&view, "IQ3_XXS")["sampling"];
+    assert_eq!(qwen["support"], "model_card", "{view}");
+    assert_eq!(
+        field(&qwen["thinking"], "temperature"),
+        (1.0, "model_card".into())
+    );
+    assert_eq!(
+        field(&qwen["instruct"], "presence_penalty"),
+        (1.5, "model_card".into())
+    );
+    let names: Vec<&str> = qwen["instruct"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["temperature", "top_p", "top_k", "presence_penalty"]);
+    let q36 = &model(&view, "qwen36-Q8_0")["sampling"];
+    assert_eq!(
+        field(&q36["thinking"], "temperature"),
+        (0.6, "config".into())
+    );
+    assert_eq!(
+        field(&q36["thinking"], "presence_penalty"),
+        (1.5, "model_card".into())
+    );
+    assert_eq!(
+        field(&q36["instruct"], "repetition_penalty"),
+        (1.1, "config".into())
+    );
+}
+
+#[tokio::test]
+async fn a_strata_that_reads_no_sampling_shows_none() {
+    let s = setup("configs-view-old").await;
+    installed(&s);
+    let view = get(&s, "/strata").await;
+    let sampling = &model(&view, "IQ3_XXS")["sampling"];
+    assert_eq!(sampling["support"], "none", "{view}");
+    assert_eq!(sampling["thinking"], json!([]));
+}

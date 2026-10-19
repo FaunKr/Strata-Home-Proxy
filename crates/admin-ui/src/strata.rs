@@ -8,9 +8,10 @@ use leptos_router::components::{A, Outlet};
 use crate::{
     api::{
         CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
-        StartCodeBench, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob, StrataJobKind,
-        StrataJobState, StrataModel, StrataPage, StrataSize, StrataUpdate, UpdateSummary,
-        error_text, get_code_bench, get_strata,
+        SamplingField, SamplingSource, SamplingSupport, StartCodeBench, StartStrataJob,
+        StrataBenchmark, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
+        StrataPage, StrataSampling, StrataSize, StrataUpdate, UpdateSummary, error_text,
+        get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
     labels::{STRATA_CONNECTION, strata_job_label},
@@ -620,10 +621,20 @@ fn Models(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl Int
             }
         })
         .collect_view();
+    // Only with word from the PC service on the sampling: an older one does not say.
+    let sampling_note = info.models.iter().any(|m| m.sampling.is_some()).then(|| {
+        view! {
+            <p class="hint">
+                "Sampling for requests that send none, from the model card unless marked. "
+                "A client's own sampling fields still win."
+            </p>
+        }
+    });
     view! {
         <section class="card">
             <h2>"Installed models"</h2>
             <ul class="list">{models}</ul>
+            {sampling_note}
         </section>
         <section class="card">
             <h2>"Load another model"</h2>
@@ -757,11 +768,13 @@ fn ModelRow(
             </button>
         }
     });
+    let sampling = model.sampling.as_ref().map(sampling_lines);
     view! {
         <li>
             <div class="grow">
                 <p class="strong">{model.id.clone()}</p>
                 <p class="muted small">{meta}</p>
+                {sampling}
             </div>
             {(model.speed_projection == Some(true))
                 .then(|| {
@@ -787,6 +800,43 @@ fn ModelRow(
             {switch}
         </li>
     }
+}
+
+/// What a request without sampling fields gets, with and without thinking.
+fn sampling_lines(sampling: &StrataSampling) -> impl IntoView + use<> {
+    if sampling.support == SamplingSupport::None {
+        return view! {
+            <p class="muted small">"This Strata version ignores sampling; update it."</p>
+        }
+        .into_any();
+    }
+    let line = |label: &str, fields: &[SamplingField]| {
+        let text = if fields.is_empty() {
+            "greedy".to_string()
+        } else {
+            fields
+                .iter()
+                .map(sampling_text)
+                .collect::<Vec<_>>()
+                .join(" · ")
+        };
+        view! { <p class="muted small">{format!("{label}: {text}")}</p> }
+    };
+    view! {
+        {line("With thinking", &sampling.thinking)}
+        {line("Without thinking", &sampling.instruct)}
+    }
+    .into_any()
+}
+
+/// `temperature 0.6 (config)`; a value from the model card is unmarked.
+fn sampling_text(field: &SamplingField) -> String {
+    let source = match field.source {
+        SamplingSource::ModelCard => "",
+        SamplingSource::Config => " (config)",
+        SamplingSource::ChatSettings => " (Chat settings)",
+    };
+    format!("{} {}{source}", field.name, field.value)
 }
 
 /// The longest context the switch offers: the model's trained length. Past

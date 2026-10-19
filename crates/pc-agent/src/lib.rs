@@ -9,6 +9,7 @@ pub mod hardware;
 pub mod managed;
 pub mod output;
 pub mod platform;
+pub mod sampling;
 pub mod strata;
 pub mod update;
 

@@ -29,6 +29,16 @@ Offload only when the user asks. When a task is well scoped and mechanical (a re
 3. When the user asks how it's going, answer from `local-agent status <run>`.
 4. When the command ends, act on its exit code.
 
+## Offload the build step of /implement or /implement-spec
+
+Only when the user asks for it; otherwise implement as usual.
+
+- Commit first: a run starts from the current branch's HEAD. For `/implement-spec`, check out the integration branch first.
+- One run per ticket, one at a time: Strata takes one run at a time, so start the next ticket when the previous run has ended, not in parallel. The brief is the ticket (title, body, link to the spec) plus the test command.
+- Pass `--allow Skill` so the worker can call `tdd`. The repo's allow rules already let it run `cargo test`, `cargo clippy`, `cargo fmt` and `scripts/check.sh`.
+- Exit codes as below, with one change for exit 0: after your review, merge the branch into the current branch yourself; asking for /implement covers the merge. A fallback agent gets the same brief and also uses `tdd`.
+- `/code-review` and the final commit stay with you, after the last ticket.
+
 ## Exit codes
 
 - **0, done**: run `local-agent result <run>`. Review the summary and the whole diff as you would a colleague's work: Strata makes more mistakes than you. Fix small problems on the branch yourself or name them. Then propose merging the branch (`git merge local-agent/<run>`) and wait for the user's word; the merge is theirs to approve. When they reject the work, offer `local-agent discard <run>`, which removes the worktree and branch. `local-agent prune` cleans up merged worktrees and runs older than 14 days.

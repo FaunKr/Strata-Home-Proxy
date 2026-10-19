@@ -271,6 +271,15 @@ button.full { width: 100%; }
 .row-form button { white-space: nowrap; }
 .row-form select { width: auto; }
 .grow { flex: 1; min-width: 180px; }
+.list > li.model { display: block; }
+.model-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 2px; }
+.model-head .strong { margin: 0; }
+.model-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.model-actions .push { margin-left: auto; }
+.model-actions:empty { display: none; }
+.inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.inline-form button { white-space: nowrap; }
+.inline-form select { width: auto; min-width: 12rem; flex: 0 1 auto; }
 .strong { font-weight: 600; }
 
 .events { list-style: none; margin: 0; padding: 0; }

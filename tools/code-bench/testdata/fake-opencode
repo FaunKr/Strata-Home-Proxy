@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Stands in for opencode in the runner's tests: writes what FAKE_SOLUTION
+names into the folder, as opencode's JSON events say it."""
+import json, os, sys, time
+
+if sys.argv[1:] == ["--version"]:
+    print("1.19.3")
+    sys.exit(0)
+with open("fake-args.json", "w") as f:
+    json.dump({"args": sys.argv[1:], "config": json.load(open("opencode.json")), "uid": os.getuid()}, f)
+mode = os.environ.get("FAKE_MODE", "")
+if mode == "background":
+    # Like an agent's `server &`: a child that keeps opencode's output open.
+    import subprocess
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+if mode == "links":
+    # An agent that tries to make the root runner write or read elsewhere.
+    os.symlink(os.environ["FAKE_TARGET"], "hidden_test.py")
+    os.symlink(os.environ["FAKE_TARGET"], "leak.py")
+if mode == "dir":
+    os.mkdir("hidden_test.py")
+if mode == "hang":
+    time.sleep(600)
+if mode == "error":
+    print(json.dumps({"type": "error", "error": {"name": "UnknownError", "data": {"message": "Model not found"}}}))
+    sys.exit(1)
+if mode == "fail":
+    print("boom", file=sys.stderr)
+    sys.exit(3)
+def event(kind, at, **part):
+    print(json.dumps({"type": kind, "timestamp": at, "part": part}), flush=True)
+event("step_start", 1000)
+event("step_finish", 3000, tokens={"input": 500, "output": 80, "reasoning": 20})
+event("step_start", 3100)
+event("step_finish", 4100, tokens={"input": 700, "output": 100})
+solution = os.environ.get("FAKE_SOLUTION")
+if solution:
+    name, text = solution.split("=", 1)
+    with open(name, "w") as f:
+        f.write(text)

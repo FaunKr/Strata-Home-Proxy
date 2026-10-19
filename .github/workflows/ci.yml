@@ -56,6 +56,11 @@ jobs:
     if: needs.changes.outputs.test == 'true'
     runs-on: ubuntu-latest
     steps:
+      # The test binaries of all packages no longer fit the runner's disk
+      # (the linker died with a bus error at 29 MB free); these preinstalled
+      # SDKs are not needed here.
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -116,6 +121,13 @@ jobs:
           build-args: STRATA_BUILD_ID=${{ github.event.pull_request.head.sha || github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # The code benchmark's runner (tools/code-bench), its own image.
+      - uses: docker/build-push-action@v6
+        with:
+          context: tools/code-bench
+          platforms: linux/amd64
+          cache-from: type=gha,scope=code-bench
+          cache-to: type=gha,mode=max,scope=code-bench
   publish:
     # On pushes to the default branch, once tests pass, publishes the image to
     # ghcr.io/faunkr/strata-home-proxy:latest so the NAS can pull it. Every layer
@@ -147,6 +159,16 @@ jobs:
           # The same as in the image job, so every layer comes from its cache.
           build-args: STRATA_BUILD_ID=${{ github.sha }}
           cache-from: type=gha
+      - uses: docker/build-push-action@v6
+        with:
+          context: tools/code-bench
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/faunkr/strata-code-bench:latest
+            ghcr.io/faunkr/strata-code-bench:${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=code-bench
   ci-ok:
     # The one check that sums up a run, for branch protection: jobs a pull
     # request doesn't need are skipped, and skipped counts as passed.

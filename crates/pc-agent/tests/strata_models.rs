@@ -445,6 +445,146 @@ async fn benchmark_without_a_result_fails_and_keeps_the_last_one() {
     );
 }
 
+#[tokio::test]
+async fn benchmark_keeps_each_models_speeds_and_settings() {
+    let s = setup("models-bench-each").await;
+    installed(&s);
+    bench(
+        &s,
+        &[
+            "  chat decode tok/s   38.50   (37.10 - 39.20, n=3)",
+            "  4K prompt tok/s    612.00   (600.00 - 620.00, n=3)",
+        ],
+    );
+    job(&s, json!({"kind": "benchmark"})).await;
+    let view = get(&s, "/strata").await;
+    let rows = view["benchmarks"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{view}");
+    assert_eq!(rows[0]["model"], "IQ3_XXS");
+    assert_eq!(rows[0]["decode_tps"], 38.5);
+    assert_eq!(rows[0]["prompt_tps"], 612.0);
+    assert_eq!(rows[0]["speed_projection"], false);
+    assert_eq!(rows[0]["version"], "0123456");
+}
+
+#[tokio::test]
+async fn an_older_services_benchmark_counts_as_its_models_row() {
+    let s = setup("models-bench-old").await;
+    installed(&s);
+    write(
+        s.agent.cfg.state_dir().join("strata-benchmark.json"),
+        r#"{"model": "IQ3_XXS", "result": "38.5 Token/s", "at": 1800000000}"#,
+    );
+    let rows = &get(&s, "/strata").await["benchmarks"];
+    assert_eq!(rows[0]["model"], "IQ3_XXS", "{rows}");
+    assert_eq!(rows[0]["decode_tps"], 38.5);
+}
+
+// --- Comparing models ---
+
+#[tokio::test]
+async fn comparing_benchmarks_every_model_and_the_active_one_comes_back() {
+    let s = setup("models-compare").await;
+    installed(&s);
+    bench(&s, &["  chat decode tok/s   20.00   (19.00 - 21.00, n=3)"]);
+    let (code, answer) = post(&s, "/strata/jobs", json!({"kind": "compare_models"})).await;
+    assert_eq!(code, 202, "{answer}");
+    let done = finished_slowly(&s).await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(done["result"], "Am schnellsten: IQ3_XXS mit 20 Token/s");
+    let dir = &s.agent.cfg.strata_dir;
+    let configs: Vec<String> = s
+        .fake
+        .runs_of("BENCH.bat")
+        .iter()
+        .map(|r| r.args[1].clone())
+        .collect();
+    assert_eq!(
+        configs,
+        [
+            dir.join("strata-iq3_xxs.json").display().to_string(),
+            dir.join("strata-coder-iq1_m.json").display().to_string(),
+        ]
+    );
+    assert_eq!(
+        s.agent.managed().strata_start,
+        Some(dir.join("run-iq3_xxs.bat"))
+    );
+    let view = get(&s, "/strata").await;
+    assert_eq!(view["benchmarks"].as_array().unwrap().len(), 2, "{view}");
+    assert!(model(&view, "IQ3_XXS")["active"].as_bool().unwrap());
+}
+
+#[tokio::test]
+async fn a_model_without_a_result_keeps_its_error_and_the_next_follows() {
+    let s = setup("models-compare-fail").await;
+    installed(&s);
+    bench(&s, &[]);
+    let (code, _) = post(&s, "/strata/jobs", json!({"kind": "compare_models"})).await;
+    assert_eq!(code, 202);
+    let done = finished_slowly(&s).await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(s.fake.runs_of("BENCH.bat").len(), 2);
+    let view = get(&s, "/strata").await;
+    for row in view["benchmarks"].as_array().unwrap() {
+        assert!(row["error"].as_str().unwrap().contains("Tokens/s"), "{row}");
+        assert!(row.get("decode_tps").is_none(), "{row}");
+    }
+}
+
+#[tokio::test]
+async fn a_failed_run_keeps_the_models_last_result_next_to_its_error() {
+    let s = setup("models-compare-keep").await;
+    installed(&s);
+    bench(&s, &["  chat decode tok/s   38.50   (37.10 - 39.20, n=3)"]);
+    job(&s, json!({"kind": "benchmark"})).await;
+    bench(&s, &[]);
+    post(&s, "/strata/jobs", json!({"kind": "compare_models"})).await;
+    assert_eq!(finished_slowly(&s).await["state"], "done");
+    let view = get(&s, "/strata").await;
+    let rows = view["benchmarks"].as_array().unwrap();
+    let active = rows.iter().find(|r| r["model"] == "IQ3_XXS").unwrap();
+    assert_eq!(active["decode_tps"], 38.5, "{active}");
+    assert!(
+        active["error"].as_str().unwrap().contains("Tokens/s"),
+        "{active}"
+    );
+    let other = rows.iter().find(|r| r["model"] != "IQ3_XXS").unwrap();
+    assert!(other.get("decode_tps").is_none(), "{other}");
+}
+
+#[tokio::test]
+async fn cancelling_a_comparison_brings_the_active_model_back() {
+    let s = setup("models-compare-cancel").await;
+    installed(&s);
+    // Each run ends after 2 s without a result.
+    s.fake.command(
+        "BENCH.bat",
+        FakeCommand {
+            lines: lines(&["Running the suite ..."]),
+            pause: Duration::from_secs(2),
+            ..FakeCommand::default()
+        },
+    );
+    post(&s, "/strata/jobs", json!({"kind": "compare_models"})).await;
+    // The second run is coder's, with coder active.
+    for _ in 0..400 {
+        if s.fake.runs_of("BENCH.bat").len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let coder = s.agent.cfg.strata_dir.join("run-coder-iq1_m.bat");
+    assert_eq!(s.agent.managed().strata_start, Some(coder));
+    let (code, _) = post(&s, "/strata/job/cancel", json!({})).await;
+    assert_eq!(code, 202);
+    assert_eq!(finished_slowly(&s).await["state"], "cancelled");
+    assert_eq!(
+        s.agent.managed().strata_start,
+        Some(s.agent.cfg.strata_dir.join("run-iq3_xxs.bat"))
+    );
+}
+
 // --- #35 new Strata key ---
 
 #[tokio::test]

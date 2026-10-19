@@ -42,6 +42,10 @@ pub fn label(key: &str) -> Label {
             "Power plug address",
             "Optional Shelly plug the PC is plugged into, e.g. 192.168.1.228. The overview then shows the PC's power draw.",
         ),
+        "CODE_BENCH_URL" => (
+            "Code benchmark address",
+            "Optional: where the proxy reaches the code-bench container, e.g. http://127.0.0.1:8096. Without it there is no code benchmark.",
+        ),
         "PLUG_SAMPLE_SECS" => (
             "Power history interval",
             "Time between two readings of the power plug kept for the history.",
@@ -147,7 +151,7 @@ pub const STRATA_CONNECTION: SectionDef = SectionDef {
     id: "strata-connection",
     title: "Connection",
     help: "Where Strata runs, and the key the proxy uses to talk to it.",
-    keys: &["STRATA_URL", "STRATA_API_KEY"],
+    keys: &["STRATA_URL", "STRATA_API_KEY", "CODE_BENCH_URL"],
     advanced: &[],
 };
 
@@ -275,6 +279,7 @@ pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SetKey => "New Strata key",
         StrataJobKind::SetSpeedProjection => "Switching speed projection",
         StrataJobKind::SetContext => "Changing context",
+        StrataJobKind::CompareModels => "Comparing models",
     }
 }
 

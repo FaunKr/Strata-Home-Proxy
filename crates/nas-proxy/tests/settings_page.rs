@@ -51,7 +51,7 @@ async fn shows_every_value_with_its_origin() {
     let view = settings(&mut b).await;
     assert_eq!(view["persistent"], true);
     assert_eq!(view["configured"], true);
-    assert_eq!(view["entries"].as_array().unwrap().len(), 22);
+    assert_eq!(view["entries"].as_array().unwrap().len(), 23);
     assert!(!view.to_string().contains("DATA_DIR"));
     assert_eq!(entry(&view, "STRATA_URL")["source"], "Env");
     assert_eq!(entry(&view, "STRATA_URL")["value"], "http://pc:8080");

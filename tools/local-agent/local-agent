@@ -37,6 +37,8 @@ assumed_window=200000
 # Compaction starts at this share of Strata's window, in percent.
 compact_share=75
 output_tokens=8192
+# Claude Code's own prompt is about 25K tokens; below 64K a run barely starts.
+min_context=65536
 
 die() {
   echo "local-agent: $*" >&2
@@ -146,6 +148,47 @@ build_permissions() {
   return 0
 }
 
+# Ends a run that Strata can't take: exit 3 tells the skill to hand the task
+# to a normal agent. $1 is the reason, $2 an optional hint on what to fix.
+fall_back() {
+  meta_set state fallback
+  meta_set reason "$1"
+  [[ -z ${2:-} ]] || meta_set hint "$2"
+  meta_set ended "$(date +%s)"
+  echo "local-agent: run $(meta_get "$run_dir" id) falls back to a normal agent: $1" >&2
+  [[ -z ${2:-} ]] || echo "local-agent: to fix: $2" >&2
+  exit 3
+}
+
+# Checks that Strata can take a run, waking the PC; falls back otherwise. A
+# wake timeout gets one more try. Sets probe_context.
+preflight() {
+  probe
+  if [[ $probe_status == 504 && $probe_tag == wake_timeout ]]; then
+    probe
+  fi
+  case $probe_status/$probe_tag in
+    200/*) ;;
+    503/gaming) fall_back "Strata is off: the PC is in Gaming-Modus" ;;
+    504/wake_timeout) fall_back "the PC did not wake up in time (tried twice)" ;;
+    401/strata_unauthorized)
+      fall_back "Strata refused the Proxy's own key" "set the Strata key in the Proxy's web UI (Strata section)"
+      ;;
+    401/*) fall_back "the Proxy did not accept the key" "check LOCAL_AGENT_KEY in $config_file against Access in the Proxy's web UI" ;;
+    503/not_configured)
+      fall_back "the Proxy is not set up: it has no address for Strata" "set Strata's address in the Proxy's web UI (Strata section)"
+      ;;
+    503/no_mac)
+      fall_back "the Proxy cannot wake the PC: it knows no MAC address" "start the PC once so the PC-Dienst reports its MAC, or set PC_MAC on the Proxy"
+      ;;
+    000/*) fall_back "the Proxy is unreachable at $LOCAL_AGENT_URL ($(tail -1 "$run_dir/health.err"))" "check LOCAL_AGENT_URL in $config_file and that this machine reaches the NAS" ;;
+    *) fall_back "the Proxy answered HTTP $probe_status${probe_tag:+ ($probe_tag)}" ;;
+  esac
+  [[ $probe_context =~ ^[0-9]+$ ]] || fall_back "Strata's /health named no max_context"
+  ((probe_context >= min_context)) || fall_back "Strata's context is $probe_context tokens, less than the $min_context a run needs" \
+    "raise Strata's context to at least 64K ($min_context tokens), e.g. in the Strata section of the Proxy's web UI"
+}
+
 instructions="You are a local-agent worker: a Claude Code session running unattended for another session.
 Nobody can answer questions or permission prompts. If a tool or command is denied, work around it or say so in your summary.
 Work only in the current directory."
@@ -190,8 +233,7 @@ cmd_run() {
   meta_set started "$(date +%s)"
   echo "local-agent: run $id ($run_dir)"
 
-  probe
-  [[ $probe_status == 200 ]] || die "Proxy answered $probe_status ${probe_tag}"
+  preflight
   local pct=$((compact_share * probe_context / assumed_window))
 
   # A writing run gets its own branch and worktree; a read-only one reads
@@ -248,6 +290,14 @@ cmd_result() {
   id=$(meta_get "$run_dir" id)
   state=$(meta_get "$run_dir" state)
   echo "run $id: $state"
+  case $state in
+    fallback) echo "next: fall back to a normal agent" ;;
+  esac
+  local reason hint
+  reason=$(meta_get "$run_dir" reason)
+  hint=$(meta_get "$run_dir" hint)
+  [[ -z $reason ]] || echo "reason: $reason"
+  [[ -z $hint ]] || echo "to fix: $hint"
   echo
   echo "## Summary"
   cat "$run_dir/summary" 2>/dev/null || true

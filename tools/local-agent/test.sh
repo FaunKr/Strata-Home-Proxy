@@ -47,11 +47,15 @@ write_config() {
   printf 'LOCAL_AGENT_URL=%s\nLOCAL_AGENT_KEY=client-key\n' "$url" >"$config"
   chmod 600 "$config"
 }
-health() { echo "{\"health\": [$*]}" >"$FAKE_PROXY_SCENARIO"; }
+# Sets the fake Proxy's answers to /health, one JSON object per argument.
+health() {
+  local IFS=,
+  echo "{\"health\": [$*]}" >"$FAKE_PROXY_SCENARIO"
+}
 
 # A fresh repo with one commit, as the current directory.
 new_repo() {
-  repo=$tmp/repos/$current
+  repo=$tmp/repos/$current${1:-}
   mkdir -p "$repo"
   cd "$repo"
   git init -q -b main
@@ -188,6 +192,54 @@ test_read_only() {
   la result "$(run_id)"
   contains "$out" "I would rather not."
   [[ $out != *"## Changes"* ]] || fail "Änderungen bei --read-only"
+}
+
+# Runs a task that must fall back before the worker starts; $1 is the
+# expected reason, $2 a piece of the hint.
+expect_fallback() {
+  la run "task"
+  [[ $code == 3 ]] || fail "exit $code statt 3: $out"
+  [[ ! -e $FAKE_CLAUDE_RECORD/args ]] || fail "Worker gestartet"
+  [[ $(git branch --format='%(refname:short)') == main ]] || fail "Branch angelegt"
+  la result "$(run_id)"
+  contains "$out" "fallback"
+  contains "$out" "$1"
+  contains "$out" "$2"
+}
+
+test_fallback_gaming() {
+  health '{"status": 503, "tag": "gaming"}'
+  expect_fallback "Gaming-Modus" "fall back"
+  [[ $(wc -l <"$FAKE_PROXY_SCENARIO.requests") == 1 ]] || fail "Gaming-Modus wiederholt"
+}
+
+test_fallback_wake_timeout_retries_once() {
+  health '{"status": 504, "tag": "wake_timeout"}' '{"status": 200, "max_context": 65536}'
+  la run "task"
+  [[ $code == 0 ]] || fail "exit $code nach erfolgreicher Wiederholung: $out"
+  health '{"status": 504, "tag": "wake_timeout"}'
+  rm -r "$FAKE_PROXY_SCENARIO.requests" "$FAKE_CLAUDE_RECORD"
+  new_repo -2
+  expect_fallback "did not wake" "fall back"
+  [[ $(wc -l <"$FAKE_PROXY_SCENARIO.requests") == 2 ]] || fail "nicht genau einmal wiederholt"
+}
+
+test_fallback_setup_errors() {
+  health '{"status": 401, "tag": "unauthorized"}'
+  expect_fallback "key" "Access"
+  health '{"status": 401, "tag": "strata_unauthorized"}'
+  expect_fallback "Strata refused" "Strata key"
+  health '{"status": 503, "tag": "not_configured"}'
+  expect_fallback "not set up" "Strata"
+  health '{"status": 503, "tag": "no_mac"}'
+  expect_fallback "MAC" "PC-Dienst"
+  health '{"status": 200, "max_context": 32768}'
+  expect_fallback "32768" "65536"
+}
+
+test_fallback_proxy_unreachable() {
+  sed -i.bak "s|^LOCAL_AGENT_URL=.*|LOCAL_AGENT_URL=http://127.0.0.1:9|" "$config"
+  expect_fallback "unreachable" "LOCAL_AGENT_URL"
 }
 
 tests=("$@")

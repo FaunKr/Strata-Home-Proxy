@@ -28,5 +28,6 @@ Offload only when the user asks. When a task is well scoped and mechanical (a re
 ## Exit codes
 
 - **0, done**: run `local-agent result <run>`. Review the summary and the whole diff as you would a colleague's work: Strata makes more mistakes than you. Fix small problems on the branch yourself or name them. Then propose merging the branch (`git merge local-agent/<run>`) and wait for the user's word; the merge is theirs to approve.
+- **3, fall back**: Strata can't do the task. `local-agent result <run>` names the reason, and for setup problems what to fix. Hand the task to a normal agent: the Agent tool with model `sonnet`, the same brief, and the same limits: read-only stays read-only; a writing run works on a new branch, not on the user's checkout, with no `git push` and no network tools. When it's done, review its work as in exit 0. Your report says that the fallback did the work, and why, including any fix the user should make.
 - **2, setup**: the message says what is missing in the configuration. Pass it on to the user.
 - **1**: local-agent itself failed; show the user its message.

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2016 # jq filters in single quotes
+# Fake `claude` for the local-agent tests. Records how it was started, then
+# plays back a scripted run chosen by FAKE_CLAUDE_MODE:
+#   success      edits a file and finishes with a summary (default)
+#   crash        edits a file, then fails with an API error
+#   crash-gaming like crash, but first switches the fake Proxy to Gaming-Modus
+#   hang         never finishes (for the time limit)
+#   slow         like success after FAKE_CLAUDE_SLEEP seconds
+#   check        one Bash tool call that echoes the marker it was asked for
+#   no-tool      answers without calling a tool
+# Records in $FAKE_CLAUDE_RECORD: args (one per line), env, stdin, pid, and
+# "<start> <end>" lines in spans.
+set -euo pipefail
+rec=${FAKE_CLAUDE_RECORD:?}
+mkdir -p "$rec"
+printf '%s\n' "$@" >"$rec/args"
+for var in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL \
+  ANTHROPIC_DEFAULT_HAIKU_MODEL CLAUDE_CODE_DISABLE_1M_CONTEXT CLAUDE_AUTOCOMPACT_PCT_OVERRIDE \
+  CLAUDE_CODE_MAX_OUTPUT_TOKENS CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC API_TIMEOUT_MS; do
+  printf '%s=%s\n' "$var" "${!var-<unset>}"
+done >"$rec/env"
+cat >"$rec/stdin"
+echo "$$" >"$rec/pid"
+echo "$PWD" >"$rec/cwd"
+now() { python3 -c "import time; print(time.time())"; }
+start=$(now)
+
+event() { jq -cn "$@"; }
+tool_use() { event --arg n "$1" --argjson i "$2" '{type:"assistant",message:{content:[{type:"tool_use",id:"t1",name:$n,input:$i}]}}'; }
+result() { event --arg r "$1" --argjson e "$2" '{type:"result",subtype:(if $e then "error_during_execution" else "success" end),is_error:$e,result:$r}'; }
+
+event '{type:"system",subtype:"init",model:"fake"}'
+case ${FAKE_CLAUDE_MODE:-success} in
+  success | slow)
+    [[ ${FAKE_CLAUDE_MODE:-} == slow ]] && sleep "${FAKE_CLAUDE_SLEEP:-1}"
+    tool_use Read '{"file_path":"README"}'
+    echo "edited by the worker" >>README
+    tool_use Edit '{"file_path":"README"}'
+    event '{type:"system",subtype:"compact_boundary"}'
+    result "Added a line to README." false
+    ;;
+  crash | crash-gaming)
+    echo "half done" >>README
+    tool_use Edit '{"file_path":"README"}'
+    if [[ $FAKE_CLAUDE_MODE == crash-gaming ]]; then
+      echo '{"health": [{"status": 503, "tag": "gaming"}]}' >"$FAKE_PROXY_SCENARIO"
+    fi
+    result "API Error: 503 Strata ist nicht verfügbar" true
+    echo "fake-claude: API error" >&2
+    echo "$start $(now)" >>"$rec/spans"
+    exit 1
+    ;;
+  hang)
+    tool_use Bash '{"command":"sleep 1000"}'
+    sleep 1000 &
+    echo $! >"$rec/child"
+    wait
+    ;;
+  check)
+    marker=$(grep -o 'local-agent-check-[0-9a-z]*' "$rec/stdin" | head -1)
+    tool_use Bash "$(jq -cn --arg c "echo $marker" '{command:$c}')"
+    event --arg m "$marker" '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"t1",content:$m}]}}'
+    result "Done." false
+    ;;
+  no-tool)
+    result "I would rather not." false
+    ;;
+esac
+echo "$start $(now)" >>"$rec/spans"

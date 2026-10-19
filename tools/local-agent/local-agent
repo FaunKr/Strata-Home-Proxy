@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# local-agent: hands a Claude Code task to Strata. Starts a headless
+# `claude -p` whose API is the Proxy on the NAS, so Strata runs the whole agent
+# loop, in its own git worktree. The skill of the same name drives it; the
+# design is in issue #107.
+#
+# Needs only Bash (3.2, as on macOS), git, jq and curl.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: local-agent run [--read-only] [--watch] [--allow RULE]... [--timeout TIME] [TASK]
+       local-agent status [RUN]
+       local-agent result [RUN]
+       local-agent discard RUN
+       local-agent check
+       local-agent prune
+
+run reads TASK from stdin when it isn't given. Exit codes of run:
+  0  done: review the result (local-agent result RUN)
+  3  fall back to a normal agent; the reason is in local-agent result RUN
+  4  timed out; the worktree and log are kept
+  1  error of local-agent itself, 2 wrong usage or configuration
+
+Configuration: ~/.config/local-agent/env (chmod 600) with
+  LOCAL_AGENT_URL=http://<NAS>:<port>   the Proxy
+  LOCAL_AGENT_KEY=<key from Access in the Proxy's web UI>
+EOF
+}
+
+config_file=${XDG_CONFIG_HOME:-$HOME/.config}/local-agent/env
+state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/local-agent
+runs_dir=$state_dir/runs
+
+# What Claude Code assumes as the context window once the 1M window is off.
+assumed_window=200000
+# Compaction starts at this share of Strata's window, in percent.
+compact_share=75
+output_tokens=8192
+
+die() {
+  echo "local-agent: $*" >&2
+  exit 1
+}
+usage_error() {
+  echo "local-agent: $*" >&2
+  exit 2
+}
+
+load_config() {
+  [[ -f $config_file ]] || usage_error "no configuration in $config_file (LOCAL_AGENT_URL and LOCAL_AGENT_KEY, chmod 600)"
+  # The file holds a key: group and others must not read it.
+  local mode
+  # shellcheck disable=SC2012 # one known file; stat differs between macOS and Linux
+  mode=$(ls -l "$config_file" | cut -c5-10)
+  [[ $mode == ------ ]] || usage_error "$config_file can be read by others; run: chmod 600 $config_file"
+  # shellcheck source=/dev/null
+  . "$config_file"
+  [[ -n ${LOCAL_AGENT_URL:-} && -n ${LOCAL_AGENT_KEY:-} ]] ||
+    usage_error "$config_file needs LOCAL_AGENT_URL and LOCAL_AGENT_KEY"
+  LOCAL_AGENT_URL=${LOCAL_AGENT_URL%/}
+  # Strata ignores the model name, but Claude Code only accepts names it knows.
+  model=${LOCAL_AGENT_MODEL:-claude-sonnet-4-5}
+}
+
+# Run metadata: one key=value per line in <run>/meta.
+meta_set() {
+  local file=$run_dir/meta
+  { grep -v "^$1=" "$file" 2>/dev/null || true; } >"$file.tmp"
+  printf '%s=%s\n' "$1" "$2" >>"$file.tmp"
+  mv "$file.tmp" "$file"
+}
+meta_get() { sed -n "s/^$2=//p" "$1/meta" 2>/dev/null | tail -1; }
+
+# Sets run_dir for a run id, or for the latest run of the current repo (of
+# any repo outside one) when no id is given.
+resolve_run() {
+  if [[ -n ${1:-} ]]; then
+    run_dir=$runs_dir/$1
+    [[ -f $run_dir/meta ]] || usage_error "unknown run: $1"
+    return
+  fi
+  local top dir latest=
+  top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  for dir in "$runs_dir"/*/; do
+    [[ -f $dir/meta ]] || continue
+    if [[ -z $top || $(meta_get "$dir" repo) == "$top" ]]; then latest=${dir%/}; fi
+  done
+  [[ -n $latest ]] || usage_error "no runs yet"
+  run_dir=$latest
+}
+
+# Asks the Proxy for Strata's /health; the Proxy wakes the PC for it. Sets
+# probe_status (000 when the Proxy didn't answer), probe_tag (its
+# x-strata-proxy-status) and probe_context (Strata's max_context).
+probe() {
+  local headers=$run_dir/health.headers body=$run_dir/health.json
+  rm -f "$headers" "$body"
+  # The key goes in on stdin, so it never shows in the process list.
+  probe_status=$(printf 'x-api-key: %s\n' "$LOCAL_AGENT_KEY" |
+    curl -sS --max-time "${1:-330}" -H @- -D "$headers" -o "$body" -w '%{http_code}' \
+      "$LOCAL_AGENT_URL/health" 2>"$run_dir/health.err") || probe_status=000
+  probe_tag=$(tr -d '\r' <"$headers" 2>/dev/null | sed -n 's/^[Xx]-[Ss]trata-[Pp]roxy-[Ss]tatus: *//p' | tail -1)
+  probe_context=$(jq -r '.max_context // empty' "$body" 2>/dev/null || true)
+}
+
+instructions="You are a local-agent worker: a Claude Code session running unattended for another session.
+Nobody can answer questions or permission prompts. If a tool or command is denied, work around it or say so in your summary.
+Work only in the current directory. When you are done, commit your changes with a short message.
+End with a short summary: what you changed, how you checked it, and what is left open."
+
+cmd_run() {
+  local task='' arg
+  while (($#)); do
+    arg=$1
+    shift
+    case $arg in
+      --) task="$*" && break ;;
+      -*) usage_error "unknown option: $arg" ;;
+      *) task="$arg${*:+ $*}" && break ;;
+    esac
+  done
+  load_config
+  [[ -n $task ]] || task=$(cat)
+  [[ -n $task ]] || usage_error "no task"
+  local repo
+  repo=$(git rev-parse --show-toplevel 2>/dev/null) || usage_error "not inside a git repository"
+
+  local id
+  id=$(date +%Y%m%d-%H%M%S)-$(printf %04x $((RANDOM)))
+  run_dir=$runs_dir/$id
+  mkdir -p "$run_dir"
+  chmod 700 "$state_dir"
+  printf '%s\n' "$task" >"$run_dir/task"
+  meta_set id "$id"
+  meta_set repo "$repo"
+  meta_set state queued
+  meta_set started "$(date +%s)"
+  echo "local-agent: run $id ($run_dir)"
+
+  probe
+  [[ $probe_status == 200 ]] || die "Proxy answered $probe_status ${probe_tag}"
+  local pct=$((compact_share * probe_context / assumed_window))
+
+  local base branch=local-agent/$id worktree
+  base=$(git -C "$repo" rev-parse HEAD)
+  worktree=$state_dir/$(basename "$repo")/$id
+  git -C "$repo" worktree add -q -b "$branch" "$worktree" "$base"
+  meta_set base "$base"
+  meta_set branch "$branch"
+  meta_set worktree "$worktree"
+  meta_set state running
+
+  (
+    cd "$worktree"
+    unset ANTHROPIC_API_KEY
+    export ANTHROPIC_BASE_URL=$LOCAL_AGENT_URL ANTHROPIC_AUTH_TOKEN=$LOCAL_AGENT_KEY
+    export ANTHROPIC_MODEL=$model ANTHROPIC_DEFAULT_HAIKU_MODEL=$model
+    export CLAUDE_CODE_DISABLE_1M_CONTEXT=1 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=$pct
+    export CLAUDE_CODE_MAX_OUTPUT_TOKENS=$output_tokens
+    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 API_TIMEOUT_MS=900000
+    exec claude -p --output-format stream-json --verbose \
+      --append-system-prompt "$instructions" --permission-mode acceptEdits
+  ) <"$run_dir/task" >"$run_dir/log.jsonl" 2>"$run_dir/stderr" || true
+
+  jq -r 'select(.type == "result") | .result' "$run_dir/log.jsonl" 2>/dev/null >"$run_dir/summary" || true
+  commit_leftovers "$worktree" "$id"
+  meta_set ended "$(date +%s)"
+  meta_set state "done"
+  echo "local-agent: run $id done; review it with: local-agent result $id"
+}
+
+# Commits what the worker left uncommitted, so the branch holds all its work.
+commit_leftovers() {
+  [[ -n $(git -C "$1" status --porcelain) ]] || return 0
+  git -C "$1" add -A
+  git -C "$1" commit -qm "local-agent: uncommitted changes of run $2"
+}
+
+cmd_result() {
+  resolve_run "${1:-}"
+  local id state branch repo base
+  id=$(meta_get "$run_dir" id)
+  state=$(meta_get "$run_dir" state)
+  echo "run $id: $state"
+  echo
+  echo "## Summary"
+  cat "$run_dir/summary" 2>/dev/null || true
+  branch=$(meta_get "$run_dir" branch)
+  if [[ -n $branch ]]; then
+    repo=$(meta_get "$run_dir" repo)
+    base=$(meta_get "$run_dir" base)
+    echo
+    echo "## Changes on $branch"
+    git -C "$repo" --no-pager diff --stat "$base" "$branch"
+    git -C "$repo" --no-pager diff "$base" "$branch"
+  fi
+}
+
+main() {
+  local cmd=${1:-}
+  (($#)) && shift
+  case $cmd in
+    run) cmd_run "$@" ;;
+    result) cmd_result "$@" ;;
+    -h | --help | help) usage ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

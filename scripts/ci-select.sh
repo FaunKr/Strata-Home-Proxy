@@ -15,6 +15,7 @@ if [[ ${1:-} == --all ]]; then
 fi
 
 packages=()
+tools=false
 windows=false
 image=false
 while IFS= read -r path; do
@@ -34,11 +35,14 @@ while IFS= read -r path; do
     # The proxy embeds the install script (include_str!), the image copies it.
     deploy/windows/*) packages+=(strata-nas-proxy) windows=true image=true ;;
     Dockerfile | .dockerignore) image=true ;;
+    # The local-agent runner has its own tests in check.sh, which only an
+    # unscoped run covers.
+    tools/local-agent | tools/local-agent/*) tools=true ;;
   esac
 done
 
 packages=$(printf '%s\n' ${packages[@]+"${packages[@]}"} | sort -u | xargs)
-echo "test=$([[ -n $packages ]] && echo true || echo false)"
+echo "test=$([[ -n $packages || $tools == true ]] && echo true || echo false)"
 echo "packages=$packages"
 echo "windows=$windows"
 echo "image=$image"

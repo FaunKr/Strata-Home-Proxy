@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Tests tools/local-agent/local-agent as a black box: each test runs the real
+# script in a throwaway git repo, against a fake Proxy (testdata/fake-proxy.py)
+# and a fake `claude` on PATH (testdata/fake-claude), and checks only what a
+# user sees: exit code, output, worktrees, branches and the original checkout.
+#
+# Usage: tools/local-agent/test.sh [test_name...]
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+tmp=$(mktemp -d)
+proxy_pid=
+cleanup() {
+  [[ -n $proxy_pid ]] && kill "$proxy_pid" 2>/dev/null
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+export HOME=$tmp/home
+export XDG_CONFIG_HOME=$HOME/.config XDG_STATE_HOME=$HOME/.local/state
+export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
+export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
+mkdir -p "$HOME" "$tmp/bin"
+ln -s "$here/testdata/fake-claude" "$tmp/bin/claude"
+export PATH=$tmp/bin:$PATH
+export FAKE_CLAUDE_RECORD=$tmp/claude
+export FAKE_PROXY_SCENARIO=$tmp/scenario.json
+
+echo '{}' >"$FAKE_PROXY_SCENARIO"
+python3 "$here/testdata/fake-proxy.py" "$FAKE_PROXY_SCENARIO" "$tmp/port" &
+proxy_pid=$!
+for _ in $(seq 50); do [[ -s $tmp/port ]] && break; sleep 0.1; done
+url=http://127.0.0.1:$(cat "$tmp/port")
+config=$XDG_CONFIG_HOME/local-agent/env
+
+current=
+# Tests run in subshells, so failures are counted in a file.
+fail() {
+  echo "FAIL $current: $*" | tee -a "$tmp/failures" >&2
+}
+# Asserts that a file or string contains a line, or a substring.
+has_line() { grep -qxF -- "$2" "$1" || fail "$1 hat keine Zeile '$2'"; }
+lacks_line() { ! grep -qxF -- "$2" "$1" || fail "$1 hat die Zeile '$2'"; }
+contains() { [[ $1 == *"$2"* ]] || fail "'$2' fehlt in: $1"; }
+
+write_config() {
+  mkdir -p "$(dirname "$config")"
+  printf 'LOCAL_AGENT_URL=%s\nLOCAL_AGENT_KEY=client-key\n' "$url" >"$config"
+  chmod 600 "$config"
+}
+health() { echo "{\"health\": [$*]}" >"$FAKE_PROXY_SCENARIO"; }
+
+# A fresh repo with one commit, as the current directory.
+new_repo() {
+  repo=$tmp/repos/$current
+  mkdir -p "$repo"
+  cd "$repo"
+  git init -q -b main
+  echo "hello" >README
+  git add README
+  git commit -qm init
+}
+
+# Runs local-agent; sets $out (stdout and stderr) and $code.
+la() {
+  code=0
+  out=$("$here/local-agent" "$@" 2>&1) || code=$?
+}
+
+reset() {
+  rm -rf "$FAKE_CLAUDE_RECORD" "$XDG_STATE_HOME" "$FAKE_PROXY_SCENARIO.requests"
+  unset FAKE_CLAUDE_MODE
+  write_config
+  health '{"status": 200, "max_context": 65536}'
+  new_repo
+}
+
+run_id() { sed -n 's/^local-agent: run \([^ ]*\).*/\1/p' <<<"$out" | head -1; }
+
+test_happy_path() {
+  la run "Add a line to README"
+  [[ $code == 0 ]] || fail "exit $code: $out"
+  local id
+  id=$(run_id)
+  [[ -n $id ]] || fail "keine Lauf-ID in: $out"
+  # The worker ran in a worktree outside the repo, on a new branch.
+  local cwd
+  cwd=$(cat "$FAKE_CLAUDE_RECORD/cwd")
+  [[ $cwd == "$XDG_STATE_HOME/local-agent/"* ]] || fail "Worker lief in $cwd"
+  [[ $(git -C "$cwd" branch --show-current) == "local-agent/$id" ]] || fail "falscher Branch in $cwd"
+  has_line "$FAKE_CLAUDE_RECORD/stdin" "Add a line to README"
+  # The edit is committed on the branch; the checkout is untouched.
+  git diff --quiet main "local-agent/$id" && fail "Branch ohne Änderung"
+  [[ $(cat README) == hello ]] || fail "Checkout geändert"
+  [[ -z $(git status --porcelain) ]] || fail "Checkout nicht sauber"
+  # How the worker was set up.
+  local env=$FAKE_CLAUDE_RECORD/env
+  has_line "$env" "ANTHROPIC_BASE_URL=$url"
+  has_line "$env" "ANTHROPIC_AUTH_TOKEN=client-key"
+  has_line "$env" "ANTHROPIC_API_KEY=<unset>"
+  grep -qx 'ANTHROPIC_MODEL=claude-.*' "$env" || fail "kein Claude-Modellname"
+  has_line "$env" "CLAUDE_CODE_DISABLE_1M_CONTEXT=1"
+  has_line "$env" "CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192"
+  has_line "$env" "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=24"
+  # The result shows the summary and the diff.
+  la result "$id"
+  [[ $code == 0 ]] || fail "result exit $code"
+  contains "$out" "Added a line to README."
+  contains "$out" "+edited by the worker"
+}
+
+test_autocompact_follows_context() {
+  health '{"status": 200, "max_context": 128000}'
+  la run "task"
+  [[ $code == 0 ]] || fail "exit $code: $out"
+  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=48"
+}
+
+test_config_required() {
+  rm "$config"
+  la run "task"
+  [[ $code == 2 ]] || fail "exit $code"
+  contains "$out" "$config"
+  [[ -e $FAKE_CLAUDE_RECORD/args ]] && fail "Worker gestartet"
+  # A config others can read is refused.
+  write_config
+  chmod 644 "$config"
+  la run "task"
+  [[ $code == 2 ]] || fail "exit $code bei lesbarer Datei"
+  contains "$out" "chmod 600"
+}
+
+test_install() {
+  rm "$config"
+  code=0
+  out=$(PREFIX=$tmp/inst "$here/install.sh" 2>&1) || code=$?
+  [[ $code == 0 ]] || fail "install exit $code: $out"
+  [[ -x $tmp/inst/local-agent ]] || fail "local-agent nicht installiert"
+  # A config template, readable only by the user, that run still refuses.
+  [[ -f $config ]] || fail "keine Vorlage für $config"
+  # shellcheck disable=SC2012
+  [[ $(ls -l "$config" | cut -c5-10) == ------ ]] || fail "Vorlage für andere lesbar"
+  contains "$out" "$config"
+  "$tmp/inst/local-agent" run task >/dev/null 2>&1 && fail "run mit leerer Vorlage"
+  # A second install keeps the existing config.
+  write_config
+  PREFIX=$tmp/inst "$here/install.sh" >/dev/null 2>&1
+  grep -q client-key "$config" || fail "Konfiguration überschrieben"
+}
+
+tests=("$@")
+if ((${#tests[@]} == 0)); then
+  # shellcheck disable=SC2207 # test names have no spaces
+  tests=($(declare -F | awk '{print $3}' | grep "^test_"))
+fi
+for current in "${tests[@]}"; do
+  set +e
+  (
+    set -e
+    reset
+    "$current"
+  )
+  rc=$?
+  set -e
+  ((rc == 0)) || fail "abgebrochen (exit $rc)"
+done
+cd "$here"
+if [[ -s $tmp/failures ]]; then
+  echo "local-agent: $(wc -l <"$tmp/failures") Fehler" >&2
+  exit 1
+fi
+echo "local-agent: ok (${#tests[@]} Tests)"

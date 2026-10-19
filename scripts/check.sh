@@ -58,6 +58,13 @@ if scripts/check-exe-version.sh "$sample" aaaaaaa3827f6f68bb56ea7e3e91c7654e0023
 fi
 # Das Update-Skript für TrueNAS, gegen nachgebildete docker, midclt und curl.
 scripts/test-truenas-auto-update.sh
+# Der Runner des Skills local-agent, gegen einen nachgebildeten Proxy und claude.
+if command -v shellcheck >/dev/null; then
+  shellcheck tools/local-agent/local-agent tools/local-agent/install.sh tools/local-agent/test.sh tools/local-agent/testdata/fake-claude
+else
+  echo "WARNUNG: shellcheck fehlt, tools/local-agent ungeprüft" >&2
+fi
+tools/local-agent/test.sh
 # Erst bauen, dann mit Zeitlimit testen: ein hängender Test bricht ab, statt
 # den Lauf endlos zu blockieren. Welcher hängt, steht in der Ausgabe
 # ("has been running for over 60 seconds").

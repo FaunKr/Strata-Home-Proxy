@@ -81,7 +81,7 @@ reset() {
   rm -rf "$FAKE_CLAUDE_RECORD" "$XDG_STATE_HOME" "$FAKE_PROXY_SCENARIO.requests"
   unset FAKE_CLAUDE_MODE
   write_config
-  health '{"status": 200, "max_context": 65536}'
+  health '{"status": 200, "max_context": 262144}'
   new_repo
 }
 
@@ -116,7 +116,9 @@ test_happy_path() {
   grep -qx 'ANTHROPIC_MODEL=claude-.*' "$env" || fail "kein Claude-Modellname"
   has_line "$env" "CLAUDE_CODE_DISABLE_1M_CONTEXT=1"
   has_line "$env" "CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192"
-  has_line "$env" "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=24"
+  # At 256K the window is capped at 180K, without a percentage override.
+  has_line "$env" "CLAUDE_CODE_AUTO_COMPACT_WINDOW=180000"
+  has_line "$env" "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<unset>"
   # The result shows the summary and the diff.
   la result "$id"
   [[ $code == 0 ]] || fail "result exit $code"
@@ -125,10 +127,28 @@ test_happy_path() {
 }
 
 test_autocompact_follows_context() {
+  # 75 % of 128000, plus the output cap and Claude Code's reserve.
   health '{"status": 200, "max_context": 128000}'
   la run "task"
   [[ $code == 0 ]] || fail "exit $code: $out"
-  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=48"
+  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_CODE_AUTO_COMPACT_WINDOW=117192"
+  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<unset>"
+}
+
+test_compact_share_changes_window() {
+  echo "LOCAL_AGENT_COMPACT_SHARE=70" >>"$config"
+  health '{"status": 200, "max_context": 128000}'
+  la run "task"
+  [[ $code == 0 ]] || fail "exit $code: $out"
+  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_CODE_AUTO_COMPACT_WINDOW=110792"
+  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<unset>"
+  # Below Claude Code's 100K minimum the window stays at 100K, and the
+  # percentage override brings compaction down to the share.
+  echo "LOCAL_AGENT_COMPACT_SHARE=50" >>"$config"
+  la run "task"
+  [[ $code == 0 ]] || fail "exit $code: $out"
+  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000"
+  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=64"
 }
 
 test_config_required() {
@@ -229,7 +249,7 @@ test_fallback_gaming() {
 }
 
 test_fallback_wake_timeout_retries_once() {
-  health '{"status": 504, "tag": "wake_timeout"}' '{"status": 200, "max_context": 65536}'
+  health '{"status": 504, "tag": "wake_timeout"}' '{"status": 200, "max_context": 262144}'
   la run "task"
   [[ $code == 0 ]] || fail "exit $code nach erfolgreicher Wiederholung: $out"
   health '{"status": 504, "tag": "wake_timeout"}'
@@ -249,7 +269,9 @@ test_fallback_setup_errors() {
   health '{"status": 503, "tag": "no_mac"}'
   expect_fallback "MAC" "PC-Dienst"
   health '{"status": 200, "max_context": 32768}'
-  expect_fallback "32768" "65536"
+  expect_fallback "32768" "128K"
+  health '{"status": 200, "max_context": 127999}'
+  expect_fallback "127999" "128K"
 }
 
 test_fallback_proxy_unreachable() {
@@ -421,8 +443,10 @@ test_check() {
   la check
   [[ $code == 0 ]] || fail "check exit $code: $out"
   contains "$out" "ok   tool call"
+  contains "$out" "ok   compaction: window 180000, compacts near 159K"
   # The worker check runs with the same settings as a run.
-  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=24"
+  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_CODE_AUTO_COMPACT_WINDOW=180000"
+  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<unset>"
   # Each failure names its fix.
   export FAKE_CLAUDE_MODE=no-tool
   la check
@@ -431,7 +455,7 @@ test_check() {
   health '{"status": 200, "max_context": 32768}'
   la check
   [[ $code == 2 ]] || fail "32K: exit $code"
-  contains "$out" "64K"
+  contains "$out" "128K"
   health '{"status": 401, "tag": "unauthorized"}'
   la check
   contains "$out" "Access"

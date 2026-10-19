@@ -33,17 +33,25 @@ state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/local-agent
 runs_dir=$state_dir/runs
 queue_dir=$state_dir/queue
 
-# What Claude Code assumes as the context window once the 1M window is off.
-assumed_window=200000
 # Compaction starts at this share of Strata's window, in percent
 # (LOCAL_AGENT_COMPACT_SHARE in the configuration).
 compact_share=75
 output_tokens=8192
+# Claude Code compacts this many tokens below its window, on top of the output
+# cap: measured on 2026-10-19 with Claude Code 2.1.218 in -p mode against Strata
+# (docs/research/fit-max-tokens-and-autocompact.md, "Hardware test").
+compact_reserve=13000
+# Bounds of the compaction window: Claude Code is documented to accept no less than
+# 100K, and nothing above 180K is tested (200K is the model's own window).
+min_window=100000
+max_window=180000
 # Seconds between looks at the Proxy during a run, for Gaming-Modus
 # (LOCAL_AGENT_PROBE_INTERVAL, mainly for the tests).
 probe_interval=${LOCAL_AGENT_PROBE_INTERVAL:-60}
-# Claude Code's own prompt is about 25K tokens; below 64K a run barely starts.
-min_context=65536
+# Below 128K, compaction thrashes on read-heavy work (measured at 64K): after a
+# compaction the context is already 20-29K, and one file read adds up to 15K.
+# 128000 rather than 131072, so that both count as 128K.
+min_context=128000
 
 die() {
   echo "local-agent: $*" >&2
@@ -271,7 +279,7 @@ preflight() {
   esac
   [[ $probe_context =~ ^[0-9]+$ ]] || "$on_fail" "Strata's /health named no max_context"
   ((probe_context >= min_context)) || "$on_fail" "Strata's context is $probe_context tokens, less than the $min_context a run needs" \
-    "raise Strata's context to at least 64K ($min_context tokens), e.g. in the Strata section of the Proxy's web UI"
+    "raise Strata's context to at least 128K ($min_context tokens), e.g. in the Strata section of the Proxy's web UI"
 }
 
 # Prints a field of the worker's final result event, e.g. result or is_error.
@@ -342,16 +350,41 @@ fail_mid_run() {
   fall_back "Strata failed mid-run: $error"
 }
 
-# Points Claude Code at the Proxy and fits auto-compaction into Strata's
-# context: Claude Code assumes 200K (with the 1M window off) and compacts at
-# compact_share of Strata's window. Output stays small enough for the
-# compaction call itself to fit. Needs probe_context.
+# Sets compact_window, compact_pct (empty when not needed) and compact_at, all
+# in tokens, so that Claude Code compacts at compact_share of Strata's context
+# and the compaction call itself still fits. Claude Code compacts at about
+# window - output cap - compact_reserve; below min_window, the percentage
+# override (of the min_window window) brings compaction down to the target.
+# Needs probe_context.
+compaction() {
+  compact_at=$((compact_share * probe_context / 100))
+  compact_window=$((compact_at + output_tokens + compact_reserve))
+  compact_pct=
+  if ((compact_window < min_window)); then
+    compact_window=$min_window
+    compact_pct=$((compact_at * 100 / min_window))
+  elif ((compact_window > max_window)); then
+    compact_window=$max_window
+    compact_at=$((compact_window - output_tokens - compact_reserve))
+  fi
+}
+
+# Points Claude Code at the Proxy and sets its compaction window explicitly
+# from Strata's context (see compaction): without it, Claude Code 2.1.218 did
+# not compact in -p mode at all. Output stays small enough for the compaction
+# call itself to fit. Needs probe_context.
 worker_env() {
+  compaction
   unset ANTHROPIC_API_KEY
   export ANTHROPIC_BASE_URL=$LOCAL_AGENT_URL ANTHROPIC_AUTH_TOKEN=$LOCAL_AGENT_KEY
   export ANTHROPIC_MODEL=$model ANTHROPIC_DEFAULT_HAIKU_MODEL=$model
   export CLAUDE_CODE_DISABLE_1M_CONTEXT=1
-  export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=$((compact_share * probe_context / assumed_window))
+  export CLAUDE_CODE_AUTO_COMPACT_WINDOW=$compact_window
+  if [[ -n $compact_pct ]]; then
+    export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=$compact_pct
+  else
+    unset CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+  fi
   export CLAUDE_CODE_MAX_OUTPUT_TOKENS=$output_tokens
   export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 API_TIMEOUT_MS=900000
 }
@@ -580,6 +613,8 @@ cmd_check() {
   check_step=proxy
   on_failure=check_failed preflight
   echo "ok   proxy: Strata answers with $probe_context tokens of context"
+  compaction
+  echo "ok   compaction: window $compact_window${compact_pct:+, override $compact_pct %}, compacts near $(((compact_at + 500) / 1000))K"
 
   check_step="tool call"
   local marker

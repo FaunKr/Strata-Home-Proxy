@@ -26,11 +26,14 @@ erreichen das NAS nicht.
    (Anteil von Stratas Kontext in Prozent, ab dem Claude Code kompaktiert;
    Standard 75).
 3. In Strata (Modell-Konfiguration auf dem PC):
-   - Kontext mindestens 64K; darunter fällt jeder Lauf zurück, weil Claude
-     Codes eigener Prompt schon rund 25K Tokens braucht. 128K, wenn der
-     Speicher reicht.
-   - `fit_max_tokens` an, damit Strata `max_tokens` kürzt statt mit 400
-     abzulehnen.
+   - Kontext mindestens 128K; darunter fällt jeder Lauf zurück. Bei 64K
+     kompaktierte Claude Code bei Arbeit mit vielen Dateien im Kreis: Nach
+     einer Kompaktierung waren schon 20–29K belegt, und eine gelesene Datei
+     bringt bis zu 15K dazu.
+   - `fit_max_tokens` an, als Sicherheitsnetz: Strata kürzt dann `max_tokens`,
+     statt mit 400 abzulehnen. Das hält einen Lauf nicht am Leben, es macht aus
+     einem späten 400 nur immer kürzere Antworten; vor dem vollen Kontext
+     schützt die Kompaktierung (siehe unten).
    - `"anthropic_thinking": "on_request"`, damit Claude Codes kurze
      Hilfsanfragen nicht erst nachdenken.
 4. `local-agent check` prüft Konfiguration, Key, `/health`, Kontext und einen
@@ -40,16 +43,34 @@ erreichen das NAS nicht.
 
 ## Kompaktierung prüfen
 
-Claude Code nimmt mit einem Claude-Modellnamen ein Fenster von 200K an (1M ist
-abgeschaltet) und wüsste sonst nichts von Stratas kleinerem Kontext. Der Runner
-setzt deshalb `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` aus `max_context`: 75 % davon,
-bezogen auf 200K (64K ergibt 24, also Kompaktierung bei rund 48K Tokens). Ob
-das im Modus `-p` greift, sagt die Doku von Claude Code nicht. Einmal auf
-echter Hardware nachweisen, bei 64K Kontext:
+Claude Code weiß nichts von Stratas Kontext. Ohne eigene Vorgabe kompaktierte
+es im Modus `-p` gar nicht (Claude Code 2.1.218, 2026-10-19): Lauf #130 wuchs
+auf 253K Tokens und endete an Stratas 400. Auch
+`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` allein, bezogen auf die angenommenen 200K,
+zeigte keine Wirkung. Der Runner setzt deshalb vor jedem Lauf (und in
+`local-agent check`) das Kompaktierungsfenster
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` ausdrücklich, berechnet aus Stratas
+`max_context`:
+
+- Ziel = `LOCAL_AGENT_COMPACT_SHARE` (Standard 75) % von `max_context`;
+- Fenster = Ziel + 8192 (Ausgabegrenze) + 13000, begrenzt auf 100000–180000.
+
+Gemessen kompaktiert Claude Code bei etwa Fenster − Ausgabegrenze − 13K: bei
+einem Fenster von 100K bei 80–89K, bei 150K bei 130K. Bei 256K ergibt das das
+Fenster 180000 und Kompaktierung bei rund 159K; bei 128000 das Fenster 117192
+und rund 96K. Unter 100K nimmt Claude Code kein Fenster an; nur dann setzt der
+Runner zusätzlich `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (Ziel geteilt durch
+1000, also Prozent des 100K-Fensters). Die Obergrenze 180K liegt bewusst unter Claude
+Codes 200K-Modellfenster, weil der Bereich darüber nicht getestet ist.
+`local-agent check` zeigt das Fenster und den ungefähren Punkt der
+Kompaktierung. Messungen: `docs/research/fit-max-tokens-and-autocompact.md`
+(Abschnitt „Hardware test").
+
+Einmal auf echter Hardware nachweisen, mit dem Kontext, den Strata fährt:
 
 ```sh
 cd <dieses Repo>
-local-agent run --read-only --watch "Lies jede Datei unter crates/nas-proxy/src und crates/admin-ui/src vollständig, eine nach der anderen, und fasse jede in einem Satz zusammen."
+local-agent run --read-only --watch "Lies jede Datei unter crates/nas-proxy/src und crates/admin-ui/src vollständig, eine nach der anderen, und fasse jede in einem Satz zusammen. Keine Subagenten: lies jede Datei selbst."
 ```
 
 Bestanden, wenn der Lauf mit Exit 0 endet und die Fortschrittsdatei (oder

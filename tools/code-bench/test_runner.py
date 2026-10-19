@@ -14,6 +14,8 @@ from threading import Thread
 HERE = Path(__file__).parent
 os.environ["OPENCODE_BIN"] = str(HERE / "testdata" / "fake-opencode")
 os.environ["WORK_DIR"] = tempfile.mkdtemp()
+# Like /tmp in the image: the agent reaches its task folders.
+os.chmod(os.environ["WORK_DIR"], 0o755)
 sys.path.insert(0, str(HERE))
 import runner  # noqa: E402
 
@@ -70,7 +72,52 @@ class RunnerTest(unittest.TestCase):
         self.fail(f"run did not end: {run}")
 
     def test_health_names_the_opencode_version(self):
-        self.assertEqual(self.call("GET", "/health"), (200, {"opencode": "1.19.3"}))
+        self.assertEqual(self.call("GET", "/health"), (200, {"opencode": "1.19.3", "problem": None}))
+
+    def test_without_its_firewall_the_runner_refuses_runs(self):
+        runner.PROBLEM = "no firewall"
+        try:
+            self.assertEqual(self.call("GET", "/health")[1]["problem"], "no firewall")
+            code, answer = self.call(
+                "POST", "/runs", {"model": "IQ3_XXS", "api_key": "shp_k", "tasks": [TASK]}
+            )
+            self.assertEqual((code, answer["reason"]), (503, "no firewall"))
+        finally:
+            runner.PROBLEM = None
+
+    def test_the_firewall_lets_the_agent_reach_the_proxy_and_the_internet_only(self):
+        rules = [" ".join(r) for r in runner.firewall_rules(1001, "172.17.0.1", 8080)]
+        chain = runner.FIREWALL_CHAIN
+        allow_proxy = f"iptables -w -A {chain} -d 172.17.0.1 -p tcp --dport 8080 -j ACCEPT"
+        self.assertIn(allow_proxy, rules)
+        # The proxy before the ranges that include it.
+        block_docker = f"iptables -w -A {chain} -d 172.16.0.0/12 -j REJECT"
+        self.assertLess(rules.index(allow_proxy), rules.index(block_docker))
+        for net in ["127.0.0.0/8", "10.0.0.0/8", "192.168.0.0/16"]:
+            self.assertIn(f"iptables -w -A {chain} -d {net} -j REJECT", rules)
+        self.assertEqual(rules[-1], f"iptables -w -A OUTPUT -m owner --uid-owner 1001 -j {chain}")
+        # Nothing rejects all: the internet stays open.
+        self.assertFalse([r for r in rules if r.endswith("-j REJECT") and " -d " not in r])
+
+    @unittest.skipUnless(os.geteuid() == 0, "needs root to switch users")
+    def test_opencode_and_the_tests_run_as_the_agent(self):
+        import pwd
+        nobody = pwd.getpwnam("nobody")
+        seen = {}
+        original = runner.score
+
+        def keep(folder, hidden):
+            seen.update(json.loads(Path(folder, "fake-args.json").read_text()))
+            return original(folder, hidden)
+
+        os.environ["FAKE_SOLUTION"] = "double.py=import os\ndef double(n):\n    assert os.getuid() != 0\n    return n * 2\n"
+        runner.AGENT_USER, runner.score = "nobody", keep
+        try:
+            run = self.run_tasks([TASK])
+        finally:
+            runner.AGENT_USER, runner.score = None, original
+        self.assertEqual(seen["uid"], nobody.pw_uid)
+        self.assertEqual(run["tasks"][0]["passed"], 2, run)
 
     def test_a_task_is_scored_by_its_hidden_tests(self):
         os.environ["FAKE_SOLUTION"] = "double.py=def double(n):\n    return n * 2\n"

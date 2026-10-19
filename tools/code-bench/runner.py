@@ -14,9 +14,12 @@ The proxy asks for the state until the run has ended.
 Only the standard library, so the image needs Python and opencode alone.
 """
 
+import ipaddress
 import json
 import os
+import pwd
 import shutil
+import socket
 import signal
 import subprocess
 import sys
@@ -24,6 +27,7 @@ import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 LISTEN = os.environ.get("LISTEN_ADDR", "0.0.0.0:8096")
 # Where opencode reaches the proxy, e.g. http://host.docker.internal:8080.
@@ -38,6 +42,26 @@ DEFAULT_TIMEOUT = 30 * 60
 MAX_FILE_BYTES = 64 * 1024
 MAX_OUTPUT_CHARS = 8 * 1024
 SCORE_MARK = "CODEBENCH_SCORE "
+# The user opencode and the hidden tests run as. Set in the image: the agent
+# then reaches neither the runner's API nor the NAS or the home network
+# (see firewall_rules). Unset, e.g. in the tests, they run as the runner.
+AGENT_USER = os.environ.get("AGENT_USER") or None
+FIREWALL_CHAIN = "CODEBENCH_AGENT"
+# What the agent must not reach: loopback (the runner's API), private,
+# link-local and CGNAT ranges (the NAS and the home network).
+BLOCKED_NETS = [
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "100.64.0.0/10",
+    "0.0.0.0/8",
+]
+# Docker's own DNS in a user-defined network.
+DOCKER_DNS = "127.0.0.11"
+# Why runs are refused, e.g. the firewall could not be set.
+PROBLEM = None
 
 # Runs the hidden tests and prints how many passed on a line of its own, so
 # whatever the tested code prints does not count. Started isolated (`-I`),
@@ -234,6 +258,7 @@ class Run:
             for path, text in self.files[name].items():
                 write(folder, path, text)
             write(folder, "opencode.json", json.dumps(config(self.model, self.api_key)))
+            give_to_agent(folder)
             stats, secs, timed_out, error = self.opencode(i, folder)
             if self.cancelled:
                 self.update(i, state="cancelled")
@@ -261,7 +286,9 @@ class Run:
     def opencode(self, i, folder):
         """Lets opencode work on the task; its stats, the time, whether it
         ran out of time, and why it ended otherwise."""
-        env = dict(os.environ, OPENCODE_DISABLE_MODELS_FETCH="1", OPENCODE_DISABLE_AUTOUPDATE="1")
+        env = agent_env(
+            dict(os.environ, OPENCODE_DISABLE_MODELS_FETCH="1", OPENCODE_DISABLE_AUTOUPDATE="1")
+        )
         env.pop("OPENCODE_CONFIG", None)
         # opencode takes its project folder, and so its opencode.json, from PWD.
         env["PWD"] = folder
@@ -282,6 +309,7 @@ class Run:
             stderr=subprocess.PIPE,
             text=True,
             start_new_session=True,
+            **as_agent(),
         )
         with self.lock:
             self.process = process
@@ -338,6 +366,97 @@ class Run:
         return stats, time.monotonic() - started, timed_out.is_set(), error
 
 
+def agent():
+    """The agent's user entry, or None when it runs as the runner."""
+    return pwd.getpwnam(AGENT_USER) if AGENT_USER else None
+
+
+def as_agent():
+    """Popen arguments that start a process as the agent."""
+    user = agent()
+    if user is None:
+        return {}
+    return {"user": user.pw_uid, "group": user.pw_gid, "extra_groups": []}
+
+
+def agent_env(env):
+    user = agent()
+    if user is not None:
+        env["HOME"] = user.pw_dir
+        env["USER"] = env["LOGNAME"] = user.pw_name
+    return env
+
+
+def give_to_agent(folder):
+    """Hands the task folder to the agent, so it can work in it."""
+    user = agent()
+    if user is None:
+        return
+    for root, dirs, names in os.walk(folder):
+        os.chown(root, user.pw_uid, user.pw_gid)
+        for name in dirs + names:
+            os.chown(os.path.join(root, name), user.pw_uid, user.pw_gid, follow_symlinks=False)
+
+
+def firewall_rules(uid, proxy_ip, proxy_port):
+    """iptables commands that keep the agent's connections off the runner,
+    the NAS and the home network, apart from the proxy; the internet stays
+    open."""
+    chain = ["iptables", "-w"]
+    rules = [
+        chain + ["-N", FIREWALL_CHAIN],
+        chain + ["-F", FIREWALL_CHAIN],
+        chain + ["-A", FIREWALL_CHAIN, "-d", DOCKER_DNS, "-j", "ACCEPT"],
+        chain + ["-A", FIREWALL_CHAIN, "-d", proxy_ip, "-p", "tcp", "--dport", str(proxy_port), "-j", "ACCEPT"],
+    ]
+    for net in BLOCKED_NETS:
+        rules.append(chain + ["-A", FIREWALL_CHAIN, "-d", net, "-j", "REJECT"])
+    rules.append(chain + ["-A", "OUTPUT", "-m", "owner", "--uid-owner", str(uid), "-j", FIREWALL_CHAIN])
+    return rules
+
+
+def proxy_address():
+    """The proxy's IP and port, from PROXY_URL."""
+    url = urlsplit(PROXY_URL)
+    port = url.port or (443 if url.scheme == "https" else 80)
+    return socket.gethostbyname(url.hostname), port
+
+
+def set_firewall():
+    """Sets the agent's firewall; why it failed, or None."""
+    user = agent()
+    if user is None:
+        return None
+    try:
+        proxy_ip, proxy_port = proxy_address()
+        ipaddress.ip_address(proxy_ip)
+    except (OSError, ValueError) as e:
+        return f"The proxy address in PROXY_URL ({PROXY_URL}) does not resolve: {e}"
+    for rule in firewall_rules(user.pw_uid, proxy_ip, proxy_port):
+        # A restarted container may have the chain already.
+        if rule[2] == "-N" and run_quietly(rule[:2] + ["-L", FIREWALL_CHAIN]):
+            continue
+        if rule[2] == "-A" and rule[3] == "OUTPUT" and run_quietly(rule[:2] + ["-C"] + rule[3:]):
+            continue
+        if not run_quietly(rule):
+            return (
+                "The code-bench container cannot set its firewall for the agent. "
+                "It needs the NET_ADMIN capability (cap_add in docker-compose.yml)."
+            )
+    # No IPv6 for the agent: the ranges above are IPv4 only.
+    no_ipv6 = ["OUTPUT", "-m", "owner", "--uid-owner", str(user.pw_uid), "-j", "REJECT"]
+    if not run_quietly(["ip6tables", "-w", "-C"] + no_ipv6):
+        run_quietly(["ip6tables", "-w", "-A"] + no_ipv6)
+    return None
+
+
+def run_quietly(args):
+    try:
+        return subprocess.run(args, capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def stop(process):
     """Ends opencode and whatever it started."""
     try:
@@ -389,9 +508,12 @@ def score(folder, hidden_test):
     write(folder, "hidden_test.py", hidden_test)
     write(folder, "_codebench_score.py", SCORE_SCRIPT)
     try:
+        give_to_agent(folder)
         out = subprocess.run(
             [PYTHON, "-I", "_codebench_score.py"],
             cwd=folder,
+            env=agent_env(dict(os.environ)),
+            **as_agent(),
             capture_output=True,
             text=True,
             timeout=TEST_TIMEOUT,
@@ -444,6 +566,8 @@ class Runner:
             timeout = int(body.get("timeout_secs") or DEFAULT_TIMEOUT)
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             return 400, {"reason": f"bad run: {e}"}
+        if PROBLEM:
+            return 503, {"reason": PROBLEM}
         if not tasks or not model or "/" in model:
             return 400, {"reason": "bad run: no tasks or no model"}
         with self.lock:
@@ -470,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self.answer(200, {"opencode": opencode_version()})
+            self.answer(200, {"opencode": opencode_version(), "problem": PROBLEM})
         elif self.path == "/runs/current":
             run = RUNNER.run
             if run is None:
@@ -505,6 +629,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global PROBLEM
+    PROBLEM = set_firewall()
+    if PROBLEM:
+        sys.stderr.write(f"code-bench: {PROBLEM}\n")
     host, _, port = LISTEN.rpartition(":")
     server = ThreadingHTTPServer((host or "0.0.0.0", int(port)), Handler)
     sys.stderr.write(f"code-bench: listening on {LISTEN}, proxy at {PROXY_URL}\n")

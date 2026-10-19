@@ -171,6 +171,10 @@ async fn health(state: &AppState, url: &str) -> Result<(), String> {
     if body["opencode"].is_null() {
         return Err("opencode is missing in the code-bench container.".into());
     }
+    // E.g. its firewall for the agent could not be set.
+    if let Some(problem) = body["problem"].as_str() {
+        return Err(problem.to_string());
+    }
     Ok(())
 }
 

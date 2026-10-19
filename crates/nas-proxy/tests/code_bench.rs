@@ -28,6 +28,8 @@ struct Runner {
     current: Arc<Mutex<Option<Value>>>,
     cancels: Arc<Mutex<u32>>,
     starts: Arc<Mutex<u32>>,
+    /// Why the runner refuses runs, as its `/health` names it.
+    problem: Arc<Mutex<Option<String>>>,
 }
 
 fn task(name: &str, passed: u32) -> Value {
@@ -43,8 +45,8 @@ fn run(state: &str) -> Value {
            "tasks": [task("roman", 8), task("csv-summary", 5), task("lru-cache", 0)]})
 }
 
-async fn health() -> Json<Value> {
-    Json(json!({"opencode": "1.19.3"}))
+async fn health(State(r): State<Runner>) -> Json<Value> {
+    Json(json!({"opencode": "1.19.3", "problem": *r.problem.lock().unwrap()}))
 }
 
 async fn start(State(r): State<Runner>, Json(body): Json<Value>) -> Response {
@@ -203,6 +205,18 @@ async fn cancelling_reaches_the_runner_and_keeps_no_result() {
     let v = page(&mut b).await;
     assert_eq!(v["run"]["state"], "cancelled", "{v}");
     assert_eq!(v["results"], json!([]));
+}
+
+#[tokio::test]
+async fn a_runner_without_its_firewall_is_a_problem() {
+    let (s, runner) = with_runner().await;
+    *runner.problem.lock().unwrap() = Some("It needs the NET_ADMIN capability.".into());
+    let mut b = logged_in(&s.url).await;
+    let v = page(&mut b).await;
+    assert_eq!(v["problem"], "It needs the NET_ADMIN capability.", "{v}");
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 400);
+    assert!(runner.started.lock().unwrap().is_none());
+    assert!(!has_key(&s));
 }
 
 #[tokio::test]

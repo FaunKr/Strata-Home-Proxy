@@ -28,6 +28,10 @@ services:
       - host.docker.internal:host-gateway
     environment:
       PROXY_URL: http://host.docker.internal:8080
+    # Damit der Runner dem Agenten NAS, Heimnetz und die eigene API sperrt;
+    # ohne verweigert er Läufe.
+    cap_add:
+      - NET_ADMIN
     # Der Agent führt hier Befehle aus: Grenzen gegen Ausreißer.
     mem_limit: 4g
     pids_limit: 512

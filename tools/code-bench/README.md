@@ -13,8 +13,14 @@ neben dem Proxy ein zweiter Container, `code-bench`:
   Lauf den PC wie jeder Client.
 - Die Aufgaben in `tasks/` baut der Proxy ein und schickt sie mit dem Lauf;
   die versteckten Tests liegen erst nach opencode im Ordner.
-- Der Agent darf lesen, schreiben und `bash` ausführen, `webfetch` nicht. Er
-  läuft als Nutzer `bench` in diesem Container, nicht auf dem NAS.
+- Der Agent darf lesen, schreiben und `bash` ausführen, `webfetch` nicht.
+  opencode und die versteckten Tests laufen als Nutzer `agent` in diesem
+  Container, nicht auf dem NAS. Der Runner (root) setzt beim Start eine
+  Firewall nur für `agent`: erlaubt sind der Proxy (`PROXY_URL`), Dockers DNS
+  und das Internet; gesperrt sind Loopback (die API des Runners), private,
+  Link-Local- und CGNAT-Netze, also NAS und Heimnetz, und IPv6. Dafür braucht
+  der Container `NET_ADMIN`; ohne verweigert der Runner Läufe und die Karte
+  nennt den Grund.
 
 Gemessen wird pro Aufgabe: Gesamtzeit, Schritte des Modells, Ein- und
 Ausgabe-Tokens, Ausgabe-Tokens pro Sekunde (über die Zeit der Schritte) und

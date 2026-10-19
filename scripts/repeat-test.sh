@@ -7,6 +7,11 @@
 # Zeitlimit pro Lauf der ganzen Datei in Sekunden: LIMIT (Vorgabe 60).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+if (($# < 3)); then
+  echo "Aufruf: scripts/repeat-test.sh <paket> <testdatei> <anzahl> [filter…]" >&2
+  echo "Beispiel: scripts/repeat-test.sh strata-nas-proxy settings_page 100" >&2
+  exit 2
+fi
 pkg=$1 test=$2 count=$3
 shift 3
 # Wie cargo test: aus dem Verzeichnis des Pakets.

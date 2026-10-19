@@ -8,3 +8,9 @@ Proxy abhängen; die Umwandlung steht in `nas-proxy/src/admin.rs`.
 
 Die doppelte Struktur ist gewollt und kein Review-Befund. Felder, die der
 Browser nie sehen darf (Keys, Hashes), fehlen in den UI-Typen.
+
+Ausnahme ist die Übersicht: `nas-proxy/src/overview.rs` baut `Overview`,
+`HardwareView`, `PowerView` usw. direkt als Typen aus `strata_admin_ui::api`.
+Diese Werte entstehen nur für die Seite; im Proxy gibt es keinen eigenen Typ,
+den sie spiegeln könnten. Neue Teile der Übersicht folgen diesem Muster, ohne
+Umwandlung in `admin.rs`.

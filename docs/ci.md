@@ -30,6 +30,10 @@ das Repo. Richtwerte nach #151:
 | PR, der Workflow, Cargo.lock oder scripts/ ändert | alles außer Windows | ca. 18 |
 | Push auf `main` | changes, test (nur Nachsehen), publish, ci-ok | ca. 5–10 |
 
+Der Job `publish` läuft nie zweimal gleichzeitig und endet nach 30 Minuten.
+Ein neuerer Push auf `main` wartet, bis der laufende fertig ist; so setzt kein
+älterer Commit `:latest` zurück.
+
 ## Wohin die Minuten gehen
 
 Die schnellste Quelle ist der Nutzungsbericht unter *Settings → Billing →

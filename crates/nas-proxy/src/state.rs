@@ -528,11 +528,14 @@ impl AppState {
             return;
         }
         let status = self.pc_status(&agent).await;
+        // A missed answer is no sleeping PC while Strata still answers (a
+        // busy PC or network); waking it again would restart the idle time.
+        let strata_answers = status.is_none() && self.strata_healthy().await;
         let now = Instant::now();
         {
             let mut inner = self.inner.lock().unwrap();
             let settling = Self::settling(&inner, cfg.sleep_settle);
-            if !inner.note_pc_status(status.as_ref(), false, settling) {
+            if !inner.note_pc_status(status.as_ref(), strata_answers, settling) {
                 return;
             }
             if self.in_flight.load(Ordering::SeqCst) > 0

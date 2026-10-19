@@ -7,7 +7,7 @@ use std::{sync::atomic::Ordering, time::Duration};
 
 use common::*;
 use serde_json::{Value, json};
-use strata_nas_proxy::{AppState, clock::unix_now};
+use strata_nas_proxy::{AppState, clock::unix_now, state::PcState};
 
 fn kind_list(v: &Value) -> Vec<String> {
     v["events"]
@@ -651,4 +651,20 @@ async fn set_up_proxy_shows_no_checklist() {
     let html = b.page("/admin").await;
     assert!(!html.contains("Finish setup"), "{html}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_missed_pc_service_answer_does_not_restart_the_idle_time() {
+    let s = setup(true, |_| {}).await;
+    eventually("PC wach", || s.state.snapshot().pc == PcState::Awake).await;
+    let before = s.state.snapshot().last_activity_at;
+    // Strata still answers; only the PC service misses its answers.
+    s.pc.status_misses.store(3, Ordering::SeqCst);
+    eventually("Antworten verpasst", || {
+        s.pc.status_misses.load(Ordering::SeqCst) == 0
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.state.snapshot().pc, PcState::Awake);
+    assert_eq!(s.state.snapshot().last_activity_at, before);
 }

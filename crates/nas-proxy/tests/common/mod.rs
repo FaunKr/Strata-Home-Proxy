@@ -86,6 +86,9 @@ pub struct FakePc {
     pub strata_log_requests: AtomicUsize,
     /// The PC service refuses `GET /strata-log` (wrong token, other address).
     pub refuse_log: AtomicBool,
+    /// The PC service answers this many `/status` calls with 503, like a busy
+    /// PC or network, although the PC stays up.
+    pub status_misses: AtomicUsize,
     /// Leistung the simulated Messsteckdose reports, in watts.
     pub plug_watts: Mutex<f64>,
     /// The Messsteckdose answers like a Gen1 plug: `/status` only.
@@ -265,7 +268,11 @@ pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Val
 }
 
 pub async fn agent_status(State(pc): State<Pc>) -> Response {
-    if !pc.up() {
+    let missed = pc
+        .status_misses
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+        .is_ok();
+    if missed || !pc.up() {
         // A sleeping PC does not answer; a refused status is the closest stand-in.
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }

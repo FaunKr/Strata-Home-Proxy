@@ -401,6 +401,35 @@ test_prune() {
   [[ -d $runs/$new ]] || fail "neuer Lauf entfernt"
 }
 
+test_check() {
+  export FAKE_CLAUDE_MODE=check
+  la check
+  [[ $code == 0 ]] || fail "check exit $code: $out"
+  contains "$out" "ok   tool call"
+  # The worker check runs with the same settings as a run.
+  has_line "$FAKE_CLAUDE_RECORD/env" "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=24"
+  # Each failure names its fix.
+  export FAKE_CLAUDE_MODE=no-tool
+  la check
+  [[ $code == 2 ]] || fail "ohne Tool-Aufruf: exit $code"
+  contains "$out" "FAIL tool call"
+  health '{"status": 200, "max_context": 32768}'
+  la check
+  [[ $code == 2 ]] || fail "32K: exit $code"
+  contains "$out" "64K"
+  health '{"status": 401, "tag": "unauthorized"}'
+  la check
+  contains "$out" "Access"
+  sed -i.bak "s|^LOCAL_AGENT_URL=.*|LOCAL_AGENT_URL=http://127.0.0.1:9|" "$config"
+  la check
+  [[ $code == 2 ]] || fail "unerreichbar: exit $code"
+  contains "$out" "LOCAL_AGENT_URL"
+  rm "$config"
+  la check
+  [[ $code == 2 ]] || fail "ohne Konfiguration: exit $code"
+  contains "$out" "$config"
+}
+
 tests=("$@")
 if ((${#tests[@]} == 0)); then
   # shellcheck disable=SC2207 # test names have no spaces

@@ -35,7 +35,8 @@ queue_dir=$state_dir/queue
 
 # What Claude Code assumes as the context window once the 1M window is off.
 assumed_window=200000
-# Compaction starts at this share of Strata's window, in percent.
+# Compaction starts at this share of Strata's window, in percent
+# (LOCAL_AGENT_COMPACT_SHARE in the configuration).
 compact_share=75
 output_tokens=8192
 # Claude Code's own prompt is about 25K tokens; below 64K a run barely starts.
@@ -64,6 +65,7 @@ load_config() {
   LOCAL_AGENT_URL=${LOCAL_AGENT_URL%/}
   # Strata ignores the model name, but Claude Code only accepts names it knows.
   model=${LOCAL_AGENT_MODEL:-claude-sonnet-4-5}
+  compact_share=${LOCAL_AGENT_COMPACT_SHARE:-$compact_share}
 }
 
 # Prints a duration like 90, 90s, 30m or 2h in seconds.
@@ -214,32 +216,34 @@ fall_back() {
   exit 3
 }
 
-# Checks that Strata can take a run, waking the PC; falls back otherwise. A
+# Checks that Strata can take a run, waking the PC; calls $on_failure (a
+# function taking a reason and a hint, fall_back by default) otherwise. A
 # wake timeout gets one more try. Sets probe_context.
 preflight() {
+  local on_fail=${on_failure:-fall_back}
   probe
   if [[ $probe_status == 504 && $probe_tag == wake_timeout ]]; then
     probe
   fi
   case $probe_status/$probe_tag in
     200/*) ;;
-    503/gaming) fall_back "Strata is off: the PC is in Gaming-Modus" ;;
-    504/wake_timeout) fall_back "the PC did not wake up in time (tried twice)" ;;
+    503/gaming) "$on_fail" "Strata is off: the PC is in Gaming-Modus" ;;
+    504/wake_timeout) "$on_fail" "the PC did not wake up in time (tried twice)" ;;
     401/strata_unauthorized)
-      fall_back "Strata refused the Proxy's own key" "set the Strata key in the Proxy's web UI (Strata section)"
+      "$on_fail" "Strata refused the Proxy's own key" "set the Strata key in the Proxy's web UI (Strata section)"
       ;;
-    401/*) fall_back "the Proxy did not accept the key" "check LOCAL_AGENT_KEY in $config_file against Access in the Proxy's web UI" ;;
+    401/*) "$on_fail" "the Proxy did not accept the key" "check LOCAL_AGENT_KEY in $config_file against Access in the Proxy's web UI" ;;
     503/not_configured)
-      fall_back "the Proxy is not set up: it has no address for Strata" "set Strata's address in the Proxy's web UI (Strata section)"
+      "$on_fail" "the Proxy is not set up: it has no address for Strata" "set Strata's address in the Proxy's web UI (Strata section)"
       ;;
     503/no_mac)
-      fall_back "the Proxy cannot wake the PC: it knows no MAC address" "start the PC once so the PC-Dienst reports its MAC, or set PC_MAC on the Proxy"
+      "$on_fail" "the Proxy cannot wake the PC: it knows no MAC address" "start the PC once so the PC-Dienst reports its MAC, or set PC_MAC on the Proxy"
       ;;
-    000/*) fall_back "the Proxy is unreachable at $LOCAL_AGENT_URL ($(tail -1 "$run_dir/health.err"))" "check LOCAL_AGENT_URL in $config_file and that this machine reaches the NAS" ;;
-    *) fall_back "the Proxy answered HTTP $probe_status${probe_tag:+ ($probe_tag)}" ;;
+    000/*) "$on_fail" "the Proxy is unreachable at $LOCAL_AGENT_URL ($(tail -1 "$run_dir/health.err"))" "check LOCAL_AGENT_URL in $config_file and that this machine reaches the NAS" ;;
+    *) "$on_fail" "the Proxy answered HTTP $probe_status${probe_tag:+ ($probe_tag)}" ;;
   esac
-  [[ $probe_context =~ ^[0-9]+$ ]] || fall_back "Strata's /health named no max_context"
-  ((probe_context >= min_context)) || fall_back "Strata's context is $probe_context tokens, less than the $min_context a run needs" \
+  [[ $probe_context =~ ^[0-9]+$ ]] || "$on_fail" "Strata's /health named no max_context"
+  ((probe_context >= min_context)) || "$on_fail" "Strata's context is $probe_context tokens, less than the $min_context a run needs" \
     "raise Strata's context to at least 64K ($min_context tokens), e.g. in the Strata section of the Proxy's web UI"
 }
 
@@ -293,6 +297,20 @@ fail_mid_run() {
     fall_back "Strata failed mid-run: the PC switched to Gaming-Modus"
   fi
   fall_back "Strata failed mid-run: $error"
+}
+
+# Points Claude Code at the Proxy and fits auto-compaction into Strata's
+# context: Claude Code assumes 200K (with the 1M window off) and compacts at
+# compact_share of Strata's window. Output stays small enough for the
+# compaction call itself to fit. Needs probe_context.
+worker_env() {
+  unset ANTHROPIC_API_KEY
+  export ANTHROPIC_BASE_URL=$LOCAL_AGENT_URL ANTHROPIC_AUTH_TOKEN=$LOCAL_AGENT_KEY
+  export ANTHROPIC_MODEL=$model ANTHROPIC_DEFAULT_HAIKU_MODEL=$model
+  export CLAUDE_CODE_DISABLE_1M_CONTEXT=1
+  export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=$((compact_share * probe_context / assumed_window))
+  export CLAUDE_CODE_MAX_OUTPUT_TOKENS=$output_tokens
+  export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 API_TIMEOUT_MS=900000
 }
 
 instructions="You are a local-agent worker: a Claude Code session running unattended for another session.
@@ -354,7 +372,6 @@ cmd_run() {
   enqueue "$id"
   wait_turn
   preflight
-  local pct=$((compact_share * probe_context / assumed_window))
 
   # A writing run gets its own branch and worktree; a read-only one reads
   # the repo as it is.
@@ -383,12 +400,7 @@ cmd_run() {
   set -m
   (
     cd "$workdir"
-    unset ANTHROPIC_API_KEY
-    export ANTHROPIC_BASE_URL=$LOCAL_AGENT_URL ANTHROPIC_AUTH_TOKEN=$LOCAL_AGENT_KEY
-    export ANTHROPIC_MODEL=$model ANTHROPIC_DEFAULT_HAIKU_MODEL=$model
-    export CLAUDE_CODE_DISABLE_1M_CONTEXT=1 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=$pct
-    export CLAUDE_CODE_MAX_OUTPUT_TOKENS=$output_tokens
-    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 API_TIMEOUT_MS=900000
+    worker_env
     exec claude -p --output-format stream-json --verbose \
       --append-system-prompt "$prompt" --permission-mode "$mode" \
       --allowedTools "${allowed[@]}" --disallowedTools "${disallowed[@]}"
@@ -490,6 +502,40 @@ cmd_prune() {
   done
 }
 
+check_failed() {
+  echo "FAIL $check_step: $1"
+  [[ -z ${2:-} ]] || echo "     to fix: $2"
+  exit 2
+}
+
+# Checks the setup step by step, as far as it gets.
+cmd_check() {
+  load_config
+  echo "ok   config $config_file"
+  run_dir=$(mktemp -d)
+  trap 'rm -rf "$run_dir"' EXIT
+  check_step=proxy
+  on_failure=check_failed preflight
+  echo "ok   proxy: Strata answers with $probe_context tokens of context"
+
+  check_step="tool call"
+  local marker
+  marker=local-agent-check-$(printf %04x $((RANDOM)))
+  mkdir "$run_dir/work"
+  (
+    cd "$run_dir/work"
+    worker_env
+    exec claude -p --output-format stream-json --verbose --allowedTools "Bash(echo:*)"
+  ) <<<"Run this command with the Bash tool, then reply with its output: echo $marker" \
+    >"$run_dir/log.jsonl" 2>"$run_dir/stderr" || true
+  jq -Rr 'fromjson? | select(.type == "user") | .message.content[]? | select(.type == "tool_result") |
+    .content | if type == "array" then map(.text? // "") | join("") else tostring end' \
+    "$run_dir/log.jsonl" | grep -qF "$marker" ||
+    check_failed "the worker made no working tool call ($(tail -1 "$run_dir/stderr" 2>/dev/null))" \
+      "look at Strata's log on the PC; Claude Code needs Strata 0.1.17 or newer"
+  echo "ok   tool call through Strata"
+}
+
 cmd_status() {
   resolve_run "${1:-}"
   local state started ended elapsed
@@ -561,6 +607,7 @@ main() {
     status) cmd_status "$@" ;;
     discard) cmd_discard "$@" ;;
     prune) cmd_prune "$@" ;;
+    check) cmd_check "$@" ;;
     result) cmd_result "$@" ;;
     -h | --help | help) usage ;;
     *)

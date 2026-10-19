@@ -34,7 +34,7 @@ Offload only when the user asks. When a task is well scoped and mechanical (a re
   - When the result shows a **Log summary**, Strata failed mid-run and its work is committed in the worktree it names. Have the agent continue there, on that branch: give it the brief, the log summary, and the instruction to finish the work rather than start over.
   - Otherwise the worker never started; the agent starts fresh on a new branch.
 
-  When the agent is done, review the whole diff as in exit 0. Your report says that the fallback did the work, and why, including any fix the user should make.
+  When the agent is done, review the whole diff as in exit 0. Your report says that the fallback did the work, and why, including any fix the user should make, and suggests `local-agent check` once it's fixed.
 - **4, timed out**: the run hit its time limit (2 hours, or `--timeout 30m`). Usually the model went in circles, and a fallback would repeat that at full cost, so don't fall back. Report the timeout with the last steps from `local-agent result <run>`; the branch keeps what was done.
 - **2, setup**: the message says what is missing in the configuration. Pass it on to the user.
 - **1**: local-agent itself failed; show the user its message.

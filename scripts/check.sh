@@ -26,10 +26,10 @@ selected() { [[ $packages == all || $packages == *" $1 "* ]]; }
 
 cargo fmt --check
 # The Node scripts of the browser check (eslint.config.mjs). Cloud sessions
-# have ESLint under /opt/node-tools; elsewhere: npm install -g eslint.
+# have ESLint under /opt/node-tools; elsewhere: npm install -g eslint@10.1.0 (the version CI installs).
 eslint=$(command -v eslint || echo /opt/node-tools/node_modules/.bin/eslint)
 if [[ ! -x $eslint ]]; then
-  echo "ESLint fehlt: npm install -g eslint" >&2
+  echo "ESLint fehlt: npm install -g eslint@10.1.0" >&2
   exit 2
 fi
 "$eslint" scripts

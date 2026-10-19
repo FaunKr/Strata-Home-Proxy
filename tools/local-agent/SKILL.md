@@ -26,7 +26,7 @@ Offload only when the user asks. When a task is well scoped and mechanical (a re
    - `--read-only` for research, review or questions: the worker reads the repo as it is, with no edit tools, no commits and no branch. The repo's allow rules don't apply; `--allow` only read commands here.
    - `--watch` only when the user wants live reports: the run names a progress file; follow it with the Monitor tool (`tail -f <file>`) and relay milestones briefly.
    - `--allow 'Bash(cargo test:*)'` (repeatable) when the task needs a command beyond the base set (read, edit, `git status/diff/add/commit`, `ls`, `grep`) and the repo's own allow rules in `.claude/settings.json`. Network tools and `git push` stay blocked whatever you pass.
-3. When the user asks how it's going, answer from `local-agent status <run>`.
+3. When the user asks how it's going, answer from `local-agent status <run>`. Its `context:` line shows how full Strata's context is and how often the worker compacted; pass on a `warning:` line as it stands.
 4. When the command ends, act on its exit code.
 
 ## Offload the build step of /implement or /implement-spec
@@ -42,7 +42,7 @@ Only when the user asks for it; otherwise implement as usual.
 ## Exit codes
 
 - **0, done**: run `local-agent result <run>`. Review the summary and the whole diff as you would a colleague's work: Strata makes more mistakes than you. Fix small problems on the branch yourself or name them. Then propose merging the branch (`git merge local-agent/<run>`) and wait for the user's word; the merge is theirs to approve. When they reject the work, offer `local-agent discard <run>`, which removes the worktree and branch. `local-agent prune` cleans up merged worktrees and runs older than 14 days.
-- **3, fall back**: Strata can't do the task. `local-agent result <run>` names the reason, and for setup problems what to fix. Hand the task to a normal agent: the Agent tool with model `sonnet`, the same brief, and the same limits: read-only stays read-only; a writing run works on a branch, not on the user's checkout, with no `git push` and no network tools.
+- **3, fall back**: Strata can't do the task. `local-agent result <run>` names the reason, and for setup problems what to fix. For a failure mid-run, its log summary's `context:` line says whether the context ran full: report that with the reason instead of guessing a cause. Hand the task to a normal agent: the Agent tool with model `sonnet`, the same brief, and the same limits: read-only stays read-only; a writing run works on a branch, not on the user's checkout, with no `git push` and no network tools.
   - When the result shows a **Log summary**, Strata failed mid-run and its work is committed in the worktree it names. Have the agent continue there, on that branch: give it the brief, the log summary, and the instruction to finish the work rather than start over.
   - Otherwise the worker never started; the agent starts fresh on a new branch.
 

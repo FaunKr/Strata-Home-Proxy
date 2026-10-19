@@ -1,2 +1,5 @@
 /target
 __pycache__/
+
+# Worktrees of Claude Code subagents.
+.claude/worktrees/

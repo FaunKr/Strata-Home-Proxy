@@ -41,6 +41,9 @@ output_tokens=8192
 # cap: measured on 2026-10-19 with Claude Code 2.1.218 in -p mode against Strata
 # (docs/research/fit-max-tokens-and-autocompact.md, "Hardware test").
 compact_reserve=13000
+# Room for one turn past the compaction point (a large file read) before the
+# runner warns that the worker isn't compacting.
+compact_overrun=20000
 # Bounds of the compaction window: Claude Code is documented to accept no less than
 # 100K, and nothing above 180K is tested (200K is the model's own window).
 min_window=100000
@@ -314,6 +317,51 @@ follow() {
   echo "$total"
 }
 
+# How full the worker's context is, from the usage in its log: sets
+# context_now and context_peak (tokens) and compactions.
+context_stats() {
+  read -r context_now context_peak compactions < <(jq -Rrn '
+    reduce (inputs | fromjson? // empty) as $e ({now: 0, peak: 0, compactions: 0};
+      if $e.type == "assistant" and $e.message.usage != null then
+        ($e.message.usage | (.input_tokens // 0) + (.cache_read_input_tokens // 0)
+          + (.cache_creation_input_tokens // 0)) as $t
+        | .now = $t | .peak = ([.peak, $t] | max)
+      elif $e.type == "system" and $e.subtype == "compact_boundary" then .compactions += 1
+      else . end)
+    | "\(.now) \(.peak) \(.compactions)"' "$run_dir/log.jsonl" 2>/dev/null || echo "0 0 0")
+}
+
+# One line on the worker's context, and a warning when it has grown past the
+# compaction point by more than a turn's room without compacting (Claude Code
+# then runs on until Strata answers 400). Needs context_stats and a run that
+# recorded compact_at.
+context_report() {
+  local at
+  at=$(meta_get "$run_dir" compact_at)
+  [[ -n $at ]] && ((context_peak > 0)) || return 0
+  echo "context: $(((context_now + 500) / 1000))K now (peak $(((context_peak + 500) / 1000))K," \
+    "compacts near $(((at + 500) / 1000))K), compactions: $compactions"
+  if ((context_now > at + compact_overrun)); then
+    echo "warning: context past the compaction point without compacting; Strata may answer 400 soon"
+  fi
+}
+
+# For --watch: appends the new steps to the progress file and, once per run, a
+# warning when the worker is past its compaction point. Updates seen and warned.
+watch_progress() {
+  local read_lines warning
+  read_lines=$(follow "$seen")
+  if ((!warned && read_lines > seen)); then
+    context_stats
+    warning=$(context_report | grep '^warning:' || true)
+    if [[ -n $warning ]]; then
+      echo "$warning" >>"$run_dir/progress"
+      warned=1
+    fi
+  fi
+  seen=$read_lines
+}
+
 # Stops the worker and every command it started (its process group).
 stop_worker() {
   kill -TERM -- "-$worker" 2>/dev/null || return 0
@@ -339,6 +387,8 @@ fail_mid_run() {
       echo "Changed files, committed on $(meta_get "$run_dir" branch):"
       git -C "$(meta_get "$run_dir" repo)" diff --name-only "$(meta_get "$run_dir" base)" "$(meta_get "$run_dir" branch)" | sed 's/^/  /'
     fi
+    context_stats
+    context_report
     echo "Last steps:"
     steps <"$run_dir/log.jsonl" | tail -10 | sed 's/^/  /'
   } >"$run_dir/handoff"
@@ -449,6 +499,8 @@ cmd_run() {
   enqueue "$id"
   wait_turn
   preflight
+  compaction
+  meta_set compact_at "$compact_at"
 
   # A writing run gets its own branch and worktree; a read-only one reads
   # the repo as it is.
@@ -488,8 +540,9 @@ cmd_run() {
   # Stopping the runner stops the worker too: it sits in its own group.
   trap 'stop_worker; meta_set state stopped; meta_set ended "$(date +%s)"; exit 130' INT TERM HUP
   local deadline=$((SECONDS + limit)) next_probe=$((SECONDS + probe_interval)) timed_out=0 gaming=0 seen=0
+  warned=0
   while kill -0 "$worker" 2>/dev/null; do
-    ((watch)) && seen=$(follow "$seen")
+    ((watch)) && watch_progress
     if ((SECONDS >= deadline)); then
       timed_out=1
       stop_worker
@@ -510,7 +563,7 @@ cmd_run() {
   done
   wait "$worker" 2>/dev/null || rc=$?
   trap - INT TERM HUP
-  ((watch)) && follow "$seen" >/dev/null
+  ((watch)) && watch_progress
 
   if ((timed_out)); then
     ((read_only)) || commit_leftovers "$workdir" "$id"
@@ -648,6 +701,8 @@ cmd_status() {
   reason=$(meta_get "$run_dir" reason)
   [[ -z $reason ]] || echo "reason: $reason"
   if [[ -s $run_dir/log.jsonl ]]; then
+    context_stats
+    context_report
     echo "last steps:"
     steps <"$run_dir/log.jsonl" | tail -8 | sed 's/^/  /'
   fi

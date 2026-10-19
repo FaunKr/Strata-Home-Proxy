@@ -296,6 +296,23 @@ test_fallback_mid_run_keeps_work() {
   contains "$out" "+half done"
 }
 
+test_warns_without_compaction() {
+  export FAKE_CLAUDE_MODE=no-compact
+  la run --watch "task"
+  [[ $code == 3 ]] || fail "exit $code statt 3: $out"
+  local progress
+  progress=$(sed -n 's/^local-agent: progress in //p' <<<"$out")
+  [[ $(grep -c '^warning: context past the compaction point' "$progress") == 1 ]] ||
+    fail "keine einzelne Warnung in: $(cat "$progress")"
+  la status "$(run_id)"
+  contains "$out" "context: 190K now (peak 190K, compacts near 159K), compactions: 0"
+  contains "$out" "warning: context past the compaction point"
+  # The fallback's log summary names the cause.
+  la result "$(run_id)"
+  contains "$out" "API Error: 400"
+  contains "$out" "compactions: 0"
+}
+
 test_fallback_mid_run_gaming() {
   export FAKE_CLAUDE_MODE=crash-gaming
   la run "task"
@@ -348,6 +365,8 @@ second line" >"$tmp/run.out" 2>&1 &
   contains "$out" "done"
   contains "$out" "Edit README"
   contains "$out" "context compacted"
+  contains "$out" "context: 20K now (peak 50K, compacts near 159K), compactions: 1"
+  [[ $out != *warning:* ]] || fail "Warnung trotz Kompaktierung: $out"
   # Fallen back.
   health '{"status": 503, "tag": "gaming"}'
   la run "task"
@@ -365,6 +384,7 @@ test_watch() {
   has_line "$progress" "started"
   has_line "$progress" "Edit README"
   has_line "$progress" "finished"
+  [[ $(grep -c '^warning:' "$progress") == 0 ]] || fail "Warnung trotz Kompaktierung"
   # Without --watch the run says only when it starts and ends.
   la run "task"
   [[ $(wc -l <<<"$out") == 2 ]] || fail "Ausgabe ohne --watch: $out"

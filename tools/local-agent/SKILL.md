@@ -18,7 +18,7 @@ Offload only when the user asks. When a task is well scoped and mechanical (a re
    local-agent run "<task>"
    ```
 
-   Its first line names the run id. Tell the user in one line that the task is running on Strata.
+   Its first line names the run id. Tell the user in one line that the task is running on Strata. Only one run talks to Strata at a time; a later run waits its turn and says so.
 
    Options, before the task:
    - `--read-only` for research, review or questions: the worker reads the repo as it is, with no edit tools and no branch.

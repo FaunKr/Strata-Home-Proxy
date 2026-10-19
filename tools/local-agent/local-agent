@@ -31,6 +31,7 @@ EOF
 config_file=${XDG_CONFIG_HOME:-$HOME/.config}/local-agent/env
 state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/local-agent
 runs_dir=$state_dir/runs
+queue_dir=$state_dir/queue
 
 # What Claude Code assumes as the context window once the 1M window is off.
 assumed_window=200000
@@ -100,6 +101,49 @@ resolve_run() {
   done
   [[ -n $latest ]] || usage_error "no runs yet"
   run_dir=$latest
+}
+
+# The queue lets one run at a time talk to Strata, across all repos. Each
+# waiting or active run holds a file named by a growing number, holding the
+# runner's pid; the lowest number of a live runner goes first.
+enqueue() {
+  mkdir -p "$queue_dir"
+  # A directory as mutex for the counter: mkdir is atomic.
+  local lock=$state_dir/counter.lock n
+  until mkdir "$lock" 2>/dev/null; do
+    # A runner killed while holding it would block everyone.
+    [[ $(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null) ]] && rmdir "$lock" 2>/dev/null
+    sleep 0.1
+  done
+  n=$(($(cat "$state_dir/counter" 2>/dev/null || echo 0) + 1))
+  echo "$n" >"$state_dir/counter"
+  rmdir "$lock"
+  ticket=$queue_dir/$(printf %010d "$n")-$1
+  echo $$ >"$ticket"
+  trap 'rm -f "$ticket"' EXIT
+}
+
+# Waits until this run's ticket is the first one of a live runner.
+wait_turn() {
+  local file pid name said=0
+  while true; do
+    for file in "$queue_dir"/*; do
+      [[ -f $file ]] || continue
+      pid=$(cat "$file" 2>/dev/null || true)
+      if [[ -z $pid ]] || ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$file"
+        continue
+      fi
+      [[ $file == "$ticket" ]] && return
+      break
+    done
+    if ((!said)); then
+      name=${file##*/}
+      echo "local-agent: waiting for run ${name#*-} to finish"
+      said=1
+    fi
+    sleep 1
+  done
 }
 
 # Asks the Proxy for Strata's /health; the Proxy wakes the PC for it. Sets
@@ -307,6 +351,8 @@ cmd_run() {
     echo "local-agent: progress in $run_dir/progress"
   fi
 
+  enqueue "$id"
+  wait_turn
   preflight
   local pct=$((compact_share * probe_context / assumed_window))
 

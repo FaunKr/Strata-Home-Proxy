@@ -333,6 +333,34 @@ test_watch() {
   [[ $(wc -l <<<"$out") == 2 ]] || fail "Ausgabe ohne --watch: $out"
 }
 
+test_one_run_at_a_time() {
+  export FAKE_CLAUDE_MODE=slow FAKE_CLAUDE_SLEEP=2
+  local task pids=()
+  for task in A B C; do
+    "$here/local-agent" run "$task" >"$tmp/run-$task.out" 2>&1 &
+    pids+=($!)
+    sleep 0.5
+  done
+  la status
+  contains "$out" "queued"
+  for task in 0 1 2; do wait "${pids[$task]}" || fail "Lauf $task scheiterte"; done
+  # The workers ran one after another, in the order the runs started.
+  [[ $(sort -n "$FAKE_CLAUDE_RECORD/spans" | awk '{print $3}' | tr -d '\n') == ABC ]] ||
+    fail "Reihenfolge: $(cat "$FAKE_CLAUDE_RECORD/spans")"
+  sort -n "$FAKE_CLAUDE_RECORD/spans" | awk 'NR > 1 && $1 < end { bad = 1 } { end = $2 } END { exit bad }' ||
+    fail "Worker liefen gleichzeitig: $(cat "$FAKE_CLAUDE_RECORD/spans")"
+}
+
+test_stale_queue_entry() {
+  # A runner killed while waiting leaves its entry behind; it must not block.
+  mkdir -p "$XDG_STATE_HOME/local-agent/queue"
+  echo 999999 >"$XDG_STATE_HOME/local-agent/queue/0000000000-dead"
+  local started=$SECONDS
+  la run "task"
+  [[ $code == 0 ]] || fail "exit $code: $out"
+  ((SECONDS - started < 10)) || fail "toter Eintrag hielt den Lauf auf"
+}
+
 tests=("$@")
 if ((${#tests[@]} == 0)); then
   # shellcheck disable=SC2207 # test names have no spaces

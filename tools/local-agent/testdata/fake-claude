@@ -10,7 +10,7 @@
 #   check        one Bash tool call that echoes the marker it was asked for
 #   no-tool      answers without calling a tool
 # Records in $FAKE_CLAUDE_RECORD: args (one per line), env, stdin, pid, and
-# "<start> <end>" lines in spans.
+# "<start> <end> <task>" lines in spans.
 set -euo pipefail
 rec=${FAKE_CLAUDE_RECORD:?}
 mkdir -p "$rec"
@@ -20,7 +20,8 @@ for var in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_M
   CLAUDE_CODE_MAX_OUTPUT_TOKENS CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC API_TIMEOUT_MS; do
   printf '%s=%s\n' "$var" "${!var-<unset>}"
 done >"$rec/env"
-cat >"$rec/stdin"
+input=$(cat)
+printf '%s\n' "$input" >"$rec/stdin"
 echo "$$" >"$rec/pid"
 echo "$PWD" >"$rec/cwd"
 now() { python3 -c "import time; print(time.time())"; }
@@ -48,7 +49,7 @@ case ${FAKE_CLAUDE_MODE:-success} in
     fi
     result "API Error: 503 Strata ist nicht verfügbar" true
     echo "fake-claude: API error" >&2
-    echo "$start $(now)" >>"$rec/spans"
+    echo "$start $(now) ${input%%$'\n'*}" >>"$rec/spans"
     exit 1
     ;;
   hang)
@@ -58,7 +59,7 @@ case ${FAKE_CLAUDE_MODE:-success} in
     wait
     ;;
   check)
-    marker=$(grep -o 'local-agent-check-[0-9a-z]*' "$rec/stdin" | head -1)
+    marker=$(grep -o 'local-agent-check-[0-9a-z]*' <<<"$input" | head -1)
     tool_use Bash "$(jq -cn --arg c "echo $marker" '{command:$c}')"
     event --arg m "$marker" '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"t1",content:$m}]}}'
     result "Done." false
@@ -67,4 +68,4 @@ case ${FAKE_CLAUDE_MODE:-success} in
     result "I would rather not." false
     ;;
 esac
-echo "$start $(now)" >>"$rec/spans"
+echo "$start $(now) ${input%%$'\n'*}" >>"$rec/spans"

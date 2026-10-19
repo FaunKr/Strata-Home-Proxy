@@ -132,6 +132,28 @@ fn Picker(range: RwSignal<String>, from: String, to: String) -> impl IntoView {
     }
 }
 
+/// Die letzten 7 Tage auf der Übersicht, mit dem Weg zum ganzen Verlauf.
+#[component]
+pub fn WeekCard(week: HistoryView) -> impl IntoView {
+    let totals = week.totals;
+    let seen = totals.awake_h + totals.gaming_h + totals.asleep_h > 0.0;
+    let summary = if seen {
+        format!("{} h awake", hours(totals.awake_h + totals.gaming_h))
+    } else {
+        "Nothing recorded yet".to_string()
+    };
+    view! {
+        <section class="card week" aria-labelledby="week-heading">
+            <div class="card-head">
+                <h2 id="week-heading">"Last 7 days"</h2>
+                <a href="/admin/pc/history" class="button secondary">"History"</a>
+            </div>
+            <p class="week-summary">{summary}</p>
+            {seen.then(|| view! { <Bars days=week.days.clone() /> })}
+        </section>
+    }
+}
+
 /// Die Balken und die Summe, oder ein leerer Verlauf, wenn noch nichts zu
 /// sehen ist.
 fn shown(view: HistoryView) -> AnyView {

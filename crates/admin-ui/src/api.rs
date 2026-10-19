@@ -287,6 +287,8 @@ pub struct Overview {
     pub pc_service: Option<PcServiceView>,
     pub hardware: HardwareView,
     pub power: PowerView,
+    /// The Verlauf of the last 7 days, summed at most once a minute.
+    pub week: HistoryView,
 }
 
 /// The Leistung of the Messsteckdose for the overview; independent of the PC's

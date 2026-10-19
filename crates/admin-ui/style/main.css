@@ -459,6 +459,9 @@ dialog.confirm .actions { justify-content: flex-end; margin-top: 24px; }
 .bars.dense { gap: 2px; }
 .bars.dense .bar { min-width: 2px; }
 .bars.dense .bar-column { border-radius: 2px; }
+.week-summary { font-size: 1.05rem; font-weight: 600; margin: 4px 0 0; }
+.week .bars { margin-top: 10px; }
+.week .bar-column { height: 56px; }
 .bars-axis { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--muted); }
 input[type="date"] {
   font: inherit;

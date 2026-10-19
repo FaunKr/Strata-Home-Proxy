@@ -14,7 +14,7 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 | 1. Einmalige Einrichtung | Anleitung: [docs/einrichtung.md](docs/einrichtung.md) |
 | 2. NAS-Proxy | gebaut, gegen nachgebautes Strata getestet |
 | 3. PC-Dienst und Gaming-Schalter | gebaut, gegen nachgebauten PC getestet; Einrichtung per Befehl aus dem Bereich *PC*: [docs/pc-dienst.md](docs/pc-dienst.md) |
-| 4. Weboberfläche | gebaut (englisch, Bereiche Overview, PC, Strata, Access, System); Verlauf mit Stromschätzung offen |
+| 4. Weboberfläche | gebaut (englisch, Bereiche Overview, PC, Strata, Access, System), mit Verlauf und Stromschätzung |
 | 5. Abnahme auf echter Hardware | offen |
 
 ## Was der NAS-Proxy tut
@@ -43,9 +43,13 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 - **MAC-Adresse:** Der PC-Dienst meldet sie selbst; der Proxy merkt sie sich in
   `/data/pc-mac` und weckt damit. `PC_MAC` braucht es nur für den allerersten
   Start, bevor der PC-Dienst je geantwortet hat.
-- **Verlauf:** Weck- und Schlafereignisse in `/data/events.db` (SQLite). Ein
-  vorhandenes `events.jsonl` wird beim ersten Start einmalig importiert und
-  danach nicht mehr geschrieben; es bleibt als Sicherung erhalten.
+- **Verlauf:** Weck- und Schlafereignisse und minütliche Werte der
+  Messsteckdose in `/data/events.db` (SQLite). Unter *PC → History* zeigt die
+  Weboberfläche, wie lange der PC wach, im Gaming-Modus, schlafend oder
+  unbeobachtet war, je Tag, Woche oder Monat, mit Stromschätzung; die
+  Übersicht zeigt die letzten 7 Tage. Ein vorhandenes `events.jsonl` wird beim
+  ersten Start einmalig importiert und danach nicht mehr geschrieben; es
+  bleibt als Sicherung erhalten.
 
 ## Auf dem NAS starten
 

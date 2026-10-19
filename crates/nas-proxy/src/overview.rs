@@ -13,7 +13,8 @@ use std::{
 
 use futures_util::{StreamExt, stream::BoxStream};
 use strata_admin_ui::api::{
-    EventView, HardwareView, Overview, PcView, PowerView, Setup, SleepView, StrataJob, StrataView,
+    EventView, HardwareView, HistoryView, Overview, PcView, PowerView, Setup, SleepView, StrataJob,
+    StrataView,
 };
 use tokio::sync::{Notify, watch};
 
@@ -31,6 +32,9 @@ const POLL_JOB: Duration = Duration::from_secs(2);
 /// anyone; changes from requests and buttons show up this fast.
 const REFRESH: Duration = Duration::from_millis(250);
 const EVENTS_SHOWN: usize = 10;
+/// How often the Verlauf of the last 7 days is summed again for the overview;
+/// it changes by the hour, not by the tick.
+const WEEK_REFRESH: Duration = Duration::from_secs(60);
 
 /// Strata's numbers from `/metrics?format=prometheus` (see docs/strata-api.md).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -61,6 +65,10 @@ pub struct Monitor {
     poll: Mutex<Duration>,
     /// Rounds of asking so far; for tests.
     rounds: AtomicUsize,
+    /// The last 7 days of the Verlauf and when they were summed.
+    week: Mutex<Option<(Instant, HistoryView)>>,
+    /// Times the week was summed so far; for tests.
+    weeks: AtomicUsize,
 }
 
 impl Default for Monitor {
@@ -73,6 +81,8 @@ impl Default for Monitor {
             probe_now: Notify::new(),
             poll: Mutex::new(POLL),
             rounds: AtomicUsize::new(0),
+            week: Mutex::new(None),
+            weeks: AtomicUsize::new(0),
         }
     }
 }
@@ -91,6 +101,24 @@ impl Monitor {
     pub fn rounds(&self) -> usize {
         self.rounds.load(Ordering::SeqCst)
     }
+
+    pub fn weeks_summed(&self) -> usize {
+        self.weeks.load(Ordering::SeqCst)
+    }
+}
+
+/// The last 7 days of the Verlauf, summed again once `WEEK_REFRESH` passed.
+async fn week(state: &Arc<AppState>) -> HistoryView {
+    let monitor = &state.overview;
+    if let Some((at, view)) = monitor.week.lock().unwrap().as_ref()
+        && at.elapsed() < WEEK_REFRESH
+    {
+        return view.clone();
+    }
+    let view = crate::history::view(state, "7d").await;
+    monitor.weeks.fetch_add(1, Ordering::SeqCst);
+    *monitor.week.lock().unwrap() = Some((Instant::now(), view.clone()));
+    view
 }
 
 /// Counts a watching page until dropped.
@@ -166,7 +194,8 @@ async fn run(state: &Arc<AppState>) {
         let Some(probe) = monitor.probe.lock().unwrap().clone() else {
             continue;
         };
-        let overview = build(state, &probe);
+        let week = week(state).await;
+        let overview = build(state, &probe, week);
         monitor.tx.send_if_modified(|current| {
             // The clock alone is no change: the page counts down by itself.
             let unchanged = current.as_ref().is_some_and(|c| {
@@ -315,7 +344,7 @@ fn hardware_view(pc: PcView, status: Option<&PcStatus>) -> HardwareView {
     }
 }
 
-fn build(state: &AppState, probe: &Probe) -> Overview {
+fn build(state: &AppState, probe: &Probe, week: HistoryView) -> Overview {
     let cfg = state.cfg();
     let snap = state.snapshot();
     let now = SystemTime::now();
@@ -381,6 +410,7 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
         pc_service,
         hardware: hardware_view(pc, probe.pc.as_ref()),
         power: probe.power.clone(),
+        week,
     }
 }
 

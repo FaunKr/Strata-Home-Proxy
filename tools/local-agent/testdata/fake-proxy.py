@@ -6,7 +6,7 @@ Usage: fake-proxy.py <scenario.json> <port-file>
 Answers GET /health from the scenario file, which it re-reads on every
 request, so a test (or the fake claude) can change it at any time:
 
-    {"health": [{"status": 504, "tag": "wake_timeout"}, {"status": 200, "max_context": 65536}]}
+    {"health": [{"status": 504, "tag": "wake_timeout"}, {"status": 200, "max_context": 262144}]}
 
 Each request takes the first entry and drops it from the file while more than
 one is left, so the last entry answers every later request. Every request is
@@ -25,7 +25,7 @@ class Handler(BaseHTTPRequestHandler):
             f.write(f"{self.path} {self.headers.get('x-api-key', '')}\n")
         with open(scenario_path) as f:
             scenario = json.load(f)
-        answers = scenario.get("health") or [{"status": 200, "max_context": 65536}]
+        answers = scenario.get("health") or [{"status": 200, "max_context": 262144}]
         answer = answers[0]
         if len(answers) > 1:
             scenario["health"] = answers[1:]
@@ -33,7 +33,7 @@ class Handler(BaseHTTPRequestHandler):
                 json.dump(scenario, f)
         status = answer.get("status", 200)
         if status == 200:
-            body = {"status": "ok", "max_context": answer.get("max_context", 65536), "service": "strata"}
+            body = {"status": "ok", "max_context": answer.get("max_context", 262144), "service": "strata"}
         else:
             body = {"type": "error", "error": {"type": "api_error", "message": answer.get("tag", "")}}
         data = json.dumps(body).encode()

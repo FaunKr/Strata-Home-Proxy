@@ -9,7 +9,7 @@ use crate::{
         ResetSetting, SaveSettings, SettingEntry, SettingValue, Source, error_text, get_settings,
         setting_error,
     },
-    labels::{SYSTEM, SectionDef, label, unit},
+    labels::{ENERGY, SYSTEM, SectionDef, label, unit},
 };
 
 #[component]
@@ -20,7 +20,7 @@ pub fn SystemPage() -> impl IntoView {
             <p class="lead">"Technical settings of the proxy itself. Rarely needs changing."</p>
         </div>
         <ProxyFacts />
-        <SettingsSections sections=&[&SYSTEM] />
+        <SettingsSections sections=&[&SYSTEM, &ENERGY] />
     }
 }
 

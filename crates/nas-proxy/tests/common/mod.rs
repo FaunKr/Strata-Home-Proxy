@@ -578,6 +578,9 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         sleep_settle: Duration::from_millis(200),
         probe_timeout: Duration::from_millis(500),
         max_body_bytes: 1 << 20,
+        power_awake_watts: 75.0,
+        power_asleep_watts: 3.0,
+        price_ct_per_kwh: 30.0,
         data_dir: None,
         ui_password: None,
     };

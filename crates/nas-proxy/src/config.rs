@@ -51,6 +51,15 @@ pub struct Config {
     pub probe_timeout: Duration,
     /// Largest accepted request body in bytes (`MAX_BODY_BYTES`).
     pub max_body_bytes: usize,
+    /// Watts the PC draws while awake (`POWER_AWAKE_WATTS`). The history
+    /// estimates energy from it when no Messsteckdose measures the PC.
+    pub power_awake_watts: f64,
+    /// Watts the PC draws while asleep (`POWER_ASLEEP_WATTS`), for the same
+    /// estimate.
+    pub power_asleep_watts: f64,
+    /// Electricity price in cents per kWh (`PRICE_CT_PER_KWH`), to turn energy
+    /// into cost.
+    pub price_ct_per_kwh: f64,
     /// Directory for the event history and saved settings (`DATA_DIR`); in
     /// memory only if unset. Not changeable on the settings page, since the
     /// settings themselves live there.
@@ -113,6 +122,9 @@ pub const FIELDS: &[Field] = &[
     field("SLEEP_SETTLE_SECS"),
     field("PROBE_TIMEOUT_MS"),
     field("MAX_BODY_BYTES"),
+    field("POWER_AWAKE_WATTS"),
+    field("POWER_ASLEEP_WATTS"),
+    field("PRICE_CT_PER_KWH"),
     Field {
         restart: true,
         ..field("LISTEN_ADDR")
@@ -144,6 +156,9 @@ impl Default for Config {
             sleep_settle: Duration::from_secs(30),
             probe_timeout: Duration::from_millis(2000),
             max_body_bytes: 64 * 1024 * 1024,
+            power_awake_watts: 75.0,
+            power_asleep_watts: 3.0,
+            price_ct_per_kwh: 30.0,
             data_dir: None,
             ui_password: None,
         }
@@ -201,6 +216,9 @@ impl Config {
             "SLEEP_SETTLE_SECS" => self.sleep_settle = secs(raw)?,
             "PROBE_TIMEOUT_MS" => self.probe_timeout = positive(millis(raw)?)?,
             "MAX_BODY_BYTES" => self.max_body_bytes = number(raw, "Bytes")?,
+            "POWER_AWAKE_WATTS" => self.power_awake_watts = positive_decimal(raw, "Watt")?,
+            "POWER_ASLEEP_WATTS" => self.power_asleep_watts = positive_decimal(raw, "Watt")?,
+            "PRICE_CT_PER_KWH" => self.price_ct_per_kwh = positive_decimal(raw, "ct/kWh")?,
             _ => unreachable!("every field in FIELDS is handled"),
         }
         Ok(())
@@ -235,6 +253,9 @@ impl Config {
             "SLEEP_SETTLE_SECS" => secs(self.sleep_settle),
             "PROBE_TIMEOUT_MS" => millis(self.probe_timeout),
             "MAX_BODY_BYTES" => Some(self.max_body_bytes.to_string()),
+            "POWER_AWAKE_WATTS" => Some(self.power_awake_watts.to_string()),
+            "POWER_ASLEEP_WATTS" => Some(self.power_asleep_watts.to_string()),
+            "PRICE_CT_PER_KWH" => Some(self.price_ct_per_kwh.to_string()),
             _ => None,
         }
     }
@@ -267,6 +288,19 @@ fn positive(d: Duration) -> Result<Duration> {
         bail!("must be greater than 0");
     }
     Ok(d)
+}
+
+/// A finite number above 0; decimals with a point, e.g. 32.5.
+fn positive_decimal(raw: &str, unit: &str) -> Result<f64> {
+    let n: f64 = raw
+        .parse()
+        .ok()
+        .filter(|n: &f64| n.is_finite())
+        .with_context(|| format!("expects a number ({unit}), e.g. 32.5"))?;
+    if n <= 0.0 {
+        bail!("must be greater than 0");
+    }
+    Ok(n)
 }
 
 /// A key that can go into an HTTP header as is.
@@ -359,5 +393,44 @@ mod tests {
         cfg.apply("PC_AGENT_URL", "http://pc").unwrap();
         cfg.apply("PC_AGENT_URL", "").unwrap();
         assert_eq!(cfg.pc_agent_url, None);
+    }
+
+    #[test]
+    fn power_and_price_have_defaults() {
+        let cfg = Config::default();
+        assert_eq!(cfg.power_awake_watts, 75.0);
+        assert_eq!(cfg.power_asleep_watts, 3.0);
+        assert_eq!(cfg.price_ct_per_kwh, 30.0);
+        assert_eq!(cfg.value("POWER_AWAKE_WATTS").as_deref(), Some("75"));
+        assert_eq!(cfg.value("PRICE_CT_PER_KWH").as_deref(), Some("30"));
+    }
+
+    #[test]
+    fn power_and_price_take_decimals() {
+        let mut cfg = Config::default();
+        cfg.apply("PRICE_CT_PER_KWH", "32.5").unwrap();
+        cfg.apply("POWER_AWAKE_WATTS", " 120 ").unwrap();
+        cfg.apply("POWER_ASLEEP_WATTS", "0.8").unwrap();
+        assert_eq!(cfg.price_ct_per_kwh, 32.5);
+        assert_eq!(cfg.power_awake_watts, 120.0);
+        assert_eq!(cfg.power_asleep_watts, 0.8);
+        assert_eq!(cfg.value("PRICE_CT_PER_KWH").as_deref(), Some("32.5"));
+    }
+
+    #[test]
+    fn power_and_price_must_be_positive_numbers() {
+        let mut cfg = Config::default();
+        for key in [
+            "POWER_AWAKE_WATTS",
+            "POWER_ASLEEP_WATTS",
+            "PRICE_CT_PER_KWH",
+        ] {
+            for raw in ["0", "-3", "dreißig", "", "NaN", "inf", "32,5"] {
+                assert!(cfg.apply(key, raw).is_err(), "{key}={raw:?}");
+            }
+        }
+        assert_eq!(cfg.power_awake_watts, 75.0);
+        assert_eq!(cfg.power_asleep_watts, 3.0);
+        assert_eq!(cfg.price_ct_per_kwh, 30.0);
     }
 }

@@ -80,6 +80,18 @@ pub fn label(key: &str) -> Label {
         ),
         "MAX_BODY_BYTES" => ("Largest request", "Requests above this size are refused."),
         "LISTEN_ADDR" => ("Proxy address", "Address and port the proxy listens on."),
+        "POWER_AWAKE_WATTS" => (
+            "Power while awake",
+            "What the PC draws while awake. The history uses it to estimate energy when no power plug measures it.",
+        ),
+        "POWER_ASLEEP_WATTS" => (
+            "Power while asleep",
+            "What the PC draws while asleep. The history uses it to estimate energy when no power plug measures it.",
+        ),
+        "PRICE_CT_PER_KWH" => (
+            "Electricity price",
+            "Price per kWh in cents, e.g. 32.5. Turns the PC's energy use into cost.",
+        ),
         _ => ("", ""),
     };
     Label {
@@ -148,6 +160,18 @@ pub const SYSTEM: SectionDef = SectionDef {
     advanced: &[],
 };
 
+pub const ENERGY: SectionDef = SectionDef {
+    id: "energy",
+    title: "Energy",
+    help: "What the PC draws and what power costs, for the energy use and cost in the history.",
+    keys: &[
+        "POWER_AWAKE_WATTS",
+        "POWER_ASLEEP_WATTS",
+        "PRICE_CT_PER_KWH",
+    ],
+    advanced: &[],
+};
+
 /// The unit a value is entered in, shown inside its field.
 pub fn unit(key: &str) -> Option<&'static str> {
     if key.ends_with("_SECS") {
@@ -156,6 +180,10 @@ pub fn unit(key: &str) -> Option<&'static str> {
         Some("ms")
     } else if key.ends_with("_BYTES") {
         Some("bytes")
+    } else if key.ends_with("_WATTS") {
+        Some("W")
+    } else if key.ends_with("_CT_PER_KWH") {
+        Some("ct/kWh")
     } else {
         None
     }

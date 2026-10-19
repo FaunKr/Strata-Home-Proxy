@@ -10,6 +10,7 @@ pub mod events;
 pub mod files;
 pub mod overview;
 pub mod pc_setup;
+pub mod plug;
 pub mod proxy;
 pub mod settings;
 pub mod state;

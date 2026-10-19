@@ -13,7 +13,7 @@ use std::{
 
 use futures_util::{StreamExt, stream::BoxStream};
 use strata_admin_ui::api::{
-    EventView, HardwareView, Overview, PcView, Setup, SleepView, StrataJob, StrataView,
+    EventView, HardwareView, Overview, PcView, PowerView, Setup, SleepView, StrataJob, StrataView,
 };
 use tokio::sync::{Notify, watch};
 
@@ -48,6 +48,8 @@ struct Probe {
     pc: Option<PcStatus>,
     /// The running Strata job, asked for only while one runs.
     job: Option<StrataJob>,
+    /// The Leistung of the Messsteckdose.
+    power: PowerView,
 }
 
 pub struct Monitor {
@@ -188,6 +190,32 @@ async fn run(state: &Arc<AppState>) {
 }
 
 async fn probe(state: &AppState) -> Probe {
+    // The plug alongside, so a slow one holds up nothing else.
+    let ((health, metrics, pc, job), power) = tokio::join!(probe_pc(state), power(state));
+    Probe {
+        health,
+        metrics,
+        pc,
+        job,
+        power,
+    }
+}
+
+/// Judged from the setting at the time of asking, so a plug set up a moment
+/// ago is not shown as unreachable before it was asked.
+async fn power(state: &AppState) -> PowerView {
+    let Some(url) = state.cfg().shelly_url.clone() else {
+        return PowerView::NotConfigured;
+    };
+    match crate::plug::power(&state.probe_client(), &url).await {
+        Some(watts) => PowerView::Watts(watts),
+        None => PowerView::Unreachable,
+    }
+}
+
+async fn probe_pc(
+    state: &AppState,
+) -> (Health, Option<Metrics>, Option<PcStatus>, Option<StrataJob>) {
     let health = state.strata_health().await;
     let up = matches!(health, Health::Up { .. });
     let (metrics, pc) = tokio::join!(metrics(state), state.check_pc(up));
@@ -199,12 +227,7 @@ async fn probe(state: &AppState) -> Probe {
             .filter(|j| j.state == strata_admin_ui::api::StrataJobState::Running),
         _ => None,
     };
-    Probe {
-        health,
-        metrics,
-        pc,
-        job,
-    }
+    (health, metrics, pc, job)
 }
 
 async fn metrics(state: &AppState) -> Option<Metrics> {
@@ -357,6 +380,7 @@ fn build(state: &AppState, probe: &Probe) -> Overview {
         events,
         pc_service,
         hardware: hardware_view(pc, probe.pc.as_ref()),
+        power: probe.power.clone(),
     }
 }
 

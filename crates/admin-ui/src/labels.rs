@@ -38,6 +38,10 @@ pub fn label(key: &str) -> Label {
             "PC service token",
             "The same secret as in strata-pc-agent.toml. Never shown.",
         ),
+        "SHELLY_URL" => (
+            "Power plug address",
+            "Optional Shelly plug the PC is plugged into, e.g. 192.168.1.228. The overview then shows the PC's power draw.",
+        ),
         "IDLE_TIMEOUT_SECS" => (
             "Idle time before sleep",
             "Without requests for this long, the PC goes to sleep.",
@@ -98,7 +102,13 @@ pub const PC_CONNECTION: SectionDef = SectionDef {
     id: "pc-connection",
     title: "Connection",
     help: "How the proxy reaches your PC. The install command fills in the PC service values.",
-    keys: &["PC_MAC", "WOL_ADDR", "PC_AGENT_URL", "PC_AGENT_TOKEN"],
+    keys: &[
+        "PC_MAC",
+        "WOL_ADDR",
+        "PC_AGENT_URL",
+        "PC_AGENT_TOKEN",
+        "SHELLY_URL",
+    ],
     advanced: &[],
 };
 

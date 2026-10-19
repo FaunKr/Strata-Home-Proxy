@@ -1,15 +1,17 @@
-//! The Hardware card on the overview: the Hardwarewerte of GPU and CPU.
+//! The Hardware card on the overview: the Hardwarewerte of GPU and CPU, and
+//! the Leistung of the Messsteckdose.
 
 use leptos::prelude::*;
 
-use crate::api::{Cpu, Gpu, HardwareView, PcView};
+use crate::api::{Cpu, Gpu, HardwareView, PcView, PowerView};
 
 /// "—" for a value the PC could not read.
 const NONE: &str = "—";
 
+/// `hardware` is `None` without a PC service; then only the power row shows.
 #[component]
-pub fn HardwareCard(hardware: HardwareView, pc: PcView) -> impl IntoView {
-    let body = match hardware {
+pub fn HardwareCard(hardware: Option<HardwareView>, pc: PcView, power: PowerView) -> impl IntoView {
+    let body = hardware.map(|hardware| match hardware {
         HardwareView::Values(h) => {
             let gpu = h.gpu.unwrap_or_default();
             view! {
@@ -33,13 +35,29 @@ pub fn HardwareCard(hardware: HardwareView, pc: PcView) -> impl IntoView {
             };
             view! { <p class="muted small">{text}</p> }.into_any()
         }
-    };
+    });
     view! {
         <section class="card hardware" aria-labelledby="hardware-heading">
             <h2 id="hardware-heading">"Hardware"</h2>
             {body}
+            <PowerRow power />
         </section>
     }
+}
+
+/// The plug also answers while the PC sleeps, so this row shows in every state.
+#[component]
+fn PowerRow(power: PowerView) -> impl IntoView {
+    let (value, note) = match power {
+        PowerView::NotConfigured => return None,
+        // A plug can report a hair below zero at standby.
+        PowerView::Watts(w) => (format!("{:.0} W", w.max(0.0)), None),
+        PowerView::Unreachable => (NONE.to_string(), Some("Plug not reachable")),
+    };
+    Some(view! {
+        <Row label="Power" values=vec![("Draw", value)] />
+        {note.map(|n| view! { <p class="muted small">{n}</p> })}
+    })
 }
 
 #[component]

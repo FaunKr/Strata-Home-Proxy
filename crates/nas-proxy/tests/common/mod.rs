@@ -86,6 +86,14 @@ pub struct FakePc {
     pub strata_log_requests: AtomicUsize,
     /// The PC service refuses `GET /strata-log` (wrong token, other address).
     pub refuse_log: AtomicBool,
+    /// Leistung the simulated Messsteckdose reports, in watts.
+    pub plug_watts: Mutex<f64>,
+    /// The Messsteckdose answers like a Gen1 plug: `/status` only.
+    pub plug_gen1: AtomicBool,
+    /// The Messsteckdose answers every call with 503.
+    pub plug_down: AtomicBool,
+    /// The Messsteckdose takes longer than any probe timeout to answer.
+    pub plug_hangs: AtomicBool,
 }
 
 /// Credential headers as Strata saw them.
@@ -135,6 +143,42 @@ impl FakePc {
 }
 
 pub type Pc = Arc<FakePc>;
+
+/// Waits forever while the Messsteckdose hangs; 503 while it is down.
+async fn plug_trouble(pc: &FakePc) -> Option<Response> {
+    if pc.plug_hangs.load(Ordering::SeqCst) {
+        std::future::pending::<()>().await;
+    }
+    pc.plug_down
+        .load(Ordering::SeqCst)
+        .then(|| StatusCode::SERVICE_UNAVAILABLE.into_response())
+}
+
+/// Like a Gen2+ Shelly plug's `GET /rpc/Switch.GetStatus?id=0`; 404 on Gen1.
+pub async fn plug_switch_status(State(pc): State<Pc>) -> Response {
+    if let Some(trouble) = plug_trouble(&pc).await {
+        return trouble;
+    }
+    if pc.plug_gen1.load(Ordering::SeqCst) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let watts = *pc.plug_watts.lock().unwrap();
+    Json(json!({"id": 0, "source": "init", "output": true, "apower": watts, "voltage": 231.2}))
+        .into_response()
+}
+
+/// Like a Gen1 Shelly plug's `GET /status`; Gen2+ plugs have none.
+pub async fn plug_status(State(pc): State<Pc>) -> Response {
+    if let Some(trouble) = plug_trouble(&pc).await {
+        return trouble;
+    }
+    if !pc.plug_gen1.load(Ordering::SeqCst) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let watts = *pc.plug_watts.lock().unwrap();
+    Json(json!({"relays": [{"ison": true}], "meters": [{"power": watts, "is_valid": true}]}))
+        .into_response()
+}
 
 /// Like Strata: 200 with `loaded`; a stand-in 503 when it would not answer.
 pub async fn health(State(pc): State<Pc>, headers: HeaderMap) -> Response {
@@ -476,6 +520,8 @@ pub struct Setup {
     pub url: String,
     /// An API key the proxy accepts; `post_json` sends it.
     pub key: String,
+    /// Address of the simulated Messsteckdose, not set up by default.
+    pub plug: String,
 }
 
 pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
@@ -497,6 +543,13 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     )
     .await;
     let wol = wol_listener(pc.clone()).await;
+    let plug = serve(
+        Router::new()
+            .route("/rpc/Switch.GetStatus", get(plug_switch_status))
+            .route("/status", get(plug_status))
+            .with_state(pc.clone()),
+    )
+    .await;
     let mut cfg = Config {
         listen_addr: "127.0.0.1:0".parse().unwrap(),
         strata_url: Some(format!("http://{strata}")),
@@ -505,6 +558,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         wol_addr: wol,
         pc_agent_url: Some(format!("http://{agent}")),
         pc_agent_token: None,
+        shelly_url: None,
         idle_timeout: Duration::from_secs(3600),
         wake_timeout: Duration::from_secs(10),
         wol_resend: Duration::from_secs(1),
@@ -529,6 +583,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         state,
         url: format!("http://{proxy}"),
         key,
+        plug: plug.to_string(),
     }
 }
 

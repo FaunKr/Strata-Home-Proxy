@@ -26,6 +26,9 @@ pub struct Config {
     pub pc_agent_url: Option<String>,
     /// Bearer token for the PC service (`PC_AGENT_TOKEN`).
     pub pc_agent_token: Option<String>,
+    /// Base URL of the Messsteckdose the PC is plugged into, a Shelly plug
+    /// (`SHELLY_URL`). Without it the overview shows no Leistung.
+    pub shelly_url: Option<String>,
     /// Time without requests before the PC is asked to sleep (`IDLE_TIMEOUT_SECS`).
     pub idle_timeout: Duration,
     /// Longest time a request waits for the PC to wake up (`WAKE_TIMEOUT_SECS`).
@@ -99,6 +102,7 @@ pub const FIELDS: &[Field] = &[
         secret: true,
         ..optional("PC_AGENT_TOKEN")
     },
+    optional("SHELLY_URL"),
     field("IDLE_TIMEOUT_SECS"),
     field("WAKE_TIMEOUT_SECS"),
     field("WOL_RESEND_SECS"),
@@ -129,6 +133,7 @@ impl Default for Config {
             wol_addr: "255.255.255.255:9".parse().unwrap(),
             pc_agent_url: None,
             pc_agent_token: None,
+            shelly_url: None,
             idle_timeout: Duration::from_secs(900),
             wake_timeout: Duration::from_secs(240),
             wol_resend: Duration::from_secs(10),
@@ -185,6 +190,7 @@ impl Config {
             "WOL_ADDR" => self.wol_addr = address(raw)?,
             "PC_AGENT_URL" => self.pc_agent_url = text.map(|u| url(&u)).transpose()?,
             "PC_AGENT_TOKEN" => self.pc_agent_token = text,
+            "SHELLY_URL" => self.shelly_url = text.map(|u| plug_url(&u)).transpose()?,
             "IDLE_TIMEOUT_SECS" => self.idle_timeout = secs(raw)?,
             "WAKE_TIMEOUT_SECS" => self.wake_timeout = secs(raw)?,
             "WOL_RESEND_SECS" => self.wol_resend = positive(secs(raw)?)?,
@@ -218,6 +224,7 @@ impl Config {
             "WOL_ADDR" => Some(self.wol_addr.to_string()),
             "PC_AGENT_URL" => self.pc_agent_url.clone(),
             "PC_AGENT_TOKEN" => self.pc_agent_token.clone(),
+            "SHELLY_URL" => self.shelly_url.clone(),
             "IDLE_TIMEOUT_SECS" => secs(self.idle_timeout),
             "WAKE_TIMEOUT_SECS" => secs(self.wake_timeout),
             "WOL_RESEND_SECS" => secs(self.wol_resend),
@@ -277,6 +284,15 @@ fn url(raw: &str) -> Result<String> {
     Ok(raw.trim_end_matches('/').to_string())
 }
 
+/// A URL, or a bare host like `192.168.1.228`, which means `http://` on it.
+fn plug_url(raw: &str) -> Result<String> {
+    if raw.contains("://") {
+        url(raw)
+    } else {
+        url(&format!("http://{raw}"))
+    }
+}
+
 /// Parses `AA:BB:CC:DD:EE:FF` or `AA-BB-CC-DD-EE-FF` (the format Windows prints).
 pub fn parse_mac(raw: &str) -> Result<[u8; 6]> {
     let parts: Vec<&str> = raw.trim().split([':', '-']).collect();
@@ -317,6 +333,7 @@ mod tests {
         cfg.apply("PC_AGENT_URL", "http://pc:8091").unwrap();
         cfg.apply("PC_AGENT_TOKEN", "geheim").unwrap();
         cfg.apply("STRATA_API_KEY", "auch-geheim").unwrap();
+        cfg.apply("SHELLY_URL", "192.168.1.228").unwrap();
         for f in FIELDS {
             let text = cfg
                 .value(f.key)
@@ -326,6 +343,7 @@ mod tests {
             assert_eq!(copy.value(f.key), Some(text), "{}", f.key);
         }
         assert_eq!(cfg.strata_url.as_deref(), Some("http://pc:8080"));
+        assert_eq!(cfg.shelly_url.as_deref(), Some("http://192.168.1.228"));
     }
 
     #[test]

@@ -50,28 +50,6 @@ einmal den Befehl von oben.
 Aufgabe, Firewall-Regel, Verknüpfung und Ordner. Auf dem NAS danach im
 Bereich *PC* `PC_AGENT_URL` und `PC_AGENT_TOKEN` mit *Reset* zurücksetzen.
 
-### Ohne NAS
-
-1. In GitHub unter *Actions* den letzten grünen CI-Lauf öffnen und unten
-   **strata-pc-agent-windows** herunterladen, entpacken.
-2. PowerShell im entpackten Ordner:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File install.ps1 -NasIp 192.168.1.10
-   ```
-   Das erzeugt ein Token und zeigt es an; sonst wie oben.
-3. `%LOCALAPPDATA%\StrataHome\strata-pc-agent.toml` öffnen und prüfen:
-   - `strata_start`: Pfad zum Startskript von Strata
-   - `strata_processes`: der Strata-Ordner mit `\` am Ende (Vorgabe
-     `C:\Strata\`). Der Dienst beendet dann jedes Programm aus diesem Ordner
-     samt allem, was es gestartet hat; nur `strata.exe` zu beenden reicht
-     nicht, weil Strata die Engine nach einem Absturz neu startet
-   - `strata_api_key`: nur falls `/health` ohne Key nicht antwortet
-   Danach in der Aufgabenplanung „Strata PC-Dienst“ beenden und neu starten.
-4. Auf dem NAS im Bereich *PC* `PC_AGENT_URL` (`http://<PC-IP>:8091`) und
-   `PC_AGENT_TOKEN` (das Token aus Schritt 2) eintragen.
-
-Entfernen: `powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall`.
-
 Der Dienst schreibt nach `%LOCALAPPDATA%\StrataHome\strata-pc-agent.log`.
 
 ## Strata-Ausgabe

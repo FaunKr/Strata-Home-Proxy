@@ -3,12 +3,12 @@
 #
 # Usage: <changed paths, one per line> | scripts/ci-select.sh
 #        scripts/ci-select.sh --all
-# Prints test=, packages=, windows= and image= for $GITHUB_OUTPUT. An empty
+# Prints test=, packages= and image= for $GITHUB_OUTPUT. An empty
 # package list means the whole workspace (scripts/check.sh without arguments).
 # scripts/ci-select.test.sh checks this mapping against the workspace.
 set -euo pipefail
 
-all() { printf '%s\n' test=true packages= windows=true image=true; }
+all() { printf '%s\n' test=true packages= image=true; }
 if [[ ${1:-} == --all ]]; then
   all
   exit 0
@@ -16,7 +16,6 @@ fi
 
 packages=()
 tools=false
-windows=false
 image=false
 while IFS= read -r path; do
   case $path in
@@ -29,11 +28,11 @@ while IFS= read -r path; do
     # The NAS proxy links the web UI.
     crates/admin-ui/*) packages+=(strata-admin-ui strata-nas-proxy) image=true ;;
     crates/nas-proxy/*) packages+=(strata-nas-proxy) image=true ;;
-    crates/pc-agent/*) packages+=(strata-pc-agent) windows=true image=true ;;
+    crates/pc-agent/*) packages+=(strata-pc-agent) image=true ;;
     # The image builds every crate.
     crates/*) image=true ;;
     # The proxy embeds the install script (include_str!), the image copies it.
-    deploy/windows/*) packages+=(strata-nas-proxy) windows=true image=true ;;
+    deploy/windows/*) packages+=(strata-nas-proxy) image=true ;;
     Dockerfile | .dockerignore) image=true ;;
     # The local-agent runner: check.sh runs its tests and shellcheck. It is no
     # crate, so the test job runs without a package list, i.e. unscoped.
@@ -48,5 +47,4 @@ done
 packages=$(printf '%s\n' ${packages[@]+"${packages[@]}"} | sort -u | xargs)
 echo "test=$([[ -n $packages || $tools == true ]] && echo true || echo false)"
 echo "packages=$packages"
-echo "windows=$windows"
 echo "image=$image"

@@ -28,7 +28,6 @@ jobs:
     outputs:
       test: ${{ steps.select.outputs.test }}
       packages: ${{ steps.select.outputs.packages }}
-      windows: ${{ steps.select.outputs.windows }}
       image: ${{ steps.select.outputs.image }}
     steps:
       - uses: actions/checkout@v4
@@ -65,46 +64,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          targets: wasm32-unknown-unknown
+          # check.sh lints the PC service's Windows code for this target, in
+          # place of a Windows runner (those minutes count double); the real
+          # Windows check is the manual workflow windows.yml.
+          targets: wasm32-unknown-unknown, x86_64-pc-windows-gnu
       - uses: Swatinem/rust-cache@v2
       # Unquoted on purpose: one argument per package, none for everything.
       - run: scripts/check.sh $PACKAGES
         env:
           PACKAGES: ${{ needs.changes.outputs.packages }}
-  windows:
-    # Builds the PC service and offers it as a download (strata-pc-agent-windows).
-    # Runs alongside test: it lints and tests the agent on its own.
-    needs: changes
-    if: needs.changes.outputs.windows == 'true'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -p strata-pc-agent --all-targets -- -D warnings
-      - run: cargo test -p strata-pc-agent
-      - run: cargo build --release -p strata-pc-agent
-        env:
-          # Part of the version the service reports (crates/pc-agent/build.rs).
-          STRATA_BUILD_ID: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: install.ps1 parses
-        run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile("$PWD\deploy\windows\install.ps1", [ref]$null, [ref]$errors) | Out-Null
-          if ($errors) { $errors; exit 1 }
-        shell: powershell
-      - run: |
-          mkdir dist
-          copy target\release\strata-pc-agent.exe dist\
-          copy crates\pc-agent\strata-pc-agent.example.toml dist\
-          copy deploy\windows\install.ps1 dist\
-        shell: cmd
-      - uses: actions/upload-artifact@v4
-        with:
-          name: strata-pc-agent-windows
-          path: dist/
   image:
     # Builds the NAS image alongside test and fills the layer cache. Dependencies
     # sit in their own layers (cargo-chef), so a code change only rebuilds our crates.
@@ -173,7 +141,7 @@ jobs:
     # The one check that sums up a run, for branch protection: jobs a pull
     # request doesn't need are skipped, and skipped counts as passed.
     if: always()
-    needs: [changes, test, windows, image]
+    needs: [changes, test, image]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

@@ -32,16 +32,16 @@ expect_selects() {
 package_of() { sed -n 's/^name *= *"\(.*\)"/\1/p' "$1/Cargo.toml" | head -1; }
 
 # Fixed cases.
-all="test=true packages= windows=true image=true"
-expect "test=false packages= windows=false image=false" README.md docs/strata-api.md
+all="test=true packages= image=true"
+expect "test=false packages= image=false" README.md docs/strata-api.md
 expect "$all" Cargo.lock
 expect "$all" .github/workflows/ci.yml
-expect "test=true packages=strata-pc-agent windows=true image=true" crates/pc-agent/src/agent.rs
-expect "test=true packages=strata-admin-ui strata-nas-proxy windows=false image=true" crates/admin-ui/src/app.rs
-expect "test=false packages= windows=false image=false" deploy/docker-compose.yml
-expect "test=true packages= windows=false image=false" tools/local-agent/local-agent
-expect "test=true packages= windows=false image=true" tools/code-bench/runner.py
-expect "test=true packages=strata-nas-proxy windows=false image=true" tools/code-bench/tasks/roman/TASK.md
+expect "test=true packages=strata-pc-agent image=true" crates/pc-agent/src/agent.rs
+expect "test=true packages=strata-admin-ui strata-nas-proxy image=true" crates/admin-ui/src/app.rs
+expect "test=false packages= image=false" deploy/docker-compose.yml
+expect "test=true packages= image=false" tools/local-agent/local-agent
+expect "test=true packages= image=true" tools/code-bench/runner.py
+expect "test=true packages=strata-nas-proxy image=true" tools/code-bench/tasks/roman/TASK.md
 [[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$all " ]] || fail "--all -> nicht alles"
 
 # Every crate selects itself and the image.

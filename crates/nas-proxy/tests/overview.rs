@@ -283,7 +283,11 @@ async fn lists_the_latest_pc_events_newest_first() {
     let v = live
         .until("Aufgewacht", |v| kind_list(v).contains(&"awake".into()))
         .await;
-    let kinds = kind_list(&v);
+    // The idle check may also have noticed the awake PC on its own.
+    let kinds: Vec<String> = kind_list(&v)
+        .into_iter()
+        .filter(|k| !k.starts_with("pc_seen"))
+        .collect();
     assert_eq!(kinds[0], "awake", "{kinds:?}");
     assert!(kinds.contains(&"wake_sent".into()), "{kinds:?}");
     // The password change of the login is not about the PC.
@@ -344,9 +348,11 @@ async fn sleep_button_puts_the_pc_to_sleep() {
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("sleep-now", &[]).await.status(), 200);
     assert!(!s.pc.up());
+    // The idle check may have noticed the sleeping PC on its own meanwhile.
     let kinds: Vec<_> = kinds(&s.state)
         .into_iter()
         .map(|k| format!("{k:?}"))
+        .filter(|k| !k.starts_with("PcSeen"))
         .collect();
     assert!(
         kinds.ends_with(&["SleepRequested".into(), "SleepAccepted".into()]),

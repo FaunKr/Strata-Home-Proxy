@@ -110,7 +110,11 @@ async fn install_wakes_the_pc_and_hands_it_a_new_strata_key() {
     assert_eq!(body["context"], 65536);
     let key = body["api_key"].as_str().unwrap().to_string();
     assert_eq!(key.len(), 64);
-    let kinds = kinds(&s.state);
+    // The idle check may have noticed the PC's state on its own meanwhile.
+    let kinds: Vec<_> = kinds(&s.state)
+        .into_iter()
+        .filter(|k| !format!("{k:?}").starts_with("PcSeen"))
+        .collect();
     assert_eq!(
         kinds.last(),
         Some(&EventKind::StrataJobStarted),

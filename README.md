@@ -59,10 +59,17 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 
 Das Image baut die CI bei jedem Push auf main: `ghcr.io/faunkr/strata-home-proxy:latest`.
 
+Das Repo ist privat, Dateien daraus lädt `curl` daher nur mit einem
+GitHub-Token (fein granular, *Contents: Read-only* für dieses Repo):
+
 ```sh
 mkdir -p strata-proxy && cd strata-proxy
-curl -fsSLO https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/main/deploy/docker-compose.yml
-curl -fsSL -o .env https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/main/deploy/env.example
+read -rs TOKEN           # Token einfügen, Enter
+gh_file() { curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/FaunKr/Strata-Home-Proxy/contents/$1"; }
+gh_file deploy/docker-compose.yml >docker-compose.yml
+gh_file deploy/env.example >.env
+unset TOKEN
 nano .env                # Werte eintragen
 docker compose pull
 docker compose up -d
@@ -93,10 +100,16 @@ oben in der YAML-Datei).
 
 1. Skript in ein eigenes Verzeichnis auf dem Pool legen, nicht in das
    Datenverzeichnis der App. Dort landen auch Log und Sicherungen.
+   Das Repo ist privat, daher mit einem GitHub-Token (fein granular,
+   *Contents: Read-only* für dieses Repo):
    ```sh
    sudo mkdir -p /mnt/POOL/apps/strata-proxy-update
    cd /mnt/POOL/apps/strata-proxy-update
-   sudo curl -fsSLO https://raw.githubusercontent.com/FaunKr/Strata-Home-Proxy/main/deploy/truenas-auto-update.sh
+   read -rs TOKEN   # Token einfügen, Enter
+   sudo curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" \
+     -o truenas-auto-update.sh \
+     https://api.github.com/repos/FaunKr/Strata-Home-Proxy/contents/deploy/truenas-auto-update.sh
+   unset TOKEN
    sudo chmod 700 truenas-auto-update.sh
    sudo ./truenas-auto-update.sh   # einmal von Hand: ohne neues Image passiert nichts
    ```

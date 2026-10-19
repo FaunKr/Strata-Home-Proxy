@@ -25,6 +25,7 @@ pub use strata_pc_agent::{
     agent::router,
     command::{CommandSpec, Running},
     hardware::{Cpu, Gpu, Hardware},
+    install::testing::SetupLeaves,
     platform::Platform,
 };
 use tokio::{net::TcpListener, sync::mpsc, sync::oneshot};
@@ -428,4 +429,15 @@ pub async fn job_until(s: &Setup, what: &str, done: impl Fn(&Value) -> bool) -> 
 
 pub async fn finished(s: &Setup) -> Value {
     job_until(s, "Ende des Vorgangs", |j| j["state"] != "running").await
+}
+
+/// The service's Strata-Ordner, to add to or look at.
+pub fn strata_ordner(s: &Setup) -> SetupLeaves {
+    SetupLeaves::at(&s.agent.cfg.strata_dir, &s.agent.cfg.strata_data_dir)
+}
+
+/// A model config's fields, read through the service's own module.
+pub fn read_config(s: &Setup, id: &str) -> Value {
+    let model = strata_ordner(s).installation().model(id).unwrap();
+    Value::Object(model.fields().clone())
 }

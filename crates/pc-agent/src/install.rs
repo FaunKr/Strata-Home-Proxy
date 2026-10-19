@@ -123,9 +123,7 @@ impl Installation {
             id: id.to_string(),
             fields,
             chat,
-            vector: PROJECTION_VECTOR
-                .iter()
-                .fold(self.dir.clone(), |p, part| p.join(part)),
+            vector: self.vector_path(),
         }
     }
 
@@ -217,10 +215,9 @@ impl Installation {
     }
 
     fn model_paths(&self, id: &str) -> Vec<PathBuf> {
-        let lower = lower(id);
         vec![
-            self.data.join("models").join(id),
-            self.data.join("packs").join(&lower),
+            self.download_dir(id),
+            self.pack_dir(id),
             self.log_path(id),
             self.run_script(id),
             // The config last: until it is gone, the model is listed and can be deleted again.
@@ -230,17 +227,17 @@ impl Installation {
 
     /// Bytes of a model's files in the data folder (`id` as the catalog spells it).
     pub fn disk_bytes(&self, id: &str) -> u64 {
-        self.model_paths(id)[..2].iter().map(|p| dir_size(p)).sum()
+        dir_size(&self.download_dir(id)) + dir_size(&self.pack_dir(id))
     }
 
     /// Bytes of a model's download so far (`id` as the catalog spells it).
     pub fn downloaded_bytes(&self, id: &str) -> u64 {
-        dir_size(&self.data.join("models").join(id))
+        dir_size(&self.download_dir(id))
     }
 
     /// Whether parts of a model's download are there already.
     pub fn partly_downloaded(&self, id: &str) -> bool {
-        std::fs::read_dir(self.data.join("models").join(id))
+        std::fs::read_dir(self.download_dir(id))
             .map(|mut entries| {
                 entries.any(|e| e.is_ok_and(|e| e.file_name().to_string_lossy().contains(".gguf")))
             })
@@ -256,7 +253,10 @@ impl Installation {
     /// that is no model's own (`START-HERE.bat` starts the model used last)
     /// gives the config Strata touched last, as Strata picks it.
     pub fn active_model(&self, start_script: &Path) -> Option<String> {
-        let script = start_script.file_name()?.to_string_lossy().to_lowercase();
+        let script = start_script
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
         let models = self.models();
         models
             .iter()
@@ -288,6 +288,22 @@ impl Installation {
 
     fn log_path(&self, id: &str) -> PathBuf {
         self.dir.join(format!("strata-{}.log", lower(id)))
+    }
+
+    /// A model's download, in the catalog's letter case as setup names it.
+    fn download_dir(&self, id: &str) -> PathBuf {
+        self.data.join("models").join(id)
+    }
+
+    fn pack_dir(&self, id: &str) -> PathBuf {
+        self.data.join("packs").join(lower(id))
+    }
+
+    /// Strata's control vector for the speed projection.
+    fn vector_path(&self) -> PathBuf {
+        PROJECTION_VECTOR
+            .iter()
+            .fold(self.dir.clone(), |p, part| p.join(part))
     }
 }
 
@@ -340,6 +356,13 @@ impl Model {
             Some(v) if v == "stop" => "stop",
             _ => "off",
         }
+    }
+
+    /// Takes back the engine flags `before` had, keeping everything else in
+    /// the config as it is now: a rollback undoes only its own change.
+    pub fn restore_args(&mut self, before: &Model) {
+        let args = before.args().to_vec();
+        *self.args_mut() = args;
     }
 
     /// The sampling its config and Chat settings give it with this Strata.
@@ -491,7 +514,7 @@ fn projection_flag_values(flag: &str) -> Option<usize> {
         .map(|(_, values)| values.len())
 }
 
-pub(crate) fn dir_size(dir: &Path) -> u64 {
+fn dir_size(dir: &Path) -> u64 {
     std::fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -510,7 +533,7 @@ pub mod testing {
 
     use serde_json::Value;
 
-    use super::{ConfigFields, Installation, config_text, lower};
+    use super::{ConfigFields, Installation, config_text};
 
     /// Writes setup's files into a Strata-Ordner and its data folder.
     pub struct SetupLeaves {
@@ -577,19 +600,13 @@ pub mod testing {
 
         /// A file of a model's download (`id` as the catalog spells it).
         pub fn download(&self, id: &str, name: &str, content: &str) -> &Self {
-            write(
-                self.install.data.join("models").join(id).join(name),
-                content,
-            );
+            write(self.install.download_dir(id).join(name), content);
             self
         }
 
         /// A file in a model's pack, at `rel` inside it.
         pub fn pack(&self, id: &str, rel: &str, content: &str) -> &Self {
-            write(
-                self.install.data.join("packs").join(lower(id)).join(rel),
-                content,
-            );
+            write(self.install.pack_dir(id).join(rel), content);
             self
         }
 
@@ -607,9 +624,7 @@ pub mod testing {
 
         /// Where Strata keeps the speed projection's control vector.
         pub fn vector(&self) -> PathBuf {
-            super::PROJECTION_VECTOR
-                .iter()
-                .fold(self.install.dir.clone(), |p, part| p.join(part))
+            self.install.vector_path()
         }
 
         /// A model config's modification time.
@@ -982,6 +997,31 @@ mod tests {
         assert!(install.data.join("mtp/rt/experts.bin").exists());
         assert!(install.paths_left("coder-IQ1_M").is_empty());
         install.remove("coder-IQ1_M").unwrap();
+        // Until the config is gone the model is listed, so a delete that
+        // stopped halfway can run again.
+        assert_eq!(
+            install.model_paths("coder-IQ1_M").last(),
+            Some(&install.config_path("coder-IQ1_M"))
+        );
+    }
+
+    #[test]
+    fn restoring_args_keeps_what_changed_in_between() {
+        let f = Folders::new("restore");
+        let s = f.setup();
+        s.model("m", config(json!(["--max-context", "65536"])));
+        let install = s.installation();
+        let before = install.model("m").unwrap();
+        let mut switched = before.clone();
+        switched.set_context(131072);
+        install.save(&switched).unwrap();
+        install.set_key("other-key-0123456789").unwrap();
+        let mut now = install.model("m").unwrap();
+        now.restore_args(&before);
+        install.save(&now).unwrap();
+        let rolled_back = install.model("m").unwrap();
+        assert_eq!(rolled_back.context(), Some(65536));
+        assert_eq!(rolled_back.fields()["api_key"], "other-key-0123456789");
     }
 
     #[test]

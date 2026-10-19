@@ -1094,7 +1094,7 @@ async fn set_speed_projection(
 /// comes back and Strata starts with that.
 async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Option<String>, Step> {
     set_step(agent, "Konfiguration ändern");
-    let old = change_model(agent, id, move |model| {
+    let before = change_model(agent, id, move |model| {
         model.set_context(context);
         Ok(())
     })
@@ -1116,7 +1116,11 @@ async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Optio
     }
     let output = agent.output.last_lines(KEPT_LINES);
     set_step(agent, "Alten Kontext zurückholen");
-    save_model(agent, old).await?;
+    change_model(agent, id, move |model| {
+        model.restore_args(&before);
+        Ok(())
+    })
+    .await?;
     agent.stop_strata();
     restart_strata(agent).await;
     if let Some(job) = agent.jobs.inner.lock().unwrap().current.as_mut() {
@@ -1148,15 +1152,6 @@ async fn change_model(
     .await
     .map_err(|e| Step::Failed(e.to_string()))?
     .map_err(Step::Failed)
-}
-
-/// Writes a model's config as it was, off the runtime's threads.
-async fn save_model(agent: &Agent, model: Model) -> Result<(), Step> {
-    let install = Installation::of(&agent.cfg);
-    tokio::task::spawn_blocking(move || install.save(&model))
-        .await
-        .map_err(|e| Step::Failed(e.to_string()))?
-        .map_err(Step::Failed)
 }
 
 /// Whether the restarted Strata answers: `false` once it has ended or not

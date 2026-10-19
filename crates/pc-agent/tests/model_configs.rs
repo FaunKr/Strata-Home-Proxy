@@ -14,16 +14,6 @@ fn write(path: PathBuf, content: &str) {
     std::fs::write(path, content).unwrap();
 }
 
-/// The service's Strata-Ordner, to add to or look at.
-fn strata_dir(s: &Setup) -> SetupLeaves {
-    SetupLeaves::at(&s.agent.cfg.strata_dir, &s.agent.cfg.strata_data_dir)
-}
-
-fn read_config(s: &Setup, id: &str) -> Value {
-    let model = strata_dir(s).installation().model(id).unwrap();
-    Value::Object(model.fields().clone())
-}
-
 /// Strata with IQ3_XXS (active) and qwen36-Q8_0, as setup writes them.
 fn installed(s: &Setup) {
     let cfg = &s.agent.cfg;
@@ -46,7 +36,7 @@ fn installed(s: &Setup) {
 }
 
 fn modified(s: &Setup, id: &str) -> std::time::SystemTime {
-    strata_dir(s).modified(id)
+    strata_ordner(s).modified(id)
 }
 
 // --- #158 loop recovery ---
@@ -70,7 +60,7 @@ async fn at_start_every_model_config_gets_loop_recovery_and_keeps_the_rest() {
         before,
         "the active model stays the one touched last"
     );
-    let text = strata_dir(&s).text("iq3_xxs");
+    let text = strata_ordner(&s).text("iq3_xxs");
     assert!(text.starts_with("{\n \""), "Strata's indent of one: {text}");
 }
 
@@ -104,13 +94,13 @@ async fn at_start_strata_restarts_after_its_request_and_only_on_a_change() {
 async fn a_config_that_cannot_be_read_is_left_and_the_others_change() {
     let s = setup("configs-broken").await;
     installed(&s);
-    strata_dir(&s).config_text("qwen36-q8_0", "{ kaputt");
+    strata_ordner(&s).config_text("qwen36-q8_0", "{ kaputt");
     strata::manage_configs_at_start(&s.agent).await.await;
     assert_eq!(
         read_config(&s, "iq3_xxs")["reasoning_loop_recovery"],
         "recover"
     );
-    assert_eq!(strata_dir(&s).text("qwen36-q8_0"), "{ kaputt");
+    assert_eq!(strata_ordner(&s).text("qwen36-q8_0"), "{ kaputt");
 }
 
 #[tokio::test]
@@ -135,7 +125,7 @@ async fn an_update_sets_loop_recovery_before_strata_starts() {
 async fn a_model_added_gets_loop_recovery() {
     let s = setup("configs-add").await;
     installed(&s);
-    let config = strata_dir(&s).installation().config_path("swift-iq2_xs");
+    let config = strata_ordner(&s).installation().config_path("swift-iq2_xs");
     s.fake.command(
         "START-HERE.bat",
         FakeCommand {
@@ -181,7 +171,7 @@ async fn the_page_shows_each_models_loop_recovery() {
     installed(&s);
     let mut cfg = read_config(&s, "qwen36-q8_0");
     cfg["reasoning_loop_recovery"] = json!("stop");
-    strata_dir(&s).config("qwen36-q8_0", cfg);
+    strata_ordner(&s).config("qwen36-q8_0", cfg);
     let view = get(&s, "/strata").await;
     assert_eq!(model(&view, "IQ3_XXS")["loop_recovery"], "off", "{view}");
     assert_eq!(
@@ -218,7 +208,7 @@ fn strata_knows(s: &Setup, config_block: bool, model_card: bool) {
 fn set_sampling(s: &Setup, id: &str, block: Value) {
     let mut cfg = read_config(s, id);
     cfg["sampling"] = block;
-    strata_dir(s).config(id, cfg);
+    strata_ordner(s).config(id, cfg);
 }
 
 #[tokio::test]
@@ -384,7 +374,7 @@ async fn chat_settings_show_as_overriding_and_stay_untouched() {
     installed(&s);
     strata_knows(&s, true, true);
     let chat = r#"{"temperature": 0.3, "reasoning_effort": "high", "max_tokens": 4096}"#;
-    strata_dir(&s)
+    strata_ordner(&s)
         .chat_settings("iq3_xxs", chat)
         .chat_settings("qwen36-q8_0", "{ kaputt");
     strata::manage_configs_at_start(&s.agent).await.await;
@@ -412,5 +402,5 @@ async fn chat_settings_show_as_overriding_and_stay_untouched() {
         field(&q36["thinking"], "temperature"),
         (1.0, "model_card".into())
     );
-    assert_eq!(strata_dir(&s).chat_text("iq3_xxs"), chat);
+    assert_eq!(strata_ordner(&s).chat_text("iq3_xxs"), chat);
 }

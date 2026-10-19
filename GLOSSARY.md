@@ -11,7 +11,7 @@ Die eigene LLM-Engine auf dem PC (Niko1221/Strata) mit einer OpenAI- und Anthrop
 _Avoid_: llama-server, llama.cpp, Modellserver
 
 **Strata-Ordner**:
-Der Ordner auf dem PC, in den Setup Strata einrichtet (`strata_dir`): Modell-Konfigurationen `strata-<id>.json` mit ihren Chat-Einstellungen, Startskripten und Logs. Die Modelldateien selbst liegen im Strata-Datenordner (`strata_data_dir`). Im PC-Dienst kennt nur `install::Installation` ihren Aufbau.
+Der Ordner auf dem PC, in den Setup Strata einrichtet (`strata_dir`): Modell-Konfigurationen `strata-<id>.json` mit ihren Chat-Einstellungen, Startskripten und Logs. Die Modelldateien selbst liegen im Strata-Datenordner (`strata_data_dir`). Wie Setup die Dateien eines Modells benennt, weiß im PC-Dienst nur `install::Installation`.
 _Avoid_: Strata-Verzeichnis, Installationsordner
 
 **PC-Dienst**:

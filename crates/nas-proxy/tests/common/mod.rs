@@ -268,10 +268,12 @@ pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Val
 }
 
 pub async fn agent_status(State(pc): State<Pc>) -> Response {
-    let missed = pc
-        .status_misses
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-        .is_ok();
+    let misses = pc.status_misses.load(Ordering::SeqCst);
+    let missed = misses > 0
+        && pc
+            .status_misses
+            .compare_exchange(misses, misses - 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok();
     if missed || !pc.up() {
         // A sleeping PC does not answer; a refused status is the closest stand-in.
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

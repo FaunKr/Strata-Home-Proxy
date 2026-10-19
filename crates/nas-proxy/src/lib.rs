@@ -8,6 +8,7 @@ pub mod clock;
 pub mod config;
 pub mod events;
 pub mod files;
+pub mod history;
 pub mod overview;
 pub mod pc_setup;
 pub mod plug;

@@ -9,7 +9,7 @@ use std::{
 use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
     api::{
-        ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, OutputMessage, Overview,
+        ApiKeyInfo, ApiKeysView, CreatedKey, HistoryView, KeepAwakeChoice, OutputMessage, Overview,
         PcSetupCommand, Session, SettingEntry, SettingValue, SettingsView, Setup, Source,
         StrataJobForm, StrataPage,
     },
@@ -291,6 +291,11 @@ impl Backend for UiBackend {
     fn update_pc_service(&self) -> BoxFuture<'static, Result<(), String>> {
         let state = Arc::clone(&self.0);
         async move { crate::pc_setup::update(&state, BY_UI).await }.boxed()
+    }
+
+    fn history(&self, days: u32) -> BoxFuture<'static, HistoryView> {
+        let state = Arc::clone(&self.0);
+        async move { crate::history::view(&state, days).await }.boxed()
     }
 }
 

@@ -11,10 +11,11 @@ use crate::{
     access::AccessPage,
     api::{ChangePassword, Login, Logout, Session, error_text, get_session},
     confirm::{Confirm, ConfirmDialog},
+    history::HistoryPage,
     icons::Icon,
     labels::{pc_badge, strata_badge},
     overview::{Live, OverviewPage},
-    pc_setup::PcPage,
+    pc_setup::{PcArea, PcSetupTab},
     settings::SystemPage,
     strata::{ConnectionTab, ModelsTab, StrataArea, VersionTab},
     strata_output::OutputTab,
@@ -73,7 +74,10 @@ pub fn App() -> impl IntoView {
             <Routes fallback=NotFound>
                 <ParentRoute path=path!("/admin") view=Layout>
                     <Route path=path!("") view=OverviewPage />
-                    <Route path=path!("pc") view=PcPage />
+                    <ParentRoute path=path!("pc") view=PcArea>
+                        <Route path=path!("") view=PcSetupTab />
+                        <Route path=path!("history") view=HistoryPage />
+                    </ParentRoute>
                     <ParentRoute path=path!("strata") view=StrataArea>
                         <Route path=path!("") view=ModelsTab />
                         <Route path=path!("output") view=OutputTab />

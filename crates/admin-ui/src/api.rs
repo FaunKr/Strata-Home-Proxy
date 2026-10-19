@@ -402,6 +402,13 @@ pub enum EventKind {
     SleepAccepted,
     SleepRefused,
     GamingRejected,
+    // What the proxy noticed about the PC without causing it; recorded only on
+    // a change, never on every check.
+    PcSeenAwake,
+    PcSeenAsleep,
+    PcSeenGaming,
+    /// The proxy started; time it could not observe counts as unknown.
+    ProxyStarted,
     PasswordChanged,
     /// Detail: the setting's name, never its value.
     SettingSaved,
@@ -756,4 +763,46 @@ pub struct StrataJobForm {
     /// Strata's experimental speed projection, for setup and another model;
     /// on or off for an installed one.
     pub speed_projection: bool,
+}
+
+// --- Verlauf: the PC's states over a range of days ---
+
+/// One day of the history, as the page draws its bar.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HistoryDay {
+    /// The day in the NAS's time zone, e.g. `2026-10-19`.
+    pub date: String,
+    /// The day as the page names it, e.g. `Sat 17 Oct`.
+    pub label: String,
+    pub awake_h: f64,
+    pub gaming_h: f64,
+    pub asleep_h: f64,
+    /// Time the proxy could not observe; never counted as sleep or awake.
+    pub unknown_h: f64,
+}
+
+/// The same hours summed over the whole range.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HistoryTotals {
+    pub awake_h: f64,
+    pub gaming_h: f64,
+    pub asleep_h: f64,
+    pub unknown_h: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HistoryView {
+    /// One entry per day, oldest first.
+    pub days: Vec<HistoryDay>,
+    pub totals: HistoryTotals,
+    /// False while no PC service is set up: the proxy cannot see what the PC
+    /// does on its own, so the history stays incomplete.
+    pub agent_configured: bool,
+}
+
+/// The history of the last `days` days, today included.
+#[server(prefix = "/admin/api", endpoint = "history")]
+pub async fn get_history(days: u32) -> Result<HistoryView, ServerFnError> {
+    require_login(false).await?;
+    Ok(backend().history(days).await)
 }

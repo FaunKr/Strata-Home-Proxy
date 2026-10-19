@@ -35,6 +35,7 @@ async fn admin_does_not_wake_the_pc() {
         "/admin/",
         "/admin/gibt-es-nicht",
         "/admin/pc",
+        "/admin/pc/history",
         "/admin/strata",
         "/admin/strata/output",
         "/admin/access",
@@ -133,6 +134,7 @@ async fn every_area_shows_the_frame_with_the_state_badges() {
     for (path, heading) in [
         ("/admin/", "Overview"),
         ("/admin/pc", "PC"),
+        ("/admin/pc/history", "PC"),
         ("/admin/strata", "Strata"),
         ("/admin/strata/output", "Strata"),
         ("/admin/strata/version", "Strata"),

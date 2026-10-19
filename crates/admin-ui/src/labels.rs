@@ -170,6 +170,10 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::SleepAccepted => "PC went to sleep",
         EventKind::SleepRefused => "PC refused to sleep",
         EventKind::GamingRejected => "Request refused: gaming mode",
+        EventKind::PcSeenAwake => "PC seen awake",
+        EventKind::PcSeenAsleep => "PC seen asleep",
+        EventKind::PcSeenGaming => "PC seen in gaming mode",
+        EventKind::ProxyStarted => "Proxy started",
         EventKind::PasswordChanged => "Password changed",
         EventKind::SettingSaved => "Setting saved",
         EventKind::ApiKeyCreated => "API key created",
@@ -203,14 +207,27 @@ pub fn event_class(kind: EventKind) -> &'static str {
         EventKind::SleepRefused
         | EventKind::GamingRejected
         | EventKind::GamingOn
+        | EventKind::PcSeenGaming
         | EventKind::WakeSent
         | EventKind::WakeRequested
         | EventKind::KeepAwakeSet
         | EventKind::StrataJobCancelled => "is-warn",
-        EventKind::SleepAccepted | EventKind::SleepRequested => "is-idle",
+        EventKind::SleepAccepted
+        | EventKind::SleepRequested
+        | EventKind::PcSeenAsleep
+        | EventKind::ProxyStarted => "is-idle",
         _ => "is-ok",
     }
 }
+
+/// The states the history shows, in the order of its bars and its legend:
+/// their name and the class of their color.
+pub const HISTORY_STATES: &[(&str, &str)] = &[
+    ("Awake", "seg-awake"),
+    ("Gaming", "seg-gaming"),
+    ("Asleep", "seg-asleep"),
+    ("Unknown", "seg-unknown"),
+];
 
 /// What a Strata job does, for the history and the page.
 pub fn strata_job_label(kind: StrataJobKind) -> &'static str {

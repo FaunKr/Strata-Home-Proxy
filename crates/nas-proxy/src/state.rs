@@ -2,9 +2,10 @@
 //! idle timer that sends the PC to sleep.
 
 use std::{
+    ops::{Deref, DerefMut},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime},
@@ -175,6 +176,53 @@ impl Inner {
     }
 }
 
+/// The Ereignis of a state the proxy noticed on its own; `Waking` and
+/// `Unknown` are steps on the way, and the history reads them from the
+/// Ereignisse around them.
+fn seen_event(pc: PcState) -> Option<EventKind> {
+    match pc {
+        PcState::Awake => Some(EventKind::PcSeenAwake),
+        PcState::Asleep => Some(EventKind::PcSeenAsleep),
+        PcState::Gaming => Some(EventKind::PcSeenGaming),
+        PcState::Waking | PcState::Unknown => None,
+    }
+}
+
+/// Writes to the shared state and records the PC's new state on the way out,
+/// for the changes the proxy only noticed; used where the state comes from an
+/// answer of the PC service or of Strata. A state the proxy brought about
+/// itself keeps its own Ereignis instead.
+struct ObservedWrite<'a> {
+    state: &'a AppState,
+    /// The state as it was before anything was written.
+    from: PcState,
+    inner: MutexGuard<'a, Inner>,
+}
+
+impl Deref for ObservedWrite<'_> {
+    type Target = Inner;
+    fn deref(&self) -> &Inner {
+        &self.inner
+    }
+}
+
+impl DerefMut for ObservedWrite<'_> {
+    fn deref_mut(&mut self) -> &mut Inner {
+        &mut self.inner
+    }
+}
+
+impl Drop for ObservedWrite<'_> {
+    fn drop(&mut self) {
+        let to = self.inner.pc;
+        if to != self.from
+            && let Some(kind) = seen_event(to)
+        {
+            self.state.events.record(kind, None);
+        }
+    }
+}
+
 /// What the overview needs from the shared state.
 pub struct Snapshot {
     pub pc: PcState,
@@ -244,7 +292,7 @@ impl AppState {
             .and_then(|text| serde_json::from_str::<KeepAwakeFile>(&text).ok())
             .map(|f| SystemTime::UNIX_EPOCH + Duration::from_secs(f.until))
             .filter(|t| *t > SystemTime::now());
-        Arc::new(Self {
+        let state = Arc::new(Self {
             auth: Auth::new(cfg.data_dir.clone(), cfg.ui_password.clone()),
             api_keys: ApiKeys::new(cfg.data_dir.clone()),
             events: EventLog::new(cfg.data_dir.clone()),
@@ -267,7 +315,11 @@ impl AppState {
             }),
             wake_lock: tokio::sync::Mutex::new(()),
             settings,
-        })
+        });
+        // Before this start the proxy saw nothing, so the time until the first
+        // known state of the history stays unknown.
+        state.events.record(EventKind::ProxyStarted, None);
+        state
     }
 
     /// The configuration in effect right now; changes on the settings page
@@ -365,6 +417,22 @@ impl AppState {
         self.inner.lock().unwrap().pc = pc;
     }
 
+    /// The shared state, recording on the way out any state the proxy learned
+    /// from an answer of the PC or of Strata.
+    fn observed(&self) -> ObservedWrite<'_> {
+        let inner = self.inner.lock().unwrap();
+        ObservedWrite {
+            from: inner.pc,
+            state: self,
+            inner,
+        }
+    }
+
+    /// Takes over a state the PC service just reported.
+    fn note_reported(&self, pc: PcState) {
+        self.observed().inner.pc = pc;
+    }
+
     /// Starts the idle time again from now, e.g. after waking by hand.
     pub fn touch(&self) {
         self.inner.lock().unwrap().touch();
@@ -399,7 +467,7 @@ impl AppState {
             },
             _ => Health::Down,
         };
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.observed();
         if Self::settling(&inner, cfg.sleep_settle) {
             return Health::Down;
         }
@@ -418,7 +486,7 @@ impl AppState {
             return None;
         }
         let status = self.pc_status(&agent).await;
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.observed();
         let settling = Self::settling(&inner, self.cfg().sleep_settle);
         inner.note_pc_status(status.as_ref(), strata_answers, settling);
         status
@@ -440,7 +508,7 @@ impl AppState {
         }
         match self.pc_status(&self.agent()).await {
             Some(status) if status.gaming_mode => {
-                self.set_pc(PcState::Gaming);
+                self.note_reported(PcState::Gaming);
                 Readiness::Gaming
             }
             _ => Readiness::NeedsWake,
@@ -468,7 +536,7 @@ impl AppState {
                 pc_answers = false;
                 if let Some(status) = self.pc_status(&self.agent()).await {
                     if status.gaming_mode {
-                        self.set_pc(PcState::Gaming);
+                        self.note_reported(PcState::Gaming);
                         return Err(WakeError::Gaming);
                     }
                     pc_answers = true;
@@ -533,7 +601,7 @@ impl AppState {
         let strata_answers = status.is_none() && self.strata_healthy().await;
         let now = Instant::now();
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.observed();
             let settling = Self::settling(&inner, cfg.sleep_settle);
             if !inner.note_pc_status(status.as_ref(), strata_answers, settling) {
                 return;

@@ -377,12 +377,20 @@ async fn gaming_on_wakes_a_sleeping_pc_first() {
     assert!(s.pc.gaming.load(Ordering::SeqCst));
     let mut live = Live::open(&b).await;
     let v = live.until("Gaming", |v| v["pc"] == "Gaming").await;
+    // In dieser Reihenfolge steht der Lauf im Verlauf; dazwischen kann der
+    // Proxy den Gaming-Modus auch als selbst bemerkt gezeichnet haben.
     let kinds = kind_list(&v);
-    assert_eq!(
-        kinds[..4],
-        ["gaming_on", "awake", "wake_sent", "wake_requested"],
-        "{kinds:?}"
-    );
+    let expected = ["gaming_on", "awake", "wake_sent", "wake_requested"];
+    let mut found = 0;
+    for kind in &kinds {
+        if *kind == expected[found] {
+            found += 1;
+            if found == expected.len() {
+                break;
+            }
+        }
+    }
+    assert_eq!(found, expected.len(), "{kinds:?}");
 }
 
 #[tokio::test]

@@ -182,7 +182,7 @@ async fn a_status_from_before_the_start_does_not_end_the_job() {
     b.call("strata-job", &[("kind", "set_key")]).await;
     let key = last_body(&s)["api_key"].as_str().unwrap().to_string();
     // Like a status answered just before the job began.
-    let stale = strata_nas_proxy::agent::PcStatus::default();
+    let stale = PcStatus::default();
     strata_nas_proxy::strata::note_status(&s.state, &s.state.agent(), &stale).await;
     s.pc.update_job(|j| j.state = StrataJobState::Done);
     eventually("neuer Key gilt", || strata_key(&s).as_deref() == Some(&key)).await;

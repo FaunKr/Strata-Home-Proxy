@@ -77,6 +77,9 @@ fn jobs() {
     let done: StrataJob = same("strata-job.json");
     assert_eq!(done.state, StrataJobState::Done);
     assert_eq!(done.ended, Some(1_792_448_800));
+    // `/strata/job/cancel` answers with the job, or refuses.
+    same::<Option<StrataJob>>("strata-job.json");
+    same::<Refused>("strata-job-cancel-refused.json");
     let running: StrataJob = same("strata-job-running.json");
     assert_eq!(running.kind, StrataJobKind::AddModel);
     assert_eq!(running.eta_secs, Some(321));

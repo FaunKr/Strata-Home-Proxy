@@ -26,8 +26,7 @@ use axum::{
     serve::IncomingStream,
 };
 use serde::Deserialize;
-pub use strata_pc_protocol::PcStatus;
-use strata_pc_protocol::{Answer, GamingRequest, Refused};
+use strata_pc_protocol::{Answer, GamingRequest, PcStatus, Refused};
 use tokio::sync::broadcast;
 
 use crate::{

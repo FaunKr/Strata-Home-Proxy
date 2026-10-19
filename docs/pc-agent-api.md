@@ -107,7 +107,9 @@ Strata auf seine Konsole schreibt. Zuerst kommen die gemerkten Zeilen (höchsten
 500, Trennzeilen eingeschlossen), dann jede neue, dazu jeder Wechsel des
 Hinweises. Jede Nachricht ist eine `StrataOutputMessage` als JSON in
 `data:`; `replace` ersetzt die letzte Zeile (Fortschritt, der in der Konsole
-dieselbe Zeile mit `\r` überschreibt).
+dieselbe Zeile mit `\r` überschreibt), `notice` sagt, ob es Ausgabe gibt
+und warum nicht. `not_started_by_agent`: Strata antwortet, wurde aber nicht
+vom Dienst gestartet, also kann er seine Ausgabe nicht lesen.
 
 Farbcodes und andere Steuerzeichen sind entfernt. Kommt der Abrufer nicht
 hinterher, endet der Strom; beim nächsten Verbinden kommen die gemerkten
@@ -124,7 +126,8 @@ bricht ihn ab, ein begonnener Download macht beim nächsten Mal weiter.
 
 ### `GET /strata`
 
-Antwort: `StrataReport`, also `StrataInfo` und daneben `update`. Was installiert ist, Stratas Katalog mit Empfehlung für den RAM des PCs,
+Antwort: `StrataReport`, also `StrataInfo` und daneben `update`. Was
+installiert ist, Stratas Katalog mit Empfehlung für den RAM des PCs,
 freier Platz, letzter Benchmark und der laufende oder letzte Vorgang.
 Enthält nie den Strata-Key. Fragt nebenbei höchstens einmal pro Stunde Git,
 ob es eine neuere Strata-Version gibt (`update_available`).
@@ -226,7 +229,8 @@ zuletzt geänderte.
 `set_context` setzt nur den Wert von `--max-context` in `args` (fehlt das
 Flag, hängt er es an) und nimmt `--rope-scaling` und `--rope-scale` mit ihren
 Werten heraus. Er nimmt nur Kontexte aus dem Katalog bis 262144, der
-trainierten Länge (`MAX_SWITCHED_CONTEXT`): darüber braucht das Modell Rope-Scaling, das nur Setup
+trainierten Länge
+(`MAX_SWITCHED_CONTEXT`): darüber braucht das Modell Rope-Scaling, das nur Setup
 einrichtet (`400`). Was Setup aus dem alten Kontext abgeleitet hat
 (KV-Streaming mit `--kv-resident`, `--kv`, parallele Slots, Kalibrierung),
 bleibt. Ein Modell aus dem Katalog, das nicht installiert ist, ist ein

@@ -95,21 +95,6 @@ enum Plan {
 }
 
 impl Plan {
-    fn kind(&self) -> StrataJobKind {
-        match self {
-            Self::Install { .. } => StrataJobKind::Install,
-            Self::AddModel { .. } => StrataJobKind::AddModel,
-            Self::Activate { .. } => StrataJobKind::Activate,
-            Self::Delete { .. } => StrataJobKind::Delete,
-            Self::Update => StrataJobKind::Update,
-            Self::Benchmark { .. } => StrataJobKind::Benchmark,
-            Self::SetKey { .. } => StrataJobKind::SetKey,
-            Self::SetSpeedProjection { .. } => StrataJobKind::SetSpeedProjection,
-            Self::SetContext { .. } => StrataJobKind::SetContext,
-            Self::CompareModels { .. } => StrataJobKind::CompareModels,
-        }
-    }
-
     fn model(&self) -> Option<String> {
         match self {
             Self::Install { size, .. } | Self::AddModel { size, .. } => Some(size.id()),
@@ -212,6 +197,7 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
             "Der PC-Dienst wird gerade aktualisiert".into(),
         ));
     }
+    let kind = request.kind();
     let plan = check(agent, request)?;
     if agent.gaming() {
         return Err(Refusal::Conflict(
@@ -240,7 +226,7 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
             .map_or(1, |id| id + 1);
         let job = StrataJob {
             id: Some(id),
-            kind: plan.kind(),
+            kind,
             model: plan.model(),
             state: StrataJobState::Running,
             step: None,

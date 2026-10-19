@@ -16,8 +16,9 @@ pub mod update;
 
 use std::{sync::Arc, time::Duration};
 
-pub use agent::{Agent, PcStatus, Peer};
+pub use agent::{Agent, Peer};
 pub use config::Config;
+pub use strata_pc_protocol::PcStatus;
 
 /// Crate version plus build, e.g. `0.1.0+558db97`; see `build.rs`.
 pub const VERSION: &str = env!("STRATA_PC_AGENT_VERSION");

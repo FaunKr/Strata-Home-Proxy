@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use reqwest::{Client, StatusCode};
-pub use strata_pc_protocol::PcStatus;
 use strata_pc_protocol::{
-    GamingRequest, Incoming, Refused, StrataInfo, StrataJob, StrataJobRequest, StrataReport,
+    GamingRequest, Incoming, PcStatus, Refused, StrataInfo, StrataJob, StrataJobRequest,
+    StrataReport,
 };
 
 use crate::config::Config;

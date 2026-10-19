@@ -104,17 +104,69 @@ probe() {
   probe_context=$(jq -r '.max_context // empty' "$body" 2>/dev/null || true)
 }
 
+# Tools the worker may use without asking, before the repo's own allow rules.
+read_tools=(Read Glob Grep TodoWrite "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)"
+  "Bash(git show:*)" "Bash(ls:*)" "Bash(grep:*)")
+edit_tools=(Edit MultiEdit Write NotebookEdit)
+write_tools=("${edit_tools[@]}" "Bash(git add:*)" "Bash(git commit:*)")
+# Never allowed, whatever the repo or --allow say: nothing leaves the machine.
+denied_tools=(WebFetch WebSearch "Bash(git push:*)" "Bash(curl:*)" "Bash(wget:*)" "Bash(ssh:*)"
+  "Bash(scp:*)" "Bash(rsync:*)" "Bash(nc:*)")
+
+# True when a rule is one of denied_tools or narrows one of them.
+is_denied() {
+  local denied prefix
+  for denied in "${denied_tools[@]}"; do
+    prefix=${denied%:\*)}
+    [[ $1 == "$denied" || $1 == "$prefix"* ]] && return 0
+  done
+  return 1
+}
+
+# Fills allowed and disallowed for the worker: the base tools, the repo's
+# allow rules (.claude/settings.json) and extra_allow, minus denied ones.
+build_permissions() {
+  local repo=$1 read_only=$2 rule candidates
+  candidates=("${read_tools[@]}")
+  ((read_only)) || candidates+=("${write_tools[@]}")
+  if [[ -f $repo/.claude/settings.json ]]; then
+    while IFS= read -r rule; do
+      [[ -n $rule ]] && candidates+=("$rule")
+    done < <(jq -r '.permissions.allow[]? // empty' "$repo/.claude/settings.json" 2>/dev/null || true)
+  fi
+  candidates+=(${extra_allow[@]+"${extra_allow[@]}"})
+  allowed=()
+  for rule in "${candidates[@]}"; do
+    is_denied "$rule" && continue
+    ((read_only)) && [[ " ${edit_tools[*]} " == *" ${rule%%(*} "* ]] && continue
+    allowed+=("$rule")
+  done
+  disallowed=("${denied_tools[@]}")
+  ((read_only)) && disallowed+=("${edit_tools[@]}")
+  return 0
+}
+
 instructions="You are a local-agent worker: a Claude Code session running unattended for another session.
 Nobody can answer questions or permission prompts. If a tool or command is denied, work around it or say so in your summary.
-Work only in the current directory. When you are done, commit your changes with a short message.
+Work only in the current directory."
+write_instructions="When you are done, commit your changes with a short message.
 End with a short summary: what you changed, how you checked it, and what is left open."
+read_only_instructions="This run is read-only: you cannot change files. Answer from what you read.
+End with your answer and the files it rests on."
 
 cmd_run() {
-  local task='' arg
+  local task='' arg read_only=0
+  extra_allow=()
   while (($#)); do
     arg=$1
     shift
     case $arg in
+      --read-only) read_only=1 ;;
+      --allow)
+        (($#)) || usage_error "--allow needs a rule, e.g. --allow 'Bash(cargo test:*)'"
+        extra_allow+=("$1")
+        shift
+        ;;
       --) task="$*" && break ;;
       -*) usage_error "unknown option: $arg" ;;
       *) task="$arg${*:+ $*}" && break ;;
@@ -142,17 +194,29 @@ cmd_run() {
   [[ $probe_status == 200 ]] || die "Proxy answered $probe_status ${probe_tag}"
   local pct=$((compact_share * probe_context / assumed_window))
 
-  local base branch=local-agent/$id worktree
-  base=$(git -C "$repo" rev-parse HEAD)
-  worktree=$state_dir/$(basename "$repo")/$id
-  git -C "$repo" worktree add -q -b "$branch" "$worktree" "$base"
-  meta_set base "$base"
-  meta_set branch "$branch"
-  meta_set worktree "$worktree"
+  # A writing run gets its own branch and worktree; a read-only one reads
+  # the repo as it is.
+  local workdir=$repo mode=acceptEdits
+  if ((read_only)); then
+    mode=default
+    meta_set mode read-only
+  else
+    local base branch=local-agent/$id
+    base=$(git -C "$repo" rev-parse HEAD)
+    workdir=$state_dir/$(basename "$repo")/$id
+    git -C "$repo" worktree add -q -b "$branch" "$workdir" "$base"
+    meta_set mode write
+    meta_set base "$base"
+    meta_set branch "$branch"
+    meta_set worktree "$workdir"
+  fi
+  build_permissions "$repo" "$read_only"
+  local prompt=$instructions$'\n'$write_instructions
+  ((read_only)) && prompt=$instructions$'\n'$read_only_instructions
   meta_set state running
 
   (
-    cd "$worktree"
+    cd "$workdir"
     unset ANTHROPIC_API_KEY
     export ANTHROPIC_BASE_URL=$LOCAL_AGENT_URL ANTHROPIC_AUTH_TOKEN=$LOCAL_AGENT_KEY
     export ANTHROPIC_MODEL=$model ANTHROPIC_DEFAULT_HAIKU_MODEL=$model
@@ -160,11 +224,12 @@ cmd_run() {
     export CLAUDE_CODE_MAX_OUTPUT_TOKENS=$output_tokens
     export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 API_TIMEOUT_MS=900000
     exec claude -p --output-format stream-json --verbose \
-      --append-system-prompt "$instructions" --permission-mode acceptEdits
+      --append-system-prompt "$prompt" --permission-mode "$mode" \
+      --allowedTools "${allowed[@]}" --disallowedTools "${disallowed[@]}"
   ) <"$run_dir/task" >"$run_dir/log.jsonl" 2>"$run_dir/stderr" || true
 
   jq -r 'select(.type == "result") | .result' "$run_dir/log.jsonl" 2>/dev/null >"$run_dir/summary" || true
-  commit_leftovers "$worktree" "$id"
+  ((read_only)) || commit_leftovers "$workdir" "$id"
   meta_set ended "$(date +%s)"
   meta_set state "done"
   echo "local-agent: run $id done; review it with: local-agent result $id"

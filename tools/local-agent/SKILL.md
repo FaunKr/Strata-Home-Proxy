@@ -19,6 +19,10 @@ Offload only when the user asks. When a task is well scoped and mechanical (a re
    ```
 
    Its first line names the run id. Tell the user in one line that the task is running on Strata.
+
+   Options, before the task:
+   - `--read-only` for research, review or questions: the worker reads the repo as it is, with no edit tools and no branch.
+   - `--allow 'Bash(cargo test:*)'` (repeatable) when the task needs a command beyond the base set (read, edit, `git status/diff/add/commit`, `ls`, `grep`) and the repo's own allow rules in `.claude/settings.json`. Network tools and `git push` stay blocked whatever you pass.
 3. When the command ends, act on its exit code.
 
 ## Exit codes

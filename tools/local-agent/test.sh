@@ -74,6 +74,11 @@ reset() {
   new_repo
 }
 
+# The values the fake claude got for an option, one per line.
+option_values() {
+  awk -v opt="$1" '$0 == opt { on = 1; next } /^--/ { on = 0 } on' "$FAKE_CLAUDE_RECORD/args"
+}
+
 run_id() { sed -n 's/^local-agent: run \([^ ]*\).*/\1/p' <<<"$out" | head -1; }
 
 test_happy_path() {
@@ -145,6 +150,44 @@ test_install() {
   write_config
   PREFIX=$tmp/inst "$here/install.sh" >/dev/null 2>&1
   grep -q client-key "$config" || fail "Konfiguration überschrieben"
+}
+
+test_worker_permissions() {
+  mkdir -p .claude
+  echo '{"permissions": {"allow": ["Bash(cargo test:*)", "Bash(git push:*)"]}}' >.claude/settings.json
+  git add .claude && git commit -qm settings
+  la run --allow "Bash(make check:*)" "task"
+  [[ $code == 0 ]] || fail "exit $code: $out"
+  has_line <(option_values --permission-mode) acceptEdits
+  local allowed=$tmp/allowed denied=$tmp/denied
+  option_values --allowedTools >"$allowed"
+  option_values --disallowedTools >"$denied"
+  has_line "$allowed" "Edit"
+  has_line "$allowed" "Bash(git commit:*)"
+  has_line "$allowed" "Bash(cargo test:*)"
+  has_line "$allowed" "Bash(make check:*)"
+  lacks_line "$allowed" "Bash(git push:*)"
+  has_line "$denied" "Bash(git push:*)"
+  has_line "$denied" "WebFetch"
+  has_line "$denied" "Bash(curl:*)"
+  # --allow counts for its run only.
+  la run "task"
+  lacks_line <(option_values --allowedTools) "Bash(make check:*)"
+}
+
+test_read_only() {
+  export FAKE_CLAUDE_MODE=no-tool
+  la run --read-only "Explain README"
+  [[ $code == 0 ]] || fail "exit $code: $out"
+  [[ $(cat "$FAKE_CLAUDE_RECORD/cwd") == "$repo" ]] || fail "Worker nicht im Repo"
+  [[ $(git branch --format='%(refname:short)') == main ]] || fail "Branch angelegt"
+  [[ -z $(git worktree list | sed 1d) ]] || fail "Worktree angelegt"
+  lacks_line <(option_values --allowedTools) "Edit"
+  has_line <(option_values --disallowedTools) "Edit"
+  has_line <(option_values --disallowedTools) "Write"
+  la result "$(run_id)"
+  contains "$out" "I would rather not."
+  [[ $out != *"## Changes"* ]] || fail "Änderungen bei --read-only"
 }
 
 tests=("$@")

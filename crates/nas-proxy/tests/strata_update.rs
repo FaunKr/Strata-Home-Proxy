@@ -273,6 +273,7 @@ async fn the_summary_is_housekeeping_not_use() {
     assert_eq!(v["update"]["summary"]["state"], "written", "{v}");
     assert_eq!(s.state.snapshot().last_activity_at, before);
     assert_eq!(own_kinds(&s.state), events);
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
 }
 
 // --- #144 kept on the NAS ---
@@ -361,6 +362,28 @@ async fn the_summary_goes_once_the_update_is_installed() {
     let v = page(&mut b).await;
     assert_eq!(v["update"], Value::Null, "{v}");
     s.pc.awake.store(false, Ordering::SeqCst);
+    let state = restarted(&s);
+    assert_eq!(strata_nas_proxy::strata::page(&state).await.update, None);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_summary_of_older_commits_is_not_shown_for_newer_ones() {
+    let dir = data_dir("outdated");
+    let (s, mut b) = written(&dir).await;
+    {
+        let mut info = s.pc.strata_info.lock().unwrap();
+        info.as_mut().unwrap()["update"]["upstream"] = json!("1111222233334444");
+    }
+    s.pc.chat_fails.store(true, Ordering::SeqCst);
+    page(&mut b).await;
+    assert_eq!(
+        settled(&mut b).await["update"]["summary"]["state"],
+        "unavailable"
+    );
+    s.pc.awake.store(false, Ordering::SeqCst);
+    let v = page(&mut b).await;
+    assert_eq!(v["update"]["summary"]["state"], "unavailable", "{v}");
     let state = restarted(&s);
     assert_eq!(strata_nas_proxy::strata::page(&state).await.update, None);
     std::fs::remove_dir_all(&dir).unwrap();

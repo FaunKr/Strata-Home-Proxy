@@ -63,7 +63,9 @@ http.createServer((req, res) => {
   else if (req.url.startsWith('/metrics')) res.end(idleMetrics);
   else if (req.url.startsWith('/v1/chat/completions')) {
     req.resume();
-    req.on('end', () => json({ model: 'Qwen3-30B-A3B', choices: [{ message: { content: summary } }] }));
+    // Slow enough that the first visit shows the summary being written and
+    // the phone's later one the summary itself.
+    req.on('end', () => setTimeout(() => json({ model: 'Qwen3-30B-A3B', choices: [{ message: { content: summary } }] }), 3000));
   } else {
     res.statusCode = 404;
     res.end();

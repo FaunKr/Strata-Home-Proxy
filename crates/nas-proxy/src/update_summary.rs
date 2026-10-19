@@ -84,6 +84,15 @@ struct Written {
     written_at: u64,
 }
 
+impl Written {
+    fn summary(self) -> UpdateSummary {
+        UpdateSummary::Written {
+            lines: self.lines,
+            model: self.model,
+        }
+    }
+}
+
 pub struct UpdateSummaries {
     dir: Option<PathBuf>,
     /// The last incoming commits with the installed version they were
@@ -113,8 +122,12 @@ pub fn noted(
     incoming: Option<Incoming>,
 ) -> Option<StrataUpdate> {
     let summaries = &state.strata.update;
-    summaries.drop_installed(now.installed, now.update_available);
     let incoming = incoming.filter(|_| now.update_available == Some(true));
+    summaries.drop_outdated(
+        now.installed,
+        now.update_available,
+        incoming.as_ref().map(|i| i.upstream.as_str()),
+    );
     let Some(incoming) = incoming else {
         *summaries.last.lock().unwrap() = None;
         return None;
@@ -129,16 +142,13 @@ pub fn noted(
         .clone()
         .filter(|w| w.upstream == *upstream);
     let summary = if let Some(w) = written {
-        UpdateSummary::Written {
-            lines: w.lines,
-            model: w.model,
-        }
+        w.summary()
     } else if summaries.writing.lock().unwrap().as_ref() == Some(upstream) {
         UpdateSummary::Writing { fallback }
     } else if summaries.recently_failed(upstream) {
         UpdateSummary::Unavailable { fallback }
     } else if now.gaming || now.job {
-        summaries.fail(upstream, "Strata is ended or a job runs");
+        summaries.fail(upstream, "Gaming-Modus or a Strata job");
         UpdateSummary::Unavailable { fallback }
     } else if start(state, now.installed, incoming.clone()) {
         UpdateSummary::Writing { fallback }
@@ -170,51 +180,51 @@ impl UpdateSummaries {
         let written = self.written.lock().unwrap().clone();
         match (written, last) {
             (Some(w), Some((installed, incoming))) if w.upstream == incoming.upstream => {
-                Some(view(
-                    installed.as_deref(),
-                    &incoming,
-                    UpdateSummary::Written {
-                        lines: w.lines,
-                        model: w.model,
-                    },
-                ))
+                Some(view(installed.as_deref(), &incoming, w.summary()))
             }
-            (Some(w), _) => Some(StrataUpdate {
-                summary: UpdateSummary::Written {
-                    lines: w.lines,
-                    model: w.model,
-                },
-                commits: Vec::new(),
-                left_out: 0,
-                compare_url: None,
-            }),
-            (None, Some((installed, incoming))) => Some(view(
+            // Newer commits than the summary's: it is outdated.
+            (_, Some((installed, incoming))) => Some(view(
                 installed.as_deref(),
                 &incoming,
                 UpdateSummary::Unavailable {
                     fallback: fallback(&incoming),
                 },
             )),
+            (Some(w), None) => Some(StrataUpdate {
+                summary: w.summary(),
+                commits: Vec::new(),
+                left_out: 0,
+                compare_url: None,
+            }),
             (None, None) => None,
         }
     }
 
-    /// Forgets the summary once its update is installed.
-    fn drop_installed(&self, installed: Option<&str>, update_available: Option<bool>) {
+    /// Forgets the summary once its update is installed or upstream moved on:
+    /// only the newest upstream commit's is kept.
+    fn drop_outdated(
+        &self,
+        installed: Option<&str>,
+        update_available: Option<bool>,
+        upstream: Option<&str>,
+    ) {
         let mut written = self.written.lock().unwrap();
-        let done = written.as_ref().is_some_and(|w| {
+        let outdated = written.as_ref().is_some_and(|w| {
             update_available == Some(false)
                 || installed.is_some_and(|i| !i.is_empty() && w.upstream.starts_with(i))
+                || upstream.is_some_and(|u| u != w.upstream)
         });
-        if done {
+        if outdated {
             *written = None;
             self.save(None);
         }
     }
 
     fn keep(&self, w: Written) {
+        // Under the lock, so a drop cannot slip between file and memory.
+        let mut written = self.written.lock().unwrap();
         self.save(Some(&w));
-        *self.written.lock().unwrap() = Some(w);
+        *written = Some(w);
     }
 
     fn save(&self, w: Option<&Written>) {
@@ -294,6 +304,13 @@ struct Health {
 async fn ask(state: &AppState, incoming: &Incoming) -> Result<(Vec<String>, String), String> {
     let cfg = state.cfg();
     let strata = cfg.strata_url.as_ref().ok_or("no Strata address")?;
+    let status = state
+        .pc_status(&state.agent())
+        .await
+        .ok_or("the PC service does not answer")?;
+    if status.gaming_mode || status.strata_job {
+        return Err("Gaming-Modus or a Strata job".into());
+    }
     let auth = cfg.strata_authorization();
     let mut req = state.probe_client().get(format!("{strata}/health"));
     if let Some(auth) = &auth {

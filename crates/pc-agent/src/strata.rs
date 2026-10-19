@@ -1292,14 +1292,14 @@ pub fn check_for_update(agent: &Arc<Agent>) {
     }
     let agent = Arc::clone(agent);
     tokio::spawn(async move {
-        let found = commits_behind(&agent).await;
+        let found = incoming_commits(&agent).await;
         let available = found.as_ref().map(|i| i.is_some());
         agent.updates.found(available, found.flatten());
     });
 }
 
 /// `None` if Git cannot tell; `Some(None)` when nothing is incoming.
-async fn commits_behind(agent: &Agent) -> Option<Option<Incoming>> {
+async fn incoming_commits(agent: &Agent) -> Option<Option<Incoming>> {
     let git = find_git(agent).await?;
     let dir = agent.cfg.strata_dir.clone();
     let run = |args: &[&str]| {

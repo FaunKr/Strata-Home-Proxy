@@ -1,4 +1,13 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(cargo test:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(scripts/check.sh:*)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {

@@ -114,6 +114,20 @@ for script in scripts/check.sh $(used_by scripts/check.sh | grep '^scripts/.*\.s
   done
 done
 
+# Every doc, comment or script that names a CI job or workflow names one that
+# exists, so removing a job can't leave stale mentions behind.
+jobs=" $(awk '/^jobs:/ { in_jobs = 1; next } /^[^ #]/ { in_jobs = 0 } in_jobs && /^  [A-Za-z0-9_-]+:/ { sub(/:.*/, ""); printf "%s ", $1 }' .github/workflows/*.yml)"
+# The backticks are literal (Markdown code spans), not substitutions.
+# shellcheck disable=SC2016
+while IFS= read -r mention; do
+  file=${mention%%:*}
+  name=$(sed -E 's/.*`([^`]+)`.*/\1/' <<<"$mention")
+  case $mention in
+    *orkflow*) [[ -e .github/workflows/$name ]] || fail "$file nennt den Workflow $name, den es nicht gibt" ;;
+    *) [[ $jobs == *" $name "* ]] || fail "$file nennt den CI-Job $name, den es nicht gibt" ;;
+  esac
+done < <(git ls-files -z | xargs -0 grep -oIE '(CI[- ][Jj]ob|[Jj]ob|[Ww]orkflow) `[A-Za-z0-9_.-]+`' 2>/dev/null || true)
+
 if ((failures)); then
   echo "ci-select: $failures Fehler; die Zuordnung steht in scripts/ci-select.sh" >&2
   exit 1

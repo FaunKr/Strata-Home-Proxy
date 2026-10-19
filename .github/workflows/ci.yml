@@ -82,9 +82,14 @@ jobs:
       - name: Free disk space
         if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-      # Unquoted on purpose: one argument per package, none for everything.
+      # check.sh lints the workflows with it.
       - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
-        run: scripts/check.sh $PACKAGES
+        run: scripts/install-actionlint.sh "$RUNNER_TEMP/bin" && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
+        # Unquoted on purpose: one argument per package, none for everything.
+        run: |
+          # shellcheck disable=SC2086
+          scripts/check.sh $PACKAGES
         env:
           PACKAGES: ${{ needs.changes.outputs.packages }}
   image:

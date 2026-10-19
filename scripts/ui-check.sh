@@ -9,7 +9,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Cloud sessions have Playwright here; elsewhere: npm install -g playwright.
-export NODE_PATH="${NODE_PATH:+$NODE_PATH:}/opt/node-tools/node_modules:$(npm root -g 2>/dev/null || true)"
+npm_root=$(npm root -g 2>/dev/null || true)
+export NODE_PATH="${NODE_PATH:+$NODE_PATH:}/opt/node-tools/node_modules:$npm_root"
 if ! node -e 'require("playwright")' 2>/dev/null; then
   echo "Playwright fehlt: npm install -g playwright && npx playwright install chromium" >&2
   exit 2

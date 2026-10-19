@@ -6,6 +6,7 @@
 - UI-Änderungen im Browser prüfen: `scripts/ui-check.sh` (`SHOTS=1` für Screenshots).
 - Neue Proxy-Tests nutzen das Gerüst mit simuliertem PC und Strata in `crates/nas-proxy/tests/common`.
 - Wackelnde oder hängende Tests: `scripts/repeat-test.sh` lässt eine Testdatei vielfach laufen und nennt, welcher hängt.
+- CI-Kosten, Actions-Minuten, welche Jobs ein PR startet: `docs/ci.md`.
 
 ## Agent skills
 

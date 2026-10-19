@@ -672,6 +672,13 @@ fn ModelRow(
     if let Some(context) = model.context {
         meta.push_str(&format!(" · {}K context", context / 1024));
     }
+    if let Some(recovery) = &model.loop_recovery {
+        meta.push_str(match recovery.as_str() {
+            "recover" => " · loop recovery on",
+            "stop" => " · loop recovery stops the reply",
+            _ => " · loop recovery off",
+        });
+    }
     let buttons = (!model.active).then(|| {
         let activate = model.id.clone();
         let delete = model.id.clone();

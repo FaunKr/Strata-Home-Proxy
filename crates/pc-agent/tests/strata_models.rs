@@ -21,9 +21,11 @@ fn write(path: PathBuf, content: &str) {
     std::fs::write(path, content).unwrap();
 }
 
+/// A config as the service leaves it after its start.
 fn config_json(gguf: &str) -> String {
-    json!({"exe": "C:/Strata/engine/strata.exe", "args": ["--native", gguf], "port": 8080, "api_key": OLD_KEY})
-        .to_string()
+    json!({"exe": "C:/Strata/engine/strata.exe", "args": ["--native", gguf], "port": 8080,
+        "api_key": OLD_KEY, "reasoning_loop_recovery": "recover"})
+    .to_string()
 }
 
 /// Strata as setup leaves it with IQ3_XXS (active) and coder-IQ1_M.

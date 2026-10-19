@@ -152,6 +152,10 @@ Ein älterer PC-Dienst lässt das Feld weg.
 `null`, wenn das Flag fehlt oder sein Wert keine Zahl ist. Ein älterer
 PC-Dienst lässt das Feld weg.
 
+`loop_recovery` ist `reasoning_loop_recovery` aus seiner Konfiguration, wie
+Strata es liest: `recover` (auch `true`), `stop` oder `off` (fehlt der Wert
+oder ist er unbekannt). Ein älterer PC-Dienst lässt das Feld weg.
+
 `benchmarks` hält den letzten Lauf jedes Modells: `decode_tps` (`chat decode
 tok/s`), `prompt_tps` (`4K prompt tok/s`, fehlt, wenn der Benchmark die Zeile
 nicht druckt), dazu `context`, `speed_projection` und `version` (Strata-Commit)
@@ -159,6 +163,17 @@ zur Zeit des Laufs. Ein Modell, das im Vergleich nicht anlief oder nichts
 meldete, hat statt der Werte `error`. `benchmark` bleibt der letzte
 erfolgreiche Lauf, für Proxys, die nur einen kennen. Ein älterer PC-Dienst
 lässt `benchmarks` weg.
+
+### Was der PC-Dienst in den Modell-Konfigurationen hält
+
+Beim Start des PC-Dienstes, nach `install`, `add_model` und `update` setzt er
+in jeder `strata-<id>.json` `"reasoning_loop_recovery": "recover"` (siehe
+[strata-api.md](strata-api.md)) und überschreibt einen anderen Wert. Alles
+andere in der Konfiguration bleibt, auch ihre Änderungszeit. Eine
+Konfiguration, die er nicht lesen oder schreiben kann, steht im Log und
+bleibt, wie sie ist. Ändert sich die Konfiguration des aktiven Modells,
+während Strata läuft, startet er Strata neu, sobald es keine Anfrage
+bearbeitet; nach `install` und `update` startet Strata ohnehin mit ihr.
 
 ### `POST /strata/jobs`
 

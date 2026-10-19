@@ -70,6 +70,8 @@ pub async fn run(agent: Arc<Agent>) -> anyhow::Result<()> {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });
+    let starting = Arc::clone(&agent);
+    tokio::spawn(async move { strata::manage_configs_at_start(&starting).await });
     agent.spawn_watchdog(WATCHDOG_EVERY);
     tracing::info!("PC-Dienst {VERSION} hört auf {}", agent.cfg.listen);
     axum::serve(

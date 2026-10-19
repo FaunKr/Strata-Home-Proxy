@@ -658,6 +658,10 @@ pub struct StrataModel {
     /// not say, or a config without it.
     #[serde(default)]
     pub context: Option<u32>,
+    /// Strata's recovery from repeated reasoning passages: `off`, `stop` or
+    /// `recover`; `None` from an older PC service, which does not say.
+    #[serde(default)]
+    pub loop_recovery: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

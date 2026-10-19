@@ -54,6 +54,11 @@ const PROJECTION_FLAGS: [(&str, &[&str]); 3] = [
     ("--cvec-mode", &["project"]),
     ("--cvec-dir", &["per-layer"]),
 ];
+/// Strata's recovery from reasoning that repeats whole passages (off by
+/// default; `"recover"` goes on with the low-effort instruction). The
+/// service sets it in every model config.
+const LOOP_RECOVERY_KEY: &str = "reasoning_loop_recovery";
+const LOOP_RECOVERY: &str = "recover";
 /// Strata's vector, in the Strata folder.
 const PROJECTION_VECTOR: [&str; 3] = [
     "data",
@@ -700,6 +705,7 @@ async fn install(
     // A Strata started by hand ends with the old values, the new one starts
     // with the managed ones.
     agent.stop_strata();
+    manage(agent).await;
     let managed = Managed {
         strata_start: Some(dir.join(run_script(&size.id()))),
         strata_args: Vec::new(),
@@ -725,6 +731,12 @@ async fn add_model(
         .or_else(|| agent.managed().api_key(&agent.cfg).map(String::from))
         .unwrap_or_default();
     setup(agent, size, context, &key, speed_projection).await?;
+    if active_changed(agent, &manage(agent).await) {
+        wait_idle(agent).await?;
+        set_step(agent, "Strata neu starten");
+        agent.stop_strata();
+        restart_strata(agent).await;
+    }
     Ok(None)
 }
 
@@ -863,6 +875,9 @@ async fn update(agent: &Arc<Agent>) -> Result<Option<String>, Step> {
         dir: Some(dir),
     };
     let updated = command(agent, spec, true).await;
+    if updated.is_ok() {
+        manage(agent).await;
+    }
     restart_strata(agent).await;
     updated?;
     agent.updates.found(Some(false), None);
@@ -1307,21 +1322,92 @@ fn rewrite_args(
     let args = cfg["args"].as_array_mut().expect("read_config checks args");
     let before = args.clone();
     change(args);
-    // Without its own start script Strata starts the config touched last:
-    // the change keeps the time, so the same model stays active.
-    let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-    crate::write_replacing(&path, &config_text(cfg))
+    write_config(&path, cfg)?;
+    Ok(before)
+}
+
+/// Writes a changed model config. Without its own start script Strata
+/// starts the config touched last: the change keeps the time, so the same
+/// model stays active.
+fn write_config(path: &Path, cfg: ConfigFields) -> Result<(), String> {
+    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    crate::write_replacing(path, &config_text(cfg))
         .map_err(|e| format!("{} nicht geschrieben: {e}", path.display()))?;
     if let Some(time) = modified {
         let kept = std::fs::File::options()
             .write(true)
-            .open(&path)
+            .open(path)
             .and_then(|f| f.set_modified(time));
         if let Err(e) = kept {
             tracing::warn!("Änderungszeit von {} nicht behalten: {e}", path.display());
         }
     }
-    Ok(before)
+    Ok(())
+}
+
+/// Sets what the service keeps in a model config; whether that changed it.
+fn manage_config(cfg: &mut ConfigFields) -> bool {
+    let before = cfg.clone();
+    cfg.insert(LOOP_RECOVERY_KEY.into(), LOOP_RECOVERY.into());
+    *cfg != before
+}
+
+/// Brings every model config to what the service keeps in it and gives the
+/// ids whose config changed. One that cannot be read or written is logged
+/// and left as it is; the others still change.
+fn manage_configs(dir: &Path) -> Vec<String> {
+    installed_models(dir)
+        .filter(|id| {
+            let path = config_path(dir, id);
+            let written = read_config(&path).and_then(|found| match found {
+                Some((_, mut cfg)) => {
+                    if manage_config(&mut cfg) {
+                        write_config(&path, cfg).map(|()| true)
+                    } else {
+                        Ok(false)
+                    }
+                }
+                None => Ok(false),
+            });
+            written.unwrap_or_else(|e| {
+                tracing::warn!("Modell-Konfiguration nicht angepasst: {e}");
+                false
+            })
+        })
+        .collect()
+}
+
+/// `manage_configs` off the runtime's threads.
+async fn manage(agent: &Agent) -> Vec<String> {
+    let dir = agent.cfg.strata_dir.clone();
+    tokio::task::spawn_blocking(move || manage_configs(&dir))
+        .await
+        .unwrap_or_default()
+}
+
+/// Whether the active model is among `changed`.
+fn active_changed(agent: &Agent, changed: &[String]) -> bool {
+    active_model(agent).is_some_and(|a| changed.iter().any(|id| id.eq_ignore_ascii_case(&a)))
+}
+
+/// At the service's start: brings every model config to what the service
+/// keeps in it. A running Strata whose active model's config changed starts
+/// again with it, once it has no request at work; a job that runs by then
+/// restarts it anyway.
+pub async fn manage_configs_at_start(agent: &Arc<Agent>) {
+    let changed = manage(agent).await;
+    if changed.is_empty() || !active_changed(agent, &changed) || !agent.strata_healthy().await {
+        return;
+    }
+    while agent.strata_busy().await {
+        tokio::time::sleep(POLL).await;
+    }
+    if agent.gaming() || agent.jobs.running() {
+        return;
+    }
+    tracing::info!("Konfiguration des aktiven Modells angepasst, Strata startet neu");
+    agent.stop_strata();
+    restart_strata(agent).await;
 }
 
 /// Takes setup's speed projection flags out of `args`, each with its values,
@@ -1984,6 +2070,9 @@ pub struct InstalledModel {
     /// The context it starts with (`--max-context`); `None` if its config
     /// does not say.
     pub context: Option<u32>,
+    /// Strata's recovery from repeated reasoning passages, as its config
+    /// sets it: `off`, `stop` or `recover`.
+    pub loop_recovery: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2014,6 +2103,7 @@ pub fn view(agent: &Agent) -> StrataView {
                 active: active.as_deref() == Some(id.as_str()),
                 speed_projection: has_speed_projection(dir, &id),
                 context: model_context(dir, &id),
+                loop_recovery: loop_recovery(dir, &id).into(),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,
@@ -2081,6 +2171,21 @@ fn model_context(dir: &Path, id: &str) -> Option<u32> {
     let args = cfg["args"].as_array()?;
     let at = args.iter().position(|v| v == CONTEXT_FLAG)?;
     args.get(at + 1)?.as_str()?.parse().ok()
+}
+
+/// `reasoning_loop_recovery` in a model's config, as Strata reads it: `true`
+/// is `recover`, a missing or unknown value off.
+fn loop_recovery(dir: &Path, id: &str) -> &'static str {
+    let value = read_config(&config_path(dir, id))
+        .ok()
+        .flatten()
+        .and_then(|(_, cfg)| cfg.get(LOOP_RECOVERY_KEY).cloned());
+    match value {
+        Some(serde_json::Value::Bool(true)) => LOOP_RECOVERY,
+        Some(v) if v == LOOP_RECOVERY => LOOP_RECOVERY,
+        Some(v) if v == "stop" => "stop",
+        _ => "off",
+    }
 }
 
 fn dir_size(dir: &Path) -> u64 {

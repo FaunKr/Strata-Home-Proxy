@@ -714,3 +714,30 @@ async fn the_active_model_offers_to_change_its_context_too() {
     let html = b.page("/admin/strata").await;
     assert_eq!(html.matches("Change context").count(), 2, "{html}");
 }
+
+// --- #158 loop recovery of installed models ---
+
+#[tokio::test]
+async fn an_installed_model_shows_its_loop_recovery() {
+    let s = setup(true, |_| {}).await;
+    let mut info = with_two_models(None);
+    info["models"][0]["loop_recovery"] = json!("recover");
+    info["models"][1]["loop_recovery"] = json!("off");
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("loop recovery on"), "{html}");
+    assert!(html.contains("loop recovery off"), "{html}");
+}
+
+#[tokio::test]
+async fn without_word_from_the_pc_service_no_loop_recovery_shows() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_two_models(None));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("IQ3_XXS"), "{html}");
+    assert!(!html.contains("loop recovery"), "{html}");
+}

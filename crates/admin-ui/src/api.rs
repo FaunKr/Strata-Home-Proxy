@@ -391,8 +391,8 @@ pub enum OutputNotice {
     NotStartedByAgent,
 }
 
-/// Kinds of events in the history; their snake_case names are what
-/// `events.jsonl` stores.
+/// Kinds of events in the history; their snake_case names are what the
+/// events database stores.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {

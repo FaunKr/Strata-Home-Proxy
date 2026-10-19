@@ -43,7 +43,9 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
 - **MAC-Adresse:** Der PC-Dienst meldet sie selbst; der Proxy merkt sie sich in
   `/data/pc-mac` und weckt damit. `PC_MAC` braucht es nur für den allerersten
   Start, bevor der PC-Dienst je geantwortet hat.
-- **Verlauf:** Weck- und Schlafereignisse in `/data/events.jsonl`.
+- **Verlauf:** Weck- und Schlafereignisse in `/data/events.db` (SQLite). Ein
+  vorhandenes `events.jsonl` wird beim ersten Start einmalig importiert und
+  danach nicht mehr geschrieben; es bleibt als Sicherung erhalten.
 
 ## Auf dem NAS starten
 

@@ -82,6 +82,8 @@ jobs:
       - name: Free disk space
         if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
+        run: npm install -g eslint@10.1.0
       # Unquoted on purpose: one argument per package, none for everything.
       - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         run: scripts/check.sh $PACKAGES

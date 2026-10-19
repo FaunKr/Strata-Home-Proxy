@@ -47,4 +47,4 @@ for _ in $(seq 50); do
 done
 
 mkdir -p target/ui-check
-BASE="http://127.0.0.1:$port" OUT=target/ui-check node scripts/ui-check.js
+BASE="http://127.0.0.1:$port" FAKE_PC="http://127.0.0.1:$pc_port" OUT=target/ui-check node scripts/ui-check.js

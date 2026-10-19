@@ -2,6 +2,10 @@
 // overview shows an awake PC with its Hardwarewerte and the Strata area its
 // models and benchmarks, and the Version tab an update Strata summarizes. It also stands in for the code-bench runner, whose
 // /health only needs to name opencode.
+// POST /fake/summary?mode=hold|fail&upstream=<hash> moves upstream on, so the
+// proxy asks for a new summary, and makes Strata hold or refuse the answer;
+// a held request is refused once the mode changes. mode=answer without
+// upstream goes back to the start.
 // Usage: node scripts/fake-pc.js <port>
 const http = require('http');
 
@@ -20,12 +24,13 @@ const at = Math.floor(Date.now() / 1000) - 3600;
 const model = (id, family, size, active, context, projection) => ({
   id, family, size, disk_bytes: 60e9, active, speed_projection: projection, context,
 });
+const firstUpstream = 'fedcba9876543210fedcba9876543210fedcba98';
 const strata = {
   installed: true,
   version: '477ac13',
   update_available: true,
   update: {
-    upstream: 'fedcba9876543210fedcba9876543210fedcba98',
+    upstream: firstUpstream,
     total: 3,
     remote: 'https://github.com/Niko1221/Strata.git',
     commits: [
@@ -64,6 +69,8 @@ const strata = {
   job: null,
 };
 const idleMetrics = 'vllm:num_requests_running{model_name="Qwen3-30B-A3B"} 0\nvllm:num_requests_waiting{model_name="Qwen3-30B-A3B"} 0\n';
+let summaryMode = 'answer';
+let held = [];
 const summary = '- **Run setup again** after this update.\n- Long prompts are read faster.\n- A crash when an answer hits max_tokens in a tool call is fixed.';
 
 http.createServer((req, res) => {
@@ -78,8 +85,19 @@ http.createServer((req, res) => {
   else if (req.url.startsWith('/metrics')) res.end(idleMetrics);
   else if (req.url.startsWith('/v1/chat/completions')) {
     req.resume();
-    // Slow enough that an early visit shows the summary being written.
-    req.on('end', () => setTimeout(() => json({ model: 'Qwen3-30B-A3B', choices: [{ message: { content: summary } }] }), 3000));
+    req.on('end', () => {
+      if (summaryMode === 'hold') held.push(res);
+      else if (summaryMode === 'fail') res.writeHead(500).end();
+      else json({ model: 'Qwen3-30B-A3B', choices: [{ message: { content: summary } }] });
+    });
+  }
+  else if (req.method === 'POST' && req.url.startsWith('/fake/summary')) {
+    const q = new URL(req.url, 'http://fake').searchParams;
+    summaryMode = q.get('mode');
+    strata.update.upstream = q.get('upstream') ?? firstUpstream;
+    for (const r of held) r.writeHead(500).end();
+    held = [];
+    res.end();
   }
   else {
     res.statusCode = 404;

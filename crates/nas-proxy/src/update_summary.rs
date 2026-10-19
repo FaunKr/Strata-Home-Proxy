@@ -103,6 +103,8 @@ pub struct UpdateSummaries {
     writing: Mutex<Option<String>>,
     /// The last failed attempt.
     failed: Mutex<Option<(String, Instant)>>,
+    /// `LIMIT` and `RETRY_AFTER`; shorter in tests.
+    timing: Mutex<(Duration, Duration)>,
 }
 
 /// What the Strata page needs to know about Strata right now.
@@ -170,6 +172,7 @@ impl UpdateSummaries {
             written: Mutex::new(written),
             writing: Mutex::new(None),
             failed: Mutex::new(None),
+            timing: Mutex::new((LIMIT, RETRY_AFTER)),
         }
     }
 
@@ -247,12 +250,18 @@ impl UpdateSummaries {
         }
     }
 
+    /// Changes how long Strata may take and how long a failure waits; for tests.
+    pub fn set_timing(&self, limit: Duration, retry_after: Duration) {
+        *self.timing.lock().unwrap() = (limit, retry_after);
+    }
+
     fn recently_failed(&self, upstream: &str) -> bool {
+        let retry_after = self.timing.lock().unwrap().1;
         self.failed
             .lock()
             .unwrap()
             .as_ref()
-            .is_some_and(|(u, at)| u == upstream && at.elapsed() < RETRY_AFTER)
+            .is_some_and(|(u, at)| u == upstream && at.elapsed() < retry_after)
     }
 
     fn fail(&self, upstream: &str, why: &str) {
@@ -345,7 +354,7 @@ async fn ask(state: &AppState, incoming: &Incoming) -> Result<(Vec<String>, Stri
     let mut req = state
         .upstream
         .post(format!("{strata}/v1/chat/completions"))
-        .timeout(LIMIT)
+        .timeout(state.strata.update.timing.lock().unwrap().0)
         .json(&body);
     if let Some(auth) = auth {
         req = req.header(reqwest::header::AUTHORIZATION, auth);

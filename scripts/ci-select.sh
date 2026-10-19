@@ -3,7 +3,6 @@
 #
 # Usage: <changed paths, one per line> | scripts/ci-select.sh
 #        scripts/ci-select.sh --all
-#        <changed paths> | scripts/ci-select.sh --main
 # Prints test=, packages=, image= (the proxy's image) and bench= (the code
 # benchmark runner's image) for $GITHUB_OUTPUT. The images build only when
 # their build definition changes: the test job already compiles the code. An empty
@@ -16,22 +15,8 @@ if [[ ${1:-} == --all ]]; then
   all
   exit 0
 fi
-# A push to main: its pull request ran the checks already. The test job runs
-# only when the dependencies change, so that main saves their Rust cache
-# (rust-cache keys on these files) and pull requests start warm.
-if [[ ${1:-} == --main ]]; then
-  test=false
-  while IFS= read -r path; do
-    case $path in
-      Cargo.toml | Cargo.lock | crates/*/Cargo.toml | rust-toolchain* | .cargo/*) test=true ;;
-    esac
-  done
-  printf '%s\n' "test=$test" packages=
-  exit 0
-fi
-
 packages=()
-tools=false
+unscoped=false
 image=false
 bench=false
 while IFS= read -r path; do
@@ -47,24 +32,24 @@ while IFS= read -r path; do
     crates/nas-proxy/*) packages+=(strata-nas-proxy) ;;
     crates/pc-agent/*) packages+=(strata-pc-agent) ;;
     # A crate without its own rule: the whole workspace.
-    crates/*) tools=true ;;
+    crates/*) unscoped=true ;;
     # The proxy embeds the install script (include_str!); check.sh also checks
     # that it parses.
     deploy/windows/*) packages+=(strata-nas-proxy) ;;
     Dockerfile | .dockerignore) image=true ;;
     # The local-agent runner: check.sh runs its tests and shellcheck. It is no
     # crate, so the test job runs without a package list, i.e. unscoped.
-    tools/local-agent | tools/local-agent/*) tools=true ;;
+    tools/local-agent | tools/local-agent/*) unscoped=true ;;
     # The code benchmark: the proxy embeds its tasks (include_str!), check.sh
     # runs the runner's tests; its image holds only the runner.
-    tools/code-bench/tasks/*) packages+=(strata-nas-proxy) tools=true ;;
-    tools/code-bench/Dockerfile | tools/code-bench/runner.py) tools=true bench=true ;;
-    tools/code-bench | tools/code-bench/*) tools=true ;;
+    tools/code-bench/tasks/*) packages+=(strata-nas-proxy) unscoped=true ;;
+    tools/code-bench/Dockerfile | tools/code-bench/runner.py) unscoped=true bench=true ;;
+    tools/code-bench | tools/code-bench/*) unscoped=true ;;
   esac
 done
 
 packages=$(printf '%s\n' ${packages[@]+"${packages[@]}"} | sort -u | xargs)
-echo "test=$([[ -n $packages || $tools == true ]] && echo true || echo false)"
+echo "test=$([[ -n $packages || $unscoped == true ]] && echo true || echo false)"
 echo "packages=$packages"
 echo "image=$image"
 echo "bench=$bench"

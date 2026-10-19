@@ -19,9 +19,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   changes:
-    # Decides which of the jobs below a run needs (scripts/ci-select.sh): a pull
-    # request what its paths need, a push to main only the test job when the
-    # dependencies change, a manual run everything.
+    # Decides which of the jobs below a pull request needs (scripts/ci-select.sh).
+    # Pushes to main and manual runs select everything; on main the test job
+    # then only refreshes the Rust cache, and the publish job builds the images.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,20 +37,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
-          EVENT: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
         run: |
-          if [[ $EVENT == push ]]; then
-            # The compare API lists at most 300 files; if that or the
-            # comparison fails (a force push), run the test job.
-            if files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" \
-                --jq '(.files // []) as $f | if ($f | length) < 300 then $f[] | .filename, (.previous_filename // empty) else "Cargo.lock" end'); then
-              scripts/ci-select.sh --main <<<"$files"
-            else
-              echo Cargo.lock | scripts/ci-select.sh --main
-            fi | tee -a "$GITHUB_OUTPUT"
-            exit 0
-          fi
           if [[ -z $PR ]]; then
             scripts/ci-select.sh --all | tee -a "$GITHUB_OUTPUT"
             exit 0
@@ -70,11 +57,6 @@ jobs:
     if: needs.changes.outputs.test == 'true'
     runs-on: ubuntu-latest
     steps:
-      # The test binaries of all packages no longer fit the runner's disk
-      # (the linker died with a bus error at 29 MB free); these preinstalled
-      # SDKs are not needed here.
-      - name: Free disk space
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -84,19 +66,31 @@ jobs:
           # Windows check is the manual workflow windows.yml.
           targets: wasm32-unknown-unknown, x86_64-pc-windows-gnu
       # Only main saves the cache, pull requests read it: one set per branch
-      # overflowed the Actions cache. It holds the dependencies, so main runs
-      # this job when they change (ci-select.sh --main).
-      - uses: Swatinem/rust-cache@v2
+      # overflowed the Actions cache. On main the pull request ran the checks
+      # already, so there this job only looks the cache up (it holds the
+      # dependencies, keyed on Cargo.lock, the manifests and the rustc version)
+      # and runs check.sh only to refill it, e.g. after a dependency change or
+      # a new stable Rust.
+      - id: cache
+        uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          lookup-only: ${{ github.event_name == 'push' }}
+      # The test binaries of all packages no longer fit the runner's disk
+      # (the linker died with a bus error at 29 MB free); these preinstalled
+      # SDKs are not needed here.
+      - name: Free disk space
+        if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       # Unquoted on purpose: one argument per package, none for everything.
-      - run: scripts/check.sh $PACKAGES
+      - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
+        run: scripts/check.sh $PACKAGES
         env:
           PACKAGES: ${{ needs.changes.outputs.packages }}
   image:
     # Builds the images whose build definition a pull request changes: the NAS
     # image and the code benchmark's runner (tools/code-bench). Dependencies sit
-    # in their own layers (cargo-chef). Pull requests only read the layer cache;
+    # in their own layers (cargo-chef). This job only reads the layer cache;
     # writing it from every branch overflowed the Actions cache and evicted
     # main's layers. On main the publish job builds both instead.
     needs: changes
@@ -112,14 +106,12 @@ jobs:
           platforms: linux/amd64
           build-args: STRATA_BUILD_ID=${{ github.event.pull_request.head.sha || github.sha }}
           cache-from: type=gha
-          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
       - if: needs.changes.outputs.bench == 'true'
         uses: docker/build-push-action@v6
         with:
           context: tools/code-bench
           platforms: linux/amd64
           cache-from: type=gha,scope=code-bench
-          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max,scope=code-bench' || '' }}
   publish:
     # On pushes to the default branch, builds both images once, publishes them
     # (the NAS pulls ghcr.io/faunkr/strata-home-proxy:latest) and writes the

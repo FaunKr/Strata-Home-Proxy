@@ -101,7 +101,7 @@ async fn status_reports_temperature_fan_and_power() {
     assert_eq!(gpu["load_pct"], Value::Null);
 }
 
-/// The real reading, in the CI job `windows`: gets through D3DKMT and PDH
+/// The real reading, in the manual workflow `windows.yml`: gets through D3DKMT and PDH
 /// without a crash and reads CPU and RAM. The runner has no GPU, so its
 /// values may stay empty.
 #[cfg(windows)]

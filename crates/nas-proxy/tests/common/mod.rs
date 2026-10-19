@@ -626,6 +626,15 @@ pub fn kinds(state: &AppState) -> Vec<EventKind> {
     state.events.recent().into_iter().map(|e| e.kind).collect()
 }
 
+/// The Ereignisse without the marks the proxy sets for the history on its
+/// own, which can land at any time.
+pub fn own_kinds(state: &AppState) -> Vec<EventKind> {
+    kinds(state)
+        .into_iter()
+        .filter(|k| !k.is_history_mark())
+        .collect()
+}
+
 /// Waits until the proxy has drawn this state of the PC in the history.
 pub async fn seen(s: &Setup, kind: EventKind) {
     eventually(&format!("{kind:?} im Verlauf"), || {

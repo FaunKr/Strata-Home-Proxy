@@ -54,7 +54,7 @@ async fn samples_the_power_while_a_plug_is_set() {
     *s.pc.plug_watts.lock().unwrap() = 312.0;
     sample_until(&s, "312 W", |x| x.watts == 312.0).await;
     // A sample is no Ereignis.
-    assert!(kinds(&s.state).is_empty(), "{:?}", kinds(&s.state));
+    assert!(own_kinds(&s.state).is_empty(), "{:?}", kinds(&s.state));
 }
 
 #[tokio::test]
@@ -90,10 +90,10 @@ async fn a_failing_plug_leaves_no_samples_and_no_events() {
     s.pc.plug_down.store(true, Ordering::SeqCst);
     *s.pc.plug_watts.lock().unwrap() = 87.0;
     s.state.settings.set("SHELLY_URL", &s.plug).unwrap();
-    let events = kinds(&s.state);
+    let events = own_kinds(&s.state);
     several_rounds().await;
     assert!(samples(&s).await.is_empty());
-    assert_eq!(kinds(&s.state), events);
+    assert_eq!(own_kinds(&s.state), events);
     s.pc.plug_down.store(false, Ordering::SeqCst);
     sample_until(&s, "87 W", |x| x.watts == 87.0).await;
 }

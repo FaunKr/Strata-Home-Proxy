@@ -29,7 +29,7 @@ pub fn HistoryPage() -> impl IntoView {
                             .find(|(days, _)| *days == range.get())
                             .map_or(RANGES[0].1, |(_, name)| *name);
                         // Ohne PC-Dienst sieht der Proxy nur, was er selbst
-                        // ausloest: der Verlauf bleibt lueckenhaft.
+                        // auslöst: der Verlauf bleibt lückenhaft.
                         let without_agent = (!view.agent_configured).then(|| {
                             view! {
                                 <p class="warning" role="status">
@@ -114,7 +114,7 @@ fn shown(view: HistoryView) -> AnyView {
     .into_any()
 }
 
-/// Ein Balken pro Tag, der aelteste zuerst.
+/// Ein Balken pro Tag, der älteste zuerst.
 #[component]
 fn Bars(days: Vec<HistoryDay>) -> impl IntoView {
     let named = days.len() <= 10;
@@ -136,8 +136,8 @@ fn Bars(days: Vec<HistoryDay>) -> impl IntoView {
 
 #[component]
 fn Bar(day: HistoryDay, named: bool) -> impl IntoView {
-    // Der Tag selbst ist der Massstab, damit ein Tag mit Zeitumstellung
-    // gefuellt ist und keiner zu viel wird.
+    // Der Tag selbst ist der Maßstab, damit ein Tag mit Zeitumstellung
+    // gefüllt ist und keiner zu viel wird.
     let total = (day.awake_h + day.gaming_h + day.asleep_h + day.unknown_h).max(1.0);
     let share = |hours: f64| format!("{:.3}%", hours / total * 100.0);
     let title = format!(
@@ -148,11 +148,11 @@ fn Bar(day: HistoryDay, named: bool) -> impl IntoView {
         hours(day.asleep_h),
         hours(day.unknown_h),
     );
-    let label = if day.date.len() == 10 {
-        format!("{}.{}.", &day.date[8..], &day.date[5..7])
-    } else {
-        day.date.clone()
-    };
+    // "18 Oct" from "Sun 18 Oct": the weekday does not fit under a bar.
+    let label = day
+        .label
+        .split_once(' ')
+        .map_or(day.label.clone(), |(_, rest)| rest.to_string());
     view! {
         <div class="bar">
             <div class="bar-column" title=title>

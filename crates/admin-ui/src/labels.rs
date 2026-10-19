@@ -206,6 +206,7 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::PcSeenAsleep => "PC seen asleep",
         EventKind::PcSeenGaming => "PC seen in gaming mode",
         EventKind::ProxyStarted => "Proxy started",
+        EventKind::ProxyStopped => "Proxy stopped",
         EventKind::PasswordChanged => "Password changed",
         EventKind::SettingSaved => "Setting saved",
         EventKind::ApiKeyCreated => "API key created",
@@ -247,7 +248,8 @@ pub fn event_class(kind: EventKind) -> &'static str {
         EventKind::SleepAccepted
         | EventKind::SleepRequested
         | EventKind::PcSeenAsleep
-        | EventKind::ProxyStarted => "is-idle",
+        | EventKind::ProxyStarted
+        | EventKind::ProxyStopped => "is-idle",
         _ => "is-ok",
     }
 }

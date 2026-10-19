@@ -409,6 +409,9 @@ pub enum EventKind {
     PcSeenGaming,
     /// The proxy started; time it could not observe counts as unknown.
     ProxyStarted,
+    /// Recorded at the next start, with the time the proxy was last seen
+    /// running; from then on the history is unknown.
+    ProxyStopped,
     PasswordChanged,
     /// Detail: the setting's name, never its value.
     SettingSaved,
@@ -452,6 +455,19 @@ impl EventKind {
                 | Self::SettingReset
                 | Self::ApiKeyCreated
                 | Self::ApiKeyRevoked
+        )
+    }
+
+    /// Marks the proxy sets for the history on its own; left out of the
+    /// overview, where the Ereignisse that caused them already stand.
+    pub fn is_history_mark(self) -> bool {
+        matches!(
+            self,
+            Self::PcSeenAwake
+                | Self::PcSeenAsleep
+                | Self::PcSeenGaming
+                | Self::ProxyStarted
+                | Self::ProxyStopped
         )
     }
 }

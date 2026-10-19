@@ -9,7 +9,7 @@ use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use rusqlite::{Connection, params};
@@ -24,6 +24,10 @@ const KEEP_IN_MEMORY: usize = 1000;
 /// Set once `events.jsonl` is imported, so an import that failed is tried
 /// again on the next start, even when new events were recorded meanwhile.
 const IMPORTED: i64 = 1;
+
+/// How often the proxy notes that it still runs. After a stop the Verlauf is
+/// unknown from the last note on, so it is off by at most this long.
+pub const BEAT: Duration = Duration::from_secs(60);
 
 const SELECT: &str = "SELECT ts, kind, detail FROM events";
 
@@ -78,11 +82,11 @@ impl History {
     /// Written at once, like the appended line before, so a killed proxy
     /// loses nothing. A single insert in WAL mode takes no sync to disk.
     pub fn record(&self, kind: EventKind, detail: Option<String>) {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default();
-        let event = Event { ts, kind, detail };
+        let event = Event {
+            ts: now(),
+            kind,
+            detail,
+        };
         tracing::info!(?kind, detail = event.detail.as_deref(), "Ereignis");
         if let Err(e) = insert(&self.db.lock().unwrap(), &event) {
             tracing::warn!("Verlauf nicht geschrieben: {e}");
@@ -92,6 +96,18 @@ impl History {
             recent.pop_front();
         }
         recent.push_back(event);
+    }
+
+    /// Notes that the proxy still runs; the next start records the last note
+    /// as `ProxyStopped`.
+    pub fn beat(&self) {
+        let written = self.db.lock().unwrap().execute(
+            "INSERT OR REPLACE INTO alive (id, ts) VALUES (0, ?1)",
+            [to_sql(now())],
+        );
+        if let Err(e) = written {
+            tracing::warn!("Lebenszeichen nicht geschrieben: {e}");
+        }
     }
 
     /// The most recent events, oldest first.
@@ -106,7 +122,7 @@ impl History {
             .unwrap()
             .iter()
             .rev()
-            .filter(|e| !e.kind.is_admin())
+            .filter(|e| !e.kind.is_admin() && !e.kind.is_history_mark())
             .take(n)
             .cloned()
             .collect()
@@ -176,6 +192,13 @@ impl History {
     }
 }
 
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
+}
+
 /// The window of a range query as SQLite integers.
 fn bounds(from: u64, to: u64) -> [i64; 2] {
     [to_sql(from), to_sql(to)]
@@ -195,6 +218,9 @@ fn open_database(dir: Option<&Path>) -> Connection {
                 let jsonl = dir.join("events.jsonl");
                 if let Err(e) = import_jsonl(&mut conn, &jsonl) {
                     tracing::warn!("Verlauf aus {} nicht übernommen: {e}", jsonl.display());
+                }
+                if let Err(e) = record_stop(&mut conn) {
+                    tracing::warn!("Ende des letzten Laufs nicht verzeichnet: {e}");
                 }
                 return conn;
             }
@@ -238,7 +264,11 @@ fn create_tables(conn: &Connection) -> rusqlite::Result<()> {
              ts INTEGER NOT NULL,
              watts REAL NOT NULL
          );
-         CREATE INDEX IF NOT EXISTS samples_ts ON samples (ts);",
+         CREATE INDEX IF NOT EXISTS samples_ts ON samples (ts);
+         CREATE TABLE IF NOT EXISTS alive (
+             id INTEGER PRIMARY KEY,
+             ts INTEGER NOT NULL
+         );",
     )
 }
 
@@ -263,6 +293,28 @@ fn import_jsonl(conn: &mut Connection, path: &Path) -> rusqlite::Result<()> {
     }
     transaction.pragma_update(None, "user_version", IMPORTED)?;
     // Dropping the transaction on an error above rolls it back.
+    transaction.commit()
+}
+
+/// The last run's final `beat` as a `ProxyStopped` at its time, once.
+fn record_stop(conn: &mut Connection) -> rusqlite::Result<()> {
+    let transaction = conn.transaction()?;
+    let last: Option<i64> = transaction
+        .query_row("SELECT ts FROM alive WHERE id = 0", [], |row| row.get(0))
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e),
+        })?;
+    if let Some(ts) = last {
+        let stop = Event {
+            ts: ts as u64,
+            kind: EventKind::ProxyStopped,
+            detail: None,
+        };
+        insert(&transaction, &stop)?;
+        transaction.execute("DELETE FROM alive", [])?;
+    }
     transaction.commit()
 }
 

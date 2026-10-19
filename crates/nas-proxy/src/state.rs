@@ -213,6 +213,8 @@ impl DerefMut for ObservedWrite<'_> {
 }
 
 impl Drop for ObservedWrite<'_> {
+    /// Records while still holding the lock, so two changes land in the
+    /// Verlauf in the order they happened; `record` never takes this lock.
     fn drop(&mut self) {
         let to = self.inner.pc;
         if to != self.from
@@ -721,6 +723,18 @@ impl AppState {
             inner.touch();
         }
         Ok(())
+    }
+
+    /// Notes every `events::BEAT` that the proxy runs, so the Verlauf knows
+    /// after a stop since when it saw nothing.
+    pub fn spawn_beat_loop(self: &Arc<Self>) {
+        let state = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                state.events.beat();
+                tokio::time::sleep(crate::events::BEAT).await;
+            }
+        });
     }
 
     pub fn spawn_idle_loop(self: &Arc<Self>) {

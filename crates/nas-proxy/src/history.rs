@@ -1,7 +1,7 @@
 //! Der Verlauf: wie lange der PC an jedem Tag eines Bereichs in welchem
 //! Zustand war. Die Kalenderrechnung ist rein - Ereignisse, Bereich und
-//! Zeitzone hinein, die Tagestunden hinaus - damit ihre Grenzen ohne einen
-//! laufenden Proxy geprueft werden koennen. Die Tage folgen der Zeitzone des
+//! Zeitzone hinein, die Tagesstunden hinaus - damit ihre Grenzen ohne einen
+//! laufenden Proxy geprüft werden können. Die Tage folgen der Zeitzone des
 //! NAS, wie `clock::zone` sie nennt.
 
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use strata_admin_ui::api::{EventKind, HistoryDay, HistoryTotals, HistoryView};
 
 use crate::{clock, events::Event, state::AppState};
 
-/// Laengere Bereiche als diesen zeichnet die Weboberflaeche nicht.
+/// Längere Bereiche als diesen zeichnet die Weboberfläche nicht.
 pub const MAX_DAYS: u32 = 366;
 
 /// Der Zustand des PCs, wie die Ereignisse ihn beschreiben.
@@ -34,7 +34,7 @@ struct Period {
     state: State,
 }
 
-/// Was ein Ereignis ueber den Zustand ab dann sagt; `None` bei einem, der
+/// Was ein Ereignis über den Zustand ab dann sagt; `None` bei einem, der
 /// dazu nichts sagt.
 fn state_after(kind: EventKind) -> Option<State> {
     match kind {
@@ -45,7 +45,7 @@ fn state_after(kind: EventKind) -> Option<State> {
     }
 }
 
-/// Der Tag, dem diese Zeit in `tz` gehoert.
+/// Der Tag, dem diese Zeit in `tz` gehört.
 fn day_of(ts: i64, tz: &TimeZone) -> Option<Date> {
     Timestamp::from_second(ts)
         .ok()
@@ -60,9 +60,9 @@ fn day_start(day: Date, tz: &TimeZone) -> Option<i64> {
         .map(|z| z.timestamp().as_second())
 }
 
-/// Die Kalendertage, die der Bereich `from..to` beruehrt. Jeder faengt mit
+/// Die Kalendertage, die der Bereich `from..to` berührt. Jeder fängt mit
 /// seiner eigenen Mitternacht an, damit ein Tag mit Zeitumstellung 23 oder 25
-/// Stunden hat; ein Tag, der erst mit `to` anfaengt, gehoert nicht dazu.
+/// Stunden hat; ein Tag, der erst mit `to` anfängt, gehört nicht dazu.
 fn days(from: i64, to: i64, tz: &TimeZone) -> Vec<Date> {
     let (Some(first), Some(last)) = (day_of(from, tz), day_of(to, tz)) else {
         return Vec::new();
@@ -82,7 +82,7 @@ fn days(from: i64, to: i64, tz: &TimeZone) -> Vec<Date> {
 }
 
 /// Die Zeitspannen eines Zustands zwischen `from` und `to`. Die Ereignisse
-/// vor dem Bereich zaehlen mit: wie es zu dessen Beginn um den PC stand, steht
+/// vor dem Bereich zählen mit: wie es zu dessen Beginn um den PC stand, steht
 /// im letzten Ereignis davor.
 fn periods(events: &[Event], from: i64, to: i64) -> Vec<Period> {
     let mut order: Vec<&Event> = events.iter().collect();
@@ -102,11 +102,15 @@ fn periods(events: &[Event], from: i64, to: i64) -> Vec<Period> {
                 state = next;
                 began = ts;
             }
-            // Ueber einen Start des Proxies reicht kein Zustand: was vor ihm
-            // galt, endet schon bei dem Ereignis, das es gesetzt hat.
+            // Über einen Start des Proxies reicht kein Zustand. Ohne
+            // `ProxyStopped` davor (ein Lauf ohne Lebenszeichen) ist nicht
+            // bekannt, wann er endete: was galt, endet dann schon bei dem
+            // Ereignis, das es gesetzt hat.
             None if event.kind == EventKind::ProxyStarted => state = State::Unknown,
-            // Bis zum naechsten bekannten Zustand ist nichts zu beobachten.
-            None if event.kind == EventKind::WakeTimeout => {
+            // Bis zum nächsten bekannten Zustand ist nichts zu beobachten:
+            // nach einem Wecken ohne Antwort, und ab dem letzten Lebenszeichen
+            // eines beendeten Proxies.
+            None if matches!(event.kind, EventKind::WakeTimeout | EventKind::ProxyStopped) => {
                 add(&mut out, state, began, ts, from, to);
                 state = State::Unknown;
                 began = ts;
@@ -118,8 +122,8 @@ fn periods(events: &[Event], from: i64, to: i64) -> Vec<Period> {
     out
 }
 
-/// Fuegt diese Zeitspanne hinzu, gekuerzt auf den Bereich; eine, die ganz
-/// auesserhalb liegt, fehlt dann.
+/// Fügt diese Zeitspanne hinzu, gekürzt auf den Bereich; eine, die ganz
+/// außerhalb liegt, fehlt dann.
 fn add(out: &mut Vec<Period>, state: State, from: i64, to: i64, range_from: i64, range_to: i64) {
     let (from, to) = (from.max(range_from), to.min(range_to));
     if to > from {
@@ -127,7 +131,7 @@ fn add(out: &mut Vec<Period>, state: State, from: i64, to: i64, range_from: i64,
     }
 }
 
-/// Stunden in jedem Zustand fuer jeden Tag von `from` bis `to`, in der
+/// Stunden in jedem Zustand für jeden Tag von `from` bis `to`, in der
 /// Zeitzone `tz`.
 pub fn day_hours(events: &[Event], from: i64, to: i64, tz: &TimeZone) -> Vec<HistoryDay> {
     let spans = periods(events, from, to);
@@ -162,7 +166,7 @@ pub fn day_hours(events: &[Event], from: i64, to: i64, tz: &TimeZone) -> Vec<His
         .collect()
 }
 
-/// Der Bereich der letzten `days` Tage, heute mitgezaehlt: von der Mitternacht
+/// Der Bereich der letzten `days` Tage, heute mitgezählt: von der Mitternacht
 /// des ersten Tages bis jetzt.
 fn range(days: u32, tz: &TimeZone) -> (i64, i64) {
     let now = clock::unix_now() as i64;
@@ -182,7 +186,7 @@ fn range(days: u32, tz: &TimeZone) -> (i64, i64) {
 pub async fn view(state: &Arc<AppState>, days: u32) -> HistoryView {
     let tz = clock::zone();
     let (from, to) = range(days.clamp(1, MAX_DAYS), &tz);
-    // Auch die Ereignisse vor dem Bereich hoeren nicht auf zu wirken: sie
+    // Auch die Ereignisse vor dem Bereich hören nicht auf zu wirken: sie
     // sagen, wie es zu seinem Beginn um den PC stand.
     let events = state
         .events
@@ -208,8 +212,8 @@ mod tests {
     use super::*;
     use jiff::Zoned;
 
-    /// Haelt die Zeitzone fest, damit die Tests nicht vom `TZ` des Rechners
-    /// abhaengen: ein Tag ist hier der, den der NAS in Berlin zaehlt.
+    /// Hält die Zeitzone fest, damit die Tests nicht vom `TZ` des Rechners
+    /// abhängen: ein Tag ist hier der, den der NAS in Berlin zählt.
     fn tz() -> TimeZone {
         TimeZone::get("Europe/Berlin").unwrap()
     }
@@ -294,8 +298,8 @@ mod tests {
 
     #[test]
     fn a_restart_leaves_unknown_from_the_last_event() {
-        // Was vor dem Neustart galt, gilt nicht ueber ihn hinweg: der Proxy
-        // koennte in der Zeit etwas uebersehen haben.
+        // Was vor dem Neustart galt, gilt nicht über ihn hinweg: der Proxy
+        // könnte in der Zeit etwas übersehen haben.
         let days = two_days(&[
             ev(
                 EventKind::PcSeenAwake,
@@ -312,6 +316,31 @@ mod tests {
         ]);
         assert_eq!(hours(&days[0]), (0.0, 0.0, 0.0, 24.0));
         assert_eq!(hours(&days[1]), (0.0, 0.0, 15.0, 9.0));
+    }
+
+    #[test]
+    fn a_stopped_proxy_leaves_unknown_from_its_last_beat() {
+        // Der PC schlief, der Proxy lief bis 3 Uhr und startete um 9 Uhr neu.
+        let days = two_days(&[
+            ev(
+                EventKind::PcSeenAsleep,
+                "2026-10-18T00:00:00+02:00[Europe/Berlin]",
+            ),
+            ev(
+                EventKind::ProxyStopped,
+                "2026-10-19T03:00:00+02:00[Europe/Berlin]",
+            ),
+            ev(
+                EventKind::ProxyStarted,
+                "2026-10-19T09:00:00+02:00[Europe/Berlin]",
+            ),
+            ev(
+                EventKind::PcSeenAsleep,
+                "2026-10-19T09:00:00+02:00[Europe/Berlin]",
+            ),
+        ]);
+        assert_eq!(hours(&days[0]), (0.0, 0.0, 24.0, 0.0));
+        assert_eq!(hours(&days[1]), (0.0, 0.0, 18.0, 6.0));
     }
 
     #[test]
@@ -384,7 +413,7 @@ mod tests {
 
     #[test]
     fn a_state_over_a_clock_change_is_counted_once() {
-        // In der Nacht zum 25. Oktober 2026 laufen die Uhren zurueck; wache
+        // In der Nacht zum 25. Oktober 2026 laufen die Uhren zurück; wache
         // Zeit von Mittag Sonnabend bis Mittag Montag sind 12 + 25 + 12 Stunden.
         let awake = ev(
             EventKind::PcSeenAwake,

@@ -283,11 +283,7 @@ async fn lists_the_latest_pc_events_newest_first() {
     let v = live
         .until("Aufgewacht", |v| kind_list(v).contains(&"awake".into()))
         .await;
-    // The idle check may also have noticed the awake PC on its own.
-    let kinds: Vec<String> = kind_list(&v)
-        .into_iter()
-        .filter(|k| !k.starts_with("pc_seen"))
-        .collect();
+    let kinds = kind_list(&v);
     assert_eq!(kinds[0], "awake", "{kinds:?}");
     assert!(kinds.contains(&"wake_sent".into()), "{kinds:?}");
     // The password change of the login is not about the PC.
@@ -348,11 +344,9 @@ async fn sleep_button_puts_the_pc_to_sleep() {
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("sleep-now", &[]).await.status(), 200);
     assert!(!s.pc.up());
-    // The idle check may have noticed the sleeping PC on its own meanwhile.
-    let kinds: Vec<_> = kinds(&s.state)
+    let kinds: Vec<_> = own_kinds(&s.state)
         .into_iter()
         .map(|k| format!("{k:?}"))
-        .filter(|k| !k.starts_with("PcSeen"))
         .collect();
     assert!(
         kinds.ends_with(&["SleepRequested".into(), "SleepAccepted".into()]),
@@ -383,20 +377,12 @@ async fn gaming_on_wakes_a_sleeping_pc_first() {
     assert!(s.pc.gaming.load(Ordering::SeqCst));
     let mut live = Live::open(&b).await;
     let v = live.until("Gaming", |v| v["pc"] == "Gaming").await;
-    // In dieser Reihenfolge steht der Lauf im Verlauf; dazwischen kann der
-    // Proxy den Gaming-Modus auch als selbst bemerkt gezeichnet haben.
     let kinds = kind_list(&v);
-    let expected = ["gaming_on", "awake", "wake_sent", "wake_requested"];
-    let mut found = 0;
-    for kind in &kinds {
-        if *kind == expected[found] {
-            found += 1;
-            if found == expected.len() {
-                break;
-            }
-        }
-    }
-    assert_eq!(found, expected.len(), "{kinds:?}");
+    assert_eq!(
+        kinds[..4],
+        ["gaming_on", "awake", "wake_sent", "wake_requested"],
+        "{kinds:?}"
+    );
 }
 
 #[tokio::test]
@@ -428,7 +414,7 @@ async fn gaming_on_reports_a_failed_wake() {
     assert_eq!(resp.status(), 400);
     assert!(resp.text().await.unwrap().contains("did not wake in time"));
     assert!(!s.pc.gaming.load(Ordering::SeqCst));
-    let kinds: Vec<_> = kinds(&s.state)
+    let kinds: Vec<_> = own_kinds(&s.state)
         .into_iter()
         .map(|k| format!("{k:?}"))
         .collect();
@@ -527,14 +513,7 @@ async fn keep_awake_rejects_unknown_choices() {
         b.call("keep-awake", &[("choice", "off")]).await.status(),
         200
     );
-    // Nur was der Proxy selbst bemerkt (Start, Zustand des PCs) steht da.
-    assert!(
-        s.state.events.latest_pc(10).iter().all(|e| e.kind
-            == strata_nas_proxy::events::EventKind::ProxyStarted
-            || format!("{:?}", e.kind).starts_with("PcSeen")),
-        "{:?}",
-        s.state.events.latest_pc(10)
-    );
+    assert!(s.state.events.latest_pc(10).is_empty());
 }
 
 // --- Review follow-ups ---
@@ -577,7 +556,6 @@ async fn lists_events_from_before_a_restart() {
         .latest_pc(10)
         .into_iter()
         .map(|e| format!("{:?}", e.kind))
-        .filter(|k| k != "ProxyStarted" && !k.starts_with("PcSeen"))
         .collect();
     assert_eq!(kinds, ["SleepAccepted", "SleepRequested"], "{kinds:?}");
     std::fs::remove_dir_all(&dir).unwrap();

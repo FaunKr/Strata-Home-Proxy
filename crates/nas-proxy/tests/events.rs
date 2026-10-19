@@ -185,11 +185,40 @@ fn no_data_dir_keeps_the_store_in_memory() {
 }
 
 #[test]
+fn the_next_start_records_when_the_proxy_was_last_seen_running() {
+    let d = fresh_dir("beat");
+    {
+        let log = History::new(Some(d.clone()));
+        log.record(EventKind::WakeSent, None);
+        log.beat();
+    }
+    let log = History::new(Some(d.clone()));
+    let recent = log.recent();
+    assert_eq!(
+        kinds(&log),
+        vec![EventKind::WakeSent, EventKind::ProxyStopped]
+    );
+    assert!(recent[1].ts >= recent[0].ts);
+    drop(log);
+    // Once only: a start after a run without a beat records no stop.
+    let log = History::new(Some(d.clone()));
+    assert_eq!(
+        kinds(&log),
+        vec![EventKind::WakeSent, EventKind::ProxyStopped]
+    );
+    drop(log);
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
 fn latest_pc_skips_events_about_the_web_ui() {
     let log = History::new(None);
     log.record(EventKind::WakeSent, None);
     log.record(EventKind::PasswordChanged, None);
     log.record(EventKind::Awake, None);
+    // And the marks the proxy sets for the history on its own.
+    log.record(EventKind::PcSeenAwake, None);
+    log.record(EventKind::ProxyStarted, None);
     let pc: Vec<EventKind> = log.latest_pc(10).into_iter().map(|e| e.kind).collect();
     // Newest first, as the overview shows them.
     assert_eq!(pc, vec![EventKind::Awake, EventKind::WakeSent]);

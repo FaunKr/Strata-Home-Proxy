@@ -18,41 +18,12 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use strata_admin_ui::api::{StrataUpdate, UpdateCommit, UpdateSummary};
+use strata_pc_protocol::{ChangedFile, Incoming};
 
 use crate::{clock, files::write_private, overview, state::AppState};
 
 /// The summary for the newest upstream commit, in `DATA_DIR`.
 const FILE: &str = "strata-update-summary.json";
-
-/// The PC service's account of the incoming commits (`update` on `/strata`).
-#[derive(Clone, Debug, Deserialize)]
-pub struct Incoming {
-    /// Full hash of the upstream commit.
-    pub upstream: String,
-    /// All incoming commits; `commits` may hold fewer.
-    pub total: u64,
-    /// Newest first.
-    pub commits: Vec<IncomingCommit>,
-    pub files: Vec<ChangedFile>,
-    #[serde(default)]
-    pub remote: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct IncomingCommit {
-    pub hash: String,
-    pub time: u64,
-    pub subject: String,
-    #[serde(default)]
-    pub body: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct ChangedFile {
-    pub path: String,
-    pub added: u64,
-    pub removed: u64,
-}
 
 /// Top-level folders the fallback names at most.
 const FALLBACK_AREAS: usize = 5;

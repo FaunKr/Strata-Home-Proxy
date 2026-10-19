@@ -14,6 +14,7 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tz-syste
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 strata-admin-ui = { path = "../admin-ui", features = ["ssr"] }
+strata-pc-protocol = { path = "../pc-protocol" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"

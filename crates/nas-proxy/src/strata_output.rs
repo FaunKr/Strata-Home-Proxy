@@ -5,48 +5,28 @@
 use std::sync::Arc;
 
 use futures_util::{StreamExt, stream::BoxStream};
-use serde::Deserialize;
 use strata_admin_ui::api::{OutputMessage, OutputNotice};
+use strata_pc_protocol::{StrataOutputMessage, StrataOutputNotice};
 use tokio::sync::mpsc;
 
 use crate::{clock, state::AppState};
 
-/// A message of the PC service (see `docs/pc-agent-api.md`).
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum PcMessage {
-    Started { at: u64 },
-    Line { text: String },
-    Replace { text: String },
-    Notice { reason: PcNotice },
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum PcNotice {
-    Running,
-    Gaming,
-    NotRunning,
-    NotStartedByAgent,
-}
-
-impl PcMessage {
-    fn into_ui(self) -> OutputMessage {
-        match self {
-            Self::Started { at } => OutputMessage::Line {
-                text: format!("Strata neu gestartet, {}", clock::local_text(at)),
+/// A message of the PC-Dienst as the page shows it.
+fn into_ui(message: StrataOutputMessage) -> OutputMessage {
+    match message {
+        StrataOutputMessage::Started { at } => OutputMessage::Line {
+            text: format!("Strata neu gestartet, {}", clock::local_text(at)),
+        },
+        StrataOutputMessage::Line { text } => OutputMessage::Line { text },
+        StrataOutputMessage::Replace { text } => OutputMessage::Replace { text },
+        StrataOutputMessage::Notice { reason } => OutputMessage::Notice {
+            notice: match reason {
+                StrataOutputNotice::Running => OutputNotice::Running,
+                StrataOutputNotice::Gaming => OutputNotice::Gaming,
+                StrataOutputNotice::NotRunning => OutputNotice::NotRunning,
+                StrataOutputNotice::NotStartedByAgent => OutputNotice::NotStartedByAgent,
             },
-            Self::Line { text } => OutputMessage::Line { text },
-            Self::Replace { text } => OutputMessage::Replace { text },
-            Self::Notice { reason } => OutputMessage::Notice {
-                notice: match reason {
-                    PcNotice::Running => OutputNotice::Running,
-                    PcNotice::Gaming => OutputNotice::Gaming,
-                    PcNotice::NotRunning => OutputNotice::NotRunning,
-                    PcNotice::NotStartedByAgent => OutputNotice::NotStartedByAgent,
-                },
-            },
-        }
+        },
     }
 }
 
@@ -123,10 +103,10 @@ async fn forward(resp: reqwest::Response, tx: &mpsc::Sender<OutputMessage>) -> b
             let Some(data) = event.lines().find_map(|l| l.strip_prefix("data:")) else {
                 continue;
             };
-            let Ok(message) = serde_json::from_str::<PcMessage>(data.trim()) else {
+            let Ok(message) = serde_json::from_str::<StrataOutputMessage>(data.trim()) else {
                 continue;
             };
-            if tx.send(message.into_ui()).await.is_err() {
+            if tx.send(into_ui(message)).await.is_err() {
                 return false;
             }
         }

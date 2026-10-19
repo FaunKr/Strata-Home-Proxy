@@ -193,6 +193,7 @@ pub struct Incoming {
     pub commits: Vec<IncomingCommit>,
     pub files: Vec<ChangedFile>,
     /// URL of the upstream remote.
+    #[serde(default)]
     pub remote: Option<String>,
 }
 
@@ -202,6 +203,7 @@ pub struct IncomingCommit {
     /// Commit time, Unix seconds.
     pub time: u64,
     pub subject: String,
+    #[serde(default)]
     pub body: String,
 }
 

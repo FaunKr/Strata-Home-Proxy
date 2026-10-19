@@ -328,3 +328,26 @@ For `local-agent`: the same change in `worker_env` would mean
 98, above any plausible default percentage, so you would leave it out.
 Validate whichever variant you pick with the README's hardware run
 (`tools/local-agent/README.md:50-59`).
+
+## Hardware test (2026-10-19, Mac → NAS proxy → Strata)
+
+Setup: Claude Code 2.1.218, `ANTHROPIC_MODEL=claude-sonnet-4-5`, Strata `max_context` 262144, `fit_max_tokens` on (probe with `max_tokens` 300000 → 200). Task: read and summarize the 37 files under `crates/nas-proxy/src` and `crates/admin-ui/src`, read-only, no subagents.
+
+| Run | Settings | Result |
+|---|---|---|
+| Baseline | current runner (`PCT_OVERRIDE=98`, no window) | exit 0, 0 compactions, peak 179K |
+| A | `AUTO_COMPACT_WINDOW=100000` | exit 0, 4 compactions at 80–89K, 23 min |
+| B | window 100000 + `PCT_OVERRIDE=49` (64K-sized) | PCT honored (compactions at 61–70K), then exit 3: "Autocompact is thrashing" |
+| C | window 150000 | exit 0, 1 compaction at 130K, peak 127K, 14 min |
+
+No run hit "request exceeds the context window", nor were any tool calls truncated.
+
+Measured: compaction fires at about window − `CLAUDE_CODE_MAX_OUTPUT_TOKENS` − ~13K.
+
+Run #130 (write mode, before this test): context grew 36K → 253K over 181 turns with **zero** compactions. It ended on Strata's 400 (`fit_max_tokens` was off then). Without an explicit window, Claude Code 2.1.218 did not compact in `-p` mode against Strata at all. The cause is unverified.
+
+Conclusions:
+- Always set `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. `fit_max_tokens` is a safety net only.
+- Derive the window from `max_context`: window = clamp(75% × context + output + 13K, 100000, 180000). Use the PCT override only below that floor. This gives 256K → 180000 (compaction at ~159K), 128K → ~119K (~98K), and 64K → 100000 + PCT 49.
+- 64K thrashes on read-heavy work: after a compaction the context is already 20–29K, and one file read adds up to 15K. Consider a minimum of 128K.
+- 180000 rather than 200000, because 200000 (the model's own window) is untested.

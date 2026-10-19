@@ -3,14 +3,14 @@
 #
 # Usage: <changed paths, one per line> | scripts/ci-select.sh
 #        scripts/ci-select.sh --all
-# Prints test=, packages=, image= (the proxy's image) and bench= (the code
-# benchmark runner's image) for $GITHUB_OUTPUT. The images build only when
+# Prints test=, packages=, image= (the proxy's image), bench= (the code
+# benchmark runner's image) and ui= (the browser check) for $GITHUB_OUTPUT. The images build only when
 # their build definition changes: the test job already compiles the code. An empty
 # package list means the whole workspace (scripts/check.sh without arguments).
 # scripts/ci-select.test.sh checks this mapping against the workspace.
 set -euo pipefail
 
-all() { printf '%s\n' test=true packages= image=true bench=true; }
+all() { printf '%s\n' test=true packages= image=true bench=true ui=true; }
 if [[ ${1:-} == --all ]]; then
   all
   exit 0
@@ -19,6 +19,8 @@ packages=()
 unscoped=false
 image=false
 bench=false
+# The browser check (scripts/ui-check.sh): the web UI and the proxy that serves it.
+ui=false
 while IFS= read -r path; do
   case $path in
     # Shared: whatever changes here can break any job. check.sh also runs the
@@ -28,15 +30,17 @@ while IFS= read -r path; do
       exit 0
       ;;
     # The NAS proxy links the web UI.
-    crates/admin-ui/*) packages+=(strata-admin-ui strata-nas-proxy) ;;
-    crates/nas-proxy/*) packages+=(strata-nas-proxy) ;;
+    crates/admin-ui/*) packages+=(strata-admin-ui strata-nas-proxy) ui=true ;;
+    crates/nas-proxy/*) packages+=(strata-nas-proxy) ui=true ;;
     crates/pc-agent/*) packages+=(strata-pc-agent) ;;
     # A crate without its own rule: the whole workspace.
     crates/*) unscoped=true ;;
     # The proxy embeds the install script (include_str!); check.sh also checks
     # that it parses.
     deploy/windows/*) packages+=(strata-nas-proxy) ;;
-    Dockerfile | .dockerignore) image=true ;;
+    # The ui job takes cargo-leptos's pin from the Dockerfile.
+    Dockerfile) image=true ui=true ;;
+    .dockerignore) image=true ;;
     # The local-agent runner: check.sh runs its tests and shellcheck. It is no
     # crate, so the test job runs without a package list, i.e. unscoped.
     tools/local-agent | tools/local-agent/*) unscoped=true ;;
@@ -53,3 +57,4 @@ echo "test=$([[ -n $package_list || $unscoped == true ]] && echo true || echo fa
 echo "packages=$package_list"
 echo "image=$image"
 echo "bench=$bench"
+echo "ui=$ui"

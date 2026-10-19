@@ -32,24 +32,25 @@ expect_selects() {
 package_of() { sed -n 's/^name *= *"\(.*\)"/\1/p' "$1/Cargo.toml" | head -1; }
 
 # Fixed cases.
-all="test=true packages= image=true bench=true"
-expect "test=false packages= image=false bench=false" README.md docs/strata-api.md
+all="test=true packages= image=true bench=true ui=true"
+expect "test=false packages= image=false bench=false ui=false" README.md docs/strata-api.md
 expect "$all" Cargo.lock
 expect "$all" .github/workflows/ci.yml
 expect "$all" scripts/check-exe-version.sh
 # Code alone runs the tests of its crates; the images build only when their
 # build definition changes.
-expect "test=true packages=strata-pc-agent image=false bench=false" crates/pc-agent/src/agent.rs
-expect "test=true packages=strata-admin-ui strata-nas-proxy image=false bench=false" crates/admin-ui/src/app.rs
-expect "test=true packages=strata-nas-proxy image=false bench=false" deploy/windows/install.ps1
-expect "test=false packages= image=true bench=false" Dockerfile
-expect "test=false packages= image=true bench=false" .dockerignore
-expect "test=false packages= image=false bench=false" deploy/docker-compose.yml
-expect "test=true packages= image=false bench=false" tools/local-agent/local-agent
-expect "test=true packages= image=false bench=true" tools/code-bench/runner.py
-expect "test=true packages= image=false bench=true" tools/code-bench/Dockerfile
-expect "test=true packages= image=false bench=false" tools/code-bench/test_runner.py
-expect "test=true packages=strata-nas-proxy image=false bench=false" tools/code-bench/tasks/roman/TASK.md
+expect "test=true packages=strata-pc-agent image=false bench=false ui=false" crates/pc-agent/src/agent.rs
+expect "test=true packages=strata-admin-ui strata-nas-proxy image=false bench=false ui=true" crates/admin-ui/src/app.rs
+expect "test=true packages=strata-nas-proxy image=false bench=false ui=false" deploy/windows/install.ps1
+expect "test=true packages=strata-nas-proxy image=false bench=false ui=true" crates/nas-proxy/src/admin.rs
+expect "test=false packages= image=true bench=false ui=true" Dockerfile
+expect "test=false packages= image=true bench=false ui=false" .dockerignore
+expect "test=false packages= image=false bench=false ui=false" deploy/docker-compose.yml
+expect "test=true packages= image=false bench=false ui=false" tools/local-agent/local-agent
+expect "test=true packages= image=false bench=true ui=false" tools/code-bench/runner.py
+expect "test=true packages= image=false bench=true ui=false" tools/code-bench/Dockerfile
+expect "test=true packages= image=false bench=false ui=false" tools/code-bench/test_runner.py
+expect "test=true packages=strata-nas-proxy image=false bench=false ui=false" tools/code-bench/tasks/roman/TASK.md
 [[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$all " ]] || fail "--all -> nicht alles"
 
 # Every crate selects itself.

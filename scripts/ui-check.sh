@@ -48,4 +48,6 @@ for _ in $(seq 50); do
 done
 
 mkdir -p target/ui-check
-BASE="http://127.0.0.1:$port" OUT=target/ui-check node scripts/ui-check.js
+# The proxy's log goes with the data directory; a failure shows its end.
+BASE="http://127.0.0.1:$port" OUT=target/ui-check node scripts/ui-check.js ||
+  { echo "--- proxy.log" >&2; tail -n 200 "$data/proxy.log" >&2; exit 1; }

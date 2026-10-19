@@ -31,6 +31,7 @@ jobs:
       packages: ${{ steps.select.outputs.packages }}
       image: ${{ steps.select.outputs.image }}
       bench: ${{ steps.select.outputs.bench }}
+      ui: ${{ steps.select.outputs.ui }}
     steps:
       - uses: actions/checkout@v4
       - id: select
@@ -92,6 +93,43 @@ jobs:
           scripts/check.sh $PACKAGES
         env:
           PACKAGES: ${{ needs.changes.outputs.packages }}
+      # The code-bench tests that need root (the agent user, the firewall in
+      # its own network namespace); check.sh runs them as the runner's user,
+      # where they are skipped.
+      - name: Code-bench tests as root
+        if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
+        run: sudo python3 -I tools/code-bench/test_runner.py
+      # How close the job is to the runner's disk limit, before the linker
+      # dies of it again.
+      - name: Free disk space left
+        if: always()
+        run: df -h /
+  ui:
+    # The web UI in a real browser (scripts/ui-check.sh): only there does a
+    # page that fails to hydrate show up. Pull requests only, like the checks.
+    needs: changes
+    if: github.event_name != 'push' && needs.changes.outputs.ui == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      # Reads the dependencies main's test job cached; saves nothing.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+          save-if: false
+      - run: scripts/install-cargo-leptos.sh
+      # The browsers of exactly that version, through its own command; the
+      # version of the cloud sessions.
+      - run: npm install -g playwright@1.56.1 && "$(npm root -g)/playwright/cli.js" install --with-deps chromium
+      - run: SHOTS=1 scripts/ui-check.sh
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-check
+          path: target/ui-check/
   image:
     # Builds the images whose build definition a pull request changes: the NAS
     # image and the code benchmark's runner (tools/code-bench). Dependencies sit
@@ -162,7 +200,7 @@ jobs:
     # The one check that sums up a run, for branch protection: jobs a pull
     # request doesn't need are skipped, and skipped counts as passed.
     if: always()
-    needs: [changes, test, image]
+    needs: [changes, test, image, ui]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

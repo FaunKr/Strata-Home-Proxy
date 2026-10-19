@@ -18,7 +18,7 @@ use strata_admin_ui::api::{
 
 use crate::{
     clock,
-    events::{Event, Sample},
+    events::{Event, HourSamples},
     state::AppState,
 };
 
@@ -26,6 +26,9 @@ use crate::{
 const DAY_BARS_UP_TO: usize = 62;
 /// Bis zu so vielen Tagen einen je Woche, darüber einen je Monat.
 const WEEK_BARS_UP_TO: usize = 366;
+
+/// Der früheste Tag, den ein gewählter Bereich zeigt.
+const EARLIEST: Date = jiff::civil::date(2000, 1, 1);
 
 /// Die Ereignisse, die etwas darüber sagen, wie es um den PC stand.
 const STATE_KINDS: &[EventKind] = &[
@@ -198,7 +201,7 @@ fn bucket_label(day: Date, bucket: HistoryBucket) -> String {
 /// Zeitzone `tz`, ohne Messwerte und Einstellungen.
 pub fn day_hours(events: &[Event], from: i64, to: i64, tz: &TimeZone) -> Vec<HistoryDay> {
     let power = PowerSettings::default();
-    bucket_hours(events, &[], &power, from, to, tz, HistoryBucket::Day).0
+    bucket_hours(events, &[], 60, &power, from, to, tz, HistoryBucket::Day).0
 }
 
 /// Woher der Verbrauch eines Zeitraums kam.
@@ -225,34 +228,35 @@ impl Sources {
     }
 }
 
-/// Der Verbrauch von `start` bis `end` in kWh, Stunde für Stunde ab `start`:
-/// eine Stunde mit Messwerten für mindestens die Hälfte ihrer Minuten zählt
-/// mit der mittleren Leistung, jede andere nach der Stromschätzung aus ihren
-/// Zuständen. Unbekannte Zeit ohne Messwerte zählt nichts.
+/// Der Verbrauch von `start` bis `end` in kWh, Stunde für Stunde: eine
+/// Stunde, deren Messwerte mindestens die Hälfte von ihr abdecken (je einer
+/// für `step` Sekunden), zählt mit ihrer mittleren Leistung, jede andere nach
+/// der Stromschätzung aus ihren Zuständen. Unbekannte Zeit ohne Messwerte
+/// zählt nichts. `hourly` ist nach Stunden sortiert.
 fn consumption(
     spans: &[Period],
-    samples: &[Sample],
+    hourly: &[HourSamples],
+    step: i64,
     power: &PowerSettings,
     start: i64,
     end: i64,
 ) -> (f64, Sources) {
     let mut kwh = 0.0;
     let mut sources = Sources::default();
-    let mut hour = start;
+    let mut hour = start - start.rem_euclid(3600);
     while hour < end {
-        let next = (hour + 3600).min(end);
-        let first = samples.partition_point(|s| (s.ts as i64) < hour);
-        let last = samples.partition_point(|s| (s.ts as i64) < next);
-        let measured = &samples[first..last];
-        let mut minutes: Vec<i64> = measured.iter().map(|s| s.ts as i64 / 60).collect();
-        minutes.dedup();
-        if !measured.is_empty() && minutes.len() as i64 * 2 * 60 >= next - hour {
-            let watts = measured.iter().map(|s| s.watts).sum::<f64>() / measured.len() as f64;
-            kwh += watts * (next - hour) as f64 / 3600.0 / 1000.0;
+        let (from, to) = (hour.max(start), (hour + 3600).min(end));
+        let found = hourly
+            .binary_search_by_key(&hour, |h| h.hour as i64)
+            .ok()
+            .map(|i| hourly[i])
+            .filter(|h| h.slots as i64 * step.max(1) * 2 >= 3600);
+        if let Some(measured) = found {
+            kwh += measured.mean_watts * (to - from) as f64 / 3600.0 / 1000.0;
             sources.measured = true;
         } else {
             for span in spans {
-                let seconds = (span.to.min(next) - span.from.max(hour)).max(0) as f64;
+                let seconds = (span.to.min(to) - span.from.max(from)).max(0) as f64;
                 let watts = match span.state {
                     State::Awake | State::Gaming => power.awake_watts,
                     State::Asleep => power.asleep_watts,
@@ -264,7 +268,7 @@ fn consumption(
                 }
             }
         }
-        hour = next;
+        hour += 3600;
     }
     (kwh, sources)
 }
@@ -285,10 +289,13 @@ fn energy(kwh: f64, asleep_h: f64, sources: Sources, power: &PowerSettings) -> E
 /// Stunden in jedem Zustand, Verbrauch und Ersparnis für jeden Balken von
 /// `from` bis `to` in der Zeitzone `tz`, und ihre Summe. Wochen und Monate
 /// schneidet der Kalender von `tz`; der erste und der letzte Balken zählen
-/// nur, was im Bereich liegt. `samples` sind nach Zeit sortiert.
+/// nur, was im Bereich liegt. `hourly` sind die Messwerte je Stunde, je einer
+/// für `step` Sekunden.
+#[allow(clippy::too_many_arguments)]
 pub fn bucket_hours(
     events: &[Event],
-    samples: &[Sample],
+    hourly: &[HourSamples],
+    step: i64,
     power: &PowerSettings,
     from: i64,
     to: i64,
@@ -340,7 +347,7 @@ pub fn bucket_hours(
                     state: span.state,
                 });
             }
-            let (kwh, sources) = consumption(&inside, samples, power, start, end);
+            let (kwh, sources) = consumption(&inside, hourly, step, power, start, end);
             bar.energy = energy(kwh, bar.asleep_h, sources, power);
             totals.awake_h += bar.awake_h;
             totals.gaming_h += bar.gaming_h;
@@ -410,7 +417,9 @@ fn resolve(range: Range, now: i64, first: Option<i64>, tz: &TimeZone) -> (i64, i
             today,
         ),
         Range::All => (first.and_then(|ts| day_of(ts, tz)).unwrap_or(today), today),
-        Range::Dates(a, b) => (a, b),
+        // Vor 2000 gab es keinen Proxy; was danach kommt, ist noch nicht
+        // geschehen. Beides hält einen vertippten Bereich klein.
+        Range::Dates(a, b) => (a.max(EARLIEST), b.min(today)),
     };
     let from = day_start(first_day, tz).unwrap_or(now);
     let to = last_day
@@ -425,8 +434,13 @@ fn resolve(range: Range, now: i64, first: Option<i64>, tz: &TimeZone) -> (i64, i
 /// Was die Seite sieht: jeder Balken des Bereichs und die Summe.
 pub async fn view(state: &Arc<AppState>, range: &str) -> HistoryView {
     let tz = clock::zone();
-    let first = state.events.first_ts().await.map(|ts| ts as i64);
-    let (from, to) = resolve(parse_range(range), clock::unix_now() as i64, first, &tz);
+    let range = parse_range(range);
+    // Nur "alles" fängt beim ersten Ereignis an.
+    let first = match range {
+        Range::All => state.events.first_ts().await.map(|ts| ts as i64),
+        _ => None,
+    };
+    let (from, to) = resolve(range, clock::unix_now() as i64, first, &tz);
     // Wie es zu Beginn des Bereichs um den PC stand, sagt das letzte Ereignis
     // davor; die anderen davor ändern nichts mehr.
     let (from_u, to_u) = (from.max(0) as u64, to.max(0) as u64);
@@ -437,15 +451,16 @@ pub async fn view(state: &Arc<AppState>, range: &str) -> HistoryView {
         .into_iter()
         .collect();
     events.extend(state.events.range(from_u, to_u).await);
-    let samples = state.events.samples(from_u, to_u).await;
     let cfg = state.cfg();
+    let step = cfg.plug_sample.as_secs().max(1);
+    let hourly = state.events.hourly(from_u, to_u, step).await;
     let power = PowerSettings {
         awake_watts: cfg.power_awake_watts,
         asleep_watts: cfg.power_asleep_watts,
         price_ct_per_kwh: cfg.price_ct_per_kwh,
     };
     let bucket = bucket_for(days(from, to, &tz).len());
-    let (bars, totals) = bucket_hours(&events, &samples, &power, from, to, &tz, bucket);
+    let (bars, totals) = bucket_hours(&events, &hourly, step as i64, &power, from, to, &tz, bucket);
     let date = |ts: i64| day_of(ts, &tz).map(|d| d.strftime("%Y-%m-%d").to_string());
     HistoryView {
         agent_configured: cfg.pc_agent_url.is_some(),
@@ -456,7 +471,6 @@ pub async fn view(state: &Arc<AppState>, range: &str) -> HistoryView {
         from: date(from).unwrap_or_default(),
         // Das Ende gehört nicht mehr dazu: der letzte Tag ist der davor.
         to: date(to - 1).unwrap_or_default(),
-        first_day: first.and_then(date),
     }
 }
 
@@ -686,7 +700,7 @@ mod tests {
 
     fn bucketed(events: &[Event], from: &str, to: &str, bucket: HistoryBucket) -> Vec<HistoryDay> {
         let power = PowerSettings::default();
-        bucket_hours(events, &[], &power, ts(from), ts(to), &tz(), bucket).0
+        bucket_hours(events, &[], 60, &power, ts(from), ts(to), &tz(), bucket).0
     }
 
     #[test]
@@ -820,10 +834,11 @@ mod tests {
     };
 
     /// Ein Tag, der Sonntag, mit Messwerten und den Einstellungen oben.
-    fn one_day(events: &[Event], samples: &[Sample]) -> (Vec<HistoryDay>, HistoryTotals) {
+    fn one_day(events: &[Event], samples: &[HourSamples]) -> (Vec<HistoryDay>, HistoryTotals) {
         bucket_hours(
             events,
             samples,
+            60,
             &POWER,
             ts(FROM),
             ts("2026-10-19T00:00:00+02:00[Europe/Berlin]"),
@@ -836,14 +851,23 @@ mod tests {
         (a - b).abs() < 1e-9
     }
 
-    /// Ein Messwert jede Minute von `from` an, `minutes` lang.
-    fn every_minute(from: &str, minutes: i64, watts: f64) -> Vec<Sample> {
-        (0..minutes)
-            .map(|m| Sample {
-                ts: (ts(from) + m * 60) as u64,
-                watts,
-            })
-            .collect()
+    /// Ein Messwert jede Minute von `from` an, `minutes` lang, je Stunde
+    /// zusammengefasst wie `History::hourly`.
+    fn every_minute(from: &str, minutes: i64, watts: f64) -> Vec<HourSamples> {
+        let mut hours: Vec<HourSamples> = Vec::new();
+        for m in 0..minutes {
+            let at = ts(from) + m * 60;
+            let hour = (at - at.rem_euclid(3600)) as u64;
+            match hours.last_mut() {
+                Some(h) if h.hour == hour => h.slots += 1,
+                _ => hours.push(HourSamples {
+                    hour,
+                    slots: 1,
+                    mean_watts: watts,
+                }),
+            }
+        }
+        hours
     }
 
     #[test]
@@ -932,6 +956,7 @@ mod tests {
         let (days, totals) = bucket_hours(
             &[asleep],
             &samples,
+            60,
             &POWER,
             ts(FROM),
             ts(TO),
@@ -942,5 +967,45 @@ mod tests {
         assert_eq!(days[1].energy.source, EnergySource::Estimated);
         assert_eq!(totals.energy.source, EnergySource::Mixed);
         assert!(close(totals.energy.kwh, 2.0 * 24.0 * 0.005));
+    }
+
+    #[test]
+    fn a_slower_plug_measures_with_fewer_samples() {
+        let asleep = ev(
+            EventKind::PcSeenAsleep,
+            "2026-10-17T00:00:00+02:00[Europe/Berlin]",
+        );
+        // Alle 5 Minuten ein Messwert: 6 von 12 decken die halbe Stunde ab.
+        let hour = vec![HourSamples {
+            hour: ts(FROM) as u64,
+            slots: 6,
+            mean_watts: 40.0,
+        }];
+        let (days, _) = bucket_hours(
+            &[asleep],
+            &hour,
+            300,
+            &POWER,
+            ts(FROM),
+            ts("2026-10-19T00:00:00+02:00[Europe/Berlin]"),
+            &tz(),
+            HistoryBucket::Day,
+        );
+        assert_eq!(days[0].energy.source, EnergySource::Mixed);
+        assert!(close(days[0].energy.kwh, 0.04 + 23.0 * 0.005));
+    }
+
+    #[test]
+    fn a_picked_range_stays_within_reason() {
+        let now = ts("2026-10-19T15:00:00+02:00[Europe/Berlin]");
+        let date = |text: &str| text.parse::<Date>().unwrap();
+        let (from, to) = resolve(
+            Range::Dates(date("0026-01-01"), date("9999-12-31")),
+            now,
+            None,
+            &tz(),
+        );
+        assert_eq!(day_of(from, &tz()), Some(date("2000-01-01")));
+        assert_eq!(to, now);
     }
 }

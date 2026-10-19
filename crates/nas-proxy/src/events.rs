@@ -9,11 +9,13 @@ use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+
+use crate::clock;
 
 pub use strata_admin_ui::api::EventKind;
 
@@ -46,6 +48,16 @@ pub struct Sample {
     /// Unix time in seconds.
     pub ts: u64,
     pub watts: f64,
+}
+
+/// The samples of one hour, as the Verlauf sums them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HourSamples {
+    /// Unix time of the full hour.
+    pub hour: u64,
+    /// Distinct sample intervals in the hour that have a sample.
+    pub slots: u64,
+    pub mean_watts: f64,
 }
 
 pub struct History {
@@ -83,7 +95,7 @@ impl History {
     /// loses nothing. A single insert in WAL mode takes no sync to disk.
     pub fn record(&self, kind: EventKind, detail: Option<String>) {
         let event = Event {
-            ts: now(),
+            ts: clock::unix_now(),
             kind,
             detail,
         };
@@ -103,7 +115,7 @@ impl History {
     pub fn beat(&self) {
         let written = self.db.lock().unwrap().execute(
             "INSERT OR REPLACE INTO alive (id, ts) VALUES (0, ?1)",
-            [to_sql(now())],
+            [to_sql(clock::unix_now())],
         );
         if let Err(e) = written {
             tracing::warn!("Lebenszeichen nicht geschrieben: {e}");
@@ -215,6 +227,37 @@ impl History {
         .await
     }
 
+    /// The samples with `from <= ts <= to` per full hour, oldest first;
+    /// `slots` counts the intervals of `step` seconds that have one. A year
+    /// is at most 8784 rows, however often the plug is read.
+    pub async fn hourly(&self, from: u64, to: u64, step: u64) -> Vec<HourSamples> {
+        let [from, to] = bounds(from, to);
+        let step = to_sql(step.max(1));
+        self.blocking(move |db| {
+            let rows = db
+                .prepare(
+                    "SELECT ts / 3600 * 3600, COUNT(DISTINCT ts / ?3), AVG(watts) FROM samples \
+                     WHERE ts BETWEEN ?1 AND ?2 GROUP BY ts / 3600 ORDER BY 1",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([from, to, step], |row| {
+                            Ok(HourSamples {
+                                hour: row.get::<_, i64>(0)? as u64,
+                                slots: row.get::<_, i64>(1)? as u64,
+                                mean_watts: row.get(2)?,
+                            })
+                        })
+                        .and_then(Iterator::collect)
+                });
+            rows.unwrap_or_else(|e| {
+                tracing::warn!("Messwerte der Steckdose nicht gelesen: {e}");
+                Vec::new()
+            })
+        })
+        .await
+    }
+
     /// Runs `query` on a blocking thread, not on the async runtime.
     async fn blocking<T: Default + Send + 'static>(
         &self,
@@ -225,13 +268,6 @@ impl History {
             .await
             .unwrap_or_default()
     }
-}
-
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default()
 }
 
 /// The window of a range query as SQLite integers.
@@ -331,11 +367,17 @@ fn import_jsonl(conn: &mut Connection, path: &Path) -> rusqlite::Result<()> {
     transaction.commit()
 }
 
-/// The last run's final `beat` as a `ProxyStopped` at its time, once.
+/// The last run's final `beat` as a `ProxyStopped` at its time, once; at
+/// the time of a later event, if one came between the beat and the stop.
 fn record_stop(conn: &mut Connection) -> rusqlite::Result<()> {
     let transaction = conn.transaction()?;
     let last: Option<i64> = transaction
-        .query_row("SELECT ts FROM alive WHERE id = 0", [], |row| row.get(0))
+        .query_row(
+            "SELECT MAX(alive.ts, IFNULL((SELECT MAX(ts) FROM events), 0)) \
+             FROM alive WHERE id = 0",
+            [],
+            |row| row.get(0),
+        )
         .map(Some)
         .or_else(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => Ok(None),

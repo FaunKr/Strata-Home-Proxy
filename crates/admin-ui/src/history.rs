@@ -139,7 +139,7 @@ fn Picker(range: RwSignal<String>, from: String, to: String) -> impl IntoView {
 #[component]
 pub fn WeekCard(week: HistoryView) -> impl IntoView {
     let totals = week.totals;
-    let seen = totals.awake_h + totals.gaming_h + totals.asleep_h > 0.0;
+    let seen = totals.awake_h + totals.gaming_h + totals.asleep_h + totals.energy.kwh > 0.0;
     let summary = if seen {
         summary_line(&totals)
     } else {
@@ -160,7 +160,9 @@ pub fn WeekCard(week: HistoryView) -> impl IntoView {
 /// Die Balken und die Summe, oder ein leerer Verlauf, wenn noch nichts zu
 /// sehen ist.
 fn shown(view: HistoryView) -> AnyView {
-    if view.totals.awake_h + view.totals.gaming_h + view.totals.asleep_h <= 0.0 {
+    let totals = view.totals;
+    // Gemessene Energie zeigt die Seite auch über unbekannte Zeit.
+    if totals.awake_h + totals.gaming_h + totals.asleep_h + totals.energy.kwh <= 0.0 {
         return view! {
             <p class="muted">
                 "Nothing to show yet: the proxy has not seen your PC in this range. Every hour counts as unknown until it does."

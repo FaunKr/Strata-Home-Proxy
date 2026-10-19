@@ -223,7 +223,7 @@ impl Config {
             "PROBE_TIMEOUT_MS" => self.probe_timeout = positive(millis(raw)?)?,
             "MAX_BODY_BYTES" => self.max_body_bytes = number(raw, "Bytes")?,
             "POWER_AWAKE_WATTS" => self.power_awake_watts = positive_decimal(raw, "Watt")?,
-            "POWER_ASLEEP_WATTS" => self.power_asleep_watts = positive_decimal(raw, "Watt")?,
+            "POWER_ASLEEP_WATTS" => self.power_asleep_watts = decimal(raw, "Watt")?,
             "PRICE_CT_PER_KWH" => self.price_ct_per_kwh = positive_decimal(raw, "ct/kWh")?,
             _ => unreachable!("every field in FIELDS is handled"),
         }
@@ -299,13 +299,23 @@ fn positive(d: Duration) -> Result<Duration> {
 
 /// A finite number above 0; decimals with a point, e.g. 32.5.
 fn positive_decimal(raw: &str, unit: &str) -> Result<f64> {
+    let n = decimal(raw, unit)?;
+    if n == 0.0 {
+        bail!("must be greater than 0");
+    }
+    Ok(n)
+}
+
+/// A number of `unit` that may be 0, e.g. a PC that draws nothing asleep.
+fn decimal(raw: &str, unit: &str) -> Result<f64> {
     let n: f64 = raw
+        .trim()
         .parse()
         .ok()
         .filter(|n: &f64| n.is_finite())
         .with_context(|| format!("expects a number ({unit}), e.g. 32.5"))?;
-    if n <= 0.0 {
-        bail!("must be greater than 0");
+    if n < 0.0 {
+        bail!("must not be negative");
     }
     Ok(n)
 }
@@ -433,10 +443,17 @@ mod tests {
             "POWER_ASLEEP_WATTS",
             "PRICE_CT_PER_KWH",
         ] {
-            for raw in ["0", "-3", "dreißig", "", "NaN", "inf", "32,5"] {
+            for raw in ["-3", "dreißig", "", "NaN", "inf", "32,5"] {
                 assert!(cfg.apply(key, raw).is_err(), "{key}={raw:?}");
             }
         }
+        // Asleep the PC may draw nothing; awake and the price not.
+        for key in ["POWER_AWAKE_WATTS", "PRICE_CT_PER_KWH"] {
+            assert!(cfg.apply(key, "0").is_err(), "{key}=0");
+        }
+        cfg.apply("POWER_ASLEEP_WATTS", "0").unwrap();
+        assert_eq!(cfg.power_asleep_watts, 0.0);
+        cfg.apply("POWER_ASLEEP_WATTS", "3").unwrap();
         assert_eq!(cfg.power_awake_watts, 75.0);
         assert_eq!(cfg.power_asleep_watts, 3.0);
         assert_eq!(cfg.price_ct_per_kwh, 30.0);

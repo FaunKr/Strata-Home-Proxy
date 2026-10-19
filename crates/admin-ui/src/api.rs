@@ -870,9 +870,6 @@ pub struct HistoryView {
     /// The range's first and last day, `2026-10-13` and `2026-10-19`.
     pub from: String,
     pub to: String,
-    /// The day of the first Ereignis, where "All" begins; none on a fresh
-    /// install.
-    pub first_day: Option<String>,
     pub power: PowerSettings,
     /// False while no PC service is set up: the proxy cannot see what the PC
     /// does on its own, so the history stays incomplete.

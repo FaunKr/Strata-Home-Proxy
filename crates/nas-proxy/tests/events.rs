@@ -229,11 +229,28 @@ fn the_next_start_records_when_the_proxy_was_last_seen_running() {
     );
     assert!(recent[1].ts >= recent[0].ts);
     drop(log);
+    // An event after the last beat moves the stop to it.
+    let log = History::new(Some(d.clone()));
+    log.beat();
+    log.record(EventKind::Awake, None);
+    let awake = log.recent().last().unwrap().ts;
+    drop(log);
+    let log = History::new(Some(d.clone()));
+    let recent = log.recent();
+    let stop = recent.last().unwrap();
+    assert_eq!(stop.kind, EventKind::ProxyStopped);
+    assert!(stop.ts >= awake);
+    drop(log);
     // Once only: a start after a run without a beat records no stop.
     let log = History::new(Some(d.clone()));
     assert_eq!(
         kinds(&log),
-        vec![EventKind::WakeSent, EventKind::ProxyStopped]
+        vec![
+            EventKind::WakeSent,
+            EventKind::ProxyStopped,
+            EventKind::Awake,
+            EventKind::ProxyStopped
+        ]
     );
     drop(log);
     std::fs::remove_dir_all(&d).unwrap();
@@ -305,6 +322,21 @@ async fn samples_reads_a_time_window_with_its_bounds() {
     );
     assert_eq!(sample_stamps(history.samples(101, 299).await), vec![200]);
     assert!(history.samples(1000, 2000).await.is_empty());
+}
+
+#[tokio::test]
+async fn hourly_sums_the_samples_of_each_hour() {
+    let history = History::new(None);
+    // Two minutes of one hour, one of the next.
+    for (ts, watts) in [(3600, 10.0), (3610, 20.0), (3660, 30.0), (7200, 5.0)] {
+        history.record_sample(sample(ts, watts));
+    }
+    let hours = history.hourly(0, u64::MAX, 60).await;
+    assert_eq!(hours.len(), 2);
+    assert_eq!((hours[0].hour, hours[0].slots), (3600, 2));
+    assert_eq!(hours[0].mean_watts, 20.0);
+    assert_eq!((hours[1].hour, hours[1].slots), (7200, 1));
+    assert!(history.hourly(8000, 9000, 60).await.is_empty());
 }
 
 #[tokio::test]

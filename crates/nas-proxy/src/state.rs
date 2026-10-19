@@ -664,12 +664,15 @@ impl AppState {
             // A PC that just accepted sleep may still answer: not awake yet.
             let settling = Self::settling(&self.inner.lock().unwrap(), cfg.sleep_settle);
             if !settling && self.pc_status(&self.agent()).await.is_some() {
-                self.set_pc(PcState::Awake);
                 if last_wol.is_some() {
+                    self.set_pc(PcState::Awake);
                     self.events.record(
                         EventKind::Awake,
                         Some(format!("after {:.1} s", started.elapsed().as_secs_f64())),
                     );
+                } else {
+                    // Woken by someone else, e.g. at the desk.
+                    self.note_reported(PcState::Awake);
                 }
                 return Ok(());
             }

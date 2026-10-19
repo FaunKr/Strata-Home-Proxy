@@ -198,7 +198,13 @@ async fn longer_ranges_come_back_in_weeks_and_months() {
 
     let all = fetch(&mut b, "all").await;
     assert_eq!(all["bucket"], "month", "{all}");
-    assert_eq!(all["from"], all["first_day"], "{all}");
+    // "All" begins on the day of the first Ereignis.
+    let first_day = jiff::Timestamp::from_second((now - 400 * day) as i64)
+        .unwrap()
+        .to_zoned(clock::zone())
+        .date()
+        .to_string();
+    assert_eq!(all["from"], first_day.as_str(), "{all}");
     let months = all["days"].as_array().unwrap();
     assert!((14..=15).contains(&months.len()), "{} Monate", months.len());
 
@@ -257,6 +263,8 @@ async fn the_plug_makes_the_energy_measured() {
     let start = yesterday["days"][0]["date"].as_str().unwrap().to_string();
     assert_ne!(start, midnight);
     let range = format!("{start}..{start}");
+    // The loop reads every 100 ms here; the samples below come every minute.
+    s.state.settings.set("PLUG_SAMPLE_SECS", "60").unwrap();
     let day_start = clock::unix_now() - 3 * 24 * 3600;
     for minute in 0..(3 * 24 * 60) {
         s.state.events.record_sample(Sample {

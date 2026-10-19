@@ -158,8 +158,7 @@ async fn install_sets_loop_recovery_in_the_new_config() {
     let (code, job) = post(&s, "/strata/jobs", install()).await;
     assert_eq!(code, 202, "{job}");
     assert_eq!(finished(&s).await["state"], "done");
-    let text = std::fs::read_to_string(s.agent.cfg.strata_dir.join("strata-iq3_xxs.json")).unwrap();
-    let cfg: Value = serde_json::from_str(&text).unwrap();
+    let cfg = read_config(&s, "iq3_xxs");
     assert_eq!(cfg["reasoning_loop_recovery"], "recover", "{cfg}");
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
 }

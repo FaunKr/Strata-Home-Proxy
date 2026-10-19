@@ -17,8 +17,9 @@ use crate::{
     agent::Agent,
     catalog::{self, Size},
     command::{Cancel, CommandSpec},
+    install::{Installation, Model},
     managed::Managed,
-    sampling::{self, ModelSampling, Support},
+    sampling::ModelSampling,
 };
 
 const JOB_FILE: &str = "strata-job.json";
@@ -40,35 +41,9 @@ const KEPT_LINES: usize = 20;
 /// Strata's port and network access, as the proxy expects them.
 const STRATA_PORT: &str = "8080";
 const STRATA_HOST: &str = "0.0.0.0";
-/// The engine flag setup writes the context with.
-const CONTEXT_FLAG: &str = "--max-context";
-/// The flags setup adds past the trained context, each with one value.
-const ROPE_FLAGS: [&str; 2] = ["--rope-scaling", "--rope-scale"];
 /// The longest context the switch takes: the model's trained length, which
 /// needs no rope scaling.
 const MAX_SWITCHED_CONTEXT: u32 = 262_144;
-/// The engine flag setup loads the speed projection's control vector with.
-const PROJECTION_VECTOR_FLAG: &str = "--control-vector-scaled";
-/// The flags setup writes after it, with their values.
-const PROJECTION_FLAGS: [(&str, &[&str]); 3] = [
-    ("--control-vector-layer-range", &["4", "44"]),
-    ("--cvec-mode", &["project"]),
-    ("--cvec-dir", &["per-layer"]),
-];
-/// Strata's recovery from reasoning that repeats whole passages (off by
-/// default; `"recover"` goes on with the low-effort instruction). The
-/// service sets it in every model config.
-const LOOP_RECOVERY_KEY: &str = "reasoning_loop_recovery";
-const LOOP_RECOVERY: &str = "recover";
-/// The config's defaults for requests without sampling fields.
-const SAMPLING_KEY: &str = "sampling";
-/// Strata's vector, in the Strata folder.
-const PROJECTION_VECTOR: [&str; 3] = [
-    "data",
-    "experimental-speed-projection",
-    "Qwen3.8-Flash-Next-experimental-speed-projection.gguf",
-];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobKind {
@@ -424,6 +399,7 @@ fn takes_speed_projection(size: &Size) -> bool {
 
 fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
     let dir = &agent.cfg.strata_dir;
+    let install = Installation::of(&agent.cfg);
     let size = |family: &str, size: &str| {
         catalog::find(family, size)
             .ok_or_else(|| Refusal::BadRequest(format!("{family} {size} gibt es nicht im Katalog")))
@@ -467,18 +443,18 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
                 api_key: api_key.map(check_key).transpose()?,
                 speed_projection: check_speed_projection(size, wanted)?,
             };
-            strata_installed(dir)?;
+            strata_installed(&install)?;
             Ok(plan)
         }
         JobRequest::Activate { model } => {
-            let id = installed_model(dir, &model)?;
+            let id = installed_model(&install, &model)?;
             if active_model(agent).as_deref() == Some(id.as_str()) {
                 return Err(Refusal::Conflict(format!("{id} ist schon aktiv")));
             }
             Ok(Plan::Activate { id })
         }
         JobRequest::Delete { model } => {
-            let id = installed_model(dir, &model)?;
+            let id = installed_model(&install, &model)?;
             if active_model(agent).as_deref() == Some(id.as_str()) {
                 return Err(Refusal::Conflict(format!(
                     "{id} ist aktiv und lässt sich nicht löschen; erst ein anderes Modell aktivieren"
@@ -487,7 +463,7 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             Ok(Plan::Delete { id })
         }
         JobRequest::Update => {
-            strata_installed(dir)?;
+            strata_installed(&install)?;
             if !dir.join(".git").exists() {
                 return Err(Refusal::Conflict(format!(
                     "{} ist kein Git-Klon und lässt sich nur von Hand aktualisieren",
@@ -497,7 +473,7 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             Ok(Plan::Update)
         }
         JobRequest::Benchmark => {
-            strata_installed(dir)?;
+            strata_installed(&install)?;
             let id = active_model(agent).ok_or_else(|| {
                 Refusal::Conflict("Kein aktives Modell bekannt; erst ein Modell aktivieren".into())
             })?;
@@ -505,11 +481,11 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
         }
         JobRequest::SetKey { api_key } => {
             let api_key = check_key(api_key)?;
-            strata_installed(dir)?;
+            strata_installed(&install)?;
             Ok(Plan::SetKey { api_key })
         }
         JobRequest::SetSpeedProjection { model, on } => {
-            let id = installed_model(dir, &model)?;
+            let id = installed_model(&install, &model)?;
             let size = catalog::by_id(&id).expect("installed_model checks the catalog");
             check_speed_projection(size, true)?;
             Ok(Plan::SetSpeedProjection { id, on })
@@ -521,15 +497,17 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
                     "Kontextlänge {context} braucht Rope-Scaling und geht nur über Setup"
                 )));
             }
-            let id = installed_model(dir, &model)?;
+            let id = installed_model(&install, &model)?;
             Ok(Plan::SetContext { id, context })
         }
         JobRequest::CompareModels => {
-            strata_installed(dir)?;
+            strata_installed(&install)?;
             let active = active_model(agent).ok_or_else(|| {
                 Refusal::Conflict("Kein aktives Modell bekannt; erst ein Modell aktivieren".into())
             })?;
-            let mut ids: Vec<String> = installed_models(dir)
+            let mut ids: Vec<String> = install
+                .models()
+                .into_iter()
                 .map(|id| catalog::by_id(&id).map_or(id, Size::id))
                 .collect();
             ids.sort();
@@ -538,8 +516,8 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
     }
 }
 
-fn strata_installed(dir: &Path) -> Result<(), Refusal> {
-    if dir.join("setup.py").is_file() {
+fn strata_installed(install: &Installation) -> Result<(), Refusal> {
+    if install.is_set_up() {
         Ok(())
     } else {
         Err(Refusal::Conflict(
@@ -549,11 +527,11 @@ fn strata_installed(dir: &Path) -> Result<(), Refusal> {
 }
 
 /// The catalog id of an installed model, in the catalog's letter case.
-fn installed_model(dir: &Path, model: &str) -> Result<String, Refusal> {
+fn installed_model(install: &Installation, model: &str) -> Result<String, Refusal> {
     let id = catalog::by_id(model)
         .ok_or_else(|| Refusal::BadRequest(format!("{model} gibt es nicht im Katalog")))?
         .id();
-    if !installed_models(dir).any(|m| m.eq_ignore_ascii_case(&id)) {
+    if !install.has(&id) {
         return Err(Refusal::Conflict(format!("{id} ist nicht installiert")));
     }
     Ok(id)
@@ -566,22 +544,8 @@ fn installed_model(dir: &Path, model: &str) -> Result<String, Refusal> {
 /// model, and activating one sets the script.
 fn active_model(agent: &Agent) -> Option<String> {
     let managed = agent.managed();
-    let script = managed
-        .start(&agent.cfg)?
-        .0
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    let dir = &agent.cfg.strata_dir;
-    let id = installed_models(dir)
-        .find(|id| run_script(id) == script)
-        .or_else(|| {
-            installed_models(dir).max_by_key(|id| {
-                std::fs::metadata(dir.join(format!("strata-{id}.json")))
-                    .and_then(|m| m.modified())
-                    .ok()
-            })
-        })?;
+    let (script, _) = managed.start(&agent.cfg)?;
+    let id = Installation::of(&agent.cfg).active_model(script)?;
     Some(catalog::by_id(&id).map_or(id, Size::id))
 }
 
@@ -607,7 +571,7 @@ fn check_space(agent: &Agent, size: &Size) -> Result<(), Refusal> {
     let Some(free) = agent.platform().disk_free(data) else {
         return Ok(());
     };
-    let have_gb = dir_size(&data.join("models").join(size.id())) as f64 / 1e9;
+    let have_gb = Installation::of(&agent.cfg).downloaded_bytes(&size.id()) as f64 / 1e9;
     let need_gb = (size.download_gb - have_gb).max(0.0) + catalog::DISK_SPARE_GB;
     let free_gb = free as f64 / 1e9;
     if free_gb < need_gb {
@@ -617,14 +581,6 @@ fn check_space(agent: &Agent, size: &Size) -> Result<(), Refusal> {
         )));
     }
     Ok(())
-}
-
-fn partly_downloaded(data: &Path, size: &Size) -> bool {
-    std::fs::read_dir(data.join("models").join(size.id()))
-        .map(|mut entries| {
-            entries.any(|e| e.is_ok_and(|e| e.file_name().to_string_lossy().contains(".gguf")))
-        })
-        .unwrap_or(false)
 }
 
 enum Outcome {
@@ -683,7 +639,8 @@ async fn install(
     speed_projection: bool,
 ) -> Result<Option<String>, Step> {
     let dir = agent.cfg.strata_dir.clone();
-    if !dir.join("setup.py").is_file() {
+    let strata = Installation::of(&agent.cfg);
+    if !strata.is_set_up() {
         if dir.read_dir().is_ok_and(|mut d| d.next().is_some()) {
             return Err(format!(
                 "{} ist nicht leer, aber kein Strata-Ordner; bitte leeren oder strata_dir ändern",
@@ -710,7 +667,7 @@ async fn install(
     agent.stop_strata();
     manage(agent).await;
     let managed = Managed {
-        strata_start: Some(dir.join(run_script(&size.id()))),
+        strata_start: Some(strata.run_script(&size.id())),
         strata_args: Vec::new(),
         strata_processes: Some(vec![folder_entry(&dir)]),
         strata_api_key: Some(api_key),
@@ -804,7 +761,7 @@ async fn activate(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> 
     agent.stop_strata();
     let dir = &agent.cfg.strata_dir;
     let mut managed = agent.managed();
-    managed.strata_start = Some(dir.join(run_script(id)));
+    managed.strata_start = Some(Installation::of(&agent.cfg).run_script(id));
     managed.strata_args = Vec::new();
     managed
         .strata_processes
@@ -818,43 +775,13 @@ async fn activate(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> 
     Ok(None)
 }
 
-/// What setup leaves behind for a model: its folders in the data folder,
-/// then its config, start script and log in the Strata folder. Files other
-/// models share (`mtp`) stay.
-fn model_paths(cfg: &crate::Config, id: &str) -> Vec<PathBuf> {
-    let lower = id.to_lowercase();
-    let data = &cfg.strata_data_dir;
-    let dir = &cfg.strata_dir;
-    vec![
-        data.join("models").join(id),
-        data.join("packs").join(&lower),
-        dir.join(format!("strata-{lower}.log")),
-        dir.join(run_script(id)),
-        // The config last: until it is gone, the model is listed and can be deleted again.
-        dir.join(format!("strata-{lower}.json")),
-    ]
-}
-
 async fn delete(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
     set_step(agent, "Dateien löschen");
-    let paths = model_paths(&agent.cfg, id);
-    tokio::task::spawn_blocking(move || {
-        paths.iter().try_for_each(|path| {
-            let removed = if path.is_dir() {
-                std::fs::remove_dir_all(path)
-            } else {
-                std::fs::remove_file(path)
-            };
-            match removed {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    Err(format!("{} nicht gelöscht: {e}", path.display()))
-                }
-                _ => Ok(()),
-            }
-        })
-    })
-    .await
-    .map_err(|e| Step::Failed(e.to_string()))??;
+    let install = Installation::of(&agent.cfg);
+    let id = id.to_string();
+    tokio::task::spawn_blocking(move || install.remove(&id))
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))??;
     Ok(None)
 }
 
@@ -975,7 +902,8 @@ async fn measure(agent: &Arc<Agent>, id: &str) -> Result<Benchmark, Step> {
     set_step(agent, "Benchmark läuft (etwa 10 min)");
     agent.jobs.inner.lock().unwrap().bench = BenchReading::default();
     let dir = agent.cfg.strata_dir.clone();
-    let config = config_path(&dir, id);
+    let install = Installation::of(&agent.cfg);
+    let config = install.config_path(id);
     let spec = CommandSpec {
         program: dir.join("BENCH.bat"),
         args: vec!["--config".into(), config.display().to_string()],
@@ -986,14 +914,15 @@ async fn measure(agent: &Arc<Agent>, id: &str) -> Result<Benchmark, Step> {
     let tps = reading
         .decode
         .ok_or_else(|| "Der Benchmark hat keine Tokens/s gemeldet".to_string())?;
+    let model = install.read_model(id);
     Ok(Benchmark {
         model: id.to_string(),
         result: format!("{} Token/s", round1(tps)),
         at: unix_now(),
         decode_tps: Some(round1(tps)),
         prompt_tps: reading.prompt.map(round1),
-        context: model_context(&dir, id),
-        speed_projection: Some(has_speed_projection(&dir, id)),
+        context: model.context(),
+        speed_projection: Some(model.speed_projection()),
         version: git_commit(&dir),
         error: None,
     })
@@ -1026,6 +955,7 @@ async fn compare_models(
             }
             Err(Step::Failed(error)) => {
                 tracing::warn!("Vergleich: {id} ohne Ergebnis: {error}");
+                let model = Installation::of(&agent.cfg).read_model(id);
                 keep_benchmark(
                     agent,
                     Benchmark {
@@ -1034,8 +964,8 @@ async fn compare_models(
                         at: unix_now(),
                         decode_tps: None,
                         prompt_tps: None,
-                        context: model_context(&agent.cfg.strata_dir, id),
-                        speed_projection: Some(has_speed_projection(&agent.cfg.strata_dir, id)),
+                        context: model.context(),
+                        speed_projection: Some(model.speed_projection()),
                         version: git_commit(&agent.cfg.strata_dir),
                         error: Some(error),
                     },
@@ -1122,9 +1052,9 @@ fn load_benchmarks(agent: &Agent) -> Vec<Benchmark> {
 async fn set_key(agent: &Arc<Agent>, api_key: String) -> Result<Option<String>, Step> {
     wait_idle(agent).await?;
     set_step(agent, "Key eintragen");
-    let dir = agent.cfg.strata_dir.clone();
+    let install = Installation::of(&agent.cfg);
     let key = api_key.clone();
-    tokio::task::spawn_blocking(move || write_key(&dir, &key))
+    tokio::task::spawn_blocking(move || install.set_key(&key))
         .await
         .map_err(|e| Step::Failed(e.to_string()))??;
     let mut managed = agent.managed();
@@ -1138,31 +1068,6 @@ async fn set_key(agent: &Arc<Agent>, api_key: String) -> Result<Option<String>, 
     Ok(None)
 }
 
-/// Sets `api_key` in each model config, keeping everything else.
-fn write_key(dir: &Path, key: &str) -> Result<(), String> {
-    // Every config is read first: one that does not parse stops the change
-    // before any has the new key.
-    let mut changed = Vec::new();
-    for id in installed_models(dir) {
-        let path = dir.join(format!("strata-{id}.json"));
-        let Some((text, mut cfg)) = read_config(&path)? else {
-            continue;
-        };
-        cfg.insert("api_key".into(), key.into());
-        changed.push((path, text, config_text(cfg)));
-    }
-    for (i, (path, _, new)) in changed.iter().enumerate() {
-        if let Err(e) = crate::write_replacing(path, new) {
-            // Back to the old key, so all configs agree with the service.
-            for (path, old, _) in &changed[..i] {
-                let _ = crate::write_replacing(path, old);
-            }
-            return Err(format!("{} nicht geschrieben: {e}", path.display()));
-        }
-    }
-    Ok(())
-}
-
 /// Switches the speed projection in a model's config, with the flags setup
 /// writes for it; everything else in the config stays. The active model
 /// restarts with it once Strata has no request at work.
@@ -1172,11 +1077,7 @@ async fn set_speed_projection(
     on: bool,
 ) -> Result<Option<String>, Step> {
     set_step(agent, "Konfiguration ändern");
-    let dir = agent.cfg.strata_dir.clone();
-    let model = id.to_string();
-    tokio::task::spawn_blocking(move || write_speed_projection(&dir, &model, on))
-        .await
-        .map_err(|e| Step::Failed(e.to_string()))??;
+    change_model(agent, id, move |model| model.set_speed_projection(on)).await?;
     // The engine reads its flags at the start: the active model starts again.
     if active_model(agent).as_deref() == Some(id) {
         wait_idle(agent).await?;
@@ -1187,37 +1088,17 @@ async fn set_speed_projection(
     Ok(None)
 }
 
-fn write_speed_projection(dir: &Path, id: &str, on: bool) -> Result<(), String> {
-    let vector: PathBuf = PROJECTION_VECTOR
-        .iter()
-        .fold(dir.to_path_buf(), |p, part| p.join(part));
-    if on && !vector.is_file() {
-        return Err(format!(
-            "Der Steuervektor der Speed-Projection fehlt: {}",
-            vector.display()
-        ));
-    }
-    rewrite_args(dir, id, |args| {
-        without_speed_projection(args);
-        if on {
-            args.push(PROJECTION_VECTOR_FLAG.into());
-            args.push(format!("{}:1.0", vector.display()).into());
-            for (flag, values) in PROJECTION_FLAGS {
-                args.push(flag.into());
-                args.extend(values.iter().map(|&v| serde_json::Value::from(v)));
-            }
-        }
-    })
-    .map(drop)
-}
-
 /// Sets a model's context in its config, without setup; the settings setup
 /// derived from the old one stay. The active model restarts with it once
-/// Strata has no request at work; if it does not come up, its old args come
-/// back and Strata starts with those.
+/// Strata has no request at work; if it does not come up, its old config
+/// comes back and Strata starts with that.
 async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Option<String>, Step> {
     set_step(agent, "Konfiguration ändern");
-    let old = change_args(agent, id, move |args| with_context(args, context)).await?;
+    let before = change_model(agent, id, move |model| {
+        model.set_context(context);
+        Ok(())
+    })
+    .await?;
     if active_model(agent).as_deref() != Some(id) {
         return Ok(None);
     }
@@ -1235,7 +1116,11 @@ async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Optio
     }
     let output = agent.output.last_lines(KEPT_LINES);
     set_step(agent, "Alten Kontext zurückholen");
-    change_args(agent, id, move |args| *args = old).await?;
+    change_model(agent, id, move |model| {
+        model.restore_args(&before);
+        Ok(())
+    })
+    .await?;
     agent.stop_strata();
     restart_strata(agent).await;
     if let Some(job) = agent.jobs.inner.lock().unwrap().current.as_mut() {
@@ -1249,18 +1134,24 @@ async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Optio
     )))
 }
 
-/// `rewrite_args` for a job.
-async fn change_args(
+/// Changes a model's config off the runtime's threads; gives it from before.
+async fn change_model(
     agent: &Agent,
     id: &str,
-    change: impl FnOnce(&mut Vec<serde_json::Value>) + Send + 'static,
-) -> Result<Vec<serde_json::Value>, Step> {
-    let dir = agent.cfg.strata_dir.clone();
-    let model = id.to_string();
-    tokio::task::spawn_blocking(move || rewrite_args(&dir, &model, change))
-        .await
-        .map_err(|e| Step::Failed(e.to_string()))?
-        .map_err(Step::Failed)
+    change: impl FnOnce(&mut Model) -> Result<(), String> + Send + 'static,
+) -> Result<Model, Step> {
+    let install = Installation::of(&agent.cfg);
+    let id = id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let before = install.model(&id)?;
+        let mut model = before.clone();
+        change(&mut model)?;
+        install.save(&model)?;
+        Ok(before)
+    })
+    .await
+    .map_err(|e| Step::Failed(e.to_string()))?
+    .map_err(Step::Failed)
 }
 
 /// Whether the restarted Strata answers: `false` once it has ended or not
@@ -1283,117 +1174,10 @@ async fn started_with_new_args(agent: &Agent) -> Result<bool, Step> {
     }
 }
 
-/// `args` with this `--max-context`, in its place, and without the rope
-/// scaling setup adds past the trained length: every context the switch
-/// takes is within it.
-fn with_context(args: &mut Vec<serde_json::Value>, context: u32) {
-    let mut kept = Vec::with_capacity(args.len());
-    let mut set = false;
-    let mut drop_value = false;
-    for arg in args.drain(..) {
-        if std::mem::take(&mut drop_value) {
-            continue;
-        }
-        if arg.as_str().is_some_and(|a| ROPE_FLAGS.contains(&a)) {
-            drop_value = true;
-        } else if arg == CONTEXT_FLAG {
-            drop_value = true;
-            if !set {
-                kept.extend([arg, context.to_string().into()]);
-                set = true;
-            }
-        } else {
-            kept.push(arg);
-        }
-    }
-    if !set {
-        kept.extend([CONTEXT_FLAG.into(), context.to_string().into()]);
-    }
-    *args = kept;
-}
-
-/// Changes `args` in a model's config; everything else in it stays. Gives
-/// the args from before.
-fn rewrite_args(
-    dir: &Path,
-    id: &str,
-    change: impl FnOnce(&mut Vec<serde_json::Value>),
-) -> Result<Vec<serde_json::Value>, String> {
-    let path = config_path(dir, id);
-    let (_, mut cfg) = read_config(&path)?
-        .ok_or_else(|| format!("{} ist keine Modell-Konfiguration", path.display()))?;
-    let args = cfg["args"].as_array_mut().expect("read_config checks args");
-    let before = args.clone();
-    change(args);
-    write_config(&path, cfg)?;
-    Ok(before)
-}
-
-/// Writes a changed model config. Without its own start script Strata
-/// starts the config touched last: the change keeps the time, so the same
-/// model stays active.
-fn write_config(path: &Path, cfg: ConfigFields) -> Result<(), String> {
-    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-    crate::write_replacing(path, &config_text(cfg))
-        .map_err(|e| format!("{} nicht geschrieben: {e}", path.display()))?;
-    if let Some(time) = modified {
-        let kept = std::fs::File::options()
-            .write(true)
-            .open(path)
-            .and_then(|f| f.set_modified(time));
-        if let Err(e) = kept {
-            tracing::warn!("Änderungszeit von {} nicht behalten: {e}", path.display());
-        }
-    }
-    Ok(())
-}
-
-/// Sets what the service keeps in a model config: loop recovery, and the
-/// `sampling` block as [`sampling::managed_block`] has it for this Strata,
-/// over a hand-set one; the block stays while Strata's version is unknown.
-/// Whether that changed the config.
-fn manage_config(cfg: &mut ConfigFields, support: Option<Support>) -> bool {
-    let before = cfg.clone();
-    cfg.insert(LOOP_RECOVERY_KEY.into(), LOOP_RECOVERY.into());
-    if let Some(support) = support {
-        match sampling::managed_block(support, cfg) {
-            Some(block) => cfg.insert(SAMPLING_KEY.into(), block),
-            None => cfg.remove(SAMPLING_KEY),
-        };
-    }
-    *cfg != before
-}
-
-/// Brings every model config to what the service keeps in it and gives the
-/// ids whose config changed. One that cannot be read or written is logged
-/// and left as it is; the others still change.
-fn manage_configs(dir: &Path) -> Vec<String> {
-    let support = Support::of(dir);
-    installed_models(dir)
-        .filter(|id| {
-            let path = config_path(dir, id);
-            let written = read_config(&path).and_then(|found| match found {
-                Some((_, mut cfg)) => {
-                    if manage_config(&mut cfg, support) {
-                        write_config(&path, cfg).map(|()| true)
-                    } else {
-                        Ok(false)
-                    }
-                }
-                None => Ok(false),
-            });
-            written.unwrap_or_else(|e| {
-                tracing::warn!("Modell-Konfiguration nicht angepasst: {e}");
-                false
-            })
-        })
-        .collect()
-}
-
-/// `manage_configs` off the runtime's threads.
+/// [`Installation::manage`] off the runtime's threads.
 async fn manage(agent: &Agent) -> Vec<String> {
-    let dir = agent.cfg.strata_dir.clone();
-    tokio::task::spawn_blocking(move || manage_configs(&dir))
+    let install = Installation::of(&agent.cfg);
+    tokio::task::spawn_blocking(move || install.manage())
         .await
         .unwrap_or_default()
 }
@@ -1424,68 +1208,6 @@ pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output =
         agent.stop_strata();
         restart_strata(&agent).await;
     }
-}
-
-/// Takes setup's speed projection flags out of `args`, each with its values,
-/// whatever they are.
-fn without_speed_projection(args: &mut Vec<serde_json::Value>) {
-    let mut kept = Vec::with_capacity(args.len());
-    let mut values = 0;
-    for arg in args.drain(..) {
-        if let Some(n) = arg.as_str().and_then(projection_flag_values) {
-            values = n;
-        } else if values > 0 && !arg.as_str().is_some_and(|a| a.starts_with("--")) {
-            values -= 1;
-        } else {
-            values = 0;
-            kept.push(arg);
-        }
-    }
-    *args = kept;
-}
-
-/// How many values one of setup's speed projection flags takes.
-fn projection_flag_values(flag: &str) -> Option<usize> {
-    if flag == PROJECTION_VECTOR_FLAG {
-        return Some(1);
-    }
-    PROJECTION_FLAGS
-        .iter()
-        .find(|(f, _)| *f == flag)
-        .map(|(_, values)| values.len())
-}
-
-/// `strata-<id>.json`, as setup names it.
-fn config_path(dir: &Path, id: &str) -> PathBuf {
-    dir.join(format!("strata-{}.json", id.to_lowercase()))
-}
-
-/// A model config with its text as read, or `None` for a `strata-*.json`
-/// that is none: model configs have `exe` and an `args` array, as Strata's
-/// own tools tell them apart.
-fn read_config(path: &Path) -> Result<Option<(String, ConfigFields)>, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("{} nicht lesbar: {e}", path.display()))?;
-    let cfg = serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
-        .map_err(|e| format!("{} ist kein gültiges JSON: {e}", path.display()))?;
-    let serde_json::Value::Object(fields) = cfg else {
-        return Ok(None);
-    };
-    if !fields.contains_key("exe") || !fields.get("args").is_some_and(|a| a.is_array()) {
-        return Ok(None);
-    }
-    Ok(Some((text, fields)))
-}
-
-type ConfigFields = serde_json::Map<String, serde_json::Value>;
-
-/// A config as Strata writes it (`json.dumps(cfg, indent=1)`).
-fn config_text(cfg: ConfigFields) -> String {
-    let mut out = Vec::new();
-    let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
-    let mut ser = serde_json::Serializer::with_formatter(&mut out, formatter);
-    serde::Serialize::serialize(&cfg, &mut ser).expect("config serializes");
-    String::from_utf8(out).expect("JSON is UTF-8")
 }
 
 /// Whether Strata's Git source has commits this folder lacks; asked in the
@@ -1672,7 +1394,7 @@ async fn setup(
 ) -> Result<(), Step> {
     let dir = &agent.cfg.strata_dir;
     let mut args: Vec<String> = vec!["--yes".into(), "--no-start".into(), "--no-browser".into()];
-    if installed_models(dir).next().is_some() {
+    if !Installation::of(&agent.cfg).models().is_empty() {
         args.push("--setup".into());
     }
     args.extend(
@@ -1989,25 +1711,6 @@ fn parse_download(line: &str) -> Option<(u64, u64, u8)> {
     Some((gb(done)?, gb(total)?, percent.trim().parse().ok()?))
 }
 
-/// Ids of the models set up in `dir`, from their `strata-<id>.json`.
-pub fn installed_models(dir: &Path) -> impl Iterator<Item = String> {
-    std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let id = name.strip_prefix("strata-")?.strip_suffix(".json")?;
-            // `strata-<model>.shared-settings.json` belongs to a model.
-            (!id.is_empty() && !id.contains('.')).then(|| id.to_string())
-        })
-}
-
-/// `run-<id>.bat`, as setup names it.
-pub fn run_script(id: &str) -> String {
-    format!("run-{}.bat", id.to_lowercase())
-}
-
 /// The folder as a `strata_processes` entry.
 fn folder_entry(dir: &Path) -> String {
     let mut entry = dir.display().to_string();
@@ -2113,18 +1816,22 @@ pub fn view(agent: &Agent) -> StrataView {
     let dir = &cfg.strata_dir;
     let ram_gb = agent.platform().ram_bytes() as f64 / (1u64 << 30) as f64;
     let active = active_model(agent);
-    let support = Support::of(dir);
-    let mut models: Vec<InstalledModel> = installed_models(dir)
+    let install = Installation::of(cfg);
+    let support = install.support();
+    let mut models: Vec<InstalledModel> = install
+        .models()
+        .into_iter()
         .map(|id| {
             let size = catalog::by_id(&id);
             let id = size.map_or(id, |s| s.id());
+            let model = install.read_model(&id);
             InstalledModel {
-                disk_bytes: model_paths(cfg, &id)[..2].iter().map(|p| dir_size(p)).sum(),
+                disk_bytes: install.disk_bytes(&id),
                 active: active.as_deref() == Some(id.as_str()),
-                speed_projection: has_speed_projection(dir, &id),
-                context: model_context(dir, &id),
-                loop_recovery: loop_recovery(dir, &id).into(),
-                sampling: support.map(|support| model_sampling(dir, &id, support)),
+                speed_projection: model.speed_projection(),
+                context: model.context(),
+                loop_recovery: model.loop_recovery().into(),
+                sampling: support.map(|support| model.sampling(support)),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,
@@ -2133,7 +1840,7 @@ pub fn view(agent: &Agent) -> StrataView {
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
     StrataView {
-        installed: dir.join("setup.py").is_file(),
+        installed: install.is_set_up(),
         version: git_commit(dir),
         update_available: agent.updates.available(),
         update: agent.updates.incoming(),
@@ -2155,7 +1862,7 @@ pub fn view(agent: &Agent) -> StrataView {
                 download_gb: s.download_gb,
                 ram_gb: s.ram_gb,
                 fits: ram_gb == 0.0 || f64::from(s.ram_gb) <= ram_gb + 0.5,
-                partly_downloaded: partly_downloaded(&cfg.strata_data_dir, s),
+                partly_downloaded: install.partly_downloaded(&s.id()),
             })
             .collect(),
         recommended: catalog::recommend(ram_gb).map(Size::id),
@@ -2171,74 +1878,6 @@ pub fn view(agent: &Agent) -> StrataView {
         benchmarks: load_benchmarks(agent),
         job: agent.jobs.current(),
     }
-}
-
-/// Whether a model's config loads a control vector; a config that cannot
-/// be read has none.
-fn has_speed_projection(dir: &Path, id: &str) -> bool {
-    read_config(&config_path(dir, id))
-        .ok()
-        .flatten()
-        .is_some_and(|(_, cfg)| {
-            cfg["args"]
-                .as_array()
-                .is_some_and(|a| a.iter().any(|v| v == PROJECTION_VECTOR_FLAG))
-        })
-}
-
-/// The value of `--max-context` in a model's config.
-fn model_context(dir: &Path, id: &str) -> Option<u32> {
-    let (_, cfg) = read_config(&config_path(dir, id)).ok().flatten()?;
-    let args = cfg["args"].as_array()?;
-    let at = args.iter().position(|v| v == CONTEXT_FLAG)?;
-    args.get(at + 1)?.as_str()?.parse().ok()
-}
-
-/// `reasoning_loop_recovery` in a model's config, as Strata reads it: `true`
-/// is `recover`, a missing or unknown value off.
-fn loop_recovery(dir: &Path, id: &str) -> &'static str {
-    let value = read_config(&config_path(dir, id))
-        .ok()
-        .flatten()
-        .and_then(|(_, cfg)| cfg.get(LOOP_RECOVERY_KEY).cloned());
-    match value {
-        Some(serde_json::Value::Bool(true)) => LOOP_RECOVERY,
-        Some(v) if v == LOOP_RECOVERY => LOOP_RECOVERY,
-        Some(v) if v == "stop" => "stop",
-        _ => "off",
-    }
-}
-
-/// The sampling a model's config and Chat settings give it with this
-/// Strata; a file that cannot be read counts as one without settings, as
-/// Strata takes Chat settings it cannot read.
-fn model_sampling(dir: &Path, id: &str, support: Support) -> ModelSampling {
-    let cfg = read_config(&config_path(dir, id))
-        .ok()
-        .flatten()
-        .map(|(_, cfg)| cfg)
-        .unwrap_or_default();
-    let path = dir.join(format!("strata-{}.shared-settings.json", id.to_lowercase()));
-    let chat = match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str::<ConfigFields>(&text)
-            .inspect_err(|e| tracing::debug!("{} ist kein gültiges JSON: {e}", path.display()))
-            .ok(),
-        Err(_) => None,
-    };
-    sampling::effective(support, &cfg, chat.as_ref())
-}
-
-fn dir_size(dir: &Path) -> u64 {
-    std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .map(|e| match e.file_type() {
-            Ok(t) if t.is_dir() => dir_size(&e.path()),
-            Ok(_) => e.metadata().map_or(0, |m| m.len()),
-            Err(_) => 0,
-        })
-        .sum()
 }
 
 /// The checked-out commit, read from `.git` without running Git.

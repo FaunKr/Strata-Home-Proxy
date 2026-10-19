@@ -27,6 +27,7 @@ struct Runner {
     /// What `GET /runs/current` answers.
     current: Arc<Mutex<Option<Value>>>,
     cancels: Arc<Mutex<u32>>,
+    starts: Arc<Mutex<u32>>,
 }
 
 fn task(name: &str, passed: u32) -> Value {
@@ -47,6 +48,9 @@ async fn health() -> Json<Value> {
 }
 
 async fn start(State(r): State<Runner>, Json(body): Json<Value>) -> Response {
+    // Slow enough for a second start to arrive meanwhile.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    *r.starts.lock().unwrap() += 1;
     *r.started.lock().unwrap() = Some(body);
     *r.current.lock().unwrap() = Some(run("running"));
     (StatusCode::ACCEPTED, Json(run("running"))).into_response()
@@ -202,21 +206,85 @@ async fn cancelling_reaches_the_runner_and_keeps_no_result() {
 }
 
 #[tokio::test]
-async fn a_key_left_from_a_lost_run_goes_with_the_next_one() {
+async fn a_key_someone_named_alike_stays_and_the_start_says_why() {
     let (s, runner) = with_runner().await;
-    let (old, _) = s.state.api_keys.create(KEY_NAME).unwrap();
+    let (_, theirs) = s.state.api_keys.create("code benchmark").unwrap();
     let mut b = logged_in(&s.url).await;
-    b.call("code-bench-start", &[]).await;
-    let keys: Vec<_> = s
-        .state
-        .api_keys
-        .list()
-        .into_iter()
-        .filter(|k| k.name == KEY_NAME)
-        .collect();
-    assert_eq!(keys.len(), 1);
-    assert!(!old.starts_with(&keys[0].prefix));
-    assert!(runner.started.lock().unwrap().is_some());
+    let resp = b.call("code-bench-start", &[]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(resp.text().await.unwrap().contains("Rename it"));
+    assert!(
+        s.state
+            .api_keys
+            .list()
+            .iter()
+            .any(|k| k.prefix == theirs.prefix)
+    );
+    assert!(runner.started.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn two_starts_at_once_make_one_run_with_a_working_key() {
+    let (s, runner) = with_runner().await;
+    let mut a = logged_in(&s.url).await;
+    let mut b = Browser {
+        base: a.base.clone(),
+        cookie: a.cookie.clone(),
+    };
+    let (first, second) = tokio::join!(
+        a.call("code-bench-start", &[]),
+        b.call("code-bench-start", &[])
+    );
+    let mut codes = [first.status().as_u16(), second.status().as_u16()];
+    codes.sort();
+    assert_eq!(codes, [200, 400]);
+    assert_eq!(*runner.starts.lock().unwrap(), 1);
+    let body = runner.started.lock().unwrap().clone().unwrap();
+    let key = body["api_key"].as_str().unwrap();
+    assert_eq!(s.state.api_keys.check(key).as_deref(), Some(KEY_NAME));
+}
+
+#[tokio::test]
+async fn a_run_the_proxy_lost_is_followed_again_and_can_be_cancelled() {
+    let (s, runner) = with_runner().await;
+    // The runner works on a run the proxy does not know, e.g. after a restart.
+    *runner.current.lock().unwrap() = Some(run("running"));
+    let mut b = logged_in(&s.url).await;
+    let resp = b.call("code-bench-start", &[]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(resp.text().await.unwrap().contains("running already"));
+    assert!(runner.started.lock().unwrap().is_none());
+    assert_eq!(page(&mut b).await["run"]["state"], "running");
+    assert_eq!(b.call("code-bench-cancel", &[]).await.status(), 200);
+    assert_eq!(*runner.cancels.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_strata_job_and_the_code_benchmark_wait_for_each_other() {
+    let (s, _runner) = with_runner().await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    let resp = b.call("strata-job", &[("kind", "benchmark")]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(
+        resp.text()
+            .await
+            .unwrap()
+            .contains("code benchmark is running")
+    );
+
+    let (s, runner) = with_runner().await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(
+        b.call("strata-job", &[("kind", "benchmark")])
+            .await
+            .status(),
+        200
+    );
+    let resp = b.call("code-bench-start", &[]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(resp.text().await.unwrap().contains("Strata job is running"));
+    assert!(runner.started.lock().unwrap().is_none());
 }
 
 async fn eventually_for(limit: Duration, what: &str, check: impl Fn() -> bool) {

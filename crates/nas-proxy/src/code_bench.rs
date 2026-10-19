@@ -3,14 +3,24 @@
 //! hands the runner a key of its own for the run, which goes through the
 //! proxy like any client's requests, and keeps each model's last result.
 
-use std::{path::PathBuf, sync::Mutex, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use serde_json::json;
 use strata_admin_ui::api::{CodeBenchPage, CodeBenchRun, CodeBenchState};
 
-use crate::{clock, files::write_private, state::AppState};
+use crate::{api_keys::KeyError, clock, files::write_private, state::AppState};
 
 const RESULTS_FILE: &str = "code-bench.json";
+/// The prefix of the run's key, so a restarted proxy still knows which key
+/// is its own.
+const KEY_FILE: &str = "code-bench-key";
 /// The name of the run's key under Access; it is revoked when the run ends.
 pub const KEY_NAME: &str = "Code benchmark";
 /// How long opencode may work on one task.
@@ -61,6 +71,10 @@ pub struct CodeBench {
     run: Mutex<Option<CodeBenchRun>>,
     /// Each model's last finished run.
     results: Mutex<Vec<CodeBenchRun>>,
+    /// A start is on its way to the runner.
+    starting: AtomicBool,
+    /// The prefix of the key the proxy made for the run.
+    key: Mutex<Option<String>>,
     dir: Option<PathBuf>,
 }
 
@@ -71,19 +85,36 @@ impl CodeBench {
             .and_then(|dir| std::fs::read(dir.join(RESULTS_FILE)).ok())
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
+        let key = data_dir
+            .as_ref()
+            .and_then(|dir| std::fs::read_to_string(dir.join(KEY_FILE)).ok())
+            .map(|prefix| prefix.trim().to_string())
+            .filter(|prefix| !prefix.is_empty());
         Self {
             run: Mutex::new(None),
             results: Mutex::new(results),
+            starting: AtomicBool::new(false),
+            key: Mutex::new(key),
             dir: data_dir,
         }
     }
 
-    fn running(&self) -> bool {
+    pub fn running(&self) -> bool {
         self.run
             .lock()
             .unwrap()
             .as_ref()
             .is_some_and(|r| r.state == CodeBenchState::Running)
+    }
+
+    fn set_key(&self, prefix: Option<String>) {
+        if let Some(dir) = &self.dir {
+            let text = prefix.clone().unwrap_or_default();
+            if let Err(e) = write_private(dir, KEY_FILE, text.as_bytes()) {
+                tracing::error!("{KEY_FILE} nicht gespeichert: {e}");
+            }
+        }
+        *self.key.lock().unwrap() = prefix;
     }
 
     /// Keeps a finished run in place of the model's last one.
@@ -143,15 +174,45 @@ async fn health(state: &AppState, url: &str) -> Result<(), String> {
     Ok(())
 }
 
+const RUNNING: &str = "A code benchmark is running already.";
+
+/// Clears the start guard however `start` ends.
+struct Starting<'a>(&'a AtomicBool);
+
+impl Drop for Starting<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 pub async fn start(state: &std::sync::Arc<AppState>) -> Result<(), String> {
     let url = state.cfg().code_bench_url.clone().ok_or(NO_URL)?;
-    if state.code_bench.running() {
-        return Err("A code benchmark is running already.".into());
+    if state.code_bench.running() || state.code_bench.starting.swap(true, Ordering::SeqCst) {
+        return Err(RUNNING.into());
     }
+    let _starting = Starting(&state.code_bench.starting);
     health(state, &url).await?;
+    // A run the proxy lost, e.g. by a restart, goes on: follow it again.
+    if let Some(run) = current(state, &url).await
+        && run.state == CodeBenchState::Running
+    {
+        *state.code_bench.run.lock().unwrap() = Some(run);
+        let state = std::sync::Arc::clone(state);
+        tokio::spawn(async move { follow(&state, &url).await });
+        return Err(RUNNING.into());
+    }
+    if state.strata.job_running() {
+        return Err("A Strata job is running. Start the code benchmark once it ends.".into());
+    }
     let model = active_model(state).await?;
     revoke_key(state);
-    let (key, _) = state.api_keys.create(KEY_NAME).map_err(|e| e.to_string())?;
+    let (key, info) = state.api_keys.create(KEY_NAME).map_err(|e| match e {
+        KeyError::DuplicateName => format!(
+            "A key named \"{KEY_NAME}\" exists under Access. Rename it: the code benchmark makes a key of that name for each run."
+        ),
+        e => e.to_string(),
+    })?;
+    state.code_bench.set_key(Some(info.prefix));
     let tasks: Vec<_> = TASKS
         .iter()
         .map(|t| {
@@ -197,6 +258,7 @@ pub async fn start(state: &std::sync::Arc<AppState>) -> Result<(), String> {
         }
     };
     *state.code_bench.run.lock().unwrap() = Some(run);
+    drop(_starting);
     let state = std::sync::Arc::clone(state);
     tokio::spawn(async move { follow(&state, &url).await });
     Ok(())
@@ -204,16 +266,18 @@ pub async fn start(state: &std::sync::Arc<AppState>) -> Result<(), String> {
 
 pub async fn cancel(state: &AppState) -> Result<(), String> {
     let url = state.cfg().code_bench_url.clone().ok_or(NO_URL)?;
-    if !state.code_bench.running() {
-        return Err("No code benchmark is running.".into());
-    }
+    // Asked of the runner even when the proxy knows of no run: it may have
+    // lost one, e.g. by a restart.
     let resp = state
         .probe_client()
         .post(format!("{url}/runs/current/cancel"))
         .send()
         .await
         .map_err(|e| format!("The code-bench container does not answer: {e}"))?;
-    // 409: it ended meanwhile; the next poll notes how.
+    // 409: no run, or it ended meanwhile and the next poll notes how.
+    if resp.status().as_u16() == 409 && !state.code_bench.running() {
+        return Err("No code benchmark is running.".into());
+    }
     if !resp.status().is_success() && resp.status().as_u16() != 409 {
         return Err(format!(
             "The code-bench container answered {}.",
@@ -240,17 +304,7 @@ async fn follow(state: &AppState, url: &str) {
     let mut missed = 0;
     loop {
         tokio::time::sleep(POLL).await;
-        let run = async {
-            let resp = state
-                .probe_client()
-                .get(format!("{url}/runs/current"))
-                .send()
-                .await
-                .ok()?;
-            resp.json::<CodeBenchRun>().await.ok()
-        }
-        .await;
-        let Some(run) = run else {
+        let Some(run) = current(state, url).await else {
             missed += 1;
             if missed < LOST_AFTER {
                 continue;
@@ -264,27 +318,53 @@ async fn follow(state: &AppState, url: &str) {
             break;
         };
         missed = 0;
-        let ended = run.state != CodeBenchState::Running;
-        *state.code_bench.run.lock().unwrap() = Some(run.clone());
-        if ended {
-            if run.state == CodeBenchState::Done {
+        match run.state {
+            CodeBenchState::Running => *state.code_bench.run.lock().unwrap() = Some(run),
+            CodeBenchState::Done => {
                 state.code_bench.keep(run);
                 *state.code_bench.run.lock().unwrap() = None;
+                break;
             }
-            break;
+            CodeBenchState::Cancelled | CodeBenchState::Failed => {
+                *state.code_bench.run.lock().unwrap() = Some(run);
+                break;
+            }
         }
     }
     revoke_key(state);
     state.overview.refresh_now();
 }
 
-/// Revokes the run's key, also one left over from a run the proxy lost.
-fn revoke_key(state: &AppState) {
-    for key in state.api_keys.list() {
-        if key.name == KEY_NAME
-            && let Err(e) = state.api_keys.revoke(&key.name, &key.prefix)
-        {
-            tracing::error!("Key des Code-Benchmarks nicht widerrufen: {e}");
-        }
+/// The runner's current run; `None` when it does not answer or had none yet.
+async fn current(state: &AppState, url: &str) -> Option<CodeBenchRun> {
+    let resp = state
+        .probe_client()
+        .get(format!("{url}/runs/current"))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
     }
+    resp.json::<CodeBenchRun>().await.ok()
+}
+
+/// Revokes the key the proxy made for the run, also one left over from a run
+/// the proxy lost; never a key someone else named alike.
+fn revoke_key(state: &AppState) {
+    let Some(prefix) = state.code_bench.key.lock().unwrap().clone() else {
+        return;
+    };
+    let ours = state
+        .api_keys
+        .list()
+        .into_iter()
+        .find(|k| k.name == KEY_NAME && k.prefix == prefix);
+    if let Some(key) = ours
+        && let Err(e) = state.api_keys.revoke(&key.name, &key.prefix)
+    {
+        tracing::error!("Key des Code-Benchmarks nicht widerrufen: {e}");
+        return;
+    }
+    state.code_bench.set_key(None);
 }

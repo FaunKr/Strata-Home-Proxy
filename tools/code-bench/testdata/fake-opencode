@@ -9,6 +9,10 @@ if sys.argv[1:] == ["--version"]:
 with open("fake-args.json", "w") as f:
     json.dump({"args": sys.argv[1:], "config": json.load(open("opencode.json"))}, f)
 mode = os.environ.get("FAKE_MODE", "")
+if mode == "background":
+    # Like an agent's `server &`: a child that keeps opencode's output open.
+    import subprocess
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
 if mode == "hang":
     time.sleep(600)
 if mode == "error":

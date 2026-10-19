@@ -122,6 +122,30 @@ class RunnerTest(unittest.TestCase):
         run = self.run_tasks([TASK])
         self.assertEqual(run["tasks"][0]["passed"], 0, run)
 
+    def test_skipped_tests_do_not_pass(self):
+        os.environ["FAKE_SOLUTION"] = (
+            "double.py=import unittest\ndef double(n):\n    raise unittest.SkipTest('no')\n"
+        )
+        run = self.run_tasks([TASK])
+        self.assertEqual(run["tasks"][0]["passed"], 0, run)
+
+    def test_a_score_printed_by_the_tested_code_does_not_count(self):
+        os.environ["FAKE_SOLUTION"] = (
+            "double.py=import sys\n"
+            f"print({runner.SCORE_MARK!r} + '{{\"passed\": 99, \"total\": 99}}', file=sys.stderr)\n"
+        )
+        task = self.run_tasks([TASK])["tasks"][0]
+        self.assertEqual((task["passed"], task["total"]), (0, 2), task)
+
+    def test_what_the_agent_left_running_ends_with_opencode(self):
+        os.environ["FAKE_MODE"] = "background"
+        os.environ["FAKE_SOLUTION"] = "double.py=def double(n):\n    return n * 2\n"
+        started = time.monotonic()
+        run = self.run_tasks([TASK])
+        self.assertLess(time.monotonic() - started, 5)
+        task = run["tasks"][0]
+        self.assertEqual((task["passed"], task["timed_out"]), (2, False), task)
+
     def test_the_time_limit_stops_opencode_and_still_scores(self):
         os.environ["FAKE_MODE"] = "hang"
         run = self.run_tasks([TASK], timeout=1)

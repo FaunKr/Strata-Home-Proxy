@@ -48,7 +48,9 @@ import json, os, sys, unittest
 sys.path.append(os.getcwd())
 suite = unittest.defaultTestLoader.loadTestsFromName("hidden_test")
 result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
-failed = len(result.failures) + len(result.errors)
+# A skipped test did not pass.
+failed = (len(result.failures) + len(result.errors) + len(result.skipped)
+          + len(result.expectedFailures) + len(result.unexpectedSuccesses))
 print("%s" + json.dumps({"passed": result.testsRun - failed, "total": result.testsRun}))
 """ % SCORE_MARK
 
@@ -59,7 +61,20 @@ PROMPT = (
 )
 
 
+_version = None
+_version_lock = threading.Lock()
+
+
 def opencode_version():
+    """opencode's version, asked once: /health is asked every few seconds."""
+    global _version
+    with _version_lock:
+        if _version is None:
+            _version = _ask_version()
+        return _version
+
+
+def _ask_version():
     try:
         out = subprocess.run(
             [OPENCODE, "--version"], capture_output=True, text=True, timeout=30
@@ -274,11 +289,22 @@ class Run:
         if cancelled:
             stop(process)
         timed_out = threading.Event()
+        finished = threading.Event()
 
         def deadline():
-            if process.poll() is None:
+            # opencode may have ended while something it started still holds
+            # its output open; that counts as running out of time too.
+            if not finished.is_set():
                 timed_out.set()
                 stop(process)
+
+        def reap():
+            # What the agent started in the background ends with opencode, so
+            # it neither outlives the task nor keeps its output open.
+            process.wait()
+            kill_group(process.pid)
+
+        threading.Thread(target=reap, daemon=True).start()
 
         timer = threading.Timer(self.timeout, deadline)
         timer.start()
@@ -296,8 +322,10 @@ class Run:
                     total_secs=round(time.monotonic() - started, 1),
                 )
             code = process.wait()
+            finished.set()
         finally:
             timer.cancel()
+            kill_group(process.pid)
             reader.join(timeout=5)
             with self.lock:
                 self.process = None
@@ -315,14 +343,20 @@ def stop(process):
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
-        return
+        pass
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        pass
+    kill_group(process.pid)
+
+
+def kill_group(pid):
+    """Kills what is left of opencode's process group."""
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
 
 
 def write(folder, path, text):
@@ -363,11 +397,13 @@ def score(folder, hidden_test):
             timeout=TEST_TIMEOUT,
             stdin=subprocess.DEVNULL,
         )
-        output = out.stdout + out.stderr
+        output = out.stdout
+        errors = out.stderr
     except subprocess.TimeoutExpired as e:
         output = (e.stdout or "") if isinstance(e.stdout, str) else ""
         return 0, total_tests(hidden_test), output + f"\nThe tests took longer than {TEST_TIMEOUT} s."
     passed, total = 0, total_tests(hidden_test)
+    # Only stdout carries the mark; the score script prints it last.
     for line in output.splitlines():
         if line.startswith(SCORE_MARK):
             try:
@@ -377,7 +413,7 @@ def score(folder, hidden_test):
                 total = max(int(result["total"]), total)
             except (ValueError, KeyError, TypeError):
                 pass
-    shown = "\n".join(l for l in output.splitlines() if not l.startswith(SCORE_MARK))
+    shown = "\n".join(l for l in (output + errors).splitlines() if not l.startswith(SCORE_MARK))
     return passed, total, shown[-MAX_OUTPUT_CHARS:]
 
 

@@ -1101,7 +1101,9 @@ fn CodeBenchCurrent(run: CodeBenchRun, cancel: ServerAction<CancelCodeBench>) ->
             <p class="hint">{format!("The last run with {} was cancelled.", run.model)}</p>
         }
         .into_any(),
-        CodeBenchState::Failed | CodeBenchState::Done => {
+        // A done run is among the results.
+        CodeBenchState::Done => ().into_any(),
+        CodeBenchState::Failed => {
             let why = run
                 .error
                 .clone()

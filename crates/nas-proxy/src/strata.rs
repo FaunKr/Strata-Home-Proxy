@@ -85,6 +85,13 @@ impl StrataState {
     }
 }
 
+impl StrataState {
+    /// Whether a Strata job the proxy started or saw is still running.
+    pub fn job_running(&self) -> bool {
+        self.job_running.load(Ordering::SeqCst)
+    }
+}
+
 /// The Strata page; asks the PC service but never wakes the PC.
 pub async fn page(state: &AppState) -> StrataPage {
     let agent = state.agent();
@@ -131,6 +138,10 @@ pub async fn start_job(state: &AppState, form: StrataJobForm) -> Result<(), Stri
     let agent = state.agent();
     if !agent.configured() {
         return Err(NO_AGENT.into());
+    }
+    // A job could switch the model the code benchmark measures.
+    if state.code_bench.running() {
+        return Err("A code benchmark is running. Strata jobs wait until it ends.".into());
     }
     if state.pc_status(&agent).await.is_none() {
         wake(state).await?;

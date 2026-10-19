@@ -39,6 +39,9 @@ assumed_window=200000
 # (LOCAL_AGENT_COMPACT_SHARE in the configuration).
 compact_share=75
 output_tokens=8192
+# Seconds between looks at the Proxy during a run, for Gaming-Modus
+# (LOCAL_AGENT_PROBE_INTERVAL, mainly for the tests).
+probe_interval=${LOCAL_AGENT_PROBE_INTERVAL:-60}
 # Claude Code's own prompt is about 25K tokens; below 64K a run barely starts.
 min_context=65536
 
@@ -87,6 +90,16 @@ meta_set() {
 }
 meta_get() { sed -n "s/^$2=//p" "$1/meta" 2>/dev/null | tail -1; }
 
+# A run's state; a queued or running run whose runner is gone is "stopped".
+run_state() {
+  local state
+  state=$(meta_get "$1" state)
+  if [[ $state == queued || $state == running ]] && ! kill -0 "$(meta_get "$1" pid)" 2>/dev/null; then
+    state=stopped
+  fi
+  echo "$state"
+}
+
 # Sets run_dir for a run id, or for the latest run of the current repo (of
 # any repo outside one) when no id is given.
 resolve_run() {
@@ -114,14 +127,16 @@ enqueue() {
   local lock=$state_dir/counter.lock n
   until mkdir "$lock" 2>/dev/null; do
     # A runner killed while holding it would block everyone.
-    [[ $(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null) ]] && rmdir "$lock" 2>/dev/null
+    [[ -z $(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null) ]] || rmdir "$lock" 2>/dev/null || true
     sleep 0.1
   done
   n=$(($(cat "$state_dir/counter" 2>/dev/null || echo 0) + 1))
   echo "$n" >"$state_dir/counter"
   rmdir "$lock"
   ticket=$queue_dir/$(printf %010d "$n")-$1
-  echo $$ >"$ticket"
+  # Written whole and then moved, so a reader never sees it without the pid.
+  echo $$ >"$queue_dir/.new-$1"
+  mv "$queue_dir/.new-$1" "$ticket"
   trap 'rm -f "$ticket"' EXIT
 }
 
@@ -167,27 +182,39 @@ read_tools=(Read Glob Grep TodoWrite "Bash(git status:*)" "Bash(git diff:*)" "Ba
   "Bash(git show:*)" "Bash(ls:*)" "Bash(grep:*)")
 edit_tools=(Edit MultiEdit Write NotebookEdit)
 write_tools=("${edit_tools[@]}" "Bash(git add:*)" "Bash(git commit:*)")
-# Never allowed, whatever the repo or --allow say: nothing leaves the machine.
+# Never allowed, whatever the repo or --allow say: pushing, and the usual
+# network tools. A deny list can't catch every program that talks to the
+# network; it keeps the common ways closed.
 denied_tools=(WebFetch WebSearch "Bash(git push:*)" "Bash(curl:*)" "Bash(wget:*)" "Bash(ssh:*)"
   "Bash(scp:*)" "Bash(rsync:*)" "Bash(nc:*)")
 
-# True when a rule is one of denied_tools or narrows one of them.
+# True when a rule is one of denied_tools or narrows one of them:
+# "Bash(git push --force)" narrows "Bash(git push:*)", "WebFetch(domain:x)"
+# narrows "WebFetch"; "Bash(ncdu:*)" doesn't narrow "Bash(nc:*)".
 is_denied() {
-  local denied prefix
+  local denied command
   for denied in "${denied_tools[@]}"; do
-    prefix=${denied%:\*)}
-    [[ $1 == "$denied" || $1 == "$prefix"* ]] && return 0
+    [[ $1 == "$denied" ]] && return 0
+    if [[ $denied == *":*)" ]]; then
+      command=${denied%:\*)}
+      [[ $1 == "$command)" || $1 == "$command:"* || $1 == "$command "* ]] && return 0
+    else
+      [[ $1 == "$denied("* ]] && return 0
+    fi
   done
   return 1
 }
 
 # Fills allowed and disallowed for the worker: the base tools, the repo's
-# allow rules (.claude/settings.json) and extra_allow, minus denied ones.
+# allow rules (.claude/settings.json; not for read-only runs) and
+# extra_allow, minus denied ones.
 build_permissions() {
   local repo=$1 read_only=$2 rule candidates
   candidates=("${read_tools[@]}")
   ((read_only)) || candidates+=("${write_tools[@]}")
-  if [[ -f $repo/.claude/settings.json ]]; then
+  # A read-only run works in the user's checkout, where the repo's rules could
+  # allow writing commands; it gets only the read tools and --allow.
+  if ((!read_only)) && [[ -f $repo/.claude/settings.json ]]; then
     while IFS= read -r rule; do
       [[ -n $rule ]] && candidates+=("$rule")
     done < <(jq -r '.permissions.allow[]? // empty' "$repo/.claude/settings.json" 2>/dev/null || true)
@@ -200,7 +227,7 @@ build_permissions() {
     allowed+=("$rule")
   done
   disallowed=("${denied_tools[@]}")
-  ((read_only)) && disallowed+=("${edit_tools[@]}")
+  ((read_only)) && disallowed+=("${edit_tools[@]}" "Bash(git add:*)" "Bash(git commit:*)")
   return 0
 }
 
@@ -247,6 +274,11 @@ preflight() {
     "raise Strata's context to at least 64K ($min_context tokens), e.g. in the Strata section of the Proxy's web UI"
 }
 
+# Prints a field of the worker's final result event, e.g. result or is_error.
+result_field() {
+  jq -Rr --arg field "$1" 'fromjson? | select(.type == "result") | .[$field]' "$run_dir/log.jsonl" | tail -1
+}
+
 # Turns the worker's stream-json log (stdin) into one line per step.
 steps() {
   jq -Rr 'fromjson? |
@@ -274,11 +306,22 @@ follow() {
   echo "$total"
 }
 
+# Stops the worker and every command it started (its process group).
+stop_worker() {
+  kill -TERM -- "-$worker" 2>/dev/null || return 0
+  local _
+  for _ in 1 2 3 4; do
+    kill -0 "$worker" 2>/dev/null || return 0
+    sleep 0.5
+  done
+  kill -KILL -- "-$worker" 2>/dev/null || true
+}
+
 # After the worker died partway: keeps its work, writes what a fallback agent
 # needs to continue, and falls back.
 fail_mid_run() {
   local error
-  error=$(jq -Rr 'fromjson? | select(.type == "result") | .result' "$run_dir/log.jsonl" | tail -1)
+  error=$(result_field result)
   [[ -n $error ]] || error=$(tail -1 "$run_dir/stderr" 2>/dev/null)
   [[ -n $error ]] || error="the worker exited with code $1"
   {
@@ -362,6 +405,7 @@ cmd_run() {
   meta_set id "$id"
   meta_set repo "$repo"
   meta_set state queued
+  meta_set pid $$
   meta_set started "$(date +%s)"
   echo "local-agent: run $id ($run_dir)"
   if ((watch)); then
@@ -393,6 +437,7 @@ cmd_run() {
   local prompt=$instructions$'\n'$write_instructions
   ((read_only)) && prompt=$instructions$'\n'$read_only_instructions
   meta_set state running
+  meta_set started "$(date +%s)"
   local rc=0
 
   # The worker gets its own process group (set -m), so a timeout stops the
@@ -405,20 +450,33 @@ cmd_run() {
       --append-system-prompt "$prompt" --permission-mode "$mode" \
       --allowedTools "${allowed[@]}" --disallowedTools "${disallowed[@]}"
   ) <"$run_dir/task" >"$run_dir/log.jsonl" 2>"$run_dir/stderr" &
-  local worker=$! deadline=$((SECONDS + limit)) timed_out=0 seen=0
+  worker=$!
   set +m
+  # Stopping the runner stops the worker too: it sits in its own group.
+  trap 'stop_worker; meta_set state stopped; meta_set ended "$(date +%s)"; exit 130' INT TERM HUP
+  local deadline=$((SECONDS + limit)) next_probe=$((SECONDS + probe_interval)) timed_out=0 gaming=0 seen=0
   while kill -0 "$worker" 2>/dev/null; do
     ((watch)) && seen=$(follow "$seen")
     if ((SECONDS >= deadline)); then
       timed_out=1
-      kill -TERM -- "-$worker" 2>/dev/null || true
-      sleep 2
-      kill -KILL -- "-$worker" 2>/dev/null || true
+      stop_worker
       break
+    fi
+    # Claude Code retries a 503 for a long time; Gaming-Modus ends the run
+    # sooner.
+    if ((SECONDS >= next_probe)); then
+      next_probe=$((SECONDS + probe_interval))
+      probe 10
+      if [[ $probe_tag == gaming ]]; then
+        gaming=1
+        stop_worker
+        break
+      fi
     fi
     sleep 1
   done
   wait "$worker" 2>/dev/null || rc=$?
+  trap - INT TERM HUP
   ((watch)) && follow "$seen" >/dev/null
 
   if ((timed_out)); then
@@ -432,11 +490,11 @@ cmd_run() {
 
   # A worker that exits badly, ends on an error or never ends counts as failed.
   local outcome
-  outcome=$(jq -Rr 'fromjson? | select(.type == "result") | .is_error' "$run_dir/log.jsonl" | tail -1)
-  if ((rc != 0)) || [[ $outcome != false ]]; then
+  outcome=$(result_field is_error)
+  if ((gaming || rc != 0)) || [[ $outcome != false ]]; then
     fail_mid_run "$rc"
   fi
-  jq -Rr 'fromjson? | select(.type == "result") | .result' "$run_dir/log.jsonl" >"$run_dir/summary"
+  result_field result >"$run_dir/summary"
   ((read_only)) || commit_leftovers "$workdir" "$id"
   meta_set ended "$(date +%s)"
   meta_set state "done"
@@ -462,13 +520,16 @@ remove_worktree() {
   ! git -C "$repo" rev-parse -q --verify "refs/heads/$branch" >/dev/null || git -C "$repo" branch -qD "$branch"
 }
 
-# True when a run's branch is merged: another local branch contains its tip.
+# True when a run's branch is merged: it has commits, and another local
+# branch contains its tip.
 merged() {
   local repo branch
   repo=$(meta_get "$1" repo)
   branch=$(meta_get "$1" branch)
   [[ -n $branch && -d $repo ]] || return 1
   git -C "$repo" rev-parse -q --verify "refs/heads/$branch" >/dev/null || return 1
+  # A branch without commits of its own is contained everywhere; keep it.
+  [[ $(git -C "$repo" rev-parse "refs/heads/$branch") != "$(meta_get "$1" base)" ]] || return 1
   local containing
   containing=$(git -C "$repo" for-each-ref --contains "refs/heads/$branch" --format='%(refname:short)' refs/heads/)
   grep -qv '^local-agent/' <<<"$containing"
@@ -477,7 +538,9 @@ merged() {
 cmd_discard() {
   [[ -n ${1:-} ]] || usage_error "discard needs a run id"
   resolve_run "$1"
-  [[ $(meta_get "$run_dir" state) != running ]] || usage_error "run $1 is still running"
+  case $(run_state "$run_dir") in
+    queued | running) usage_error "run $1 is still running" ;;
+  esac
   remove_worktree "$run_dir"
   meta_set state discarded
   echo "local-agent: discarded run $1"
@@ -490,7 +553,7 @@ cmd_prune() {
   for dir in "$runs_dir"/*/; do
     dir=${dir%/}
     [[ -f $dir/meta ]] || continue
-    state=$(meta_get "$dir" state)
+    state=$(run_state "$dir")
     [[ $state == queued || $state == running ]] && continue
     if merged "$dir"; then
       remove_worktree "$dir"
@@ -539,7 +602,7 @@ cmd_check() {
 cmd_status() {
   resolve_run "${1:-}"
   local state started ended elapsed
-  state=$(meta_get "$run_dir" state)
+  state=$(run_state "$run_dir")
   started=$(meta_get "$run_dir" started)
   ended=$(meta_get "$run_dir" ended)
   elapsed=$((${ended:-$(date +%s)} - started))
@@ -559,7 +622,7 @@ cmd_result() {
   resolve_run "${1:-}"
   local id state branch repo base
   id=$(meta_get "$run_dir" id)
-  state=$(meta_get "$run_dir" state)
+  state=$(run_state "$run_dir")
   echo "run $id: $state"
   case $state in
     fallback) echo "next: fall back to a normal agent" ;;

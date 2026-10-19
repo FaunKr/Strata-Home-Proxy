@@ -6,6 +6,7 @@
 #   crash        edits a file, then fails with an API error
 #   crash-gaming like crash, but first switches the fake Proxy to Gaming-Modus
 #   hang         never finishes (for the time limit)
+#   hang-gaming  switches the fake Proxy to Gaming-Modus, then never finishes
 #   slow         like success after FAKE_CLAUDE_SLEEP seconds
 #   check        one Bash tool call that echoes the marker it was asked for
 #   no-tool      answers without calling a tool
@@ -52,8 +53,11 @@ case ${FAKE_CLAUDE_MODE:-success} in
     echo "$start $(now) ${input%%$'\n'*}" >>"$rec/spans"
     exit 1
     ;;
-  hang)
+  hang | hang-gaming)
     tool_use Bash '{"command":"sleep 1000"}'
+    if [[ $FAKE_CLAUDE_MODE == hang-gaming ]]; then
+      echo '{"health": [{"status": 503, "tag": "gaming"}]}' >"$FAKE_PROXY_SCENARIO"
+    fi
     sleep 1000 &
     echo $! >"$rec/child"
     wait

@@ -40,6 +40,13 @@ fail() {
 # Asserts that a file or string contains a line, or a substring.
 has_line() { grep -qxF -- "$2" "$1" || fail "$1 hat keine Zeile '$2'"; }
 lacks_line() { ! grep -qxF -- "$2" "$1" || fail "$1 hat die Zeile '$2'"; }
+# A process counts as alive unless it is gone or a zombie (which a container's
+# init may never reap).
+alive() {
+  local stat
+  stat=$(ps -o stat= -p "$1" 2>/dev/null || true)
+  [[ -n $stat && $stat != Z* ]]
+}
 contains() { [[ $1 == *"$2"* ]] || fail "'$2' fehlt in: $1"; }
 
 write_config() {
@@ -177,6 +184,13 @@ test_worker_permissions() {
   # --allow counts for its run only.
   la run "task"
   lacks_line <(option_values --allowedTools) "Bash(make check:*)"
+  # A denied tool doesn't block tools that merely share its first letters.
+  la run --allow "Bash(ncdu:*)" "task"
+  has_line <(option_values --allowedTools) "Bash(ncdu:*)"
+  # Read-only runs work in the checkout: the repo's rules don't apply there.
+  export FAKE_CLAUDE_MODE=no-tool
+  la run --read-only "task"
+  lacks_line <(option_values --allowedTools) "Bash(cargo test:*)"
 }
 
 test_read_only() {
@@ -189,6 +203,7 @@ test_read_only() {
   lacks_line <(option_values --allowedTools) "Edit"
   has_line <(option_values --disallowedTools) "Edit"
   has_line <(option_values --disallowedTools) "Write"
+  has_line <(option_values --disallowedTools) "Bash(git commit:*)"
   la result "$(run_id)"
   contains "$out" "I would rather not."
   [[ $out != *"## Changes"* ]] || fail "Änderungen bei --read-only"
@@ -277,7 +292,7 @@ test_time_limit() {
   sleep 0.5
   local pid
   for pid in "$(cat "$FAKE_CLAUDE_RECORD/pid")" "$(cat "$FAKE_CLAUDE_RECORD/child")"; do
-    ! kill -0 "$pid" 2>/dev/null || fail "Prozess $pid läuft noch"
+    ! alive "$pid" || fail "Prozess $pid läuft noch"
   done
   local id
   id=$(run_id)
@@ -428,6 +443,55 @@ test_check() {
   la check
   [[ $code == 2 ]] || fail "ohne Konfiguration: exit $code"
   contains "$out" "$config"
+}
+
+test_interrupted_run() {
+  export FAKE_CLAUDE_MODE=hang
+  "$here/local-agent" run "task" >"$tmp/run.out" 2>&1 &
+  local runner=$!
+  for _ in $(seq 50); do
+    [[ -s $FAKE_CLAUDE_RECORD/child ]] && break
+    sleep 0.1
+  done
+  kill -TERM "$runner"
+  wait "$runner" 2>/dev/null || true
+  sleep 0.5
+  local pid
+  for pid in "$(cat "$FAKE_CLAUDE_RECORD/pid")" "$(cat "$FAKE_CLAUDE_RECORD/child")"; do
+    ! alive "$pid" || fail "Prozess $pid läuft nach Abbruch weiter"
+  done
+  la status
+  contains "$out" "stopped"
+  # A runner that died without cleaning up counts as stopped, too.
+  local id
+  id=$(sed -n 's/^local-agent: run \([^ ]*\).*/\1/p' "$tmp/run.out")
+  sed -i.bak 's/^state=.*/state=running/; s/^pid=.*/pid=999999/' "$XDG_STATE_HOME/local-agent/runs/$id/meta"
+  la status "$id"
+  contains "$out" "stopped"
+  la discard "$id"
+  [[ $code == 0 ]] || fail "discard eines toten Laufs: exit $code: $out"
+}
+
+test_fallback_gaming_during_run() {
+  export FAKE_CLAUDE_MODE=hang-gaming LOCAL_AGENT_PROBE_INTERVAL=1
+  local started=$SECONDS
+  la run "task"
+  [[ $code == 3 ]] || fail "exit $code statt 3: $out"
+  ((SECONDS - started < 15)) || fail "Gaming-Modus zu spät bemerkt"
+  ! alive "$(cat "$FAKE_CLAUDE_RECORD/child")" || fail "Worker läuft weiter"
+  la result "$(run_id)"
+  contains "$out" "Gaming-Modus"
+  contains "$out" "## Log summary"
+}
+
+test_prune_keeps_runs_without_commits() {
+  # A run that changed nothing isn't "merged": prune keeps its worktree.
+  export FAKE_CLAUDE_MODE=no-tool
+  la run "task"
+  local worktree
+  worktree=$(cat "$FAKE_CLAUDE_RECORD/cwd")
+  la prune
+  [[ -d $worktree ]] || fail "Worktree ohne Commits entfernt"
 }
 
 tests=("$@")

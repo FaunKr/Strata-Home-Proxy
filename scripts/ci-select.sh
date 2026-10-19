@@ -35,8 +35,8 @@ while IFS= read -r path; do
     # The proxy embeds the install script (include_str!), the image copies it.
     deploy/windows/*) packages+=(strata-nas-proxy) windows=true image=true ;;
     Dockerfile | .dockerignore) image=true ;;
-    # The local-agent runner has its own tests in check.sh, which only an
-    # unscoped run covers.
+    # The local-agent runner: check.sh runs its tests and shellcheck. It is no
+    # crate, so the test job runs without a package list, i.e. unscoped.
     tools/local-agent | tools/local-agent/*) tools=true ;;
   esac
 done

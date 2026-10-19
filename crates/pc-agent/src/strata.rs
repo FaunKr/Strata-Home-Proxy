@@ -2202,15 +2202,23 @@ fn loop_recovery(dir: &Path, id: &str) -> &'static str {
     }
 }
 
-/// The sampling a model's config gives it with this Strata; a config that
-/// cannot be read counts as one without settings.
+/// The sampling a model's config and Chat settings give it with this
+/// Strata; a file that cannot be read counts as one without settings, as
+/// Strata takes Chat settings it cannot read.
 fn model_sampling(dir: &Path, id: &str, support: Support) -> ModelSampling {
     let cfg = read_config(&config_path(dir, id))
         .ok()
         .flatten()
         .map(|(_, cfg)| cfg)
         .unwrap_or_default();
-    sampling::effective(support, &cfg)
+    let path = dir.join(format!("strata-{}.shared-settings.json", id.to_lowercase()));
+    let chat = match std::fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str::<ConfigFields>(&text)
+            .inspect_err(|e| tracing::debug!("{} ist kein gültiges JSON: {e}", path.display()))
+            .ok(),
+        Err(_) => None,
+    };
+    sampling::effective(support, &cfg, chat.as_ref())
 }
 
 fn dir_size(dir: &Path) -> u64 {

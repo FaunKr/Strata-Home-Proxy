@@ -161,8 +161,11 @@ ist `model_card`, `config` oder `none` (dieses Strata liest keins und ist
 greedy), `thinking` und `instruct` sind Listen von `{"name", "value",
 "source"}` mit `source` `model_card`, `config` oder `chat_settings`, in der
 Reihenfolge temperature, top_p, top_k, min_p, presence_penalty,
-repetition_penalty, frequency_penalty. Eine leere Liste ist greedy. Ein
-älterer PC-Dienst lässt das Feld weg.
+repetition_penalty, frequency_penalty. Eine leere Liste ist greedy. Aus den
+Chat-Einstellungen (`strata-<id>.shared-settings.json`, Stratas Web-App)
+zählen temperature, top_p und top_k; der PC-Dienst liest die Datei nur und
+nimmt eine, die kein gültiges JSON ist, wie Strata als leer. Ein älterer
+PC-Dienst lässt das Feld weg.
 
 `benchmarks` hält den letzten Lauf jedes Modells: `decode_tps` (`chat decode
 tok/s`), `prompt_tps` (`4K prompt tok/s`, fehlt, wenn der Benchmark die Zeile

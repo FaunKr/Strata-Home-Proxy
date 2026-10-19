@@ -366,3 +366,51 @@ async fn a_strata_that_reads_no_sampling_shows_none() {
     assert_eq!(sampling["support"], "none", "{view}");
     assert_eq!(sampling["thinking"], json!([]));
 }
+
+// --- #160 Chat settings over the recommended sampling ---
+
+fn chat_settings_path(s: &Setup, id: &str) -> PathBuf {
+    s.agent
+        .cfg
+        .strata_dir
+        .join(format!("strata-{id}.shared-settings.json"))
+}
+
+#[tokio::test]
+async fn chat_settings_show_as_overriding_and_stay_untouched() {
+    let s = setup("configs-chat").await;
+    installed(&s);
+    strata_knows(&s, true, true);
+    let chat = r#"{"temperature": 0.3, "reasoning_effort": "high", "max_tokens": 4096}"#;
+    write(chat_settings_path(&s, "iq3_xxs"), chat);
+    write(chat_settings_path(&s, "qwen36-q8_0"), "{ kaputt");
+    strata::manage_configs_at_start(&s.agent).await;
+    let view = get(&s, "/strata").await;
+    let qwen = &model(&view, "IQ3_XXS")["sampling"];
+    for set in ["thinking", "instruct"] {
+        assert_eq!(
+            field(&qwen[set], "temperature"),
+            (0.3, "chat_settings".into()),
+            "{set}"
+        );
+        assert_eq!(
+            field(&qwen[set], "top_k"),
+            (20.0, "model_card".into()),
+            "{set}"
+        );
+    }
+    let names = qwen["thinking"].to_string();
+    assert!(
+        !names.contains("max_tokens") && !names.contains("reasoning_effort"),
+        "{names}"
+    );
+    let q36 = &model(&view, "qwen36-Q8_0")["sampling"];
+    assert_eq!(
+        field(&q36["thinking"], "temperature"),
+        (1.0, "model_card".into())
+    );
+    assert_eq!(
+        std::fs::read_to_string(chat_settings_path(&s, "iq3_xxs")).unwrap(),
+        chat
+    );
+}

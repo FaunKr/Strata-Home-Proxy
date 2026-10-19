@@ -91,6 +91,9 @@ const FIELDS: &[&str] = &[
 ];
 const ALIASES: &[(&str, &str)] = &[("repeat_penalty", "repetition_penalty")];
 
+/// The keys of the Chat settings that are sampling (`clean_shared_defaults`).
+const CHAT_FIELDS: &[&str] = &["temperature", "top_p", "top_k"];
+
 fn arch(cfg: &Map<String, Value>) -> &str {
     cfg.get("arch")
         .and_then(Value::as_str)
@@ -152,8 +155,14 @@ pub struct ModelSampling {
     pub instruct: Vec<Field>,
 }
 
-/// The sampling Strata applies for a model with config `cfg`.
-pub fn effective(support: Support, cfg: &Map<String, Value>) -> ModelSampling {
+/// The sampling Strata applies for a model with config `cfg` and the Chat
+/// settings `chat` (`strata-<id>.shared-settings.json`), which the service
+/// only reads.
+pub fn effective(
+    support: Support,
+    cfg: &Map<String, Value>,
+    chat: Option<&Map<String, Value>>,
+) -> ModelSampling {
     let fields = |thinking: bool| {
         let mut out: Vec<Field> = Vec::new();
         let mut put = |name: &str, value: f64, source: Source| match out
@@ -185,6 +194,13 @@ pub fn effective(support: Support, cfg: &Map<String, Value>) -> ModelSampling {
                     .map_or(key.as_str(), |(_, name)| name);
                 if let (true, Some(value)) = (FIELDS.contains(&name), value.as_f64()) {
                     put(name, value, Source::Config);
+                }
+            }
+        }
+        if support != Support::None {
+            for (key, value) in chat.into_iter().flatten() {
+                if let (true, Some(value)) = (CHAT_FIELDS.contains(&key.as_str()), value.as_f64()) {
+                    put(key, value, Source::ChatSettings);
                 }
             }
         }

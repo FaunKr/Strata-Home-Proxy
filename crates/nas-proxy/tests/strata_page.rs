@@ -801,3 +801,26 @@ async fn without_word_from_the_pc_service_no_sampling_shows() {
     assert!(!html.contains("thinking:"), "{html}");
     assert!(!html.contains("still win"), "{html}");
 }
+
+// --- #160 Chat settings over the recommended sampling ---
+
+#[tokio::test]
+async fn sampling_from_chat_settings_is_marked_as_such() {
+    let s = setup(true, |_| {}).await;
+    let mut info = with_two_models(None);
+    info["models"][0]["sampling"] = json!({
+        "support": "model_card",
+        "thinking": [sampling_field("temperature", 0.3, "chat_settings"),
+                     sampling_field("top_k", 20.0, "model_card")],
+        "instruct": [],
+    });
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(
+        html.contains("With thinking: temperature 0.3 (Chat settings) · top_k 20"),
+        "{html}"
+    );
+    assert!(html.contains("Without thinking: greedy"), "{html}");
+}

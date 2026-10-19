@@ -65,6 +65,16 @@ load_config() {
   model=${LOCAL_AGENT_MODEL:-claude-sonnet-4-5}
 }
 
+# Prints a duration like 90, 90s, 30m or 2h in seconds.
+seconds() {
+  [[ $1 =~ ^([0-9]+)([smh]?)$ ]] || return 1
+  case ${BASH_REMATCH[2]} in
+    m) echo $((10#${BASH_REMATCH[1]} * 60)) ;;
+    h) echo $((10#${BASH_REMATCH[1]} * 3600)) ;;
+    *) echo $((10#${BASH_REMATCH[1]})) ;;
+  esac
+}
+
 # Run metadata: one key=value per line in <run>/meta.
 meta_set() {
   local file=$run_dir/meta
@@ -235,13 +245,18 @@ read_only_instructions="This run is read-only: you cannot change files. Answer f
 End with your answer and the files it rests on."
 
 cmd_run() {
-  local task='' arg read_only=0
+  local task='' arg read_only=0 timeout=2h
   extra_allow=()
   while (($#)); do
     arg=$1
     shift
     case $arg in
       --read-only) read_only=1 ;;
+      --timeout)
+        (($#)) || usage_error "--timeout needs a time, e.g. --timeout 30m"
+        timeout=$1
+        shift
+        ;;
       --allow)
         (($#)) || usage_error "--allow needs a rule, e.g. --allow 'Bash(cargo test:*)'"
         extra_allow+=("$1")
@@ -252,6 +267,8 @@ cmd_run() {
       *) task="$arg${*:+ $*}" && break ;;
     esac
   done
+  local limit
+  limit=$(seconds "$timeout") || usage_error "--timeout takes seconds, or a number with s, m or h: $timeout"
   load_config
   [[ -n $task ]] || task=$(cat)
   [[ -n $task ]] || usage_error "no task"
@@ -295,6 +312,9 @@ cmd_run() {
   meta_set state running
   local rc=0
 
+  # The worker gets its own process group (set -m), so a timeout stops the
+  # commands it started too.
+  set -m
   (
     cd "$workdir"
     unset ANTHROPIC_API_KEY
@@ -306,7 +326,29 @@ cmd_run() {
     exec claude -p --output-format stream-json --verbose \
       --append-system-prompt "$prompt" --permission-mode "$mode" \
       --allowedTools "${allowed[@]}" --disallowedTools "${disallowed[@]}"
-  ) <"$run_dir/task" >"$run_dir/log.jsonl" 2>"$run_dir/stderr" || rc=$?
+  ) <"$run_dir/task" >"$run_dir/log.jsonl" 2>"$run_dir/stderr" &
+  local worker=$! deadline=$((SECONDS + limit)) timed_out=0
+  set +m
+  while kill -0 "$worker" 2>/dev/null; do
+    if ((SECONDS >= deadline)); then
+      timed_out=1
+      kill -TERM -- "-$worker" 2>/dev/null || true
+      sleep 2
+      kill -KILL -- "-$worker" 2>/dev/null || true
+      break
+    fi
+    sleep 1
+  done
+  wait "$worker" 2>/dev/null || rc=$?
+
+  if ((timed_out)); then
+    ((read_only)) || commit_leftovers "$workdir" "$id"
+    meta_set state timeout
+    meta_set reason "stopped after the time limit of $timeout"
+    meta_set ended "$(date +%s)"
+    echo "local-agent: run $id stopped after $timeout; see local-agent result $id" >&2
+    exit 4
+  fi
 
   # A worker that exits badly, ends on an error or never ends counts as failed.
   local outcome
@@ -336,6 +378,7 @@ cmd_result() {
   echo "run $id: $state"
   case $state in
     fallback) echo "next: fall back to a normal agent" ;;
+    timeout) echo "next: report the timeout; no fallback" ;;
   esac
   local reason hint
   reason=$(meta_get "$run_dir" reason)
@@ -349,6 +392,11 @@ cmd_result() {
     echo
     echo "## Summary"
     cat "$run_dir/summary"
+  fi
+  if [[ $state == timeout ]]; then
+    echo
+    echo "## Last steps"
+    steps <"$run_dir/log.jsonl" | tail -10
   fi
   if [[ -f $run_dir/handoff ]]; then
     echo

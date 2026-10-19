@@ -268,6 +268,29 @@ test_fallback_mid_run_gaming() {
   contains "$out" "Gaming-Modus"
 }
 
+test_time_limit() {
+  export FAKE_CLAUDE_MODE=hang
+  local started=$SECONDS
+  la run --timeout 2s "task"
+  [[ $code == 4 ]] || fail "exit $code statt 4: $out"
+  ((SECONDS - started < 15)) || fail "Zeitlimit nicht eingehalten"
+  sleep 0.5
+  local pid
+  for pid in "$(cat "$FAKE_CLAUDE_RECORD/pid")" "$(cat "$FAKE_CLAUDE_RECORD/child")"; do
+    ! kill -0 "$pid" 2>/dev/null || fail "Prozess $pid läuft noch"
+  done
+  local id
+  id=$(run_id)
+  git rev-parse -q --verify "local-agent/$id" >/dev/null || fail "Branch entfernt"
+  [[ -d $(cat "$FAKE_CLAUDE_RECORD/cwd") ]] || fail "Worktree entfernt"
+  la result "$id"
+  contains "$out" "timeout"
+  contains "$out" "Bash sleep 1000"
+  # Durations: seconds, minutes, hours; anything else is refused.
+  la run --timeout soon "task"
+  [[ $code == 2 ]] || fail "--timeout soon: exit $code"
+}
+
 tests=("$@")
 if ((${#tests[@]} == 0)); then
   # shellcheck disable=SC2207 # test names have no spaces

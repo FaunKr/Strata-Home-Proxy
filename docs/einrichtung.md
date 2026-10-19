@@ -113,7 +113,7 @@ Anmeldungen sind ungültig und beim ersten Login wird ein neues Passwort verlang
 
 - [ ] Unter *Strata → Connection* den API-Key von Strata als `STRATA_API_KEY` eintragen (den Wert von `--api-key` aus Schritt 5)
 - [ ] Unter *Access* für jeden Client einen eigenen Key anlegen und sofort kopieren; er wird nicht wieder angezeigt
-- [ ] Skill `local-agent` einrichten ([tools/local-agent/README.md](../tools/local-agent/README.md)): eigener Key aus *Access*, Strata mit mindestens 64K Kontext, `fit_max_tokens` und `"anthropic_thinking": "on_request"`; `local-agent check` ist grün
+- [ ] Skill `local-agent` einrichten ([tools/local-agent/README.md](../tools/local-agent/README.md)): eigener Key aus *Access*, Strata mit mindestens 128K Kontext, `fit_max_tokens` (als Sicherheitsnetz) und `"anthropic_thinking": "on_request"`; `local-agent check` ist grün
 - [ ] Kompaktierung des Skills auf echter Hardware nachgewiesen: der lange Testlauf aus dem README zeigt `context compacted` und endet ohne 400
 - [ ] Claude Code direkt gegen Strata (falls genutzt): `ANTHROPIC_BASE_URL=http://<NAS-IP>:8080` und `ANTHROPIC_API_KEY=<Key aus der Weboberfläche>` (geht als `x-api-key` raus)
 - [ ] Open WebUI (falls genutzt): *Admin-Einstellungen → Verbindungen → OpenAI API*, URL `http://<NAS-IP>:8080/v1`, als Key den Key aus der Weboberfläche

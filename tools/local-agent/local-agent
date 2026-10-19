@@ -41,7 +41,7 @@ output_tokens=8192
 # cap: measured on 2026-10-19 with Claude Code 2.1.218 in -p mode against Strata
 # (docs/research/fit-max-tokens-and-autocompact.md, "Hardware test").
 compact_reserve=13000
-# Bounds of the compaction window: Claude Code rejects or ignores less than
+# Bounds of the compaction window: Claude Code is documented to accept no less than
 # 100K, and nothing above 180K is tested (200K is the model's own window).
 min_window=100000
 max_window=180000
@@ -362,7 +362,7 @@ compaction() {
   compact_pct=
   if ((compact_window < min_window)); then
     compact_window=$min_window
-    compact_pct=$((compact_at / 1000))
+    compact_pct=$((compact_at * 100 / min_window))
   elif ((compact_window > max_window)); then
     compact_window=$max_window
     compact_at=$((compact_window - output_tokens - compact_reserve))

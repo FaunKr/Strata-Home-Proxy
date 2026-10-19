@@ -56,6 +56,11 @@ jobs:
     if: needs.changes.outputs.test == 'true'
     runs-on: ubuntu-latest
     steps:
+      # The test binaries of all packages no longer fit the runner's disk
+      # (the linker died with a bus error at 29 MB free); these preinstalled
+      # SDKs are not needed here.
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:

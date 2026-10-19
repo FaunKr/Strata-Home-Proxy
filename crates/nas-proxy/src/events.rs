@@ -1,6 +1,7 @@
-//! History of wake and sleep events, for the web UI and the power estimate.
-//! The Ereignisse live in a SQLite database in `DATA_DIR` (docs/adr/0003);
-//! without one the store is in memory.
+//! The Verlauf: Ereignisse about waking and sleeping and the Leistung of the
+//! Messsteckdose over time, for the web UI and the power estimate. Both live in
+//! a SQLite database in `DATA_DIR` (docs/adr/0003); without one the store is
+//! in memory.
 
 use std::{
     collections::VecDeque,
@@ -35,13 +36,21 @@ pub struct Event {
     pub detail: Option<String>,
 }
 
-pub struct EventLog {
+/// One reading of the Messsteckdose. Kept forever, like the Ereignisse.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Sample {
+    /// Unix time in seconds.
+    pub ts: u64,
+    pub watts: f64,
+}
+
+pub struct History {
     /// The latest events, for the overview, without asking the database.
     recent: Mutex<VecDeque<Event>>,
     db: Arc<Mutex<Connection>>,
 }
 
-impl EventLog {
+impl History {
     /// Opens the database and imports `events.jsonl` before returning; meant
     /// for startup.
     pub fn new(data_dir: Option<PathBuf>) -> Self {
@@ -106,21 +115,74 @@ impl EventLog {
     /// Every event with `from <= ts <= to`, oldest first, back to the first
     /// one. The query runs on a blocking thread, not on the async runtime.
     pub async fn range(&self, from: u64, to: u64) -> Vec<Event> {
-        let db = Arc::clone(&self.db);
-        let bounds = [
-            i64::try_from(from).unwrap_or(i64::MAX),
-            i64::try_from(to).unwrap_or(i64::MAX),
-        ];
-        tokio::task::spawn_blocking(move || {
+        let [from, to] = bounds(from, to);
+        self.blocking(move |db| {
             select(
-                &db.lock().unwrap(),
+                db,
                 &format!("{SELECT} WHERE ts BETWEEN ?1 AND ?2 ORDER BY ts, rowid"),
-                &[&bounds[0], &bounds[1]],
+                &[&from, &to],
             )
         })
         .await
-        .unwrap_or_default()
     }
+
+    /// Written at once, like `record`, so a killed proxy loses nothing.
+    pub fn record_sample(&self, sample: Sample) {
+        let written = self.db.lock().unwrap().execute(
+            "INSERT INTO samples (ts, watts) VALUES (?1, ?2)",
+            params![to_sql(sample.ts), sample.watts],
+        );
+        if let Err(e) = written {
+            tracing::warn!("Messwert der Steckdose nicht geschrieben: {e}");
+        }
+    }
+
+    /// Every sample with `from <= ts <= to`, oldest first. The query runs on a
+    /// blocking thread, not on the async runtime.
+    pub async fn samples(&self, from: u64, to: u64) -> Vec<Sample> {
+        let [from, to] = bounds(from, to);
+        self.blocking(move |db| {
+            let rows = db
+                .prepare(
+                    "SELECT ts, watts FROM samples WHERE ts BETWEEN ?1 AND ?2 ORDER BY ts, rowid",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([from, to], |row| {
+                            Ok(Sample {
+                                ts: row.get::<_, i64>(0)? as u64,
+                                watts: row.get(1)?,
+                            })
+                        })
+                        .and_then(Iterator::collect)
+                });
+            rows.unwrap_or_else(|e| {
+                tracing::warn!("Messwerte der Steckdose nicht gelesen: {e}");
+                Vec::new()
+            })
+        })
+        .await
+    }
+
+    /// Runs `query` on a blocking thread, not on the async runtime.
+    async fn blocking<T: Default + Send + 'static>(
+        &self,
+        query: impl FnOnce(&Connection) -> T + Send + 'static,
+    ) -> T {
+        let db = Arc::clone(&self.db);
+        tokio::task::spawn_blocking(move || query(&db.lock().unwrap()))
+            .await
+            .unwrap_or_default()
+    }
+}
+
+/// The window of a range query as SQLite integers.
+fn bounds(from: u64, to: u64) -> [i64; 2] {
+    [to_sql(from), to_sql(to)]
+}
+
+fn to_sql(ts: u64) -> i64 {
+    i64::try_from(ts).unwrap_or(i64::MAX)
 }
 
 /// `events.db` in `dir`, or a database in memory if there is no `dir` or the
@@ -142,7 +204,7 @@ fn open_database(dir: Option<&Path>) -> Connection {
         }
     }
     let conn = Connection::open_in_memory().expect("Speicher für den Verlauf");
-    create_table(&conn).expect("Verlauf im Speicher eingerichtet");
+    create_tables(&conn).expect("Verlauf im Speicher eingerichtet");
     conn
 }
 
@@ -160,18 +222,23 @@ fn open_file(path: &Path) -> Result<Connection, Box<dyn std::error::Error>> {
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
-    create_table(&conn)?;
+    create_tables(&conn)?;
     Ok(conn)
 }
 
-fn create_table(conn: &Connection) -> rusqlite::Result<()> {
+fn create_tables(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS events (
              ts INTEGER NOT NULL,
              kind TEXT NOT NULL,
              detail TEXT
          );
-         CREATE INDEX IF NOT EXISTS events_ts ON events (ts);",
+         CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
+         CREATE TABLE IF NOT EXISTS samples (
+             ts INTEGER NOT NULL,
+             watts REAL NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS samples_ts ON samples (ts);",
     )
 }
 

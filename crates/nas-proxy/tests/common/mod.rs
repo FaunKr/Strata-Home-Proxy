@@ -574,6 +574,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         health_poll: Duration::from_millis(50),
         ping_interval: Duration::from_millis(200),
         idle_check: Duration::from_millis(50),
+        plug_sample: Duration::from_millis(100),
         sleep_retry: Duration::from_millis(300),
         sleep_settle: Duration::from_millis(200),
         probe_timeout: Duration::from_millis(500),
@@ -589,6 +590,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     state.overview.set_poll(Duration::from_millis(100));
     let (key, _) = state.api_keys.create("Test").unwrap();
     state.spawn_idle_loop();
+    state.spawn_plug_loop();
     let proxy = serve(api_router(state.clone())).await;
     Setup {
         pc,

@@ -51,7 +51,7 @@ async fn shows_every_value_with_its_origin() {
     let view = settings(&mut b).await;
     assert_eq!(view["persistent"], true);
     assert_eq!(view["configured"], true);
-    assert_eq!(view["entries"].as_array().unwrap().len(), 21);
+    assert_eq!(view["entries"].as_array().unwrap().len(), 22);
     assert!(!view.to_string().contains("DATA_DIR"));
     assert_eq!(entry(&view, "STRATA_URL")["source"], "Env");
     assert_eq!(entry(&view, "STRATA_URL")["value"], "http://pc:8080");
@@ -106,6 +106,7 @@ async fn each_area_shows_its_own_settings() {
                 "PC_AGENT_URL",
                 "PC_AGENT_TOKEN",
                 "SHELLY_URL",
+                "PLUG_SAMPLE_SECS",
                 "IDLE_TIMEOUT_SECS",
                 "WAKE_TIMEOUT_SECS",
                 "WOL_RESEND_SECS",
@@ -136,7 +137,7 @@ async fn each_area_shows_its_own_settings() {
         .iter()
         .flat_map(|(_, keys)| keys.iter().copied())
         .collect();
-    assert_eq!(all.len(), 21);
+    assert_eq!(all.len(), 22);
     for (path, keys) in areas {
         let html = b.page(path).await;
         for key in &all {

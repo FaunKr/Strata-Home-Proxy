@@ -42,6 +42,10 @@ pub fn label(key: &str) -> Label {
             "Power plug address",
             "Optional Shelly plug the PC is plugged into, e.g. 192.168.1.228. The overview then shows the PC's power draw.",
         ),
+        "PLUG_SAMPLE_SECS" => (
+            "Power history interval",
+            "Time between two readings of the power plug kept for the history.",
+        ),
         "IDLE_TIMEOUT_SECS" => (
             "Idle time before sleep",
             "Without requests for this long, the PC goes to sleep.",
@@ -121,7 +125,7 @@ pub const PC_CONNECTION: SectionDef = SectionDef {
         "PC_AGENT_TOKEN",
         "SHELLY_URL",
     ],
-    advanced: &[],
+    advanced: &["PLUG_SAMPLE_SECS"],
 };
 
 pub const PC_WAKE_SLEEP: SectionDef = SectionDef {

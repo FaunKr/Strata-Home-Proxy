@@ -1,0 +1,12 @@
+[package]
+name = "strata-pc-protocol"
+version = "0.1.0"
+edition = "2024"
+
+# The PC-Dienst's API as types: the PC-Dienst writes them, the Proxy reads
+# them, the Weboberfläche shows them. Only serde, so it builds for wasm too.
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0.154"

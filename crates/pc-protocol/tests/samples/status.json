@@ -1,0 +1,23 @@
+{
+  "gaming_mode": false,
+  "strata_running": true,
+  "user_idle_secs": 1840,
+  "mac": "AA:BB:CC:DD:EE:FF",
+  "strata_job": false,
+  "version": "0.1.0+558db97",
+  "hardware": {
+    "gpu": {
+      "load_pct": 37.0,
+      "temp_c": 61.5,
+      "vram_used_bytes": 12670000000,
+      "vram_total_bytes": 17163091968,
+      "fan_rpm": 0,
+      "power_pct": 41.0
+    },
+    "cpu": {
+      "load_pct": 12.0,
+      "ram_used_bytes": 22980000000,
+      "ram_total_bytes": 34359738368
+    }
+  }
+}

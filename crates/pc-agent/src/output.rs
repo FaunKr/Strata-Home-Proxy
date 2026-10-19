@@ -11,43 +11,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde::Serialize;
+pub use strata_pc_protocol::{StrataOutputMessage, StrataOutputNotice};
 use tokio::sync::broadcast;
 
 /// Lines kept in memory, separators included.
 pub const KEPT: usize = 500;
 const LOG_FILE: &str = "strata.log";
-
-/// One message of `GET /strata-log` (see `docs/pc-agent-api.md`).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Message {
-    /// The service started Strata, at this Unix time.
-    Started {
-        at: u64,
-    },
-    Line {
-        text: String,
-    },
-    /// Takes the place of the last line, as a progress bar does in a console.
-    Replace {
-        text: String,
-    },
-    Notice {
-        reason: Notice,
-    },
-}
-
-/// Why there is no output to follow, or `Running` when there is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Notice {
-    Running,
-    Gaming,
-    NotRunning,
-    /// Strata answers, but the service did not start it, so it cannot read it.
-    NotStartedByAgent,
-}
 
 enum Entry {
     Started(u64),
@@ -55,10 +24,10 @@ enum Entry {
 }
 
 impl Entry {
-    fn message(&self) -> Message {
+    fn message(&self) -> StrataOutputMessage {
         match self {
-            Entry::Started(at) => Message::Started { at: *at },
-            Entry::Line(text) => Message::Line { text: text.clone() },
+            Entry::Started(at) => StrataOutputMessage::Started { at: *at },
+            Entry::Line(text) => StrataOutputMessage::Line { text: text.clone() },
         }
     }
 }
@@ -76,7 +45,7 @@ struct Inner {
 
 pub struct StrataOutput {
     inner: Mutex<Inner>,
-    tx: broadcast::Sender<Message>,
+    tx: broadcast::Sender<StrataOutputMessage>,
     file: PathBuf,
 }
 
@@ -128,7 +97,9 @@ impl StrataOutput {
             && let Some(Entry::Line(last)) = inner.entries.back_mut()
         {
             last.clone_from(&text);
-            let _ = self.tx.send(Message::Replace { text: text.clone() });
+            let _ = self
+                .tx
+                .send(StrataOutputMessage::Replace { text: text.clone() });
         } else {
             self.add(&mut inner, Entry::Line(text.clone()));
         }
@@ -174,7 +145,12 @@ impl StrataOutput {
     }
 
     /// The kept output, and everything that follows it.
-    pub fn subscribe(&self) -> (Vec<Message>, broadcast::Receiver<Message>) {
+    pub fn subscribe(
+        &self,
+    ) -> (
+        Vec<StrataOutputMessage>,
+        broadcast::Receiver<StrataOutputMessage>,
+    ) {
         let inner = self.inner.lock().unwrap();
         let backlog = inner.entries.iter().map(Entry::message).collect();
         (backlog, self.tx.subscribe())

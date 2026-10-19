@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::sampling::{self, ModelSampling, Support};
+use crate::sampling::{self, SamplingSupport, StrataSampling};
 
 /// The engine flag setup writes the context with.
 const CONTEXT_FLAG: &str = "--max-context";
@@ -191,8 +191,8 @@ impl Installation {
     }
 
     /// Which sampling defaults this Strata applies; `None` while unknown.
-    pub fn support(&self) -> Option<Support> {
-        Support::of(&self.dir)
+    pub fn support(&self) -> Option<SamplingSupport> {
+        sampling::support_of(&self.dir)
     }
 
     /// Deletes what setup left for a model (`id` as the catalog spells it):
@@ -366,7 +366,7 @@ impl Model {
     }
 
     /// The sampling its config and Chat settings give it with this Strata.
-    pub fn sampling(&self, support: Support) -> ModelSampling {
+    pub fn sampling(&self, support: SamplingSupport) -> StrataSampling {
         sampling::effective(support, &self.fields, self.chat.as_ref())
     }
 
@@ -473,7 +473,7 @@ fn config_text(fields: &ConfigFields) -> String {
 }
 
 /// Whether managing changed the config.
-fn manage_config(fields: &mut ConfigFields, support: Option<Support>) -> bool {
+fn manage_config(fields: &mut ConfigFields, support: Option<SamplingSupport>) -> bool {
     let before = fields.clone();
     fields.insert(LOOP_RECOVERY_KEY.into(), LOOP_RECOVERY.into());
     if let Some(support) = support {
@@ -775,7 +775,10 @@ mod tests {
             .model("b", config(json!([])))
             .chat_settings("b", "{ kaputt");
         let temperature = |id: &str| {
-            let sampling = s.installation().read_model(id).sampling(Support::ModelCard);
+            let sampling = s
+                .installation()
+                .read_model(id)
+                .sampling(SamplingSupport::ModelCard);
             serde_json::to_value(sampling).unwrap()["thinking"][0].clone()
         };
         assert_eq!(temperature("a")["value"], 0.3);

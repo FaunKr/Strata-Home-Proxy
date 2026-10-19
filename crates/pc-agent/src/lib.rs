@@ -16,7 +16,7 @@ pub mod update;
 
 use std::{sync::Arc, time::Duration};
 
-pub use agent::{Agent, Peer, Status};
+pub use agent::{Agent, PcStatus, Peer};
 pub use config::Config;
 
 /// Crate version plus build, e.g. `0.1.0+558db97`; see `build.rs`.
@@ -98,7 +98,7 @@ async fn bind(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpList
 }
 
 /// For the desktop shortcut: switches gaming mode through the running service.
-pub async fn switch_gaming(cfg: &Config, want: Option<bool>) -> anyhow::Result<Status> {
+pub async fn switch_gaming(cfg: &Config, want: Option<bool>) -> anyhow::Result<PcStatus> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()?;
@@ -106,7 +106,7 @@ pub async fn switch_gaming(cfg: &Config, want: Option<bool>) -> anyhow::Result<S
     let enabled = match want {
         Some(v) => v,
         None => {
-            let current: Status = http
+            let current: PcStatus = http
                 .get(format!("{base}/status"))
                 .bearer_auth(&cfg.token)
                 .send()
@@ -120,7 +120,7 @@ pub async fn switch_gaming(cfg: &Config, want: Option<bool>) -> anyhow::Result<S
     Ok(http
         .post(format!("{base}/gaming"))
         .bearer_auth(&cfg.token)
-        .json(&serde_json::json!({ "enabled": enabled }))
+        .json(&strata_pc_protocol::GamingRequest { enabled })
         .send()
         .await?
         .error_for_status()?

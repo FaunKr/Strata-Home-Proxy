@@ -501,7 +501,7 @@ async fn benchmark_keeps_its_result_with_model_and_date() {
     // Also after a restart of the service.
     let again = strata::view(&s.restarted());
     assert_eq!(
-        serde_json::to_value(again.benchmark).unwrap()["result"],
+        serde_json::to_value(again.info.benchmark).unwrap()["result"],
         "38.5 Token/s"
     );
 }

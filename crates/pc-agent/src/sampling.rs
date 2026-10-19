@@ -4,41 +4,29 @@
 //! block, then the Chat settings of Strata's web app. A request's own
 //! fields win over all of them.
 
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-
-/// Which of the defaults the installed Strata applies, read from its
-/// `serve/server.py` by name rather than by commit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Support {
-    /// The model card's sets (Strata a8091f4d, 2026-10-15, on).
-    ModelCard,
-    /// Only the config's `sampling` block (9e6e5b7a, 2026-09-26, on).
-    Config,
-    /// Neither: a request without sampling is greedy.
-    None,
-}
+pub use strata_pc_protocol::{SamplingField, SamplingSource, SamplingSupport, StrataSampling};
 
 /// Names in `serve/server.py` that tell the versions apart.
 const MODEL_CARD_NAME: &str = "MODEL_CARD_SAMPLING";
 const CONFIG_BLOCK_NAME: &str = "sampling_defaults_from_config";
 
-impl Support {
-    /// What the Strata in `strata_dir` applies; `None` while its
-    /// `serve/server.py` cannot be read, so a passing error changes nothing.
-    pub fn of(strata_dir: &std::path::Path) -> Option<Self> {
-        let server = std::fs::read_to_string(strata_dir.join("serve").join("server.py"))
-            .inspect_err(|e| tracing::debug!("serve/server.py nicht lesbar: {e}"))
-            .ok()?;
-        Some(if server.contains(MODEL_CARD_NAME) {
-            Self::ModelCard
-        } else if server.contains(CONFIG_BLOCK_NAME) {
-            Self::Config
-        } else {
-            Self::None
-        })
-    }
+/// Which of the defaults the Strata in `strata_dir` applies, read from its
+/// `serve/server.py` by name rather than by commit: the model card's sets
+/// (Strata a8091f4d, 2026-10-15, on), only the config's `sampling` block
+/// (9e6e5b7a, 2026-09-26, on), or neither. `None` while `serve/server.py`
+/// cannot be read, so a passing error changes nothing.
+pub fn support_of(strata_dir: &std::path::Path) -> Option<SamplingSupport> {
+    let server = std::fs::read_to_string(strata_dir.join("serve").join("server.py"))
+        .inspect_err(|e| tracing::debug!("serve/server.py nicht lesbar: {e}"))
+        .ok()?;
+    Some(if server.contains(MODEL_CARD_NAME) {
+        SamplingSupport::ModelCard
+    } else if server.contains(CONFIG_BLOCK_NAME) {
+        SamplingSupport::Config
+    } else {
+        SamplingSupport::None
+    })
 }
 
 type Set = &'static [(&'static str, f64)];
@@ -112,8 +100,8 @@ fn model_card(arch: &str, thinking: bool) -> Set {
 /// where Strata reads only the block, so a plain request is not greedy;
 /// none where Strata has the model card (the block would hide its instruct
 /// set) or ignores the block.
-pub fn managed_block(support: Support, cfg: &Map<String, Value>) -> Option<Value> {
-    (support == Support::Config).then(|| {
+pub fn managed_block(support: SamplingSupport, cfg: &Map<String, Value>) -> Option<Value> {
+    (support == SamplingSupport::Config).then(|| {
         model_card(arch(cfg), true)
             .iter()
             .map(|&(name, value)| (name.to_string(), number(name, value)))
@@ -131,42 +119,17 @@ fn number(name: &str, value: f64) -> Value {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Source {
-    ModelCard,
-    Config,
-    ChatSettings,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Field {
-    pub name: String,
-    pub value: f64,
-    pub source: Source,
-}
-
-/// What a request without sampling fields gets.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ModelSampling {
-    pub support: Support,
-    /// With thinking; empty is greedy.
-    pub thinking: Vec<Field>,
-    /// Without thinking.
-    pub instruct: Vec<Field>,
-}
-
 /// The sampling Strata applies for a model with config `cfg` and the Chat
 /// settings `chat` (`strata-<id>.shared-settings.json`), which the service
 /// only reads.
 pub fn effective(
-    support: Support,
+    support: SamplingSupport,
     cfg: &Map<String, Value>,
     chat: Option<&Map<String, Value>>,
-) -> ModelSampling {
+) -> StrataSampling {
     let fields = |thinking: bool| {
-        let mut out: Vec<Field> = Vec::new();
-        let mut put = |name: &str, value: f64, source: Source| match out
+        let mut out: Vec<SamplingField> = Vec::new();
+        let mut put = |name: &str, value: f64, source: SamplingSource| match out
             .iter_mut()
             .find(|f| f.name == name)
         {
@@ -174,18 +137,18 @@ pub fn effective(
                 f.value = value;
                 f.source = source;
             }
-            None => out.push(Field {
+            None => out.push(SamplingField {
                 name: name.into(),
                 value,
                 source,
             }),
         };
-        if support == Support::ModelCard {
+        if support == SamplingSupport::ModelCard {
             for &(name, value) in model_card(arch(cfg), thinking) {
-                put(name, value, Source::ModelCard);
+                put(name, value, SamplingSource::ModelCard);
             }
         }
-        if support != Support::None
+        if support != SamplingSupport::None
             && let Some(block) = cfg.get("sampling").and_then(Value::as_object)
         {
             for (key, value) in block {
@@ -194,21 +157,21 @@ pub fn effective(
                     .find(|(alias, _)| alias == key)
                     .map_or(key.as_str(), |(_, name)| name);
                 if let (true, Some(value)) = (FIELDS.contains(&name), value.as_f64()) {
-                    put(name, value, Source::Config);
+                    put(name, value, SamplingSource::Config);
                 }
             }
         }
-        if support != Support::None {
+        if support != SamplingSupport::None {
             for (key, value) in chat.into_iter().flatten() {
                 if let (true, Some(value)) = (CHAT_FIELDS.contains(&key.as_str()), value.as_f64()) {
-                    put(key, value, Source::ChatSettings);
+                    put(key, value, SamplingSource::ChatSettings);
                 }
             }
         }
         out.sort_by_key(|f| FIELDS.iter().position(|&n| n == f.name));
         out
     };
-    ModelSampling {
+    StrataSampling {
         support,
         thinking: fields(true),
         instruct: fields(false),

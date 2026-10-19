@@ -1,0 +1,61 @@
+[
+  {
+    "kind": "install",
+    "family": "qwen",
+    "size": "IQ3_XXS",
+    "context": 65536,
+    "api_key": "0123abcd",
+    "experimental_speed_projection": true
+  },
+  {
+    "kind": "install",
+    "family": "swift",
+    "size": "IQ3_XXS",
+    "context": 65536,
+    "api_key": "0123abcd"
+  },
+  {
+    "kind": "add_model",
+    "family": "coder",
+    "size": "IQ1_M",
+    "context": 32768,
+    "api_key": "0123abcd"
+  },
+  {
+    "kind": "add_model",
+    "family": "coder",
+    "size": "IQ1_M",
+    "context": 32768
+  },
+  {
+    "kind": "activate",
+    "model": "coder-IQ1_M"
+  },
+  {
+    "kind": "delete",
+    "model": "coder-IQ1_M"
+  },
+  {
+    "kind": "update"
+  },
+  {
+    "kind": "benchmark"
+  },
+  {
+    "kind": "set_key",
+    "api_key": "4567efab"
+  },
+  {
+    "kind": "set_speed_projection",
+    "model": "IQ3_XXS",
+    "on": false
+  },
+  {
+    "kind": "set_context",
+    "model": "IQ3_XXS",
+    "context": 131072
+  },
+  {
+    "kind": "compare_models"
+  }
+]

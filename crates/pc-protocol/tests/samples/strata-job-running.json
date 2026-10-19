@@ -1,0 +1,19 @@
+{
+  "id": 7,
+  "kind": "add_model",
+  "model": "coder-IQ1_M",
+  "state": "running",
+  "step": "4/7: Downloading the model",
+  "percent": 40,
+  "done_bytes": 23000000000,
+  "total_bytes": 58400000000,
+  "bytes_per_sec": 110000000,
+  "eta_secs": 321,
+  "lines": [
+    "Downloading part 3 of 8"
+  ],
+  "error": null,
+  "result": null,
+  "started": 1792449000,
+  "ended": null
+}

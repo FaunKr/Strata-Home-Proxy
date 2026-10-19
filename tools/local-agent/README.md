@@ -63,7 +63,12 @@ Runner zusätzlich `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (Ziel geteilt durch
 1000, also Prozent des 100K-Fensters). Die Obergrenze 180K liegt bewusst unter Claude
 Codes 200K-Modellfenster, weil der Bereich darüber nicht getestet ist.
 `local-agent check` zeigt das Fenster und den ungefähren Punkt der
-Kompaktierung. Messungen: `docs/research/fit-max-tokens-and-autocompact.md`
+Kompaktierung. Während eines Laufs zeigt `local-agent status` (und im
+Fehlerfall die Log-Zusammenfassung in `local-agent result`), wie voll der
+Kontext ist und wie oft schon kompaktiert wurde. Liegt der Kontext mehr als
+20K über dem Punkt der Kompaktierung, ohne dass Claude Code kompaktiert hat,
+steht dort eine Warnung; mit `--watch` landet sie einmal in der
+Fortschrittsdatei. Messungen: `docs/research/fit-max-tokens-and-autocompact.md`
 (Abschnitt „Hardware test").
 
 Einmal auf echter Hardware nachweisen, mit dem Kontext, den Strata fährt:

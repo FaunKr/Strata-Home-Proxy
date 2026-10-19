@@ -5,6 +5,8 @@
 #   success      edits a file and finishes with a summary (default)
 #   crash        edits a file, then fails with an API error
 #   crash-gaming like crash, but first switches the fake Proxy to Gaming-Modus
+#   no-compact   grows its context past the compaction point without compacting,
+#                then fails on Strata's 400
 #   hang         never finishes (for the time limit)
 #   hang-gaming  switches the fake Proxy to Gaming-Modus, then never finishes
 #   slow         like success after FAKE_CLAUDE_SLEEP seconds
@@ -31,6 +33,8 @@ start=$(now)
 
 event() { jq -cn "$@"; }
 tool_use() { event --arg n "$1" --argjson i "$2" '{type:"assistant",message:{content:[{type:"tool_use",id:"t1",name:$n,input:$i}]}}'; }
+# A turn whose prompt took $1 tokens of context, as Claude Code logs its usage.
+turn() { event --argjson t "$1" '{type:"assistant",message:{content:[{type:"text",text:"…"}],usage:{input_tokens:100,cache_read_input_tokens:($t - 100),output_tokens:50}}}'; }
 result() { event --arg r "$1" --argjson e "$2" '{type:"result",subtype:(if $e then "error_during_execution" else "success" end),is_error:$e,result:$r}'; }
 
 event '{type:"system",subtype:"init",model:"fake"}'
@@ -40,7 +44,9 @@ case ${FAKE_CLAUDE_MODE:-success} in
     tool_use Read '{"file_path":"README"}'
     echo "edited by the worker" >>README
     tool_use Edit '{"file_path":"README"}'
+    turn 50000
     event '{type:"system",subtype:"compact_boundary"}'
+    turn 20000
     result "Added a line to README." false
     ;;
   crash | crash-gaming)
@@ -52,6 +58,13 @@ case ${FAKE_CLAUDE_MODE:-success} in
     result "API Error: 503 Strata ist nicht verfügbar" true
     echo "fake-claude: API error" >&2
     echo "$start $(now) ${input%%$'\n'*}" >>"$rec/spans"
+    exit 1
+    ;;
+  no-compact)
+    tool_use Read '{"file_path":"README"}'
+    turn 100000
+    turn 190000
+    result "API Error: 400 request exceeds the context window" true
     exit 1
     ;;
   hang | hang-gaming)

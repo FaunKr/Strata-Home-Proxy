@@ -71,7 +71,8 @@ Einfacher Weg, sobald Proxy und PC-Dienst laufen: Weboberfläche, Bereich
 **Strata**. Der Knopf weckt den PC, holt Strata, richtet es mit dem
 empfohlenen Modell ein und trägt den Strata-Key in Strata und Proxy ein.
 Die Empfehlung folgt Stratas eigenem Setup: ab 60 GB RAM `IQ3_XXS`, ab 44 GB
-`Q2_0`, ab 28 GB `coder-IQ1_M`; Kontext 64K für eine 16-GB-Karte.
+`Q2_0`, ab 28 GB `coder-IQ1_M`; Kontext 64K für eine 16-GB-Karte. Der Skill
+`local-agent` braucht mehr Kontext (siehe sein README).
 
 - [ ] Bereich *Strata*: „Set up Strata“ läuft durch, das Modell lädt auf der RX 6800 XT
 - [ ] „Run benchmark“ (Reiter *Version & benchmark*) liefert Tokens/s: ____
@@ -113,7 +114,7 @@ Anmeldungen sind ungültig und beim ersten Login wird ein neues Passwort verlang
 
 - [ ] Unter *Strata → Connection* den API-Key von Strata als `STRATA_API_KEY` eintragen (den Wert von `--api-key` aus Schritt 5)
 - [ ] Unter *Access* für jeden Client einen eigenen Key anlegen und sofort kopieren; er wird nicht wieder angezeigt
-- [ ] Skill `local-agent` einrichten ([tools/local-agent/README.md](../tools/local-agent/README.md)): eigener Key aus *Access*, Strata mit mindestens 128K Kontext, `fit_max_tokens` (als Sicherheitsnetz) und `"anthropic_thinking": "on_request"`; `local-agent check` ist grün
+- [ ] Skill `local-agent` einrichten ([tools/local-agent/README.md](../tools/local-agent/README.md)): eigener Key aus *Access* und die Strata-Einstellungen aus dem README; `local-agent check` ist grün
 - [ ] Kompaktierung des Skills auf echter Hardware nachgewiesen: der lange Testlauf aus dem README zeigt `context compacted` und endet ohne 400
 - [ ] Claude Code direkt gegen Strata (falls genutzt): `ANTHROPIC_BASE_URL=http://<NAS-IP>:8080` und `ANTHROPIC_API_KEY=<Key aus der Weboberfläche>` (geht als `x-api-key` raus)
 - [ ] Open WebUI (falls genutzt): *Admin-Einstellungen → Verbindungen → OpenAI API*, URL `http://<NAS-IP>:8080/v1`, als Key den Key aus der Weboberfläche

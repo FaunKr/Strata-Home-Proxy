@@ -1247,7 +1247,7 @@ fn Benchmarks(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl
                 let is_active = active.as_deref() == Some(row.model.as_str());
                 let is_fastest = fastest.as_deref() == Some(row.model.as_str());
                 let can_activate =
-                    !is_active && row.error.is_none() && installed.contains(&row.model);
+                    !is_active && row.decode_tps.is_some() && installed.contains(&row.model);
                 view! { <BenchRow row is_active is_fastest can_activate actions blocked /> }
             })
             .collect_view();
@@ -1309,17 +1309,25 @@ fn BenchRow(
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
+    // A failed run keeps the model's last measurement, if it had one.
     let speeds = match (&row.error, row.decode_tps) {
-        (Some(error), _) => {
+        (Some(error), None) => {
             view! { <p class="error small">{format!("No result: {error}")}</p> }.into_any()
         }
-        (None, Some(decode)) => {
+        (error, Some(decode)) => {
             let mut text = format!("Decode {}", tps(decode));
             text.push_str(&match row.prompt_tps {
                 Some(prompt) => format!(" · Prompt {}", tps(prompt)),
                 None => " · Prompt –".into(),
             });
-            view! { <p>{text}</p> }.into_any()
+            let failed = error
+                .clone()
+                .map(|e| view! { <p class="error small">{format!("Last run failed: {e}")}</p> });
+            view! {
+                <p>{text}</p>
+                {failed}
+            }
+            .into_any()
         }
         (None, None) => view! { <p>{row.result.clone()}</p> }.into_any(),
     };

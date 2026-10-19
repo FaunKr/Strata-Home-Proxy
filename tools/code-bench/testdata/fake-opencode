@@ -13,6 +13,12 @@ if mode == "background":
     # Like an agent's `server &`: a child that keeps opencode's output open.
     import subprocess
     subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+if mode == "links":
+    # An agent that tries to make the root runner write or read elsewhere.
+    os.symlink(os.environ["FAKE_TARGET"], "hidden_test.py")
+    os.symlink(os.environ["FAKE_TARGET"], "leak.py")
+if mode == "dir":
+    os.mkdir("hidden_test.py")
 if mode == "hang":
     time.sleep(600)
 if mode == "error":

@@ -208,6 +208,23 @@ async fn cancelling_reaches_the_runner_and_keeps_no_result() {
 }
 
 #[tokio::test]
+async fn a_strata_job_waits_while_a_run_is_starting() {
+    let (s, _runner) = with_runner().await;
+    let mut a = logged_in(&s.url).await;
+    let mut b = Browser {
+        base: a.base.clone(),
+        cookie: a.cookie.clone(),
+    };
+    // The runner takes 300 ms to answer the start; the job comes meanwhile.
+    let (started, job) = tokio::join!(a.call("code-bench-start", &[]), async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        b.call("strata-job", &[("kind", "benchmark")]).await
+    });
+    assert_eq!(started.status(), 200);
+    assert_eq!(job.status(), 400);
+}
+
+#[tokio::test]
 async fn a_runner_without_its_firewall_is_a_problem() {
     let (s, runner) = with_runner().await;
     *runner.problem.lock().unwrap() = Some("It needs the NET_ADMIN capability.".into());

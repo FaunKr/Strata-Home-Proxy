@@ -533,6 +533,27 @@ async fn a_model_without_a_result_keeps_its_error_and_the_next_follows() {
 }
 
 #[tokio::test]
+async fn a_failed_run_keeps_the_models_last_result_next_to_its_error() {
+    let s = setup("models-compare-keep").await;
+    installed(&s);
+    bench(&s, &["  chat decode tok/s   38.50   (37.10 - 39.20, n=3)"]);
+    job(&s, json!({"kind": "benchmark"})).await;
+    bench(&s, &[]);
+    post(&s, "/strata/jobs", json!({"kind": "compare_models"})).await;
+    assert_eq!(finished_slowly(&s).await["state"], "done");
+    let view = get(&s, "/strata").await;
+    let rows = view["benchmarks"].as_array().unwrap();
+    let active = rows.iter().find(|r| r["model"] == "IQ3_XXS").unwrap();
+    assert_eq!(active["decode_tps"], 38.5, "{active}");
+    assert!(
+        active["error"].as_str().unwrap().contains("Tokens/s"),
+        "{active}"
+    );
+    let other = rows.iter().find(|r| r["model"] != "IQ3_XXS").unwrap();
+    assert!(other.get("decode_tps").is_none(), "{other}");
+}
+
+#[tokio::test]
 async fn cancelling_a_comparison_brings_the_active_model_back() {
     let s = setup("models-compare-cancel").await;
     installed(&s);

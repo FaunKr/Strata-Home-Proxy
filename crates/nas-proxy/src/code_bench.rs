@@ -99,7 +99,12 @@ impl CodeBench {
         }
     }
 
-    pub fn running(&self) -> bool {
+    /// Whether a run is on its way or going: Strata jobs wait meanwhile.
+    pub fn busy(&self) -> bool {
+        self.running() || self.starting.load(Ordering::SeqCst)
+    }
+
+    fn running(&self) -> bool {
         self.run
             .lock()
             .unwrap()
@@ -134,6 +139,8 @@ impl CodeBench {
 pub async fn page(state: &AppState) -> CodeBenchPage {
     let problem = match state.cfg().code_bench_url.clone() {
         None => Some(NO_URL.to_string()),
+        // While a run goes, `follow` asks the runner already.
+        Some(_) if state.code_bench.running() => None,
         Some(url) => health(state, &url).await.err(),
     };
     let with_time = |mut run: CodeBenchRun| {
@@ -266,6 +273,27 @@ pub async fn start(state: &std::sync::Arc<AppState>) -> Result<(), String> {
     let state = std::sync::Arc::clone(state);
     tokio::spawn(async move { follow(&state, &url).await });
     Ok(())
+}
+
+/// After a restart: follows a run that went on meanwhile, or revokes the key
+/// a run left behind.
+pub fn resume(state: &std::sync::Arc<AppState>) {
+    let Some(url) = state.cfg().code_bench_url.clone() else {
+        return;
+    };
+    if state.code_bench.key.lock().unwrap().is_none() {
+        return;
+    }
+    let state = std::sync::Arc::clone(state);
+    tokio::spawn(async move {
+        match current(&state, &url).await {
+            Some(run) if run.state == CodeBenchState::Running => {
+                *state.code_bench.run.lock().unwrap() = Some(run);
+                follow(&state, &url).await;
+            }
+            _ => revoke_key(&state),
+        }
+    });
 }
 
 pub async fn cancel(state: &AppState) -> Result<(), String> {

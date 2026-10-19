@@ -140,7 +140,7 @@ pub async fn start_job(state: &AppState, form: StrataJobForm) -> Result<(), Stri
         return Err(NO_AGENT.into());
     }
     // A job could switch the model the code benchmark measures.
-    if state.code_bench.running() {
+    if state.code_bench.busy() {
         return Err("A code benchmark is running. Strata jobs wait until it ends.".into());
     }
     if state.pc_status(&agent).await.is_none() {

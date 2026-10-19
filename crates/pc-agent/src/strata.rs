@@ -1046,9 +1046,21 @@ async fn compare_models(
 
 /// Keeps a model's record in place of its last one; the newest also goes
 /// to the file older services read.
-fn keep_benchmark(agent: &Agent, record: Benchmark) {
+fn keep_benchmark(agent: &Agent, mut record: Benchmark) {
     let dir = agent.cfg.state_dir();
     let mut all = load_benchmarks(agent);
+    // A failed run keeps the model's last measurement next to its error, so
+    // one failure does not wipe a good result.
+    if record.error.is_some()
+        && let Some(last) = all
+            .iter()
+            .find(|b| b.model.eq_ignore_ascii_case(&record.model) && b.decode_tps.is_some())
+    {
+        record = Benchmark {
+            error: record.error,
+            ..last.clone()
+        };
+    }
     all.retain(|b| !b.model.eq_ignore_ascii_case(&record.model));
     if record.error.is_none() {
         let text = serde_json::to_string_pretty(&record).expect("benchmark serializes");
@@ -1601,6 +1613,7 @@ async fn command(agent: &Arc<Agent>, spec: CommandSpec, progress: bool) -> Resul
                 progress: p,
                 secret,
                 bench,
+                step_prefix,
                 ..
             } = &mut *inner;
             let line = match secret.as_deref() {
@@ -1614,6 +1627,12 @@ async fn command(agent: &Arc<Agent>, spec: CommandSpec, progress: bool) -> Resul
             let before = job.step.clone();
             if progress {
                 p.read(&line, job);
+                // In a comparison: which model the step belongs to.
+                if job.step != before
+                    && let (Some(prefix), Some(step)) = (step_prefix.as_deref(), job.step.as_mut())
+                {
+                    *step = format!("{prefix} · {step}");
+                }
             }
             let mut lines: VecDeque<String> = std::mem::take(&mut job.lines).into();
             lines.push_back(line);

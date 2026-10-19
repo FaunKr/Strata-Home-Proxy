@@ -86,18 +86,76 @@ class RunnerTest(unittest.TestCase):
             runner.PROBLEM = None
 
     def test_the_firewall_lets_the_agent_reach_the_proxy_and_the_internet_only(self):
-        rules = [" ".join(r) for r in runner.firewall_rules(1001, "172.17.0.1", 8080)]
+        rules = [" ".join(r) for r in runner.firewall_rules(1001, "127.0.0.1", 8097)]
         chain = runner.FIREWALL_CHAIN
-        allow_proxy = f"iptables -w -A {chain} -d 172.17.0.1 -p tcp --dport 8080 -j ACCEPT"
-        self.assertIn(allow_proxy, rules)
-        # The proxy before the ranges that include it.
-        block_docker = f"iptables -w -A {chain} -d 172.16.0.0/12 -j REJECT"
-        self.assertLess(rules.index(allow_proxy), rules.index(block_docker))
-        for net in ["127.0.0.0/8", "10.0.0.0/8", "192.168.0.0/16"]:
+        allow_relay = f"iptables -w -A {chain} -d 127.0.0.1 -p tcp --dport 8097 -j ACCEPT"
+        self.assertIn(allow_relay, rules)
+        # The relay before the loopback range that includes it.
+        block_loopback = f"iptables -w -A {chain} -d 127.0.0.0/8 -j REJECT"
+        self.assertLess(rules.index(allow_relay), rules.index(block_loopback))
+        for net in ["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]:
             self.assertIn(f"iptables -w -A {chain} -d {net} -j REJECT", rules)
         self.assertEqual(rules[-1], f"iptables -w -A OUTPUT -m owner --uid-owner 1001 -j {chain}")
         # Nothing rejects all: the internet stays open.
         self.assertFalse([r for r in rules if r.endswith("-j REJECT") and " -d " not in r])
+
+    def test_links_the_agent_leaves_are_not_followed(self):
+        target = Path(os.environ["WORK_DIR"], "outside.py")
+        target.write_text("SECRET = 1\n")
+        os.environ["FAKE_MODE"], os.environ["FAKE_TARGET"] = "links", str(target)
+        try:
+            task = self.run_tasks([TASK])["tasks"][0]
+        finally:
+            os.environ.pop("FAKE_TARGET")
+        self.assertEqual(target.read_text(), "SECRET = 1\n")
+        self.assertNotIn("leak.py", task["files"])
+        self.assertEqual(task["total"], 2, task)
+
+    def test_a_folder_in_the_hidden_tests_place_scores_the_task_not_the_run(self):
+        os.environ["FAKE_MODE"] = "dir"
+        os.environ["FAKE_SOLUTION"] = "double.py=def double(n):\n    return n * 2\n"
+        run = self.run_tasks([TASK, dict(TASK, name="double2")])
+        self.assertEqual(run["state"], "done", run)
+        self.assertEqual([t["passed"] for t in run["tasks"]], [2, 2], run)
+
+    def test_the_relay_passes_on_v1_only_and_streams(self):
+        seen = []
+
+        class Upstream(runner.BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen.append((self.path, self.headers.get("authorization"), self.rfile.read(int(self.headers["content-length"]))))
+                self.send_response(200)
+                self.send_header("content-type", "text/event-stream")
+                self.end_headers()
+                self.wfile.write(b"data: one\n\ndata: two\n\n")
+
+            def log_message(self, *args):
+                pass
+
+        upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+        Thread(target=upstream.serve_forever, daemon=True).start()
+        relay_server = ThreadingHTTPServer(("127.0.0.1", 0), runner.Relay)
+        Thread(target=relay_server.serve_forever, daemon=True).start()
+        proxy_url = runner.PROXY_URL
+        runner.PROXY_URL = f"http://127.0.0.1:{upstream.server_port}"
+        base = f"http://127.0.0.1:{relay_server.server_port}"
+        try:
+            req = urllib.request.Request(
+                base + "/v1/chat/completions", data=b'{"x": 1}', method="POST",
+                headers={"authorization": "Bearer shp_k", "content-type": "application/json"},
+            )
+            with urllib.request.urlopen(req) as resp:
+                self.assertEqual(resp.read(), b"data: one\n\ndata: two\n\n")
+            self.assertEqual(seen, [("/v1/chat/completions", "Bearer shp_k", b'{"x": 1}')])
+            for path in ["/admin/api/login", "/admin", "/v1"]:
+                with self.assertRaises(urllib.error.HTTPError) as e:
+                    urllib.request.urlopen(urllib.request.Request(base + path, data=b"", method="POST"))
+                self.assertEqual(e.exception.code, 403, path)
+            self.assertEqual(len(seen), 1)
+        finally:
+            runner.PROXY_URL = proxy_url
+            upstream.shutdown()
+            relay_server.shutdown()
 
     @unittest.skipUnless(os.geteuid() == 0, "needs root to switch users")
     def test_opencode_and_the_tests_run_as_the_agent(self):
@@ -154,7 +212,8 @@ class RunnerTest(unittest.TestCase):
         self.assertIn("--title", seen["args"])
         self.assertEqual(seen["args"][seen["args"].index("--model") + 1], "strata/IQ3_XXS")
         provider = seen["config"]["provider"]["strata"]["options"]
-        self.assertEqual(provider["baseURL"], runner.PROXY_URL + "/v1")
+        # Through the runner's relay, which passes on /v1 only.
+        self.assertEqual(provider["baseURL"], f"http://{runner.RELAY_ADDR}/v1")
         self.assertEqual(provider["apiKey"], "shp_k")
         self.assertEqual(seen["config"]["permission"]["webfetch"], "deny")
 

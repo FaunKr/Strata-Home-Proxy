@@ -14,6 +14,7 @@ The proxy asks for the state until the run has ended.
 Only the standard library, so the image needs Python and opencode alone.
 """
 
+import http.client
 import ipaddress
 import json
 import os
@@ -58,6 +59,9 @@ BLOCKED_NETS = [
     "100.64.0.0/10",
     "0.0.0.0/8",
 ]
+# Where opencode reaches the proxy: a relay in the runner that passes on the
+# OpenAI endpoint (/v1) only, so the agent cannot reach the proxy's web UI.
+RELAY_ADDR = os.environ.get("RELAY_ADDR", "127.0.0.1:8097")
 # Docker's own DNS in a user-defined network.
 DOCKER_DNS = "127.0.0.11"
 # Why runs are refused, e.g. the firewall could not be set.
@@ -116,7 +120,7 @@ def config(model, api_key):
             "strata": {
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Strata",
-                "options": {"baseURL": PROXY_URL + "/v1", "apiKey": api_key},
+                "options": {"baseURL": f"http://{RELAY_ADDR}/v1", "apiKey": api_key},
                 "models": {
                     model: {"name": model, "temperature": True, "options": {"temperature": 0}}
                 },
@@ -398,16 +402,16 @@ def give_to_agent(folder):
             os.chown(os.path.join(root, name), user.pw_uid, user.pw_gid, follow_symlinks=False)
 
 
-def firewall_rules(uid, proxy_ip, proxy_port):
-    """iptables commands that keep the agent's connections off the runner,
-    the NAS and the home network, apart from the proxy; the internet stays
-    open."""
+def firewall_rules(uid, relay_ip, relay_port):
+    """iptables commands that keep the agent's connections off the runner's
+    API, the proxy, the NAS and the home network, apart from the relay to
+    the proxy's /v1; the internet stays open."""
     chain = ["iptables", "-w"]
     rules = [
         chain + ["-N", FIREWALL_CHAIN],
         chain + ["-F", FIREWALL_CHAIN],
         chain + ["-A", FIREWALL_CHAIN, "-d", DOCKER_DNS, "-j", "ACCEPT"],
-        chain + ["-A", FIREWALL_CHAIN, "-d", proxy_ip, "-p", "tcp", "--dport", str(proxy_port), "-j", "ACCEPT"],
+        chain + ["-A", FIREWALL_CHAIN, "-d", relay_ip, "-p", "tcp", "--dport", str(relay_port), "-j", "ACCEPT"],
     ]
     for net in BLOCKED_NETS:
         rules.append(chain + ["-A", FIREWALL_CHAIN, "-d", net, "-j", "REJECT"])
@@ -415,11 +419,10 @@ def firewall_rules(uid, proxy_ip, proxy_port):
     return rules
 
 
-def proxy_address():
-    """The proxy's IP and port, from PROXY_URL."""
-    url = urlsplit(PROXY_URL)
-    port = url.port or (443 if url.scheme == "https" else 80)
-    return socket.gethostbyname(url.hostname), port
+def relay_address():
+    """The relay's IP and port, from RELAY_ADDR."""
+    host, _, port = RELAY_ADDR.rpartition(":")
+    return socket.gethostbyname(host), int(port)
 
 
 def set_firewall():
@@ -428,11 +431,11 @@ def set_firewall():
     if user is None:
         return None
     try:
-        proxy_ip, proxy_port = proxy_address()
-        ipaddress.ip_address(proxy_ip)
+        relay_ip, relay_port = relay_address()
+        ipaddress.ip_address(relay_ip)
     except (OSError, ValueError) as e:
-        return f"The proxy address in PROXY_URL ({PROXY_URL}) does not resolve: {e}"
-    for rule in firewall_rules(user.pw_uid, proxy_ip, proxy_port):
+        return f"The relay address in RELAY_ADDR ({RELAY_ADDR}) does not resolve: {e}"
+    for rule in firewall_rules(user.pw_uid, relay_ip, relay_port):
         # A restarted container may have the chain already.
         if rule[2] == "-N" and run_quietly(rule[:2] + ["-L", FIREWALL_CHAIN]):
             continue
@@ -479,9 +482,17 @@ def kill_group(pid):
 
 
 def write(folder, path, text):
+    """Writes a file the runner puts in a task folder. What the agent left
+    under that name goes first, and links are never followed: the runner may
+    be root, the folder is the agent's."""
     full = os.path.join(folder, path)
     os.makedirs(os.path.dirname(full), exist_ok=True)
-    with open(full, "w", encoding="utf-8") as f:
+    if os.path.isdir(full) and not os.path.islink(full):
+        shutil.rmtree(full)
+    elif os.path.lexists(full):
+        os.unlink(full)
+    fd = os.open(full, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
 
 
@@ -492,9 +503,17 @@ def solution_files(folder, given):
         dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__pycache__"]
         for name in sorted(names):
             path = os.path.relpath(os.path.join(root, name), folder)
-            if not name.endswith(".py") or path in given:
+            full = os.path.join(root, name)
+            # A link could point at any file in the container.
+            if not name.endswith(".py") or path in given or os.path.islink(full):
                 continue
-            with open(os.path.join(root, name), "rb") as f:
+            try:
+                fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            except OSError:
+                continue
+            with os.fdopen(fd, "rb") as f:
+                if not os.path.isfile(full):
+                    continue
                 data = f.read(MAX_FILE_BYTES + 1)
             text = data[:MAX_FILE_BYTES].decode("utf-8", "replace")
             if len(data) > MAX_FILE_BYTES:
@@ -505,25 +524,32 @@ def solution_files(folder, given):
 
 def score(folder, hidden_test):
     """How many hidden tests pass, out of how many, and their output."""
-    write(folder, "hidden_test.py", hidden_test)
-    write(folder, "_codebench_score.py", SCORE_SCRIPT)
     try:
+        write(folder, "hidden_test.py", hidden_test)
+        write(folder, "_codebench_score.py", SCORE_SCRIPT)
         give_to_agent(folder)
-        out = subprocess.run(
-            [PYTHON, "-I", "_codebench_score.py"],
-            cwd=folder,
-            env=agent_env(dict(os.environ)),
-            **as_agent(),
-            capture_output=True,
-            text=True,
-            timeout=TEST_TIMEOUT,
-            stdin=subprocess.DEVNULL,
-        )
-        output = out.stdout
-        errors = out.stderr
-    except subprocess.TimeoutExpired as e:
-        output = (e.stdout or "") if isinstance(e.stdout, str) else ""
-        return 0, total_tests(hidden_test), output + f"\nThe tests took longer than {TEST_TIMEOUT} s."
+    except OSError as e:
+        return 0, total_tests(hidden_test), f"The hidden tests could not be put in place: {e}"
+    # Its own process group: what the tested code starts ends with it.
+    process = subprocess.Popen(
+        [PYTHON, "-I", "_codebench_score.py"],
+        cwd=folder,
+        env=agent_env(dict(os.environ)),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+        **as_agent(),
+    )
+    try:
+        output, errors = process.communicate(timeout=TEST_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        kill_group(process.pid)
+        output, _ = process.communicate()
+        return 0, total_tests(hidden_test), (output or "") + f"\nThe tests took longer than {TEST_TIMEOUT} s."
+    finally:
+        kill_group(process.pid)
     passed, total = 0, total_tests(hidden_test)
     # Only stdout carries the mark; the score script prints it last.
     for line in output.splitlines():
@@ -583,6 +609,57 @@ class Runner:
 RUNNER = Runner()
 
 
+class Relay(BaseHTTPRequestHandler):
+    """Passes opencode's requests to the proxy's OpenAI endpoint (/v1) and
+    nothing else, streaming the answer."""
+
+    def relay(self):
+        if not self.path.startswith("/v1/"):
+            self.send_error(403, "only /v1 is relayed")
+            return
+        length = int(self.headers.get("content-length") or 0)
+        body = self.rfile.read(length) if length else None
+        url = urlsplit(PROXY_URL)
+        conn_class = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
+        conn = conn_class(url.hostname, url.port, timeout=DEFAULT_TIMEOUT)
+        headers = {
+            k: v for k, v in self.headers.items() if k.lower() not in ("host", "connection", "content-length")
+        }
+        try:
+            conn.request(self.command, url.path.rstrip("/") + self.path, body=body, headers=headers)
+            resp = conn.getresponse()
+        except OSError as e:
+            self.send_error(502, f"proxy unreachable: {e}")
+            return
+        # HTTP/1.0: the answer ends when the connection closes, so a stream
+        # passes through as it comes.
+        self.send_response(resp.status, resp.reason)
+        for k, v in resp.getheaders():
+            if k.lower() not in ("transfer-encoding", "connection", "content-length"):
+                self.send_header(k, v)
+        self.end_headers()
+        try:
+            while chunk := resp.read1(64 * 1024):
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    do_GET = do_POST = relay
+
+    def log_message(self, fmt, *args):
+        pass
+
+
+def serve_relay():
+    host, _, port = RELAY_ADDR.rpartition(":")
+    server = ThreadingHTTPServer((host, int(port)), Relay)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
 class Handler(BaseHTTPRequestHandler):
     def answer(self, code, body):
         data = json.dumps(body).encode()
@@ -633,6 +710,7 @@ def main():
     PROBLEM = set_firewall()
     if PROBLEM:
         sys.stderr.write(f"code-bench: {PROBLEM}\n")
+    serve_relay()
     host, _, port = LISTEN.rpartition(":")
     server = ThreadingHTTPServer((host or "0.0.0.0", int(port)), Handler)
     sys.stderr.write(f"code-bench: listening on {LISTEN}, proxy at {PROXY_URL}\n")

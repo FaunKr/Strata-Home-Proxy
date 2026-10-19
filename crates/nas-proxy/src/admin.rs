@@ -9,8 +9,8 @@ use std::{
 use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
     api::{
-        ApiKeyInfo, ApiKeysView, CreatedKey, KeepAwakeChoice, OutputMessage, Overview,
-        PcSetupCommand, Session, SettingEntry, SettingValue, SettingsView, Setup, Source,
+        ApiKeyInfo, ApiKeysView, CodeBenchPage, CreatedKey, KeepAwakeChoice, OutputMessage,
+        Overview, PcSetupCommand, Session, SettingEntry, SettingValue, SettingsView, Setup, Source,
         StrataJobForm, StrataPage,
     },
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
@@ -282,6 +282,21 @@ impl Backend for UiBackend {
     fn cancel_strata_job(&self) -> BoxFuture<'static, Result<(), String>> {
         let state = Arc::clone(&self.0);
         async move { crate::strata::cancel(&state).await }.boxed()
+    }
+
+    fn code_bench(&self) -> BoxFuture<'static, CodeBenchPage> {
+        let state = Arc::clone(&self.0);
+        async move { crate::code_bench::page(&state).await }.boxed()
+    }
+
+    fn start_code_bench(&self) -> BoxFuture<'static, Result<(), String>> {
+        let state = Arc::clone(&self.0);
+        async move { crate::code_bench::start(&state).await }.boxed()
+    }
+
+    fn cancel_code_bench(&self) -> BoxFuture<'static, Result<(), String>> {
+        let state = Arc::clone(&self.0);
+        async move { crate::code_bench::cancel(&state).await }.boxed()
     }
 
     fn pc_setup_command(&self, host: &str) -> Result<PcSetupCommand, String> {

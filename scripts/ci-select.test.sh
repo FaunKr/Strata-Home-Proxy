@@ -40,6 +40,8 @@ expect "test=true packages=strata-pc-agent windows=true image=true" crates/pc-ag
 expect "test=true packages=strata-admin-ui strata-nas-proxy windows=false image=true" crates/admin-ui/src/app.rs
 expect "test=false packages= windows=false image=false" deploy/docker-compose.yml
 expect "test=true packages= windows=false image=false" tools/local-agent/local-agent
+expect "test=true packages= windows=false image=true" tools/code-bench/runner.py
+expect "test=true packages=strata-nas-proxy windows=false image=true" tools/code-bench/tasks/roman/TASK.md
 [[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$all " ]] || fail "--all -> nicht alles"
 
 # Every crate selects itself and the image.

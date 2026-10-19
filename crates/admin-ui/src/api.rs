@@ -767,6 +767,101 @@ pub async fn cancel_strata_job() -> Result<(), ServerFnError> {
     backend().cancel_strata_job().await.map_err(bad_request)
 }
 
+// --- The code benchmark, run by the container code-bench on the NAS ---
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeBenchState {
+    Running,
+    Done,
+    Failed,
+    Cancelled,
+}
+
+/// One task of a run, as the runner reports it (tools/code-bench/runner.py).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodeBenchTask {
+    pub name: String,
+    pub title: String,
+    /// `pending`, `running`, `done` or `cancelled`.
+    pub state: String,
+    #[serde(default)]
+    pub total_secs: Option<f64>,
+    /// Model calls opencode made.
+    #[serde(default)]
+    pub steps: u32,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    /// Output tokens over the time the model calls took.
+    #[serde(default)]
+    pub output_tps: Option<f64>,
+    /// Hidden tests passed, out of `total`.
+    #[serde(default)]
+    pub passed: u32,
+    #[serde(default)]
+    pub total: u32,
+    /// opencode was stopped at the time limit.
+    #[serde(default)]
+    pub timed_out: bool,
+    /// The Python files the agent left, by path.
+    #[serde(default)]
+    pub files: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub test_output: String,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// A run of the three tasks with one model.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodeBenchRun {
+    pub model: String,
+    pub state: CodeBenchState,
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Unix seconds.
+    pub started: u64,
+    #[serde(default)]
+    pub ended: Option<u64>,
+    pub tasks: Vec<CodeBenchTask>,
+    /// Local time of the end, filled in by the proxy.
+    #[serde(default)]
+    pub at_text: String,
+}
+
+/// The code benchmark card.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodeBenchPage {
+    /// Why no run can start now, e.g. the container does not answer.
+    pub problem: Option<String>,
+    /// The running run, or the last one if it did not finish.
+    pub run: Option<CodeBenchRun>,
+    /// Each model's last finished run.
+    pub results: Vec<CodeBenchRun>,
+}
+
+#[server(prefix = "/admin/api", endpoint = "code-bench")]
+pub async fn get_code_bench() -> Result<CodeBenchPage, ServerFnError> {
+    require_login(false).await?;
+    Ok(backend().code_bench().await)
+}
+
+/// Lets the active model solve the three tasks; the PC wakes with the
+/// first request.
+#[server(prefix = "/admin/api", endpoint = "code-bench-start")]
+pub async fn start_code_bench() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend().start_code_bench().await.map_err(bad_request)
+}
+
+#[server(prefix = "/admin/api", endpoint = "code-bench-cancel")]
+pub async fn cancel_code_bench() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend().cancel_code_bench().await.map_err(bad_request)
+}
+
 /// A job as the page asks for it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StrataJobForm {

@@ -208,6 +208,8 @@ pub struct AppState {
     pub strata: crate::strata::StrataState,
     /// Setting up the PC service from the NAS.
     pub pc_setup: crate::pc_setup::PcSetup,
+    /// The code benchmark in the container code-bench.
+    pub code_bench: crate::code_bench::CodeBench,
     in_flight: AtomicUsize,
     inner: Mutex<Inner>,
     wake_lock: tokio::sync::Mutex<()>,
@@ -252,6 +254,7 @@ impl AppState {
             overview: Monitor::default(),
             strata: crate::strata::StrataState::new(cfg.data_dir.clone()),
             pc_setup: crate::pc_setup::PcSetup::default(),
+            code_bench: crate::code_bench::CodeBench::new(cfg.data_dir.clone()),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
             inner: Mutex::new(Inner {

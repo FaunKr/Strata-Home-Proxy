@@ -26,8 +26,8 @@ use leptos_axum::{
 
 use crate::{
     api::{
-        ApiKeysView, CreatedKey, KeepAwakeChoice, OutputMessage, Overview, PcSetupCommand, Session,
-        SettingValue, SettingsView, Setup, StrataJobForm, StrataPage,
+        ApiKeysView, CodeBenchPage, CreatedKey, KeepAwakeChoice, OutputMessage, Overview,
+        PcSetupCommand, Session, SettingValue, SettingsView, Setup, StrataJobForm, StrataPage,
     },
     app::{App, shell},
 };
@@ -82,6 +82,11 @@ pub trait Backend: Send + Sync + 'static {
     /// it refuses.
     fn start_strata_job(&self, form: StrataJobForm) -> BoxFuture<'static, Result<(), String>>;
     fn cancel_strata_job(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// The code benchmark: its state and each model's last result.
+    fn code_bench(&self) -> BoxFuture<'static, CodeBenchPage>;
+    /// Starts a code benchmark of the active model; a message if it cannot.
+    fn start_code_bench(&self) -> BoxFuture<'static, Result<(), String>>;
+    fn cancel_code_bench(&self) -> BoxFuture<'static, Result<(), String>>;
     /// A new one-time code and the command with it, for the PC to reach the
     /// NAS at `host` (as the browser did); a message if that is not usable.
     fn pc_setup_command(&self, host: &str) -> Result<PcSetupCommand, String>;

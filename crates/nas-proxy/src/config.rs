@@ -29,6 +29,10 @@ pub struct Config {
     /// Base URL of the Messsteckdose the PC is plugged into, a Shelly plug
     /// (`SHELLY_URL`). Without it the overview shows no Leistung.
     pub shelly_url: Option<String>,
+    /// Base URL of the code benchmark's runner, the container `code-bench`
+    /// (`CODE_BENCH_URL`), e.g. `http://127.0.0.1:8096`. Without it there is
+    /// no code benchmark.
+    pub code_bench_url: Option<String>,
     /// Time without requests before the PC is asked to sleep (`IDLE_TIMEOUT_SECS`).
     pub idle_timeout: Duration,
     /// Longest time a request waits for the PC to wake up (`WAKE_TIMEOUT_SECS`).
@@ -103,6 +107,7 @@ pub const FIELDS: &[Field] = &[
         ..optional("PC_AGENT_TOKEN")
     },
     optional("SHELLY_URL"),
+    optional("CODE_BENCH_URL"),
     field("IDLE_TIMEOUT_SECS"),
     field("WAKE_TIMEOUT_SECS"),
     field("WOL_RESEND_SECS"),
@@ -134,6 +139,7 @@ impl Default for Config {
             pc_agent_url: None,
             pc_agent_token: None,
             shelly_url: None,
+            code_bench_url: None,
             idle_timeout: Duration::from_secs(900),
             wake_timeout: Duration::from_secs(240),
             wol_resend: Duration::from_secs(10),
@@ -191,6 +197,7 @@ impl Config {
             "PC_AGENT_URL" => self.pc_agent_url = text.map(|u| url(&u)).transpose()?,
             "PC_AGENT_TOKEN" => self.pc_agent_token = text,
             "SHELLY_URL" => self.shelly_url = text.map(|u| plug_url(&u)).transpose()?,
+            "CODE_BENCH_URL" => self.code_bench_url = text.map(|u| url(&u)).transpose()?,
             "IDLE_TIMEOUT_SECS" => self.idle_timeout = secs(raw)?,
             "WAKE_TIMEOUT_SECS" => self.wake_timeout = secs(raw)?,
             "WOL_RESEND_SECS" => self.wol_resend = positive(secs(raw)?)?,
@@ -225,6 +232,7 @@ impl Config {
             "PC_AGENT_URL" => self.pc_agent_url.clone(),
             "PC_AGENT_TOKEN" => self.pc_agent_token.clone(),
             "SHELLY_URL" => self.shelly_url.clone(),
+            "CODE_BENCH_URL" => self.code_bench_url.clone(),
             "IDLE_TIMEOUT_SECS" => secs(self.idle_timeout),
             "WAKE_TIMEOUT_SECS" => secs(self.wake_timeout),
             "WOL_RESEND_SECS" => secs(self.wol_resend),
@@ -334,6 +342,8 @@ mod tests {
         cfg.apply("PC_AGENT_TOKEN", "geheim").unwrap();
         cfg.apply("STRATA_API_KEY", "auch-geheim").unwrap();
         cfg.apply("SHELLY_URL", "192.168.1.228").unwrap();
+        cfg.apply("CODE_BENCH_URL", "http://127.0.0.1:8096")
+            .unwrap();
         for f in FIELDS {
             let text = cfg
                 .value(f.key)

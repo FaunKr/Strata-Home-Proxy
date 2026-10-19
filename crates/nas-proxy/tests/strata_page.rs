@@ -484,8 +484,9 @@ async fn connection_tab_holds_exactly_the_strata_settings() {
     let html = b.page("/admin/strata/connection").await;
     assert!(html.contains("id=\"setting-STRATA_URL\""), "{html}");
     assert!(html.contains("id=\"setting-STRATA_API_KEY\""), "{html}");
+    assert!(html.contains("id=\"setting-CODE_BENCH_URL\""), "{html}");
     let fields = html.matches("id=\"setting-").count();
-    assert_eq!(fields, 2, "{html}");
+    assert_eq!(fields, 3, "{html}");
     let models = b.page("/admin/strata").await;
     assert!(!models.contains("id=\"setting-"), "{models}");
 }

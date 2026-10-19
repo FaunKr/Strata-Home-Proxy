@@ -7,8 +7,10 @@ use leptos_router::components::{A, Outlet};
 
 use crate::{
     api::{
-        CancelStrataJob, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob, StrataJobKind,
-        StrataJobState, StrataModel, StrataPage, StrataSize, error_text, get_strata,
+        CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
+        StartCodeBench, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob, StrataJobKind,
+        StrataJobState, StrataModel, StrataPage, StrataSize, error_text, get_code_bench,
+        get_strata,
     },
     confirm::{Confirm, Question},
     labels::{STRATA_CONNECTION, strata_job_label},
@@ -265,15 +267,20 @@ pub fn ModelsTab() -> impl IntoView {
 
 #[component]
 pub fn VersionTab() -> impl IntoView {
-    with_page(|area, page| {
-        let blocked = area.blocked(&page);
-        let actions = area.actions;
-        match page.info {
-            None => ().into_any(),
-            Some(info) if !info.installed => not_installed().into_any(),
-            Some(info) => view! { <Version info actions blocked /> }.into_any(),
-        }
-    })
+    // The code benchmark loads on its own, outside the page's Suspend: a
+    // resource created inside it does not hydrate.
+    view! {
+        {with_page(|area, page| {
+            let blocked = area.blocked(&page);
+            let actions = area.actions;
+            match page.info {
+                None => ().into_any(),
+                Some(info) if !info.installed => not_installed().into_any(),
+                Some(info) => view! { <Version info actions blocked /> }.into_any(),
+            }
+        })}
+        <CodeBenchCard />
+    }
 }
 
 #[component]
@@ -900,6 +907,307 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
             </div>
         </section>
         <Benchmarks info actions blocked />
+    }
+}
+
+/// How often the card asks again while a code benchmark runs.
+#[cfg(feature = "hydrate")]
+const CODE_BENCH_POLL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The code benchmark: start, progress and each model's last result.
+#[component]
+fn CodeBenchCard() -> impl IntoView {
+    let start = ServerAction::<StartCodeBench>::new();
+    let cancel = ServerAction::<CancelCodeBench>::new();
+    let tick = RwSignal::new(0u32);
+    let page = Resource::new(
+        move || (tick.get(), start.version().get(), cancel.version().get()),
+        |_| get_code_bench(),
+    );
+    let running = Memo::new(move |_| {
+        page.get()
+            .and_then(|p| p.ok())
+            .and_then(|p| p.run)
+            .is_some_and(|r| r.state == CodeBenchState::Running)
+    });
+    #[cfg(feature = "hydrate")]
+    {
+        let ticker = set_interval_with_handle(
+            move || {
+                if running.get_untracked() {
+                    tick.update(|n| *n += 1);
+                }
+            },
+            CODE_BENCH_POLL,
+        )
+        .ok();
+        on_cleanup(move || {
+            if let Some(t) = ticker {
+                t.clear();
+            }
+        });
+    }
+    let confirm = expect_context::<Confirm>();
+    let run = move |_| {
+        confirm.ask(
+            Question {
+                title: "Run the code benchmark?".into(),
+                text: format!(
+                    "The active model solves {} Python tasks with opencode, up to {} minutes each. The PC wakes with the first request; other requests keep working meanwhile.",
+                    CODE_BENCH_TASKS, CODE_BENCH_TASK_MINUTES
+                ),
+                confirm: "Run code benchmark",
+                danger: false,
+            },
+            move || {
+                start.dispatch(StartCodeBench {});
+            },
+        );
+    };
+    view! {
+        <section class="card">
+            <h2>"Code benchmark"</h2>
+            <p class="muted small">
+                "The active model solves three Python tasks with opencode in the code-bench container on the NAS. Hidden tests score what it leaves."
+            </p>
+            {action_error(start.value())}
+            {action_error(cancel.value())}
+            <Transition>
+                {move || Suspend::new(async move {
+                    match page.await {
+                        Err(e) => view! { <p class="error">{error_text(&e)}</p> }.into_any(),
+                        Ok(p) => {
+                            let problem = p
+                                .problem
+                                .clone()
+                                .map(|text| view! { <p class="warning" role="status">{text}</p> });
+                            let blocked = p.problem.is_some();
+                            let current = p.run.clone().map(|r| view! { <CodeBenchCurrent run=r cancel /> });
+                            let mut results = p.results.clone();
+                            results.sort_by(|a, b| {
+                                let (pa, ta) = run_totals(a);
+                                let (pb, tb) = run_totals(b);
+                                pb.cmp(&pa).then(ta.total_cmp(&tb))
+                            });
+                            let results = if results.is_empty() {
+                                view! { <p>"No code benchmark has run yet."</p> }.into_any()
+                            } else {
+                                results
+                                    .into_iter()
+                                    .map(|r| view! { <CodeBenchResult run=r /> })
+                                    .collect_view()
+                                    .into_any()
+                            };
+                            view! {
+                                {problem}
+                                {current}
+                                {results}
+                                <div class="actions">
+                                    <button
+                                        type="button"
+                                        class="secondary"
+                                        disabled=move || {
+                                            blocked || running.get() || start.pending().get()
+                                        }
+                                        on:click=run
+                                    >
+                                        "Run code benchmark"
+                                    </button>
+                                </div>
+                            }
+                                .into_any()
+                        }
+                    }
+                })}
+            </Transition>
+        </section>
+    }
+}
+
+const CODE_BENCH_TASKS: usize = 3;
+const CODE_BENCH_TASK_MINUTES: usize = 30;
+
+/// Hidden tests passed and seconds in total.
+fn run_totals(run: &CodeBenchRun) -> (u32, f64) {
+    (
+        run.tasks.iter().map(|t| t.passed).sum(),
+        run.tasks.iter().filter_map(|t| t.total_secs).sum(),
+    )
+}
+
+/// `754.2` → `12:34 min`, `42.5` → `43 s`.
+fn duration_text(secs: f64) -> String {
+    let secs = secs.round() as u64;
+    if secs < 60 {
+        format!("{secs} s")
+    } else {
+        format!("{}:{:02} min", secs / 60, secs % 60)
+    }
+}
+
+/// The running run, or the last one that ended without a result.
+#[component]
+fn CodeBenchCurrent(run: CodeBenchRun, cancel: ServerAction<CancelCodeBench>) -> impl IntoView {
+    let confirm = expect_context::<Confirm>();
+    match run.state {
+        CodeBenchState::Running => {
+            let at = run
+                .tasks
+                .iter()
+                .position(|t| t.state == "running")
+                .unwrap_or(0);
+            let task = run.tasks.get(at).cloned();
+            let mut figures = vec![format!("Task {} of {}", at + 1, run.tasks.len())];
+            if let Some(t) = &task {
+                figures.push(t.title.clone());
+                figures.push(format!("{} model steps", t.steps));
+                if let Some(secs) = t.total_secs {
+                    figures.push(duration_text(secs));
+                }
+            }
+            view! {
+                <div class="job" role="status">
+                    <p class="strong">{format!("Running with {}", run.model)}</p>
+                    <p class="hint">{figures.join(" · ")}</p>
+                    <div class="actions">
+                        <button
+                            type="button"
+                            class="secondary"
+                            disabled=move || cancel.pending().get()
+                            on:click=move |_| {
+                                confirm
+                                    .ask(
+                                        Question {
+                                            title: "Cancel the code benchmark?".into(),
+                                            text: "The task that runs now ends, the others do not start."
+                                                .into(),
+                                            confirm: "Cancel",
+                                            danger: true,
+                                        },
+                                        move || {
+                                            cancel.dispatch(CancelCodeBench {});
+                                        },
+                                    );
+                            }
+                        >
+                            "Cancel code benchmark"
+                        </button>
+                    </div>
+                </div>
+            }
+                .into_any()
+        }
+        CodeBenchState::Cancelled => view! {
+            <p class="hint">{format!("The last run with {} was cancelled.", run.model)}</p>
+        }
+        .into_any(),
+        CodeBenchState::Failed | CodeBenchState::Done => {
+            let why = run
+                .error
+                .clone()
+                .unwrap_or_else(|| "no reason given".into());
+            view! {
+                <p class="error">{format!("The last run with {} failed: {why}", run.model)}</p>
+            }
+            .into_any()
+        }
+    }
+}
+
+/// A model's last finished run: the total, then each task.
+#[component]
+fn CodeBenchResult(run: CodeBenchRun) -> impl IntoView {
+    let (passed, secs) = run_totals(&run);
+    let total: u32 = run.tasks.iter().map(|t| t.total).sum();
+    let output: u64 = run.tasks.iter().map(|t| t.output_tokens).sum();
+    // The time the model spent, from each task's speed.
+    let model_secs: f64 = run
+        .tasks
+        .iter()
+        .filter_map(|t| Some(t.output_tokens as f64 / t.output_tps.filter(|v| *v > 0.0)?))
+        .sum();
+    let mut summary = vec![
+        format!("{passed}/{total} tests"),
+        duration_text(secs),
+        format!("{output} output tokens"),
+    ];
+    if model_secs > 0.0 {
+        summary.push(tps((output as f64 / model_secs * 10.0).round() / 10.0));
+    }
+    let tasks = run
+        .tasks
+        .into_iter()
+        .map(|t| view! { <CodeBenchTaskRow task=t /> })
+        .collect_view();
+    view! {
+        <div class="bench-run">
+            <h3>{run.model.clone()}</h3>
+            <p>{format!("Total: {}", summary.join(" · "))}</p>
+            <p class="muted small">{run.at_text.clone()}</p>
+            <ul class="list">{tasks}</ul>
+        </div>
+    }
+}
+
+#[component]
+fn CodeBenchTaskRow(task: CodeBenchTask) -> impl IntoView {
+    let mut figures = vec![format!("{}/{} tests", task.passed, task.total)];
+    if let Some(secs) = task.total_secs {
+        figures.push(duration_text(secs));
+    }
+    figures.push(format!("{} steps", task.steps));
+    figures.push(format!(
+        "{} in / {} out tokens",
+        task.input_tokens, task.output_tokens
+    ));
+    if let Some(v) = task.output_tps {
+        figures.push(tps(v));
+    }
+    let class = if task.total > 0 && task.passed == task.total {
+        "badge is-ok"
+    } else if task.passed > 0 {
+        "badge is-warn"
+    } else {
+        "badge is-bad"
+    };
+    let badge = if task.timed_out {
+        "Time limit".to_string()
+    } else {
+        format!("{}/{}", task.passed, task.total)
+    };
+    let files = task
+        .files
+        .iter()
+        .map(|(path, text)| {
+            view! {
+                <p class="small strong">{path.clone()}</p>
+                <pre class="lines">{text.clone()}</pre>
+            }
+        })
+        .collect_view();
+    let no_files = task
+        .files
+        .is_empty()
+        .then(|| view! { <p class="hint">"The agent left no Python file."</p> });
+    view! {
+        <li>
+            <div class="grow">
+                <p class="strong">{task.title.clone()}</p>
+                <p class="muted small">{figures.join(" · ")}</p>
+                {task.error.clone().map(|e| view! { <p class="error small">{e}</p> })}
+                <details class="advanced">
+                    <summary>"Code and test output"</summary>
+                    {files}
+                    {no_files}
+                    <p class="small strong">"Hidden tests"</p>
+                    <pre class="lines">{task.test_output.clone()}</pre>
+                </details>
+            </div>
+            <span class=class>
+                <span class="dot"></span>
+                {badge}
+            </span>
+        </li>
     }
 }
 

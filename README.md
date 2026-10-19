@@ -72,6 +72,11 @@ ins Heimnetz. Alle Einstellungen stehen mit Erklärung in
 
 Nur ein Weckpaket senden, zum Testen: `docker compose run --rm strata-proxy wake`
 
+Der zweite Dienst `code-bench` (Image `ghcr.io/faunkr/strata-code-bench:latest`)
+ist nur für den Code-Benchmark da; ohne ihn läuft alles andere genauso. Das
+Update-Skript für TrueNAS aktualisiert ihn nicht, dafür einmal
+`docker pull ghcr.io/faunkr/strata-code-bench:latest` und die App neu starten.
+
 ## Automatische Updates (TrueNAS)
 
 [deploy/truenas-auto-update.sh](deploy/truenas-auto-update.sh) holt alle 15
@@ -181,6 +186,18 @@ ist englisch und in fünf Bereiche gegliedert: *Overview*, *PC*, *Strata*
   und einmal. Die .exe liegt im Image und ist ohne Anmeldung unter
   `/admin/agent/strata-pc-agent.exe` abrufbar. Details:
   [docs/pc-dienst.md](docs/pc-dienst.md).
+- **Benchmark** (*Strata → Version & benchmark*): *Run benchmark* misst das
+  aktive Modell, *Compare models* jedes installierte nacheinander (je etwa
+  10 min, Anfragen warten so lange) und aktiviert danach wieder das vorher
+  aktive. Die Liste zeigt pro Modell Decode- und Prompt-Tokens/s, mit
+  welchem Kontext, welcher Speed-Projection und welcher Strata-Version
+  gemessen wurde, das schnellste zuerst, mit *Make active*.
+- **Code benchmark** (gleicher Reiter): Das aktive Modell löst mit opencode
+  drei Python-Aufgaben im Container `code-bench` neben dem Proxy (in beiden
+  Compose-Dateien; `CODE_BENCH_URL` zeigt darauf). Versteckte Tests bewerten
+  das Ergebnis; gezeigt werden Tests, Zeit, Schritte, Tokens und Tokens/s je
+  Aufgabe, aufklappbar mit Code und Testausgabe. Details:
+  [tools/code-bench/README.md](tools/code-bench/README.md).
 - **API-Keys** (Bereich *Access*): Einen Key pro Client anlegen. Er wird nur direkt nach dem
   Anlegen vollständig angezeigt und nur als Hash in `/data/api-keys.json`
   gespeichert. Die Liste zeigt Anfang, Erstellung und letzte Nutzung; ein

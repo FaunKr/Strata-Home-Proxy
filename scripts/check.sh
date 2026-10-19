@@ -65,6 +65,8 @@ else
   echo "WARNUNG: shellcheck fehlt, tools/local-agent ungeprüft" >&2
 fi
 tools/local-agent/test.sh
+# Der Runner des Code-Benchmarks, gegen ein nachgebildetes opencode.
+python3 tools/code-bench/test_runner.py
 # Erst bauen, dann mit Zeitlimit testen: ein hängender Test bricht ab, statt
 # den Lauf endlos zu blockieren. Welcher hängt, steht in der Ausgabe
 # ("has been running for over 60 seconds").

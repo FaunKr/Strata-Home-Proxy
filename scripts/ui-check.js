@@ -7,7 +7,12 @@ const areas = ['/admin', '/admin/pc', '/admin/strata', '/admin/strata/output',
   '/admin/strata/version', '/admin/strata/connection', '/admin/access', '/admin/system'];
 // Texts an area must show: the overview's Power row comes from
 // scripts/fake-shelly.js, its Hardware card from scripts/fake-pc.js.
-const expected = { '/admin': ['87 W', 'Awake', '11.8 / 16.0 GB', '0 rpm', '41 % of limit'] };
+const expected = {
+  '/admin': ['87 W', 'Awake', '11.8 / 16.0 GB', '0 rpm', '41 % of limit'],
+  // Benchmarks from scripts/fake-pc.js, the code benchmark from
+  // scripts/ui-check-code-bench.json.
+  '/admin/strata/version': ['Fastest', 'Decode 52.3 tok/s', 'Compare models', 'Total: 19/24 tests', 'Run code benchmark'],
+};
 const views = [['desk', { width: 1280, height: 900 }, 'light'], ['phone', { width: 390, height: 844 }, 'dark']];
 // The same markers as crates/nas-proxy/tests/ui_language.rs.
 const german = /[äöüßÄÖÜ]|\b(nicht|und|oder|der|das|ist|wird|bitte|keine?|Abgelehnt|Einstellung|Fehler|Passwort)\b/;

@@ -100,3 +100,21 @@ async fn status_reports_temperature_fan_and_power() {
     assert_eq!(gpu["power_pct"], 41.0);
     assert_eq!(gpu["load_pct"], Value::Null);
 }
+
+/// The real reading, in the CI job `windows`: gets through D3DKMT and PDH
+/// without a crash and reads CPU and RAM. The runner has no GPU, so its
+/// values may stay empty.
+#[cfg(windows)]
+#[test]
+fn windows_reads_cpu_and_ram() {
+    use strata_pc_agent::hardware::read;
+    // The first call starts the sampler; CPU load needs a second sample 2 s later.
+    read();
+    std::thread::sleep(std::time::Duration::from_millis(4500));
+    let cpu = read().cpu;
+    let load = cpu.load_pct.expect("CPU-Last");
+    assert!((0.0..=100.0).contains(&load), "CPU-Last {load}");
+    let total = cpu.ram_total_bytes.expect("RAM gesamt");
+    let used = cpu.ram_used_bytes.expect("RAM belegt");
+    assert!(0 < used && used <= total, "RAM {used} von {total}");
+}

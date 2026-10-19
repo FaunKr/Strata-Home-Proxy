@@ -51,7 +51,7 @@ async fn shows_every_value_with_its_origin() {
     let view = settings(&mut b).await;
     assert_eq!(view["persistent"], true);
     assert_eq!(view["configured"], true);
-    assert_eq!(view["entries"].as_array().unwrap().len(), 19);
+    assert_eq!(view["entries"].as_array().unwrap().len(), 23);
     assert!(!view.to_string().contains("DATA_DIR"));
     assert_eq!(entry(&view, "STRATA_URL")["source"], "Env");
     assert_eq!(entry(&view, "STRATA_URL")["value"], "http://pc:8080");
@@ -59,6 +59,10 @@ async fn shows_every_value_with_its_origin() {
     assert_eq!(entry(&view, "IDLE_TIMEOUT_SECS")["value"], "600");
     assert_eq!(entry(&view, "WAKE_TIMEOUT_SECS")["source"], "Default");
     assert_eq!(entry(&view, "LISTEN_ADDR")["restart"], true);
+    assert_eq!(entry(&view, "POWER_AWAKE_WATTS")["value"], "75");
+    assert_eq!(entry(&view, "POWER_ASLEEP_WATTS")["value"], "3");
+    assert_eq!(entry(&view, "PRICE_CT_PER_KWH")["value"], "30");
+    assert_eq!(entry(&view, "PRICE_CT_PER_KWH")["source"], "Default");
     assert_eq!(entry(&view, "PC_AGENT_TOKEN")["value"], "set");
     assert!(!view.to_string().contains("streng-geheim"));
 
@@ -102,6 +106,7 @@ async fn each_area_shows_its_own_settings() {
                 "PC_AGENT_URL",
                 "PC_AGENT_TOKEN",
                 "SHELLY_URL",
+                "PLUG_SAMPLE_SECS",
                 "IDLE_TIMEOUT_SECS",
                 "WAKE_TIMEOUT_SECS",
                 "WOL_RESEND_SECS",
@@ -122,6 +127,9 @@ async fn each_area_shows_its_own_settings() {
                 "MAX_BODY_BYTES",
                 "PING_INTERVAL_SECS",
                 "PROBE_TIMEOUT_MS",
+                "POWER_AWAKE_WATTS",
+                "POWER_ASLEEP_WATTS",
+                "PRICE_CT_PER_KWH",
             ][..],
         ),
     ];
@@ -129,7 +137,7 @@ async fn each_area_shows_its_own_settings() {
         .iter()
         .flat_map(|(_, keys)| keys.iter().copied())
         .collect();
-    assert_eq!(all.len(), 18);
+    assert_eq!(all.len(), 22);
     for (path, keys) in areas {
         let html = b.page(path).await;
         for key in &all {
@@ -272,6 +280,32 @@ async fn saved_strata_url_applies_at_once_and_reset_restores_it() {
 }
 
 #[tokio::test]
+async fn power_and_price_are_saved_with_decimals_and_apply_at_once() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = save_settings(
+        &mut b,
+        &[
+            ("POWER_AWAKE_WATTS", "110"),
+            ("POWER_ASLEEP_WATTS", "1.5"),
+            ("PRICE_CT_PER_KWH", "32.5"),
+        ],
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let cfg = s.state.cfg();
+    assert_eq!(cfg.power_awake_watts, 110.0);
+    assert_eq!(cfg.power_asleep_watts, 1.5);
+    assert_eq!(cfg.price_ct_per_kwh, 32.5);
+    let view = settings(&mut b).await;
+    assert_eq!(entry(&view, "PRICE_CT_PER_KWH")["source"], "Saved");
+    assert_eq!(entry(&view, "PRICE_CT_PER_KWH")["value"], "32.5");
+    let html = b.page("/admin/system").await;
+    assert!(html.contains("ct/kWh"), "{html}");
+    assert!(html.contains("value=\"32.5\""), "{html}");
+}
+
+#[tokio::test]
 async fn saved_idle_timeout_brings_sleep_forward() {
     use std::{sync::atomic::Ordering, time::Duration};
     let s = setup(true, |_| {}).await;
@@ -293,6 +327,9 @@ async fn invalid_values_are_rejected_with_a_message() {
         ("WOL_ADDR", "192.168.1.255"),
         ("IDLE_TIMEOUT_SECS", ""),
         ("DATA_DIR", "/tmp"),
+        ("POWER_AWAKE_WATTS", "0"),
+        ("POWER_ASLEEP_WATTS", "-1"),
+        ("PRICE_CT_PER_KWH", "billig"),
     ] {
         let resp = save(&mut b, key, value).await;
         assert_eq!(resp.status(), 400, "{key}={value}");

@@ -575,10 +575,14 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         health_poll: Duration::from_millis(50),
         ping_interval: Duration::from_millis(200),
         idle_check: Duration::from_millis(50),
+        plug_sample: Duration::from_millis(100),
         sleep_retry: Duration::from_millis(300),
         sleep_settle: Duration::from_millis(200),
         probe_timeout: Duration::from_millis(500),
         max_body_bytes: 1 << 20,
+        power_awake_watts: 75.0,
+        power_asleep_watts: 3.0,
+        price_ct_per_kwh: 30.0,
         data_dir: None,
         ui_password: None,
     };
@@ -587,6 +591,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     state.overview.set_poll(Duration::from_millis(100));
     let (key, _) = state.api_keys.create("Test").unwrap();
     state.spawn_idle_loop();
+    state.spawn_plug_loop();
     let proxy = serve(api_router(state.clone())).await;
     Setup {
         pc,
@@ -620,6 +625,23 @@ pub async fn post_json(s: &Setup, path: &str, body: Value) -> reqwest::Response 
 
 pub fn kinds(state: &AppState) -> Vec<EventKind> {
     state.events.recent().into_iter().map(|e| e.kind).collect()
+}
+
+/// The Ereignisse without the marks the proxy sets for the history on its
+/// own, which can land at any time.
+pub fn own_kinds(state: &AppState) -> Vec<EventKind> {
+    kinds(state)
+        .into_iter()
+        .filter(|k| !k.is_history_mark())
+        .collect()
+}
+
+/// Waits until the proxy has drawn this state of the PC in the history.
+pub async fn seen(s: &Setup, kind: EventKind) {
+    eventually(&format!("{kind:?} im Verlauf"), || {
+        kinds(&s.state).contains(&kind)
+    })
+    .await;
 }
 
 /// A browser with one cookie jar.

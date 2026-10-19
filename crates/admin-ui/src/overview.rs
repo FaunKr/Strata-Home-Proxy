@@ -11,6 +11,7 @@ use crate::{
     },
     confirm::{Confirm, Question},
     hardware::HardwareCard,
+    history::WeekCard,
     icons::Icon,
     labels::{event_class, event_label, pc_badge, strata_badge, strata_job_label},
 };
@@ -200,7 +201,8 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
             <GamingCard overview=overview.clone() actions />
             <KeepAwakeCard overview=overview.clone() actions />
         </div>
-        <Tiles overview live />
+        <Tiles overview=overview.clone() live />
+        <WeekCard week=overview.week.clone() />
         {hardware}
         <section class="card" aria-labelledby="events-heading">
             <h2 id="events-heading">"Recent events"</h2>

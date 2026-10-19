@@ -2,9 +2,10 @@
 //! idle timer that sends the PC to sleep.
 
 use std::{
+    ops::{Deref, DerefMut},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime},
@@ -23,7 +24,7 @@ use crate::{
     auth::Auth,
     clock,
     config::{Config, format_mac, parse_mac},
-    events::{EventKind, EventLog},
+    events::{EventKind, History, Sample},
     overview::Monitor,
     settings::Settings,
     wol,
@@ -175,6 +176,55 @@ impl Inner {
     }
 }
 
+/// The Ereignis of a state the proxy noticed on its own; `Waking` and
+/// `Unknown` are steps on the way, and the history reads them from the
+/// Ereignisse around them.
+fn seen_event(pc: PcState) -> Option<EventKind> {
+    match pc {
+        PcState::Awake => Some(EventKind::PcSeenAwake),
+        PcState::Asleep => Some(EventKind::PcSeenAsleep),
+        PcState::Gaming => Some(EventKind::PcSeenGaming),
+        PcState::Waking | PcState::Unknown => None,
+    }
+}
+
+/// Writes to the shared state and records the PC's new state on the way out,
+/// for the changes the proxy only noticed; used where the state comes from an
+/// answer of the PC service or of Strata. A state the proxy brought about
+/// itself keeps its own Ereignis instead.
+struct ObservedWrite<'a> {
+    state: &'a AppState,
+    /// The state as it was before anything was written.
+    from: PcState,
+    inner: MutexGuard<'a, Inner>,
+}
+
+impl Deref for ObservedWrite<'_> {
+    type Target = Inner;
+    fn deref(&self) -> &Inner {
+        &self.inner
+    }
+}
+
+impl DerefMut for ObservedWrite<'_> {
+    fn deref_mut(&mut self) -> &mut Inner {
+        &mut self.inner
+    }
+}
+
+impl Drop for ObservedWrite<'_> {
+    /// Records while still holding the lock, so two changes land in the
+    /// Verlauf in the order they happened; `record` never takes this lock.
+    fn drop(&mut self) {
+        let to = self.inner.pc;
+        if to != self.from
+            && let Some(kind) = seen_event(to)
+        {
+            self.state.events.record(kind, None);
+        }
+    }
+}
+
 /// What the overview needs from the shared state.
 pub struct Snapshot {
     pub pc: PcState,
@@ -201,7 +251,7 @@ pub struct AppState {
     pub upstream: Client,
     /// For `/health` and the PC service, rebuilt when `PROBE_TIMEOUT_MS` changes.
     probe: Mutex<(Duration, Client)>,
-    pub events: EventLog,
+    pub events: History,
     /// Live state for the overview page.
     pub overview: Monitor,
     /// Strata jobs on the PC and the Strata key.
@@ -246,10 +296,10 @@ impl AppState {
             .and_then(|text| serde_json::from_str::<KeepAwakeFile>(&text).ok())
             .map(|f| SystemTime::UNIX_EPOCH + Duration::from_secs(f.until))
             .filter(|t| *t > SystemTime::now());
-        Arc::new(Self {
+        let state = Arc::new(Self {
             auth: Auth::new(cfg.data_dir.clone(), cfg.ui_password.clone()),
             api_keys: ApiKeys::new(cfg.data_dir.clone()),
-            events: EventLog::new(cfg.data_dir.clone()),
+            events: History::new(cfg.data_dir.clone()),
             upstream,
             overview: Monitor::default(),
             strata: crate::strata::StrataState::new(cfg.data_dir.clone()),
@@ -270,7 +320,11 @@ impl AppState {
             }),
             wake_lock: tokio::sync::Mutex::new(()),
             settings,
-        })
+        });
+        // Before this start the proxy saw nothing, so the time until the first
+        // known state of the history stays unknown.
+        state.events.record(EventKind::ProxyStarted, None);
+        state
     }
 
     /// The configuration in effect right now; changes on the settings page
@@ -368,6 +422,22 @@ impl AppState {
         self.inner.lock().unwrap().pc = pc;
     }
 
+    /// The shared state, recording on the way out any state the proxy learned
+    /// from an answer of the PC or of Strata.
+    fn observed(&self) -> ObservedWrite<'_> {
+        let inner = self.inner.lock().unwrap();
+        ObservedWrite {
+            from: inner.pc,
+            state: self,
+            inner,
+        }
+    }
+
+    /// Takes over a state the PC service just reported.
+    fn note_reported(&self, pc: PcState) {
+        self.observed().inner.pc = pc;
+    }
+
     /// Starts the idle time again from now, e.g. after waking by hand.
     pub fn touch(&self) {
         self.inner.lock().unwrap().touch();
@@ -402,7 +472,7 @@ impl AppState {
             },
             _ => Health::Down,
         };
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.observed();
         if Self::settling(&inner, cfg.sleep_settle) {
             return Health::Down;
         }
@@ -421,7 +491,7 @@ impl AppState {
             return None;
         }
         let status = self.pc_status(&agent).await;
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.observed();
         let settling = Self::settling(&inner, self.cfg().sleep_settle);
         inner.note_pc_status(status.as_ref(), strata_answers, settling);
         status
@@ -443,7 +513,7 @@ impl AppState {
         }
         match self.pc_status(&self.agent()).await {
             Some(status) if status.gaming_mode => {
-                self.set_pc(PcState::Gaming);
+                self.note_reported(PcState::Gaming);
                 Readiness::Gaming
             }
             _ => Readiness::NeedsWake,
@@ -471,7 +541,7 @@ impl AppState {
                 pc_answers = false;
                 if let Some(status) = self.pc_status(&self.agent()).await {
                     if status.gaming_mode {
-                        self.set_pc(PcState::Gaming);
+                        self.note_reported(PcState::Gaming);
                         return Err(WakeError::Gaming);
                     }
                     pc_answers = true;
@@ -536,7 +606,7 @@ impl AppState {
         let strata_answers = status.is_none() && self.strata_healthy().await;
         let now = Instant::now();
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.observed();
             let settling = Self::settling(&inner, cfg.sleep_settle);
             if !inner.note_pc_status(status.as_ref(), strata_answers, settling) {
                 return;
@@ -597,12 +667,15 @@ impl AppState {
             // A PC that just accepted sleep may still answer: not awake yet.
             let settling = Self::settling(&self.inner.lock().unwrap(), cfg.sleep_settle);
             if !settling && self.pc_status(&self.agent()).await.is_some() {
-                self.set_pc(PcState::Awake);
                 if last_wol.is_some() {
+                    self.set_pc(PcState::Awake);
                     self.events.record(
                         EventKind::Awake,
                         Some(format!("after {:.1} s", started.elapsed().as_secs_f64())),
                     );
+                } else {
+                    // Woken by someone else, e.g. at the desk.
+                    self.note_reported(PcState::Awake);
                 }
                 return Ok(());
             }
@@ -658,6 +731,18 @@ impl AppState {
         Ok(())
     }
 
+    /// Notes every `events::BEAT` that the proxy runs, so the Verlauf knows
+    /// after a stop since when it saw nothing.
+    pub fn spawn_beat_loop(self: &Arc<Self>) {
+        let state = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                state.events.beat();
+                tokio::time::sleep(crate::events::BEAT).await;
+            }
+        });
+    }
+
     pub fn spawn_idle_loop(self: &Arc<Self>) {
         let state = Arc::clone(self);
         tokio::spawn(async move {
@@ -668,6 +753,33 @@ impl AppState {
                 state.api_keys.flush_last_used();
             }
         });
+    }
+
+    /// Records the Leistung of the Messsteckdose every `PLUG_SAMPLE_SECS`
+    /// while one is set up. A read that fails stores nothing; a hanging plug
+    /// costs this loop one probe timeout and holds up nothing else.
+    pub fn spawn_plug_loop(self: &Arc<Self>) {
+        let state = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                // Read each round, so a changed SHELLY_URL or PLUG_SAMPLE_SECS
+                // applies at once.
+                let started = Instant::now();
+                let cfg = state.cfg();
+                if let Some(url) = &cfg.shelly_url {
+                    state.sample_plug(&cfg, url).await;
+                }
+                tokio::time::sleep(cfg.plug_sample.saturating_sub(started.elapsed())).await;
+            }
+        });
+    }
+
+    async fn sample_plug(&self, cfg: &Config, url: &str) {
+        let ts = clock::unix_now();
+        match crate::plug::power(&self.probe(cfg), url).await {
+            Some(watts) => self.events.record_sample(Sample { ts, watts }),
+            None => tracing::debug!("Steckdose {url} ohne Messwert"),
+        }
     }
 }
 

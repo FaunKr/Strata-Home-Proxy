@@ -110,7 +110,7 @@ async fn install_wakes_the_pc_and_hands_it_a_new_strata_key() {
     assert_eq!(body["context"], 65536);
     let key = body["api_key"].as_str().unwrap().to_string();
     assert_eq!(key.len(), 64);
-    let kinds = kinds(&s.state);
+    let kinds = own_kinds(&s.state);
     assert_eq!(
         kinds.last(),
         Some(&EventKind::StrataJobStarted),
@@ -237,7 +237,7 @@ async fn progress_comes_through_the_live_stream() {
         .await;
     s.pc.update_job(json!({"state": "done"}));
     live.until("Ende", |v| v["strata_job"].is_null()).await;
-    let kinds = kinds(&s.state);
+    let kinds = own_kinds(&s.state);
     assert!(kinds.contains(&EventKind::StrataJobDone), "{kinds:?}");
 }
 

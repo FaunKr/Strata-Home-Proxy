@@ -121,6 +121,25 @@ async fn asks_only_while_a_page_watches() {
 }
 
 #[tokio::test]
+async fn the_stream_carries_the_last_7_days_summed_once_a_minute() {
+    let s = setup(true, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live.until("PC wach", |v| v["pc"] == "Awake").await;
+    let week = &v["week"];
+    assert_eq!(week["bucket"], "day", "{week}");
+    assert_eq!(week["days"].as_array().unwrap().len(), 7, "{week}");
+    assert!(
+        week["totals"]["unknown_h"].as_f64().unwrap() > 0.0,
+        "{week}"
+    );
+    // Many ticks of the stream, one sum.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert!(s.state.overview.rounds() >= 3);
+    assert_eq!(s.state.overview.weeks_summed(), 1);
+}
+
+#[tokio::test]
 async fn watching_neither_wakes_nor_keeps_awake() {
     let s = setup(false, |_| {}).await;
     let b = logged_in(&s.url).await;
@@ -344,7 +363,7 @@ async fn sleep_button_puts_the_pc_to_sleep() {
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("sleep-now", &[]).await.status(), 200);
     assert!(!s.pc.up());
-    let kinds: Vec<_> = kinds(&s.state)
+    let kinds: Vec<_> = own_kinds(&s.state)
         .into_iter()
         .map(|k| format!("{k:?}"))
         .collect();
@@ -414,7 +433,7 @@ async fn gaming_on_reports_a_failed_wake() {
     assert_eq!(resp.status(), 400);
     assert!(resp.text().await.unwrap().contains("did not wake in time"));
     assert!(!s.pc.gaming.load(Ordering::SeqCst));
-    let kinds: Vec<_> = kinds(&s.state)
+    let kinds: Vec<_> = own_kinds(&s.state)
         .into_iter()
         .map(|k| format!("{k:?}"))
         .collect();

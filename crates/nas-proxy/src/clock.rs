@@ -15,6 +15,12 @@ pub fn unix_now() -> u64 {
     unix(SystemTime::now())
 }
 
+/// The time zone of the NAS: the days of the Verlauf follow it, so the same
+/// range reads the same on the NAS and on any page.
+pub fn zone() -> TimeZone {
+    TimeZone::system()
+}
+
 fn zoned(ts: u64) -> Zoned {
     let ts = Timestamp::from_second(ts as i64).unwrap_or(Timestamp::UNIX_EPOCH);
     ts.to_zoned(TimeZone::system())

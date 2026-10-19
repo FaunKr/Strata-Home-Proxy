@@ -568,6 +568,7 @@ pub enum StrataJobKind {
     SetKey,
     SetSpeedProjection,
     SetContext,
+    CompareModels,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -658,7 +659,7 @@ pub struct StrataSize {
     pub partly_downloaded: bool,
 }
 
-/// The last benchmark run.
+/// A model's last benchmark run.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StrataBenchmark {
     pub model: String,
@@ -669,6 +670,23 @@ pub struct StrataBenchmark {
     /// Local time text, filled in by the proxy.
     #[serde(default)]
     pub at_text: String,
+    /// Chat decode tokens per second; `None` from an older PC service or
+    /// when the run failed.
+    #[serde(default)]
+    pub decode_tps: Option<f64>,
+    /// Tokens per second reading a 4K prompt, if the benchmark said.
+    #[serde(default)]
+    pub prompt_tps: Option<f64>,
+    /// What it was measured with.
+    #[serde(default)]
+    pub context: Option<u32>,
+    #[serde(default)]
+    pub speed_projection: Option<bool>,
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Why its run in a comparison gave no result.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// Strata on the PC as its service reports it.
@@ -692,8 +710,12 @@ pub struct StrataInfo {
     #[serde(default)]
     pub disk_free_gb: Option<f64>,
     pub data_dir: String,
+    /// The last successful run.
     #[serde(default)]
     pub benchmark: Option<StrataBenchmark>,
+    /// Each model's last run; empty from an older PC service.
+    #[serde(default)]
+    pub benchmarks: Vec<StrataBenchmark>,
     #[serde(default)]
     pub job: Option<StrataJob>,
 }

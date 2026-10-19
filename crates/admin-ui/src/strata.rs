@@ -7,8 +7,8 @@ use leptos_router::components::{A, Outlet};
 
 use crate::{
     api::{
-        CancelStrataJob, StartStrataJob, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
-        StrataModel, StrataPage, StrataSize, error_text, get_strata,
+        CancelStrataJob, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob, StrataJobKind,
+        StrataJobState, StrataModel, StrataPage, StrataSize, error_text, get_strata,
     },
     confirm::{Confirm, Question},
     labels::{STRATA_CONNECTION, strata_job_label},
@@ -864,10 +864,6 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
         Some(false) => ("Up to date", "badge is-ok"),
         None => ("Not known", "badge is-idle"),
     };
-    let bench = info.benchmark.clone().map_or_else(
-        || "No benchmark has run yet.".to_string(),
-        |b| format!("Last: {} with {}, {}.", b.result, b.model, b.at_text),
-    );
     view! {
         <section class="card">
             <div class="card-head">
@@ -903,10 +899,70 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
                 </button>
             </div>
         </section>
+        <Benchmarks info actions blocked />
+    }
+}
+
+/// About how long one benchmark takes, as the PC service says.
+const BENCH_MINUTES: usize = 10;
+
+/// Each model's last benchmark, fastest first, and the buttons that run one
+/// or compare them all.
+#[component]
+fn Benchmarks(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+    let confirm = expect_context::<Confirm>();
+    let mut rows: Vec<StrataBenchmark> = info.benchmarks.clone();
+    // An older PC service keeps only the last run.
+    if rows.is_empty() {
+        rows.extend(info.benchmark.clone());
+    }
+    rows.sort_by(|a, b| {
+        b.decode_tps
+            .unwrap_or(-1.0)
+            .total_cmp(&a.decode_tps.unwrap_or(-1.0))
+            .then_with(|| a.model.cmp(&b.model))
+    });
+    let active = info.models.iter().find(|m| m.active).map(|m| m.id.clone());
+    let installed: Vec<String> = info.models.iter().map(|m| m.id.clone()).collect();
+    let fastest = rows
+        .first()
+        .filter(|r| r.decode_tps.is_some())
+        .map(|r| r.model.clone());
+    let list = if rows.is_empty() {
+        view! { <p>"No benchmark has run yet."</p> }.into_any()
+    } else {
+        let items = rows
+            .into_iter()
+            .map(|row| {
+                let is_active = active.as_deref() == Some(row.model.as_str());
+                let is_fastest = fastest.as_deref() == Some(row.model.as_str());
+                let can_activate =
+                    !is_active && row.error.is_none() && installed.contains(&row.model);
+                view! { <BenchRow row is_active is_fastest can_activate actions blocked /> }
+            })
+            .collect_view();
+        view! { <ul class="list">{items}</ul> }.into_any()
+    };
+    let runs = info.models.len();
+    let compare = move |_| {
+        let question = Question {
+            title: "Compare all models?".into(),
+            text: format!(
+                "{runs} runs, about {} minutes. Strata switches between the models, and requests wait meanwhile. The active model comes back at the end.",
+                runs * BENCH_MINUTES
+            ),
+            confirm: "Compare models",
+            danger: false,
+        };
+        confirm.ask(question, move || actions.job(StrataJobKind::CompareModels));
+    };
+    view! {
         <section class="card">
             <h2>"Benchmark"</h2>
-            <p>{bench}</p>
-            <p class="muted small">"Measures the active model. Requests wait while it runs."</p>
+            {list}
+            <p class="muted small">
+                "Run benchmark measures the active model. Requests wait while it runs."
+            </p>
             <div class="actions">
                 <button
                     type="button"
@@ -916,8 +972,100 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
                 >
                     "Run benchmark"
                 </button>
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || blocked.get() || runs < 2
+                    on:click=compare
+                >
+                    "Compare models"
+                </button>
             </div>
         </section>
+    }
+}
+
+/// `38.5` → `38.5 tok/s`.
+fn tps(v: f64) -> String {
+    format!("{v} tok/s")
+}
+
+#[component]
+fn BenchRow(
+    row: StrataBenchmark,
+    is_active: bool,
+    is_fastest: bool,
+    can_activate: bool,
+    actions: Actions,
+    blocked: Signal<bool>,
+) -> impl IntoView {
+    let speeds = match (&row.error, row.decode_tps) {
+        (Some(error), _) => {
+            view! { <p class="error small">{format!("No result: {error}")}</p> }.into_any()
+        }
+        (None, Some(decode)) => {
+            let mut text = format!("Decode {}", tps(decode));
+            text.push_str(&match row.prompt_tps {
+                Some(prompt) => format!(" · Prompt {}", tps(prompt)),
+                None => " · Prompt –".into(),
+            });
+            view! { <p>{text}</p> }.into_any()
+        }
+        (None, None) => view! { <p>{row.result.clone()}</p> }.into_any(),
+    };
+    let mut with = Vec::new();
+    if let Some(context) = row.context {
+        with.push(format!("{}K context", context / 1024));
+    }
+    match row.speed_projection {
+        Some(true) => with.push("speed projection on".into()),
+        Some(false) => with.push("speed projection off".into()),
+        None => {}
+    }
+    if let Some(version) = &row.version {
+        with.push(format!("Strata {version}"));
+    }
+    with.push(row.at_text.clone());
+    let id = row.model.clone();
+    view! {
+        <li>
+            <div class="grow">
+                <p class="strong">{row.model.clone()}</p>
+                {speeds}
+                <p class="muted small">{with.join(" · ")}</p>
+            </div>
+            {is_fastest
+                .then(|| {
+                    view! {
+                        <span class="badge is-ok">
+                            <span class="dot"></span>
+                            "Fastest"
+                        </span>
+                    }
+                })}
+            {is_active
+                .then(|| {
+                    view! {
+                        <span class="badge is-idle">
+                            <span class="dot"></span>
+                            "Active"
+                        </span>
+                    }
+                })}
+            {can_activate
+                .then(|| {
+                    view! {
+                        <button
+                            type="button"
+                            class="secondary"
+                            disabled=move || blocked.get()
+                            on:click=move |_| actions.model_job(StrataJobKind::Activate, id.clone())
+                        >
+                            "Make active"
+                        </button>
+                    }
+                })}
+        </li>
     }
 }
 

@@ -114,7 +114,7 @@ pub async fn page(state: &AppState) -> StrataPage {
             stale: false,
         };
     };
-    if let Some(bench) = info.benchmark.as_mut() {
+    for bench in info.benchmark.iter_mut().chain(info.benchmarks.iter_mut()) {
         bench.at_text = clock::local_text(bench.at);
     }
     *state.strata.last.lock().unwrap() = Some(info.clone());
@@ -212,7 +212,10 @@ fn body(form: &StrataJobForm, key: Option<&str>) -> serde_json::Value {
             put("model", json!(form.model));
             put("context", json!(form.context));
         }
-        StrataJobKind::Update | StrataJobKind::Benchmark | StrataJobKind::SetKey => {}
+        StrataJobKind::Update
+        | StrataJobKind::Benchmark
+        | StrataJobKind::SetKey
+        | StrataJobKind::CompareModels => {}
     }
     if let Some(key) = key {
         put("api_key", json!(key));

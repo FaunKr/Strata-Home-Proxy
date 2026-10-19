@@ -64,6 +64,16 @@ _Avoid_: Shelly, Smart Plug (nur im Code)
 Was die Messsteckdose als aktuelle Leistungsaufnahme des PCs meldet, in Watt; die Übersicht zeigt sie im Bereich Hardware als *Power*, auch während der PC schläft.
 _Avoid_: Stromverbrauch, Energie
 
+**Verbrauch**:
+Die Energie, die der PC über einen Zeitraum des Verlaufs gebraucht hat, in kWh und € zum heutigen Preis. Gemessen, wo die Messsteckdose für mindestens die Hälfte einer Stunde Werte hat, sonst aus der Stromschätzung; die Weboberfläche nennt ihn *Energy* und sagt „measured“, „estimated“ oder „mixed“.
+_Avoid_: Stromverbrauch
+
+**Stromschätzung**:
+Der Verbrauch aus den Einstellungen statt aus Messwerten: wache Stunden (auch im Gaming-Modus) × `POWER_AWAKE_WATTS`, schlafende × `POWER_ASLEEP_WATTS`. Unbekannte Zeit zählt nicht.
+
+**Ersparnis**:
+Was der Schlaf gegenüber einem rund um die Uhr wachen PC spart: schlafende Stunden × (`POWER_AWAKE_WATTS` − `POWER_ASLEEP_WATTS`), in kWh und €; immer aus den Einstellungen, auch wenn gemessen wird. Die Weboberfläche nennt sie *Saved*.
+
 **Gaming-Modus**:
 Ein Zustand des PCs, in dem Strata beendet ist, Anfragen abgewiesen werden und der Proxy den PC nicht schlafen schickt.
 _Avoid_: Spielemodus

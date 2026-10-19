@@ -462,6 +462,12 @@ dialog.confirm .actions { justify-content: flex-end; margin-top: 24px; }
 .week-summary { font-size: 1.05rem; font-weight: 600; margin: 4px 0 0; }
 .week .bars { margin-top: 10px; }
 .week .bar-column { height: 56px; }
+.per-bar { margin-top: 12px; }
+.per-bar summary { cursor: pointer; min-height: 24px; color: var(--muted); }
+.per-bar .table-scroll { overflow-x: auto; }
+.per-bar table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 8px; }
+.per-bar th, .per-bar td { text-align: right; padding: 4px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
+.per-bar th[scope="row"], .per-bar td:last-child { text-align: left; font-weight: normal; }
 .bars-axis { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--muted); }
 input[type="date"] {
   font: inherit;

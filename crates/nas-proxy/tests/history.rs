@@ -8,7 +8,10 @@ use std::{sync::atomic::Ordering, time::Duration};
 
 use common::*;
 use serde_json::Value;
-use strata_nas_proxy::{clock, events::EventKind};
+use strata_nas_proxy::{
+    clock,
+    events::{EventKind, Sample},
+};
 
 /// Die Geschichte, die die Seite für diesen Bereich bekäme.
 async fn fetch(b: &mut Browser, range: &str) -> Value {
@@ -208,4 +211,77 @@ async fn longer_ranges_come_back_in_weeks_and_months() {
     assert_eq!(picked["to"], to.as_str());
     assert_eq!(picked["days"].as_array().unwrap().len(), 8);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn the_watt_settings_change_the_estimate_at_once() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    seen(&s, EventKind::PcSeenAwake).await;
+    let before = history(&mut b, "7d").await;
+    let energy = &before["totals"]["energy"];
+    assert_eq!(energy["source"], "estimated", "{before}");
+    assert!(energy["kwh"].as_f64().unwrap() > 0.0, "{before}");
+    assert_eq!(before["power"]["awake_watts"], 75.0);
+
+    s.state.settings.set("POWER_AWAKE_WATTS", "750").unwrap();
+    s.state.settings.set("PRICE_CT_PER_KWH", "60").unwrap();
+    let after = fetch(&mut b, "7d").await;
+    assert_eq!(after["power"]["awake_watts"], 750.0);
+    assert_eq!(after["power"]["price_ct_per_kwh"], 60.0);
+    // Zehnmal die Watt, doppelt der Preis: grob zwanzigmal die Euro.
+    let eur = |v: &Value| v["totals"]["energy"]["eur"].as_f64().unwrap();
+    assert!(eur(&after) > eur(&before) * 15.0, "{before}\n{after}");
+}
+
+#[tokio::test]
+async fn the_plug_makes_the_energy_measured() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    *s.pc.plug_watts.lock().unwrap() = 87.4;
+    s.state.settings.set("SHELLY_URL", &s.plug).unwrap();
+    // Der Proxy liest die Steckdose selbst ...
+    for _ in 0..100 {
+        if !s.state.events.samples(0, u64::MAX).await.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let live = s.state.events.samples(0, u64::MAX).await;
+    assert!(live.iter().any(|x| x.watts == 87.4), "{live:?}");
+    // ... aber eine gemessene Stunde braucht 30 Minuten davon: der gestrige
+    // Tag bekommt sie so, wie die Schleife sie geschrieben hätte.
+    let today = fetch(&mut b, "1d").await;
+    let midnight = today["days"][0]["date"].as_str().unwrap().to_string();
+    let yesterday = fetch(&mut b, "2d").await;
+    let start = yesterday["days"][0]["date"].as_str().unwrap().to_string();
+    assert_ne!(start, midnight);
+    let range = format!("{start}..{start}");
+    let day_start = clock::unix_now() - 3 * 24 * 3600;
+    for minute in 0..(3 * 24 * 60) {
+        s.state.events.record_sample(Sample {
+            ts: day_start + minute * 60,
+            watts: 87.4,
+        });
+    }
+    let view = fetch(&mut b, &range).await;
+    let energy = &view["totals"]["energy"];
+    assert_eq!(energy["source"], "measured", "{view}");
+    let hours = view["totals"]["unknown_h"].as_f64().unwrap()
+        + view["totals"]["awake_h"].as_f64().unwrap()
+        + view["totals"]["asleep_h"].as_f64().unwrap();
+    let kwh = energy["kwh"].as_f64().unwrap();
+    assert!((kwh - 0.0874 * hours).abs() < 1e-6, "{view}");
+}
+
+#[tokio::test]
+async fn without_a_plug_the_energy_stays_estimated() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    seen(&s, EventKind::PcSeenAwake).await;
+    let view = history(&mut b, "7d").await;
+    assert!(s.state.events.samples(0, u64::MAX).await.is_empty());
+    for bar in view["days"].as_array().unwrap() {
+        assert_eq!(bar["energy"]["source"], "estimated", "{view}");
+    }
 }

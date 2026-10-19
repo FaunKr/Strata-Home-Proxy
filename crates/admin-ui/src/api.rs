@@ -798,6 +798,41 @@ pub enum HistoryBucket {
     Month,
 }
 
+/// Where the Verbrauch of a bar comes from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnergySource {
+    /// From the Messsteckdose: every hour with samples for at least half its
+    /// minutes.
+    Measured,
+    /// From the watt settings (Stromschätzung).
+    #[default]
+    Estimated,
+    /// Some hours measured, some estimated.
+    Mixed,
+}
+
+/// Verbrauch and Ersparnis over a bar or the whole range. € use today's
+/// price for all of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Energy {
+    pub kwh: f64,
+    pub eur: f64,
+    /// Against running awake around the clock: asleep hours × (awake W −
+    /// asleep W), always from the settings.
+    pub saved_kwh: f64,
+    pub saved_eur: f64,
+    pub source: EnergySource,
+}
+
+/// The settings the Stromschätzung and the € used.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PowerSettings {
+    pub awake_watts: f64,
+    pub asleep_watts: f64,
+    pub price_ct_per_kwh: f64,
+}
+
 /// One bar of the history: a day, a week or a month, as `HistoryView::bucket`
 /// says.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -813,6 +848,7 @@ pub struct HistoryDay {
     pub asleep_h: f64,
     /// Time the proxy could not observe; never counted as sleep or awake.
     pub unknown_h: f64,
+    pub energy: Energy,
 }
 
 /// The same hours summed over the whole range.
@@ -822,6 +858,7 @@ pub struct HistoryTotals {
     pub gaming_h: f64,
     pub asleep_h: f64,
     pub unknown_h: f64,
+    pub energy: Energy,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -836,6 +873,7 @@ pub struct HistoryView {
     /// The day of the first Ereignis, where "All" begins; none on a fresh
     /// install.
     pub first_day: Option<String>,
+    pub power: PowerSettings,
     /// False while no PC service is set up: the proxy cannot see what the PC
     /// does on its own, so the history stays incomplete.
     pub agent_configured: bool,

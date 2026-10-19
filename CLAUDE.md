@@ -5,6 +5,7 @@
 - Bevor du vorschlägst, einen PR zu mergen: `/code-review` über seinen Diff.
 - UI-Änderungen im Browser prüfen: `scripts/ui-check.sh` (`SHOTS=1` für Screenshots).
 - Neue Proxy-Tests nutzen das Gerüst mit simuliertem PC und Strata in `crates/nas-proxy/tests/common`.
+- Was der PC-Dienst über HTTP nimmt und antwortet, steht als Typen in `crates/pc-protocol`; Felder kommen nur dazu, Regeln in `docs/pc-agent-api.md`.
 - Wackelnde oder hängende Tests: `scripts/repeat-test.sh` lässt eine Testdatei vielfach laufen und nennt, welcher hängt.
 - CI-Kosten, Actions-Minuten, welche Jobs ein PR startet: `docs/ci.md`.
 

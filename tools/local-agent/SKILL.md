@@ -29,7 +29,7 @@ Offload only when the user asks. When a task is well scoped and mechanical (a re
 
 ## Exit codes
 
-- **0, done**: run `local-agent result <run>`. Review the summary and the whole diff as you would a colleague's work: Strata makes more mistakes than you. Fix small problems on the branch yourself or name them. Then propose merging the branch (`git merge local-agent/<run>`) and wait for the user's word; the merge is theirs to approve.
+- **0, done**: run `local-agent result <run>`. Review the summary and the whole diff as you would a colleague's work: Strata makes more mistakes than you. Fix small problems on the branch yourself or name them. Then propose merging the branch (`git merge local-agent/<run>`) and wait for the user's word; the merge is theirs to approve. When they reject the work, offer `local-agent discard <run>`, which removes the worktree and branch. `local-agent prune` cleans up merged worktrees and runs older than 14 days.
 - **3, fall back**: Strata can't do the task. `local-agent result <run>` names the reason, and for setup problems what to fix. Hand the task to a normal agent: the Agent tool with model `sonnet`, the same brief, and the same limits: read-only stays read-only; a writing run works on a branch, not on the user's checkout, with no `git push` and no network tools.
   - When the result shows a **Log summary**, Strata failed mid-run and its work is committed in the worktree it names. Have the agent continue there, on that branch: give it the brief, the log summary, and the instruction to finish the work rather than start over.
   - Otherwise the worker never started; the agent starts fresh on a new branch.

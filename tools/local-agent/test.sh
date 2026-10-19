@@ -296,8 +296,8 @@ test_status() {
   export FAKE_CLAUDE_MODE=slow FAKE_CLAUDE_SLEEP=3
   "$here/local-agent" run "First line of the task
 second line" >"$tmp/run.out" 2>&1 &
-  local runner=$! i
-  for i in $(seq 50); do
+  local runner=$!
+  for _ in $(seq 50); do
     la status
     [[ $out == *running* ]] && break
     sleep 0.1
@@ -359,6 +359,46 @@ test_stale_queue_entry() {
   la run "task"
   [[ $code == 0 ]] || fail "exit $code: $out"
   ((SECONDS - started < 10)) || fail "toter Eintrag hielt den Lauf auf"
+}
+
+test_discard() {
+  la run "task"
+  local id worktree
+  id=$(run_id)
+  worktree=$(cat "$FAKE_CLAUDE_RECORD/cwd")
+  la discard "$id"
+  [[ $code == 0 ]] || fail "discard exit $code: $out"
+  [[ ! -e $worktree ]] || fail "Worktree bleibt"
+  ! git rev-parse -q --verify "local-agent/$id" >/dev/null || fail "Branch bleibt"
+  [[ $(cat README) == hello && -z $(git status --porcelain) ]] || fail "Checkout geändert"
+  la status "$id"
+  contains "$out" "discarded"
+  la discard nosuchrun
+  [[ $code == 2 ]] || fail "unbekannter Lauf: exit $code"
+  contains "$out" "nosuchrun"
+}
+
+test_prune() {
+  local merged unmerged new
+  la run "old and merged"
+  merged=$(run_id)
+  git merge -q "local-agent/$merged"
+  la run "old, not merged"
+  unmerged=$(run_id)
+  la run "new"
+  new=$(run_id)
+  local runs=$XDG_STATE_HOME/local-agent/runs
+  touch -t 202601010000 "$runs/$merged" "$runs/$merged/"* "$runs/$unmerged" "$runs/$unmerged/"*
+  la prune
+  [[ $code == 0 ]] || fail "prune exit $code: $out"
+  # Old and merged: run folder, worktree and branch go.
+  [[ ! -e $runs/$merged ]] || fail "alter Lauf bleibt"
+  ! git rev-parse -q --verify "local-agent/$merged" >/dev/null || fail "gemergter Branch bleibt"
+  ! git worktree list | grep -qF "$merged" || fail "gemergter Worktree bleibt"
+  # Old but unmerged: everything stays, so discard still works.
+  [[ -d $runs/$unmerged ]] || fail "ungemergter Lauf entfernt"
+  git worktree list | grep -qF "$unmerged" || fail "ungemergter Worktree entfernt"
+  [[ -d $runs/$new ]] || fail "neuer Lauf entfernt"
 }
 
 tests=("$@")

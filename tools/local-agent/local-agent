@@ -438,6 +438,58 @@ commit_leftovers() {
   git -C "$1" commit -qm "local-agent: uncommitted changes of run $2"
 }
 
+# Removes a run's worktree and branch, if it has them.
+remove_worktree() {
+  local repo worktree branch
+  repo=$(meta_get "$1" repo)
+  worktree=$(meta_get "$1" worktree)
+  branch=$(meta_get "$1" branch)
+  [[ -n $branch && -d $repo ]] || return 0
+  [[ ! -d $worktree ]] || git -C "$repo" worktree remove --force "$worktree"
+  git -C "$repo" worktree prune
+  ! git -C "$repo" rev-parse -q --verify "refs/heads/$branch" >/dev/null || git -C "$repo" branch -qD "$branch"
+}
+
+# True when a run's branch is merged: another local branch contains its tip.
+merged() {
+  local repo branch
+  repo=$(meta_get "$1" repo)
+  branch=$(meta_get "$1" branch)
+  [[ -n $branch && -d $repo ]] || return 1
+  git -C "$repo" rev-parse -q --verify "refs/heads/$branch" >/dev/null || return 1
+  local containing
+  containing=$(git -C "$repo" for-each-ref --contains "refs/heads/$branch" --format='%(refname:short)' refs/heads/)
+  grep -qv '^local-agent/' <<<"$containing"
+}
+
+cmd_discard() {
+  [[ -n ${1:-} ]] || usage_error "discard needs a run id"
+  resolve_run "$1"
+  [[ $(meta_get "$run_dir" state) != running ]] || usage_error "run $1 is still running"
+  remove_worktree "$run_dir"
+  meta_set state discarded
+  echo "local-agent: discarded run $1"
+}
+
+# Removes the worktrees of merged runs, and run folders older than 14 days
+# whose worktree is gone. Unmerged work is never removed.
+cmd_prune() {
+  local dir state
+  for dir in "$runs_dir"/*/; do
+    dir=${dir%/}
+    [[ -f $dir/meta ]] || continue
+    state=$(meta_get "$dir" state)
+    [[ $state == queued || $state == running ]] && continue
+    if merged "$dir"; then
+      remove_worktree "$dir"
+    fi
+    if [[ -n $(find "$dir/meta" -mtime +14) ]] && [[ ! -d $(meta_get "$dir" worktree) ]]; then
+      rm -rf "$dir"
+      echo "local-agent: pruned run ${dir##*/}"
+    fi
+  done
+}
+
 cmd_status() {
   resolve_run "${1:-}"
   local state started ended elapsed
@@ -507,6 +559,8 @@ main() {
   case $cmd in
     run) cmd_run "$@" ;;
     status) cmd_status "$@" ;;
+    discard) cmd_discard "$@" ;;
+    prune) cmd_prune "$@" ;;
     result) cmd_result "$@" ;;
     -h | --help | help) usage ;;
     *)

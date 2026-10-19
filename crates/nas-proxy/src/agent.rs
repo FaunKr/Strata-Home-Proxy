@@ -6,7 +6,7 @@ use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use strata_admin_ui::api::{Hardware, StrataInfo, StrataJob};
 
-use crate::config::Config;
+use crate::{config::Config, update_summary::Incoming};
 
 const LOG_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const LOG_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
@@ -146,7 +146,9 @@ impl AgentClient {
     }
 
     /// Strata on the PC; `None` if the service does not answer.
-    pub async fn strata(&self) -> Option<StrataInfo> {
+    /// Strata as the service reports it, with the incoming commits apart:
+    /// they stay on the NAS (the page gets them through `update_summary`).
+    pub async fn strata(&self) -> Option<(StrataInfo, Option<Incoming>)> {
         let resp = self
             .request(reqwest::Method::GET, "/strata")?
             .send()
@@ -155,7 +157,12 @@ impl AgentClient {
         if !resp.status().is_success() {
             return None;
         }
-        resp.json().await.ok()
+        let mut body: serde_json::Value = resp.json().await.ok()?;
+        let incoming = body
+            .as_object_mut()?
+            .remove("update")
+            .and_then(|u| serde_json::from_value(u).ok());
+        Some((serde_json::from_value(body).ok()?, incoming))
     }
 
     /// The running or last Strata job.

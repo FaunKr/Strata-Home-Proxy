@@ -8,7 +8,7 @@ use leptos_router::components::{A, Outlet};
 use crate::{
     api::{
         CancelStrataJob, StartStrataJob, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
-        StrataModel, StrataPage, StrataSize, error_text, get_strata,
+        StrataModel, StrataPage, StrataSize, StrataUpdate, UpdateSummary, error_text, get_strata,
     },
     confirm::{Confirm, Question},
     labels::{STRATA_CONNECTION, strata_job_label},
@@ -268,10 +268,20 @@ pub fn VersionTab() -> impl IntoView {
     with_page(|area, page| {
         let blocked = area.blocked(&page);
         let actions = area.actions;
+        let update = page.update;
         match page.info {
-            None => ().into_any(),
+            None => update
+                .map(|update| {
+                    view! {
+                        <section class="card">
+                            <h2>"Update"</h2>
+                            <Changes update />
+                        </section>
+                    }
+                })
+                .into_any(),
             Some(info) if !info.installed => not_installed().into_any(),
-            Some(info) => view! { <Version info actions blocked /> }.into_any(),
+            Some(info) => view! { <Version info update actions blocked /> }.into_any(),
         }
     })
 }
@@ -853,7 +863,12 @@ fn ContextSwitch(
 }
 
 #[component]
-fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+fn Version(
+    info: StrataInfo,
+    update: Option<StrataUpdate>,
+    actions: Actions,
+    blocked: Signal<bool>,
+) -> impl IntoView {
     let confirm = expect_context::<Confirm>();
     let version = info
         .version
@@ -881,6 +896,9 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
                 <dt>"Installed"</dt>
                 <dd>{version}</dd>
             </dl>
+            {update
+                .filter(|_| info.update_available == Some(true))
+                .map(|update| view! { <Changes update /> })}
             <div class="actions">
                 <button
                     type="button"
@@ -921,6 +939,90 @@ fn Version(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
     }
 }
 
+/// What an update brings: the summary, then the commits it is based on.
+#[component]
+fn Changes(update: StrataUpdate) -> impl IntoView {
+    let (lines, note, by_strata) = match update.summary {
+        UpdateSummary::Written { lines, model } => {
+            (lines, format!("Summary by Strata ({model})"), true)
+        }
+        UpdateSummary::Writing { fallback } => {
+            (fallback, "Strata is writing a summary…".to_string(), false)
+        }
+        UpdateSummary::Unavailable { fallback } => (
+            fallback,
+            "Summary not available: Strata isn't ready".to_string(),
+            false,
+        ),
+    };
+    let count = update.commits.len() as u64 + update.left_out;
+    let more = (update.left_out > 0).then(|| format!("and {} more", update.left_out));
+    view! {
+        <div class="update-changes">
+            {if by_strata {
+                view! {
+                    <ul class="update-summary">
+                        {lines.into_iter().map(|l| view! { <li>{l}</li> }).collect_view()}
+                    </ul>
+                }
+                    .into_any()
+            } else {
+                lines.into_iter().map(|l| view! { <p>{l}</p> }).collect_view().into_any()
+            }}
+            <p class="muted small">{note}</p>
+            {(!update.commits.is_empty())
+                .then(|| {
+                    view! {
+                        <details class="update-commits">
+                            <summary>
+                                {format!("Show {count} change{}", if count == 1 { "" } else { "s" })}
+                            </summary>
+                            <ul>
+                                {update
+                                    .commits
+                                    .into_iter()
+                                    .map(|c| {
+                                        let short = match c.url {
+                                            Some(url) => {
+                                                view! {
+                                                    <a href=url target="_blank" rel="noopener noreferrer">
+                                                        <code>{c.short}</code>
+                                                    </a>
+                                                }
+                                                    .into_any()
+                                            }
+                                            None => view! { <code>{c.short}</code> }.into_any(),
+                                        };
+                                        view! {
+                                            <li>
+                                                {short}
+                                                " "
+                                                <span>{c.subject}</span>
+                                                " "
+                                                <span class="muted small">{c.date_text}</span>
+                                            </li>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </ul>
+                            {more.map(|m| view! { <p class="muted small">{m}</p> })}
+                        </details>
+                    }
+                })}
+            {update
+                .compare_url
+                .map(|url| {
+                    view! {
+                        <p class="small">
+                            <a href=url target="_blank" rel="noopener noreferrer">
+                                "Compare on GitHub"
+                            </a>
+                        </p>
+                    }
+                })}
+        </div>
+    }
+}
 #[component]
 fn StrataKey(actions: Actions, blocked: Signal<bool>) -> impl IntoView {
     let confirm = expect_context::<Confirm>();

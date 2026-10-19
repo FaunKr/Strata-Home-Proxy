@@ -26,6 +26,11 @@ fn zoned(ts: u64) -> Zoned {
     ts.to_zoned(TimeZone::system())
 }
 
+/// `17.10.2026`.
+pub fn local_date(ts: u64) -> String {
+    zoned(ts).strftime("%d.%m.%Y").to_string()
+}
+
 /// `14:03` for today, `17.10. 14:03` for other days.
 pub fn local_text(ts: u64) -> String {
     let at = zoned(ts);

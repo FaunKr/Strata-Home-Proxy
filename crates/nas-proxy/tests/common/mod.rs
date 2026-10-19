@@ -52,6 +52,14 @@ pub struct FakePc {
     pub starting: AtomicBool,
     /// Strata answers, but its model is not in memory (`"loaded": false`).
     pub unloaded: AtomicBool,
+    /// Bodies of the chat requests that were not streamed.
+    pub chat_bodies: Mutex<Vec<Value>>,
+    /// What a chat request without streaming answers instead of "Hallo".
+    pub chat_answer: Mutex<Option<String>>,
+    /// A chat request without streaming fails with 500.
+    pub chat_fails: AtomicBool,
+    /// Pause before a chat answer without streaming.
+    pub chat_pause: Mutex<Duration>,
     /// Body of Strata's `/metrics?format=prometheus`, e.g. `METRICS_BUSY`; 404
     /// (an older build) if unset.
     pub metrics: Mutex<Option<String>>,
@@ -188,7 +196,11 @@ pub async fn health(State(pc): State<Pc>, headers: HeaderMap) -> Response {
     *pc.health_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
     if pc.strata_up() {
         let loaded = !pc.unloaded.load(Ordering::SeqCst);
-        Json(json!({"status": "ok", "loaded": loaded, "service": "strata"})).into_response()
+        Json(
+            json!({"status": "ok", "loaded": loaded, "service": "strata",
+                    "model": "Qwen3-30B-A3B", "max_context": 32768}),
+        )
+        .into_response()
     } else {
         StatusCode::SERVICE_UNAVAILABLE.into_response()
     }
@@ -264,7 +276,20 @@ pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Val
             Duration::ZERO,
         );
     }
-    Json(json!({"choices": [{"message": {"content": "Hallo"}}]})).into_response()
+    pc.chat_bodies.lock().unwrap().push(body);
+    let pause = *pc.chat_pause.lock().unwrap();
+    tokio::time::sleep(pause).await;
+    if pc.chat_fails.load(Ordering::SeqCst) {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    let content = pc
+        .chat_answer
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| "Hallo".into());
+    Json(json!({"model": "Qwen3-30B-A3B", "choices": [{"message": {"content": content}}]}))
+        .into_response()
 }
 
 pub async fn agent_status(State(pc): State<Pc>) -> Response {

@@ -369,6 +369,109 @@ async fn the_page_shows_whether_an_update_is_available() {
     assert_eq!(get(&s, "/strata").await["update_available"], false);
 }
 
+// --- #142 incoming changes ---
+
+/// Git with two commits upstream: one with a body of two lines.
+fn upstream_git(s: &Setup) {
+    let fake = |out: &[&str]| FakeCommand {
+        lines: lines(out),
+        ..FakeCommand::default()
+    };
+    s.fake.command("git rev-list", fake(&["2"]));
+    s.fake.command("git rev-parse", fake(&["fedcba9876543210"]));
+    s.fake.command(
+        "git log",
+        fake(&[
+            "fedcba9876543210\u{1f}1760000000\u{1f}Faster prefill\u{1f}Reads the prompt in bigger chunks.",
+            "Needs setup again.\u{1e}",
+            "aaaabbbbccccdddd\u{1f}1759990000\u{1f}Fix a crash\u{1f}\u{1e}",
+        ]),
+    );
+    s.fake.command(
+        "git diff",
+        fake(&[
+            "120\t30\tserve/server.py",
+            "-\t-\tdocs/logo.png",
+            "4\t0\tsetup.py",
+        ]),
+    );
+    s.fake.command(
+        "git ls-remote",
+        fake(&["https://github.com/Niko1221/Strata.git"]),
+    );
+}
+
+async fn view_once_checked(s: &Setup) -> Value {
+    let mut view = get(s, "/strata").await;
+    for _ in 0..100 {
+        if view["update_available"] != Value::Null {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        view = get(s, "/strata").await;
+    }
+    view
+}
+
+#[tokio::test]
+async fn the_page_carries_the_incoming_changes() {
+    let s = setup("models-update-changes").await;
+    installed(&s);
+    upstream_git(&s);
+    let view = view_once_checked(&s).await;
+    assert_eq!(view["update_available"], true, "{view}");
+    let update = &view["update"];
+    assert_eq!(update["upstream"], "fedcba9876543210", "{view}");
+    assert_eq!(update["total"], 2);
+    assert_eq!(update["remote"], "https://github.com/Niko1221/Strata.git");
+    assert_eq!(
+        update["commits"],
+        json!([
+            {"hash": "fedcba9876543210", "time": 1760000000u64, "subject": "Faster prefill",
+             "body": "Reads the prompt in bigger chunks.\nNeeds setup again."},
+            {"hash": "aaaabbbbccccdddd", "time": 1759990000u64, "subject": "Fix a crash", "body": ""},
+        ])
+    );
+    assert_eq!(
+        update["files"],
+        json!([
+            {"path": "serve/server.py", "added": 120, "removed": 30},
+            {"path": "docs/logo.png", "added": 0, "removed": 0},
+            {"path": "setup.py", "added": 4, "removed": 0},
+        ])
+    );
+    let log = s
+        .fake
+        .runs_of("git")
+        .into_iter()
+        .find(|c| c.args[0] == "log")
+        .unwrap();
+    assert!(log.args.contains(&"HEAD..@{u}".to_string()), "{log:?}");
+    assert!(log.args.contains(&"200".to_string()), "{log:?}");
+
+    // After an update it is gone.
+    assert_eq!(job(&s, json!({"kind": "update"})).await["state"], "done");
+    assert_eq!(get(&s, "/strata").await.get("update"), None);
+}
+
+#[tokio::test]
+async fn nothing_incoming_means_no_changes() {
+    let s = setup("models-update-none").await;
+    installed(&s);
+    upstream_git(&s);
+    s.fake.command(
+        "git rev-list",
+        FakeCommand {
+            lines: lines(&["0"]),
+            ..FakeCommand::default()
+        },
+    );
+    let view = view_once_checked(&s).await;
+    assert_eq!(view["update_available"], false, "{view}");
+    assert_eq!(view.get("update"), None);
+    assert!(!s.fake.runs_of("git").iter().any(|c| c.args[0] == "log"));
+}
+
 // --- #34 benchmark ---
 
 fn bench(s: &Setup, rows: &[&str]) {

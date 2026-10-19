@@ -839,7 +839,7 @@ async fn update(agent: &Arc<Agent>) -> Result<Option<String>, Step> {
     let updated = command(agent, spec, true).await;
     restart_strata(agent).await;
     updated?;
-    agent.updates.found(Some(false));
+    agent.updates.found(Some(false), None);
     Ok(None)
 }
 
@@ -1213,11 +1213,51 @@ struct UpdateState {
     checked: Option<Instant>,
     asking: bool,
     available: Option<bool>,
+    incoming: Option<Incoming>,
 }
+
+/// What an update would bring: the commits Strata's Git source has and this
+/// folder lacks, for the Proxy's summary.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Incoming {
+    /// Full hash of the upstream commit.
+    pub upstream: String,
+    /// All incoming commits; `commits` holds at most `MAX_COMMITS` of them.
+    pub total: u64,
+    /// Newest first.
+    pub commits: Vec<IncomingCommit>,
+    pub files: Vec<ChangedFile>,
+    /// URL of the upstream remote.
+    pub remote: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IncomingCommit {
+    pub hash: String,
+    /// Commit time, Unix seconds.
+    pub time: u64,
+    pub subject: String,
+    pub body: String,
+}
+
+/// A file the incoming commits change; binary files count 0 lines.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChangedFile {
+    pub path: String,
+    pub added: u64,
+    pub removed: u64,
+}
+
+/// Most incoming commits the page carries.
+const MAX_COMMITS: usize = 200;
 
 impl UpdateCheck {
     pub fn available(&self) -> Option<bool> {
         self.inner.lock().unwrap().available
+    }
+
+    pub fn incoming(&self) -> Option<Incoming> {
+        self.inner.lock().unwrap().incoming.clone()
     }
 
     /// Claims the next check, if one is due.
@@ -1234,11 +1274,12 @@ impl UpdateCheck {
         true
     }
 
-    fn found(&self, available: Option<bool>) {
+    fn found(&self, available: Option<bool>, incoming: Option<Incoming>) {
         let mut state = self.inner.lock().unwrap();
         state.asking = false;
         state.checked = Some(Instant::now());
         state.available = available;
+        state.incoming = incoming;
     }
 }
 
@@ -1251,28 +1292,87 @@ pub fn check_for_update(agent: &Arc<Agent>) {
     }
     let agent = Arc::clone(agent);
     tokio::spawn(async move {
-        let available = commits_behind(&agent).await.map(|n| n > 0);
-        agent.updates.found(available);
+        let found = commits_behind(&agent).await;
+        let available = found.as_ref().map(|i| i.is_some());
+        agent.updates.found(available, found.flatten());
     });
 }
 
-async fn commits_behind(agent: &Agent) -> Option<u64> {
+/// `None` if Git cannot tell; `Some(None)` when nothing is incoming.
+async fn commits_behind(agent: &Agent) -> Option<Option<Incoming>> {
     let git = find_git(agent).await?;
     let dir = agent.cfg.strata_dir.clone();
-    let run = |args: &[&str]| CommandSpec {
-        program: git.clone(),
-        args: args.iter().map(|a| a.to_string()).collect(),
-        dir: Some(dir.clone()),
+    let run = |args: &[&str]| {
+        let spec = CommandSpec {
+            program: git.clone(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            dir: Some(dir.clone()),
+        };
+        async move {
+            let (code, lines) = output(agent, &spec).await?;
+            (code == 0).then_some(lines)
+        }
     };
-    let (code, _) = output(agent, &run(&["fetch", "--quiet"])).await?;
-    if code != 0 {
-        return None;
+    run(&["fetch", "--quiet"]).await?;
+    let total: u64 = run(&["rev-list", "--count", "HEAD..@{u}"])
+        .await?
+        .iter()
+        .find_map(|l| l.trim().parse().ok())?;
+    if total == 0 {
+        return Some(None);
     }
-    let (code, lines) = output(agent, &run(&["rev-list", "--count", "HEAD..@{u}"])).await?;
-    if code != 0 {
-        return None;
-    }
-    lines.iter().find_map(|l| l.trim().parse().ok())
+    let upstream = run(&["rev-parse", "@{u}"])
+        .await?
+        .first()?
+        .trim()
+        .to_string();
+    let max = MAX_COMMITS.to_string();
+    let log = run(&[
+        "log",
+        "-n",
+        &max,
+        "--format=%H%x1f%ct%x1f%s%x1f%b%x1e",
+        "HEAD..@{u}",
+    ])
+    .await?;
+    let numstat = run(&["diff", "--numstat", "HEAD..@{u}"]).await?;
+    let remote = run(&["ls-remote", "--get-url"])
+        .await
+        .and_then(|l| l.first().map(|u| u.trim().to_string()))
+        .filter(|u| !u.is_empty());
+    Some(Some(Incoming {
+        upstream,
+        total,
+        commits: parse_log(&log.join("\n")),
+        files: numstat.iter().filter_map(|l| parse_numstat(l)).collect(),
+        remote,
+    }))
+}
+
+/// Records of `%H %ct %s %b`, fields split by 0x1f, records ended by 0x1e.
+fn parse_log(text: &str) -> Vec<IncomingCommit> {
+    text.split('\u{1e}')
+        .filter_map(|record| {
+            let mut fields = record.trim_start_matches('\n').splitn(4, '\u{1f}');
+            Some(IncomingCommit {
+                hash: fields.next()?.trim().to_string(),
+                time: fields.next()?.trim().parse().ok()?,
+                subject: fields.next()?.trim().to_string(),
+                body: fields.next().unwrap_or_default().trim().to_string(),
+            })
+        })
+        .collect()
+}
+
+/// `added<TAB>removed<TAB>path`; binary files show `-` for both.
+fn parse_numstat(line: &str) -> Option<ChangedFile> {
+    let mut fields = line.splitn(3, '\t');
+    let count = |f: Option<&str>| f.map(|n| n.parse().unwrap_or(0));
+    Some(ChangedFile {
+        added: count(fields.next())?,
+        removed: count(fields.next())?,
+        path: fields.next()?.to_string(),
+    })
 }
 
 /// Runs Strata's setup without questions, with the fixed values and the key.
@@ -1647,6 +1747,9 @@ pub struct StrataView {
     pub version: Option<String>,
     /// Whether Strata's source has newer commits; `None` until known.
     pub update_available: Option<bool>,
+    /// What the newer commits bring, while there are some.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<Incoming>,
     pub models: Vec<InstalledModel>,
     pub families: Vec<FamilyView>,
     pub catalog: Vec<CatalogEntry>,
@@ -1722,6 +1825,7 @@ pub fn view(agent: &Agent) -> StrataView {
         installed: dir.join("setup.py").is_file(),
         version: git_commit(dir),
         update_available: agent.updates.available(),
+        update: agent.updates.incoming(),
         models,
         families: catalog::FAMILIES
             .iter()

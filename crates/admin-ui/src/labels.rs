@@ -42,6 +42,10 @@ pub fn label(key: &str) -> Label {
             "Power plug address",
             "Optional Shelly plug the PC is plugged into, e.g. 192.168.1.228. The overview then shows the PC's power draw.",
         ),
+        "PLUG_SAMPLE_SECS" => (
+            "Power history interval",
+            "Time between two readings of the power plug kept for the history.",
+        ),
         "IDLE_TIMEOUT_SECS" => (
             "Idle time before sleep",
             "Without requests for this long, the PC goes to sleep.",
@@ -80,6 +84,18 @@ pub fn label(key: &str) -> Label {
         ),
         "MAX_BODY_BYTES" => ("Largest request", "Requests above this size are refused."),
         "LISTEN_ADDR" => ("Proxy address", "Address and port the proxy listens on."),
+        "POWER_AWAKE_WATTS" => (
+            "Power while awake",
+            "What the PC draws while awake. The history uses it to estimate energy when no power plug measures it.",
+        ),
+        "POWER_ASLEEP_WATTS" => (
+            "Power while asleep",
+            "What the PC draws while asleep. The history uses it to estimate energy when no power plug measures it.",
+        ),
+        "PRICE_CT_PER_KWH" => (
+            "Electricity price",
+            "Price per kWh in cents, e.g. 32.5. Turns the PC's energy use into cost.",
+        ),
         _ => ("", ""),
     };
     Label {
@@ -109,7 +125,7 @@ pub const PC_CONNECTION: SectionDef = SectionDef {
         "PC_AGENT_TOKEN",
         "SHELLY_URL",
     ],
-    advanced: &[],
+    advanced: &["PLUG_SAMPLE_SECS"],
 };
 
 pub const PC_WAKE_SLEEP: SectionDef = SectionDef {
@@ -148,6 +164,18 @@ pub const SYSTEM: SectionDef = SectionDef {
     advanced: &[],
 };
 
+pub const ENERGY: SectionDef = SectionDef {
+    id: "energy",
+    title: "Energy",
+    help: "What the PC draws and what power costs, for the energy use and cost in the history.",
+    keys: &[
+        "POWER_AWAKE_WATTS",
+        "POWER_ASLEEP_WATTS",
+        "PRICE_CT_PER_KWH",
+    ],
+    advanced: &[],
+};
+
 /// The unit a value is entered in, shown inside its field.
 pub fn unit(key: &str) -> Option<&'static str> {
     if key.ends_with("_SECS") {
@@ -156,6 +184,10 @@ pub fn unit(key: &str) -> Option<&'static str> {
         Some("ms")
     } else if key.ends_with("_BYTES") {
         Some("bytes")
+    } else if key.ends_with("_WATTS") {
+        Some("W")
+    } else if key.ends_with("_CT_PER_KWH") {
+        Some("ct/kWh")
     } else {
         None
     }

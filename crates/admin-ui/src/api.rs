@@ -755,6 +755,48 @@ pub struct StrataPage {
     pub info: Option<StrataInfo>,
     /// `info` is from an earlier answer.
     pub stale: bool,
+    /// What an available update brings; `None` without one, or when the PC
+    /// service does not report it.
+    #[serde(default)]
+    pub update: Option<StrataUpdate>,
+}
+
+/// What a Strata update brings since the installed version.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StrataUpdate {
+    pub summary: UpdateSummary,
+    /// Newest first; empty while the PC sleeps after a restart of the proxy.
+    pub commits: Vec<UpdateCommit>,
+    /// Incoming commits not in `commits`.
+    pub left_out: u64,
+    /// GitHub's comparison of the installed and the newest version.
+    pub compare_url: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpdateCommit {
+    pub short: String,
+    pub subject: String,
+    pub date_text: String,
+    pub url: Option<String>,
+}
+
+/// The summary of an update; without Strata's, one from the numbers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum UpdateSummary {
+    /// Written by Strata with `model`.
+    Written {
+        lines: Vec<String>,
+        model: String,
+    },
+    /// Strata is writing it now.
+    Writing {
+        fallback: Vec<String>,
+    },
+    Unavailable {
+        fallback: Vec<String>,
+    },
 }
 
 #[server(prefix = "/admin/api", endpoint = "strata")]

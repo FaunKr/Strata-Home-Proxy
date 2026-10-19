@@ -29,6 +29,10 @@ Immer 200 und ohne Key (Zeile 5460):
 
 `loaded` ist false, solange das Modell nicht im Speicher ist. Strata lädt es mit der nächsten Anfrage. Antwortet `/health` gar nicht, läuft Strata nicht oder startet noch.
 
+## Zusammenfassung eines Updates: `POST /v1/chat/completions`
+
+Für die Zusammenfassung eines Strata-Updates auf dem Reiter *Version & benchmark* fragt der Proxy Strata selbst, mit seinem Key und ohne Streaming. `reasoning_effort` nimmt Strata pro Anfrage (`none`, `low`, `medium` oder `high`); der Proxy setzt `medium`. Die Antwort steht in `choices[0].message.content`, das Denken nicht darin. Gefragt wird nur, wenn `/health` `loaded: true` meldet und die Metriken keine laufende oder wartende Anfrage zeigen; `max_context` aus `/health` begrenzt die Länge der Anfrage.
+
 ## Metriken: `GET /metrics?format=prometheus`
 
 Diesen Endpunkt nutzt die Übersicht. Er braucht den Key (Zeile 5416) und liefert Prometheus-Text mit vLLM-Namen und `strata:`-Namen (`serve/prometheus.py`, `render`). Jede Zeile trägt das Label `model_name`:

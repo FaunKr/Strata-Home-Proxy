@@ -130,6 +130,20 @@ freier Platz, letzter Benchmark und der laufende oder letzte Vorgang.
 Enthält nie den Strata-Key. Fragt nebenbei höchstens einmal pro Stunde Git,
 ob es eine neuere Strata-Version gibt (`update_available`).
 
+Kommen Commits herein, steht in `update`, was sie bringen; ohne Update, vor
+der ersten Prüfung und bei einem älteren PC-Dienst fehlt das Feld:
+
+```json
+{"upstream": "fedcba98…", "total": 14, "remote": "https://github.com/Niko1221/Strata.git",
+ "commits": [{"hash": "fedcba98…", "time": 1760000000, "subject": "…", "body": "…"}],
+ "files": [{"path": "serve/server.py", "added": 120, "removed": 30}]}
+```
+
+`commits` sind die neuesten zuerst, höchstens 200 (`total` zählt alle).
+`files` kommt aus `git diff --numstat HEAD..@{u}`; Binärdateien zählen 0
+Zeilen. Der Proxy behält das alles auf dem NAS; die Weboberfläche bekommt nur
+Kurz-Hash, Betreff und Datum.
+
 Jedes installierte Modell sagt mit `speed_projection`, ob seine Konfiguration
 einen Steuervektor lädt (`--control-vector-scaled`, Stratas oder ein eigener).
 Ein älterer PC-Dienst lässt das Feld weg.

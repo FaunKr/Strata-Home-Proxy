@@ -32,26 +32,32 @@ expect_selects() {
 package_of() { sed -n 's/^name *= *"\(.*\)"/\1/p' "$1/Cargo.toml" | head -1; }
 
 # Fixed cases.
-all="test=true packages= windows=true image=true ui=true"
-expect "test=false packages= windows=false image=false ui=false" README.md docs/strata-api.md
+all="test=true packages= image=true bench=true ui=true"
+expect "test=false packages= image=false bench=false ui=false" README.md docs/strata-api.md
 expect "$all" Cargo.lock
 expect "$all" .github/workflows/ci.yml
-expect "test=true packages=strata-pc-agent windows=true image=true ui=false" crates/pc-agent/src/agent.rs
-expect "test=true packages=strata-admin-ui strata-nas-proxy windows=false image=true ui=true" crates/admin-ui/src/app.rs
-expect "test=true packages=strata-nas-proxy windows=false image=true ui=true" crates/nas-proxy/src/admin.rs
-expect "test=false packages= windows=false image=false ui=false" deploy/docker-compose.yml
-expect "test=false packages= windows=false image=true ui=true" Dockerfile
-expect "test=true packages= windows=false image=false ui=false" tools/local-agent/local-agent
-expect "test=true packages= windows=false image=true ui=false" tools/code-bench/runner.py
-expect "test=true packages=strata-nas-proxy windows=false image=true ui=false" tools/code-bench/tasks/roman/TASK.md
+expect "$all" scripts/check-exe-version.sh
+# Code alone runs the tests of its crates; the images build only when their
+# build definition changes.
+expect "test=true packages=strata-pc-agent image=false bench=false ui=false" crates/pc-agent/src/agent.rs
+expect "test=true packages=strata-admin-ui strata-nas-proxy image=false bench=false ui=true" crates/admin-ui/src/app.rs
+expect "test=true packages=strata-nas-proxy image=false bench=false ui=false" deploy/windows/install.ps1
+expect "test=true packages=strata-nas-proxy image=false bench=false ui=true" crates/nas-proxy/src/admin.rs
+expect "test=false packages= image=true bench=false ui=true" Dockerfile
+expect "test=false packages= image=true bench=false ui=false" .dockerignore
+expect "test=false packages= image=false bench=false ui=false" deploy/docker-compose.yml
+expect "test=true packages= image=false bench=false ui=false" tools/local-agent/local-agent
+expect "test=true packages= image=false bench=true ui=false" tools/code-bench/runner.py
+expect "test=true packages= image=false bench=true ui=false" tools/code-bench/Dockerfile
+expect "test=true packages= image=false bench=false ui=false" tools/code-bench/test_runner.py
+expect "test=true packages=strata-nas-proxy image=false bench=false ui=false" tools/code-bench/tasks/roman/TASK.md
 [[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$all " ]] || fail "--all -> nicht alles"
 
-# Every crate selects itself and the image.
+# Every crate selects itself.
 for dir in crates/*/; do
   dir=${dir%/}
   package=$(package_of "$dir")
   expect_selects "$dir/src/lib.rs" packages "$package"
-  expect_selects "$dir/src/lib.rs" image true
   # Every crate that depends on it by path is selected too.
   for dependent in crates/*/; do
     dependent=${dependent%/}
@@ -71,19 +77,34 @@ while IFS=: read -r source embedded; do
 done < <(grep -roE --include='*.rs' 'include_(str|bytes)!\(\s*"[^"]+"' crates |
   sed -E 's/:include_(str|bytes)!\(\s*"/:/; s/"$//')
 
-# Every local file the Dockerfile copies selects the image.
-while read -r -a words; do
-  sources=()
-  for word in "${words[@]:1}"; do
-    [[ $word == --from=* || $word == *://* ]] && continue 2
-    [[ $word == --* ]] || sources+=("$word")
-  done
-  unset "sources[$((${#sources[@]} - 1))]"
-  for src in "${sources[@]}"; do
-    [[ -d $src ]] && src=$src/x
-    expect_selects "$src" image true
-  done
-done < <(sed -e ':a' -e '/\\$/N' -e 's/\\\n//' -e 'ta' Dockerfile | grep -E '^(COPY|ADD) ')
+# Every local file an image's Dockerfile copies is checked by a pull request
+# that changes it: it builds that image or runs the tests that cover the file.
+expect_checked() {
+  local path=$1 key=$2 out
+  out=$(printf '%s\n' "$path" | scripts/ci-select.sh)
+  [[ $out == *"$key=true"* || $out == *test=true* ]] || fail "$path -> weder $key noch test"
+}
+dockerfile_sources() {
+  local words word sources src
+  while read -r -a words; do
+    sources=()
+    for word in "${words[@]:1}"; do
+      [[ $word == --from=* || $word == *://* ]] && continue 2
+      [[ $word == --* ]] || sources+=("$word")
+    done
+    unset "sources[$((${#sources[@]} - 1))]"
+    for src in "${sources[@]}"; do
+      [[ -d $1/$src ]] && src=$src/x
+      echo "${1#./}/$src" | sed 's|^\./||; s|^/||'
+    done
+  done < <(sed -e ':a' -e '/\\$/N' -e 's/\\\n//' -e 'ta' "$1/Dockerfile" | grep -E '^(COPY|ADD) ')
+}
+while read -r src; do expect_checked "$src" image; done < <(dockerfile_sources .)
+# The runner's image holds nothing a test job builds, so only bench counts.
+while read -r src; do expect_selects "$src" bench true; done < <(dockerfile_sources tools/code-bench)
+# The image definitions themselves select their image.
+expect_selects Dockerfile image true
+expect_selects tools/code-bench/Dockerfile bench true
 
 # Every file check.sh uses, and every file the scripts it runs use, runs the
 # test job.

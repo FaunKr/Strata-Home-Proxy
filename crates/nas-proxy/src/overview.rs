@@ -259,7 +259,7 @@ async fn probe_pc(
     (health, metrics, pc, job)
 }
 
-async fn metrics(state: &AppState) -> Option<Metrics> {
+pub(crate) async fn metrics(state: &AppState) -> Option<Metrics> {
     let cfg = state.cfg();
     // Not `/metrics/prometheus`: its tokens/s counts finished requests only,
     // and each scrape resets that window for other scrapers.

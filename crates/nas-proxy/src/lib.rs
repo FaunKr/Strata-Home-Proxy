@@ -18,6 +18,7 @@ pub mod settings;
 pub mod state;
 pub mod strata;
 pub mod strata_output;
+pub mod update_summary;
 pub mod wol;
 
 use std::sync::Arc;

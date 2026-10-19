@@ -20,7 +20,8 @@ concurrency:
 jobs:
   changes:
     # Decides which of the jobs below a pull request needs (scripts/ci-select.sh).
-    # Pushes to main and manual runs need everything.
+    # Pushes to main and manual runs select everything; on main the test job
+    # then only refreshes the Rust cache, and the publish job builds the images.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -28,8 +29,8 @@ jobs:
     outputs:
       test: ${{ steps.select.outputs.test }}
       packages: ${{ steps.select.outputs.packages }}
-      windows: ${{ steps.select.outputs.windows }}
       image: ${{ steps.select.outputs.image }}
+      bench: ${{ steps.select.outputs.bench }}
       ui: ${{ steps.select.outputs.ui }}
     steps:
       - uses: actions/checkout@v4
@@ -57,25 +58,41 @@ jobs:
     if: needs.changes.outputs.test == 'true'
     runs-on: ubuntu-latest
     steps:
-      # The test binaries of all packages no longer fit the runner's disk
-      # (the linker died with a bus error at 29 MB free); these preinstalled
-      # SDKs are not needed here.
-      - name: Free disk space
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+          # check.sh lints the PC service's Windows code for this target, in
+          # place of a Windows runner (those minutes count double); the real
+          # Windows check is the manual workflow windows.yml.
+          targets: wasm32-unknown-unknown, x86_64-pc-windows-gnu
+      # Only main saves the cache, pull requests read it: one set per branch
+      # overflowed the Actions cache. On main the pull request ran the checks
+      # already, so there this job only looks the cache up (it holds the
+      # dependencies, keyed on Cargo.lock, the manifests and the rustc version)
+      # and runs check.sh only to refill it, e.g. after a dependency change or
+      # a new stable Rust.
+      - id: cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          lookup-only: ${{ github.event_name == 'push' }}
+      # The test binaries of all packages no longer fit the runner's disk
+      # (the linker died with a bus error at 29 MB free); these preinstalled
+      # SDKs are not needed here.
+      - name: Free disk space
+        if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       # Unquoted on purpose: one argument per package, none for everything.
-      - run: scripts/check.sh $PACKAGES
+      - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
+        run: scripts/check.sh $PACKAGES
         env:
           PACKAGES: ${{ needs.changes.outputs.packages }}
       # The code-bench tests that need root (the agent user, the firewall in
       # its own network namespace); check.sh runs them as the runner's user,
       # where they are skipped.
       - name: Code-bench tests as root
+        if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         run: sudo python3 -I tools/code-bench/test_runner.py
       # How close the job is to the runner's disk limit, before the linker
       # dies of it again.
@@ -84,19 +101,23 @@ jobs:
         run: df -h /
   ui:
     # The web UI in a real browser (scripts/ui-check.sh): only there does a
-    # page that fails to hydrate show up.
+    # page that fails to hydrate show up. Pull requests only, like the checks.
     needs: changes
-    if: needs.changes.outputs.ui == 'true'
+    if: github.event_name != 'push' && needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      # Reads the dependencies main's test job cached; saves nothing.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+          save-if: false
       - run: scripts/install-cargo-leptos.sh
-      # The Playwright version of the cloud sessions.
-      # The browsers of exactly that version, through its own command.
+      # The browsers of exactly that version, through its own command; the
+      # version of the cloud sessions.
       - run: npm install -g playwright@1.56.1 && "$(npm root -g)/playwright/cli.js" install --with-deps chromium
       - run: SHOTS=1 scripts/ui-check.sh
       - if: failure()
@@ -104,69 +125,36 @@ jobs:
         with:
           name: ui-check
           path: target/ui-check/
-  windows:
-    # Builds the PC service and offers it as a download (strata-pc-agent-windows).
-    # Runs alongside test: it lints and tests the agent on its own.
-    needs: changes
-    if: needs.changes.outputs.windows == 'true'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -p strata-pc-agent --all-targets -- -D warnings
-      - run: cargo test -p strata-pc-agent
-      - run: cargo build --release -p strata-pc-agent
-        env:
-          # Part of the version the service reports (crates/pc-agent/build.rs).
-          STRATA_BUILD_ID: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: install.ps1 parses
-        run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile("$PWD\deploy\windows\install.ps1", [ref]$null, [ref]$errors) | Out-Null
-          if ($errors) { $errors; exit 1 }
-        shell: powershell
-      - run: |
-          mkdir dist
-          copy target\release\strata-pc-agent.exe dist\
-          copy crates\pc-agent\strata-pc-agent.example.toml dist\
-          copy deploy\windows\install.ps1 dist\
-        shell: cmd
-      - uses: actions/upload-artifact@v4
-        with:
-          name: strata-pc-agent-windows
-          path: dist/
   image:
-    # Builds the NAS image alongside test and fills the layer cache. Dependencies
-    # sit in their own layers (cargo-chef), so a code change only rebuilds our crates.
+    # Builds the images whose build definition a pull request changes: the NAS
+    # image and the code benchmark's runner (tools/code-bench). Dependencies sit
+    # in their own layers (cargo-chef). This job only reads the layer cache;
+    # writing it from every branch overflowed the Actions cache and evicted
+    # main's layers. On main the publish job builds both instead.
     needs: changes
-    if: needs.changes.outputs.image == 'true'
+    if: github.event_name != 'push' && (needs.changes.outputs.image == 'true' || needs.changes.outputs.bench == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - if: needs.changes.outputs.image == 'true'
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
           build-args: STRATA_BUILD_ID=${{ github.event.pull_request.head.sha || github.sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
-      # The code benchmark's runner (tools/code-bench), its own image.
-      - uses: docker/build-push-action@v6
+      - if: needs.changes.outputs.bench == 'true'
+        uses: docker/build-push-action@v6
         with:
           context: tools/code-bench
           platforms: linux/amd64
           cache-from: type=gha,scope=code-bench
-          cache-to: type=gha,mode=max,scope=code-bench
   publish:
-    # On pushes to the default branch, once tests pass, publishes the image to
-    # ghcr.io/faunkr/strata-home-proxy:latest so the NAS can pull it. Every layer
-    # comes from the cache the image job just wrote, so this only uploads.
+    # On pushes to the default branch, builds both images once, publishes them
+    # (the NAS pulls ghcr.io/faunkr/strata-home-proxy:latest) and writes the
+    # layer cache that pull requests read. The pull request ran the tests.
     if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
-    needs: [test, image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -189,9 +177,9 @@ jobs:
             ghcr.io/faunkr/strata-home-proxy:${{ github.sha }}
           # The NAS update script logs it (deploy/truenas-auto-update.sh).
           labels: org.opencontainers.image.revision=${{ github.sha }}
-          # The same as in the image job, so every layer comes from its cache.
           build-args: STRATA_BUILD_ID=${{ github.sha }}
           cache-from: type=gha
+          cache-to: type=gha,mode=max
       - uses: docker/build-push-action@v6
         with:
           context: tools/code-bench
@@ -202,11 +190,12 @@ jobs:
             ghcr.io/faunkr/strata-code-bench:${{ github.sha }}
           labels: org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=code-bench
+          cache-to: type=gha,mode=max,scope=code-bench
   ci-ok:
     # The one check that sums up a run, for branch protection: jobs a pull
     # request doesn't need are skipped, and skipped counts as passed.
     if: always()
-    needs: [changes, test, windows, image, ui]
+    needs: [changes, test, image, ui]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

@@ -5,7 +5,7 @@
 use std::{
     path::PathBuf,
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -24,6 +24,7 @@ use crate::{
     events::EventKind,
     files::write_private,
     state::{AppState, WakeError},
+    update_summary::{self, UpdateSummaries},
 };
 
 /// A key handed to the PC that counts once its job is done; kept over a
@@ -40,6 +41,8 @@ pub struct StrataState {
     job_running: AtomicBool,
     /// A new Strata key the proxy uses once the PC took it over.
     pending: Mutex<Option<PendingKey>>,
+    /// What an available update brings.
+    pub update: UpdateSummaries,
     dir: Option<PathBuf>,
 }
 
@@ -60,6 +63,7 @@ impl StrataState {
             last: Mutex::new(None),
             job_running: AtomicBool::new(pending.is_some()),
             pending: Mutex::new(pending),
+            update: UpdateSummaries::new(data_dir.clone()),
             dir: data_dir,
         }
     }
@@ -93,7 +97,7 @@ impl StrataState {
 }
 
 /// The Strata page; asks the PC service but never wakes the PC.
-pub async fn page(state: &AppState) -> StrataPage {
+pub async fn page(state: &Arc<AppState>) -> StrataPage {
     let agent = state.agent();
     let last = || state.strata.last.lock().unwrap().clone();
     if !agent.configured() {
@@ -102,6 +106,7 @@ pub async fn page(state: &AppState) -> StrataPage {
             gaming: false,
             info: None,
             stale: false,
+            update: None,
         };
     }
     let Some(status) = state.pc_status(&agent).await else {
@@ -111,25 +116,43 @@ pub async fn page(state: &AppState) -> StrataPage {
             gaming: false,
             stale: info.is_some(),
             info,
+            update: state.strata.update.stale(),
         };
     };
-    let Some(mut info) = agent.strata().await else {
+    let Some((mut info, incoming)) = agent.strata().await else {
         return StrataPage {
             problem: Some(TOO_OLD.into()),
             gaming: status.gaming_mode,
             info: None,
             stale: false,
+            update: None,
         };
     };
     for bench in info.benchmark.iter_mut().chain(info.benchmarks.iter_mut()) {
         bench.at_text = clock::local_text(bench.at);
     }
     *state.strata.last.lock().unwrap() = Some(info.clone());
+    let job = status.strata_job
+        || info
+            .job
+            .as_ref()
+            .is_some_and(|j| j.state == StrataJobState::Running);
+    let update = update_summary::noted(
+        state,
+        update_summary::Now {
+            installed: info.version.as_deref(),
+            update_available: info.update_available,
+            gaming: status.gaming_mode,
+            job,
+        },
+        incoming,
+    );
     StrataPage {
         problem: None,
         gaming: status.gaming_mode,
         info: Some(info),
         stale: false,
+        update,
     }
 }
 

@@ -7,6 +7,8 @@ description: Offload a task to Strata, the local model on the home PC, through t
 
 `local-agent run` starts a headless Claude Code worker whose model is Strata, reached through the Proxy on the NAS. It works on a new branch in its own worktree; the user's checkout stays untouched. Strata is slow and free; a cloud agent is fast and costs tokens.
 
+If `local-agent` isn't on `PATH`, tell the user to run `tools/local-agent/install.sh` from their Strata-Home-Proxy checkout, then `local-agent check`.
+
 Offload only when the user asks. When a task is well scoped and mechanical (a rename, a test for a known function, a doc pass), suggest offloading it in one line and wait for the answer.
 
 ## Offload a task

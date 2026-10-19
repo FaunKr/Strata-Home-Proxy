@@ -428,6 +428,59 @@ dialog.confirm::backdrop { background: rgba(14, 10, 22, 0.55); }
 dialog.confirm h2 { font-size: 1.15rem; margin-bottom: 8px; }
 dialog.confirm .actions { justify-content: flex-end; margin-top: 24px; }
 
+/* --- Verlauf: one bar per day, filled by the hours of each state --- */
+
+.bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 16px 0 4px;
+}
+.bar { flex: 1 1 0; min-width: 4px; display: flex; flex-direction: column; gap: 6px; }
+.bar-column {
+  display: flex;
+  flex-direction: column;
+  height: 132px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+/* The proxy sends the hours; each part is its share of that day. */
+.seg { flex: none; }
+.seg-awake { background: var(--ok); }
+.seg-gaming { background: var(--warn); }
+.seg-asleep { background: var(--idle); }
+.seg-unknown {
+  background-color: var(--surface-2);
+  background-image: repeating-linear-gradient(45deg, var(--line) 0 3px, transparent 3px 6px);
+}
+.day-label { font-size: 0.72rem; color: var(--muted); text-align: center; }
+/* A year by week has 53 bars: they stay thin and need no names each. */
+.bars.dense { gap: 2px; }
+.bars.dense .bar { min-width: 2px; }
+.bars.dense .bar-column { border-radius: 2px; }
+.week-summary { font-size: 1.05rem; font-weight: 600; margin: 4px 0 0; }
+.week .bars { margin-top: 10px; }
+.week .bar-column { height: 56px; }
+.per-bar { margin-top: 12px; }
+.per-bar summary { cursor: pointer; min-height: 24px; color: var(--muted); }
+.per-bar .table-scroll { overflow-x: auto; }
+.per-bar table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 8px; }
+.per-bar th, .per-bar td { text-align: right; padding: 4px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
+.per-bar th[scope="row"], .per-bar td:last-child { text-align: left; font-weight: normal; }
+.bars-axis { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--muted); }
+input[type="date"] {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 10px;
+}
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 8px 0 0; padding: 0; }
+.legend li { display: flex; align-items: center; gap: 7px; font-size: 0.85rem; color: var(--muted); }
+.swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+
 /* --- Narrower screens --- */
 
 @media (max-width: 960px) {

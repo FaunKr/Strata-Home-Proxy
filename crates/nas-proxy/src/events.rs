@@ -1,6 +1,7 @@
-//! History of wake and sleep events, for the web UI and the power estimate.
-//! The Ereignisse live in a SQLite database in `DATA_DIR` (docs/adr/0003);
-//! without one the store is in memory.
+//! The Verlauf: Ereignisse about waking and sleeping and the Leistung of the
+//! Messsteckdose over time, for the web UI and the power estimate. Both live in
+//! a SQLite database in `DATA_DIR` (docs/adr/0003); without one the store is
+//! in memory.
 
 use std::{
     collections::VecDeque,
@@ -8,11 +9,13 @@ use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+
+use crate::clock;
 
 pub use strata_admin_ui::api::EventKind;
 
@@ -23,6 +26,10 @@ const KEEP_IN_MEMORY: usize = 1000;
 /// Set once `events.jsonl` is imported, so an import that failed is tried
 /// again on the next start, even when new events were recorded meanwhile.
 const IMPORTED: i64 = 1;
+
+/// How often the proxy notes that it still runs. After a stop the Verlauf is
+/// unknown from the last note on, so it is off by at most this long.
+pub const BEAT: Duration = Duration::from_secs(60);
 
 const SELECT: &str = "SELECT ts, kind, detail FROM events";
 
@@ -35,13 +42,31 @@ pub struct Event {
     pub detail: Option<String>,
 }
 
-pub struct EventLog {
+/// One reading of the Messsteckdose. Kept forever, like the Ereignisse.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Sample {
+    /// Unix time in seconds.
+    pub ts: u64,
+    pub watts: f64,
+}
+
+/// The samples of one hour, as the Verlauf sums them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HourSamples {
+    /// Unix time of the full hour.
+    pub hour: u64,
+    /// Distinct sample intervals in the hour that have a sample.
+    pub slots: u64,
+    pub mean_watts: f64,
+}
+
+pub struct History {
     /// The latest events, for the overview, without asking the database.
     recent: Mutex<VecDeque<Event>>,
     db: Arc<Mutex<Connection>>,
 }
 
-impl EventLog {
+impl History {
     /// Opens the database and imports `events.jsonl` before returning; meant
     /// for startup.
     pub fn new(data_dir: Option<PathBuf>) -> Self {
@@ -69,11 +94,11 @@ impl EventLog {
     /// Written at once, like the appended line before, so a killed proxy
     /// loses nothing. A single insert in WAL mode takes no sync to disk.
     pub fn record(&self, kind: EventKind, detail: Option<String>) {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default();
-        let event = Event { ts, kind, detail };
+        let event = Event {
+            ts: clock::unix_now(),
+            kind,
+            detail,
+        };
         tracing::info!(?kind, detail = event.detail.as_deref(), "Ereignis");
         if let Err(e) = insert(&self.db.lock().unwrap(), &event) {
             tracing::warn!("Verlauf nicht geschrieben: {e}");
@@ -83,6 +108,18 @@ impl EventLog {
             recent.pop_front();
         }
         recent.push_back(event);
+    }
+
+    /// Notes that the proxy still runs; the next start records the last note
+    /// as `ProxyStopped`.
+    pub fn beat(&self) {
+        let written = self.db.lock().unwrap().execute(
+            "INSERT OR REPLACE INTO alive (id, ts) VALUES (0, ?1)",
+            [to_sql(clock::unix_now())],
+        );
+        if let Err(e) = written {
+            tracing::warn!("Lebenszeichen nicht geschrieben: {e}");
+        }
     }
 
     /// The most recent events, oldest first.
@@ -97,7 +134,7 @@ impl EventLog {
             .unwrap()
             .iter()
             .rev()
-            .filter(|e| !e.kind.is_admin())
+            .filter(|e| !e.kind.is_admin() && !e.kind.is_history_mark())
             .take(n)
             .cloned()
             .collect()
@@ -106,21 +143,140 @@ impl EventLog {
     /// Every event with `from <= ts <= to`, oldest first, back to the first
     /// one. The query runs on a blocking thread, not on the async runtime.
     pub async fn range(&self, from: u64, to: u64) -> Vec<Event> {
-        let db = Arc::clone(&self.db);
-        let bounds = [
-            i64::try_from(from).unwrap_or(i64::MAX),
-            i64::try_from(to).unwrap_or(i64::MAX),
-        ];
-        tokio::task::spawn_blocking(move || {
+        let [from, to] = bounds(from, to);
+        self.blocking(move |db| {
             select(
-                &db.lock().unwrap(),
+                db,
                 &format!("{SELECT} WHERE ts BETWEEN ?1 AND ?2 ORDER BY ts, rowid"),
-                &[&bounds[0], &bounds[1]],
+                &[&from, &to],
             )
         })
         .await
-        .unwrap_or_default()
     }
+
+    /// The latest event of one of `kinds` before `ts`: how things stood when
+    /// a range begins.
+    pub async fn last_before(&self, ts: u64, kinds: &[EventKind]) -> Option<Event> {
+        let names: Vec<String> = kinds.iter().map(|k| kind_name(*k)).collect();
+        let ts = to_sql(ts);
+        self.blocking(move |db| {
+            let marks = vec!["?"; names.len()].join(", ");
+            let mut args: Vec<&dyn rusqlite::ToSql> = vec![&ts];
+            args.extend(names.iter().map(|n| n as &dyn rusqlite::ToSql));
+            select(
+                db,
+                &format!(
+                    "{SELECT} WHERE ts < ?1 AND kind IN ({marks}) \
+                     ORDER BY ts DESC, rowid DESC LIMIT 1"
+                ),
+                &args,
+            )
+            .pop()
+        })
+        .await
+    }
+
+    /// The time of the first event, if there is one.
+    pub async fn first_ts(&self) -> Option<u64> {
+        self.blocking(|db| {
+            db.query_row("SELECT MIN(ts) FROM events", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })
+            .ok()
+            .flatten()
+            .map(|ts| ts.max(0) as u64)
+        })
+        .await
+    }
+
+    /// Written at once, like `record`, so a killed proxy loses nothing.
+    pub fn record_sample(&self, sample: Sample) {
+        let written = self.db.lock().unwrap().execute(
+            "INSERT INTO samples (ts, watts) VALUES (?1, ?2)",
+            params![to_sql(sample.ts), sample.watts],
+        );
+        if let Err(e) = written {
+            tracing::warn!("Messwert der Steckdose nicht geschrieben: {e}");
+        }
+    }
+
+    /// Every sample with `from <= ts <= to`, oldest first. The query runs on a
+    /// blocking thread, not on the async runtime.
+    pub async fn samples(&self, from: u64, to: u64) -> Vec<Sample> {
+        let [from, to] = bounds(from, to);
+        self.blocking(move |db| {
+            let rows = db
+                .prepare(
+                    "SELECT ts, watts FROM samples WHERE ts BETWEEN ?1 AND ?2 ORDER BY ts, rowid",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([from, to], |row| {
+                            Ok(Sample {
+                                ts: row.get::<_, i64>(0)? as u64,
+                                watts: row.get(1)?,
+                            })
+                        })
+                        .and_then(Iterator::collect)
+                });
+            rows.unwrap_or_else(|e| {
+                tracing::warn!("Messwerte der Steckdose nicht gelesen: {e}");
+                Vec::new()
+            })
+        })
+        .await
+    }
+
+    /// The samples with `from <= ts <= to` per full hour, oldest first;
+    /// `slots` counts the intervals of `step` seconds that have one. A year
+    /// is at most 8784 rows, however often the plug is read.
+    pub async fn hourly(&self, from: u64, to: u64, step: u64) -> Vec<HourSamples> {
+        let [from, to] = bounds(from, to);
+        let step = to_sql(step.max(1));
+        self.blocking(move |db| {
+            let rows = db
+                .prepare(
+                    "SELECT ts / 3600 * 3600, COUNT(DISTINCT ts / ?3), AVG(watts) FROM samples \
+                     WHERE ts BETWEEN ?1 AND ?2 GROUP BY ts / 3600 ORDER BY 1",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([from, to, step], |row| {
+                            Ok(HourSamples {
+                                hour: row.get::<_, i64>(0)? as u64,
+                                slots: row.get::<_, i64>(1)? as u64,
+                                mean_watts: row.get(2)?,
+                            })
+                        })
+                        .and_then(Iterator::collect)
+                });
+            rows.unwrap_or_else(|e| {
+                tracing::warn!("Messwerte der Steckdose nicht gelesen: {e}");
+                Vec::new()
+            })
+        })
+        .await
+    }
+
+    /// Runs `query` on a blocking thread, not on the async runtime.
+    async fn blocking<T: Default + Send + 'static>(
+        &self,
+        query: impl FnOnce(&Connection) -> T + Send + 'static,
+    ) -> T {
+        let db = Arc::clone(&self.db);
+        tokio::task::spawn_blocking(move || query(&db.lock().unwrap()))
+            .await
+            .unwrap_or_default()
+    }
+}
+
+/// The window of a range query as SQLite integers.
+fn bounds(from: u64, to: u64) -> [i64; 2] {
+    [to_sql(from), to_sql(to)]
+}
+
+fn to_sql(ts: u64) -> i64 {
+    i64::try_from(ts).unwrap_or(i64::MAX)
 }
 
 /// `events.db` in `dir`, or a database in memory if there is no `dir` or the
@@ -134,6 +290,9 @@ fn open_database(dir: Option<&Path>) -> Connection {
                 if let Err(e) = import_jsonl(&mut conn, &jsonl) {
                     tracing::warn!("Verlauf aus {} nicht übernommen: {e}", jsonl.display());
                 }
+                if let Err(e) = record_stop(&mut conn) {
+                    tracing::warn!("Ende des letzten Laufs nicht verzeichnet: {e}");
+                }
                 return conn;
             }
             Err(e) => {
@@ -142,7 +301,7 @@ fn open_database(dir: Option<&Path>) -> Connection {
         }
     }
     let conn = Connection::open_in_memory().expect("Speicher für den Verlauf");
-    create_table(&conn).expect("Verlauf im Speicher eingerichtet");
+    create_tables(&conn).expect("Verlauf im Speicher eingerichtet");
     conn
 }
 
@@ -160,18 +319,27 @@ fn open_file(path: &Path) -> Result<Connection, Box<dyn std::error::Error>> {
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
-    create_table(&conn)?;
+    create_tables(&conn)?;
     Ok(conn)
 }
 
-fn create_table(conn: &Connection) -> rusqlite::Result<()> {
+fn create_tables(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS events (
              ts INTEGER NOT NULL,
              kind TEXT NOT NULL,
              detail TEXT
          );
-         CREATE INDEX IF NOT EXISTS events_ts ON events (ts);",
+         CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
+         CREATE TABLE IF NOT EXISTS samples (
+             ts INTEGER NOT NULL,
+             watts REAL NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS samples_ts ON samples (ts);
+         CREATE TABLE IF NOT EXISTS alive (
+             id INTEGER PRIMARY KEY,
+             ts INTEGER NOT NULL
+         );",
     )
 }
 
@@ -196,6 +364,34 @@ fn import_jsonl(conn: &mut Connection, path: &Path) -> rusqlite::Result<()> {
     }
     transaction.pragma_update(None, "user_version", IMPORTED)?;
     // Dropping the transaction on an error above rolls it back.
+    transaction.commit()
+}
+
+/// The last run's final `beat` as a `ProxyStopped` at its time, once; at
+/// the time of a later event, if one came between the beat and the stop.
+fn record_stop(conn: &mut Connection) -> rusqlite::Result<()> {
+    let transaction = conn.transaction()?;
+    let last: Option<i64> = transaction
+        .query_row(
+            "SELECT MAX(alive.ts, IFNULL((SELECT MAX(ts) FROM events), 0)) \
+             FROM alive WHERE id = 0",
+            [],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e),
+        })?;
+    if let Some(ts) = last {
+        let stop = Event {
+            ts: ts as u64,
+            kind: EventKind::ProxyStopped,
+            detail: None,
+        };
+        insert(&transaction, &stop)?;
+        transaction.execute("DELETE FROM alive", [])?;
+    }
     transaction.commit()
 }
 

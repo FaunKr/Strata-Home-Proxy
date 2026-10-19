@@ -16,7 +16,7 @@ pkg=$1 test=$2 count=$3
 shift 3
 # Wie cargo test: aus dem Verzeichnis des Pakets.
 read -r bin dir < <(cargo test -q -p "$pkg" --test "$test" --no-run --message-format=json \
-  | jq -r 'select(.executable != null) | "\(.executable) \(.manifest_path | rtrimstr("/Cargo.toml"))"' | tail -n1)
+  | jq -r 'select(.executable != null and .target.kind == ["test"]) | "\(.executable) \(.manifest_path | rtrimstr("/Cargo.toml"))"' | tail -n1)
 cd "$dir"
 all=$("$bin" --list "$@" 2>/dev/null | sed -n 's/: test$//p' | sort)
 failed=0 hung=0

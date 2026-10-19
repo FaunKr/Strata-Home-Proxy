@@ -1,7 +1,9 @@
 //! The area "PC": the PC service with its updates, the one-line install
-//! command, and the settings for reaching, waking and sleeping the PC.
+//! command, and the settings for reaching, waking and sleeping the PC; the
+//! other tab of the area is the Verlauf in `history`.
 
 use leptos::prelude::*;
+use leptos_router::components::{A, Outlet};
 
 use crate::{
     api::{NewPcSetupCommand, PcServiceView, PcView, UpdatePcService, error_text},
@@ -11,13 +13,31 @@ use crate::{
     settings::SettingsSections,
 };
 
+/// The frame of the area: its heading, its tabs and the page inside them.
 #[component]
-pub fn PcPage() -> impl IntoView {
+pub fn PcArea() -> impl IntoView {
     view! {
         <div class="page-head">
             <h1>"PC"</h1>
             <p class="lead">"The PC service, and how the proxy wakes your PC and lets it sleep."</p>
         </div>
+        <nav class="tabs" aria-label="PC">
+            <A href="/admin/pc" exact=true attr:class="tab">
+                "PC service"
+            </A>
+            <A href="/admin/pc/history" attr:class="tab">
+                "History"
+            </A>
+        </nav>
+        <Outlet />
+    }
+}
+
+/// What the PC does on the PC: its service, the command that installs it, and
+/// the settings for reaching, waking and sleeping it.
+#[component]
+pub fn PcSetupTab() -> impl IntoView {
+    view! {
         <PcService />
         <Install />
         <SettingsSections sections=&[&PC_CONNECTION, &PC_WAKE_SLEEP] />

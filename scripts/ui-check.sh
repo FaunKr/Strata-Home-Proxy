@@ -17,6 +17,11 @@ fi
 
 data="$(mktemp -d)"
 trap 'rm -rf "$data"' EXIT
+# A Verlauf from an earlier run, imported at the start, so the history shows
+# bars and energy: asleep for two days, then awake until the proxy stopped.
+now=$(date +%s)
+printf '{"ts":%d,"kind":"pc_seen_asleep"}\n{"ts":%d,"kind":"pc_seen_awake"}\n{"ts":%d,"kind":"proxy_stopped"}\n' \
+  $((now - 3 * 86400)) $((now - 86400)) $((now - 3600)) >"$data/events.jsonl"
 cargo leptos build --project admin-ui >"$data/build.log" 2>&1 || { cat "$data/build.log"; exit 1; }
 
 port="${UI_CHECK_PORT:-18099}"

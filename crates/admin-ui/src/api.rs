@@ -287,6 +287,8 @@ pub struct Overview {
     pub pc_service: Option<PcServiceView>,
     pub hardware: HardwareView,
     pub power: PowerView,
+    /// The Verlauf of the last 7 days, summed at most once a minute.
+    pub week: HistoryView,
 }
 
 /// The Leistung of the Messsteckdose for the overview; independent of the PC's
@@ -402,6 +404,16 @@ pub enum EventKind {
     SleepAccepted,
     SleepRefused,
     GamingRejected,
+    // What the proxy noticed about the PC without causing it; recorded only on
+    // a change, never on every check.
+    PcSeenAwake,
+    PcSeenAsleep,
+    PcSeenGaming,
+    /// The proxy started; time it could not observe counts as unknown.
+    ProxyStarted,
+    /// Recorded at the next start, with the time the proxy was last seen
+    /// running; from then on the history is unknown.
+    ProxyStopped,
     PasswordChanged,
     /// Detail: the setting's name, never its value.
     SettingSaved,
@@ -445,6 +457,19 @@ impl EventKind {
                 | Self::SettingReset
                 | Self::ApiKeyCreated
                 | Self::ApiKeyRevoked
+        )
+    }
+
+    /// Marks the proxy sets for the history on its own; left out of the
+    /// overview, where the Ereignisse that caused them already stand.
+    pub fn is_history_mark(self) -> bool {
+        matches!(
+            self,
+            Self::PcSeenAwake
+                | Self::PcSeenAsleep
+                | Self::PcSeenGaming
+                | Self::ProxyStarted
+                | Self::ProxyStopped
         )
     }
 }
@@ -756,4 +781,106 @@ pub struct StrataJobForm {
     /// Strata's experimental speed projection, for setup and another model;
     /// on or off for an installed one.
     pub speed_projection: bool,
+}
+
+// --- Verlauf: the PC's states over a range of days ---
+
+/// How much time one bar of the history covers; the proxy picks it from the
+/// length of the range.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryBucket {
+    /// Ranges up to 62 days.
+    #[default]
+    Day,
+    /// Up to 366 days; weeks start on Monday.
+    Week,
+    Month,
+}
+
+/// Where the Verbrauch of a bar comes from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnergySource {
+    /// From the Messsteckdose: every hour with samples for at least half its
+    /// minutes.
+    Measured,
+    /// From the watt settings (Stromschätzung).
+    #[default]
+    Estimated,
+    /// Some hours measured, some estimated.
+    Mixed,
+}
+
+/// Verbrauch and Ersparnis over a bar or the whole range. € use today's
+/// price for all of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Energy {
+    pub kwh: f64,
+    pub eur: f64,
+    /// Against running awake around the clock: asleep hours × (awake W −
+    /// asleep W), always from the settings.
+    pub saved_kwh: f64,
+    pub saved_eur: f64,
+    pub source: EnergySource,
+}
+
+/// The settings the Stromschätzung and the € used.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PowerSettings {
+    pub awake_watts: f64,
+    pub asleep_watts: f64,
+    pub price_ct_per_kwh: f64,
+}
+
+/// One bar of the history: a day, a week or a month, as `HistoryView::bucket`
+/// says.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HistoryDay {
+    /// The first day of the bar in the NAS's time zone, e.g. `2026-10-19`;
+    /// for the first bar not before the range's first day.
+    pub date: String,
+    /// The bar as the page names it: `Sat 17 Oct`, `12 Oct` for a week from
+    /// that day, `Oct 2026`.
+    pub label: String,
+    pub awake_h: f64,
+    pub gaming_h: f64,
+    pub asleep_h: f64,
+    /// Time the proxy could not observe; never counted as sleep or awake.
+    pub unknown_h: f64,
+    pub energy: Energy,
+}
+
+/// The same hours summed over the whole range.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HistoryTotals {
+    pub awake_h: f64,
+    pub gaming_h: f64,
+    pub asleep_h: f64,
+    pub unknown_h: f64,
+    pub energy: Energy,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HistoryView {
+    /// One entry per bar, oldest first.
+    pub days: Vec<HistoryDay>,
+    pub bucket: HistoryBucket,
+    pub totals: HistoryTotals,
+    /// The range's first and last day, `2026-10-13` and `2026-10-19`.
+    pub from: String,
+    pub to: String,
+    pub power: PowerSettings,
+    /// False while no PC service is set up: the proxy cannot see what the PC
+    /// does on its own, so the history stays incomplete.
+    pub agent_configured: bool,
+}
+
+/// The history over `range`: `7d` for the last 7 days today included, `12m`
+/// for the last twelve months, `all` back to the first Ereignis, or two days
+/// as `2026-01-01..2026-03-31`, both included.
+#[server(prefix = "/admin/api", endpoint = "history")]
+pub async fn get_history(range: String) -> Result<HistoryView, ServerFnError> {
+    require_login(false).await?;
+    Ok(backend().history(range).await)
 }

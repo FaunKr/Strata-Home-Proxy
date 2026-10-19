@@ -61,8 +61,8 @@ fn events_jsonl_is_imported_once() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
-#[test]
-fn range_reads_all_events_in_a_time_window() {
+#[tokio::test]
+async fn range_reads_all_events_in_a_time_window() {
     let d = dir("range");
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
@@ -75,11 +75,15 @@ fn range_reads_all_events_in_a_time_window() {
     let stamps = |events: Vec<strata_nas_proxy::events::Event>| -> Vec<u64> {
         events.into_iter().map(|e| e.ts).collect()
     };
-    assert_eq!(stamps(log.range(0, u64::MAX)), vec![100, 200, 300]);
+    assert_eq!(stamps(log.range(0, u64::MAX).await), vec![100, 200, 300]);
     // The boundaries belong to the window.
-    assert_eq!(stamps(log.range(100, 300)), vec![100, 200, 300]);
-    assert_eq!(stamps(log.range(150, 250)), vec![200]);
-    assert!(log.range(1000, 2000).is_empty());
+    assert_eq!(stamps(log.range(100, 300).await), vec![100, 200, 300]);
+    assert_eq!(stamps(log.range(150, 250).await), vec![200]);
+    assert!(log.range(1000, 2000).await.is_empty());
+    // A recorded event is in the range right away.
+    log.record(EventKind::Awake, None);
+    let all = log.range(0, u64::MAX).await;
+    assert_eq!(all.last().map(|e| e.kind), Some(EventKind::Awake));
     std::fs::remove_dir_all(&d).unwrap();
 }
 
@@ -103,4 +107,34 @@ fn latest_pc_skips_events_about_the_web_ui() {
     let pc: Vec<EventKind> = log.latest_pc(10).into_iter().map(|e| e.kind).collect();
     // Newest first, as the overview shows them.
     assert_eq!(pc, vec![EventKind::Awake, EventKind::WakeSent]);
+}
+
+#[tokio::test]
+async fn a_row_of_an_unknown_kind_hides_no_other_rows() {
+    let d = dir("unknown-row");
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    // As a newer version would leave it: a kind this one does not know,
+    // between two it knows.
+    {
+        let conn = rusqlite::Connection::open(d.join("events.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (ts INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT);
+             INSERT INTO events VALUES (100, '\"wake_sent\"', NULL);
+             INSERT INTO events VALUES (150, '\"zeitreise\"', NULL);
+             INSERT INTO events VALUES (200, '\"awake\"', NULL);",
+        )
+        .unwrap();
+    }
+    let log = EventLog::new(Some(d.clone()));
+    assert_eq!(kinds(&log), vec![EventKind::WakeSent, EventKind::Awake]);
+    let stamps: Vec<u64> = log
+        .range(0, u64::MAX)
+        .await
+        .into_iter()
+        .map(|e| e.ts)
+        .collect();
+    assert_eq!(stamps, vec![100, 200]);
+    drop(log);
+    std::fs::remove_dir_all(&d).unwrap();
 }

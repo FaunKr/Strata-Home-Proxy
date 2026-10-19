@@ -2,8 +2,10 @@
 
 Die Ereignisse liegen in einer SQLite-Datenbank (`events.db`) in `DATA_DIR`,
 nicht mehr in `events.jsonl`. Der Proxy nutzt `rusqlite` mit gebündeltem
-SQLite; alle Aufrufe laufen auf einem eigenen Thread, nie auf den Threads des
-async-Runtimes. Ohne `DATA_DIR` liegt der Store im Speicher.
+SQLite. Schreiben und Bereichsabfragen laufen auf einem eigenen Thread, nie auf
+den Threads des async-Runtimes: `record` stellt nur in die Warteschlange, `range`
+wartet asynchron. Die letzten 1000 Ereignisse für die Übersicht hält der Log
+zusätzlich im Speicher. Ohne `DATA_DIR` liegt der Store im Speicher.
 
 Der Verlauf soll ab dem nächsten Ticket Bereiche abfragen (Tage, Wochen) und
 später Minutensamples bilden. Ein JSONL-File müsste dafür jedes Mal vollständig

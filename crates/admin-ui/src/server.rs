@@ -89,9 +89,9 @@ pub trait Backend: Send + Sync + 'static {
     /// if the PC sleeps or nothing can be updated; how the update went shows
     /// on the overview.
     fn update_pc_service(&self) -> BoxFuture<'static, Result<(), String>>;
-    /// How long the PC was awake, gaming, asleep and unobserved on each of the
-    /// last `days` days, today included.
-    fn history(&self, days: u32) -> BoxFuture<'static, HistoryView>;
+    /// How long the PC was awake, gaming, asleep and unobserved over `range`,
+    /// as `api::get_history` takes it.
+    fn history(&self, range: String) -> BoxFuture<'static, HistoryView>;
 }
 
 pub type SharedBackend = Arc<dyn Backend>;

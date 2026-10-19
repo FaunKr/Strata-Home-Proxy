@@ -142,6 +142,41 @@ impl History {
         .await
     }
 
+    /// The latest event of one of `kinds` before `ts`: how things stood when
+    /// a range begins.
+    pub async fn last_before(&self, ts: u64, kinds: &[EventKind]) -> Option<Event> {
+        let names: Vec<String> = kinds.iter().map(|k| kind_name(*k)).collect();
+        let ts = to_sql(ts);
+        self.blocking(move |db| {
+            let marks = vec!["?"; names.len()].join(", ");
+            let mut args: Vec<&dyn rusqlite::ToSql> = vec![&ts];
+            args.extend(names.iter().map(|n| n as &dyn rusqlite::ToSql));
+            select(
+                db,
+                &format!(
+                    "{SELECT} WHERE ts < ?1 AND kind IN ({marks}) \
+                     ORDER BY ts DESC, rowid DESC LIMIT 1"
+                ),
+                &args,
+            )
+            .pop()
+        })
+        .await
+    }
+
+    /// The time of the first event, if there is one.
+    pub async fn first_ts(&self) -> Option<u64> {
+        self.blocking(|db| {
+            db.query_row("SELECT MIN(ts) FROM events", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })
+            .ok()
+            .flatten()
+            .map(|ts| ts.max(0) as u64)
+        })
+        .await
+    }
+
     /// Written at once, like `record`, so a killed proxy loses nothing.
     pub fn record_sample(&self, sample: Sample) {
         let written = self.db.lock().unwrap().execute(

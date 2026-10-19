@@ -293,9 +293,9 @@ impl Backend for UiBackend {
         async move { crate::pc_setup::update(&state, BY_UI).await }.boxed()
     }
 
-    fn history(&self, days: u32) -> BoxFuture<'static, HistoryView> {
+    fn history(&self, range: String) -> BoxFuture<'static, HistoryView> {
         let state = Arc::clone(&self.0);
-        async move { crate::history::view(&state, days).await }.boxed()
+        async move { crate::history::view(&state, &range).await }.boxed()
     }
 }
 

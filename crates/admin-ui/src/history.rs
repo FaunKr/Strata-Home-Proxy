@@ -5,29 +5,34 @@
 use leptos::prelude::*;
 
 use crate::{
-    api::{HistoryDay, HistoryTotals, HistoryView, get_history},
+    api::{HistoryBucket, HistoryDay, HistoryTotals, HistoryView, get_history},
     labels::HISTORY_STATES,
 };
 
-/// Die Bereiche, aus denen die Seite wählt.
-const RANGES: &[(u32, &str)] = &[(7, "Last 7 days"), (30, "Last 30 days")];
+/// Die Bereiche, aus denen die Seite wählt, wie `get_history` sie nimmt.
+const RANGES: &[(&str, &str)] = &[
+    ("7d", "Last 7 days"),
+    ("30d", "Last 30 days"),
+    ("12m", "Last 12 months"),
+    ("all", "All"),
+];
+
+/// Bis zu so vielen Balken steht unter jedem sein Name.
+const NAMED_BARS: usize = 14;
 
 #[component]
 pub fn HistoryPage() -> impl IntoView {
-    let range = RwSignal::new(RANGES[0].0);
+    let range = RwSignal::new(RANGES[0].0.to_string());
     let history = Resource::new(
         move || range.get(),
-        |days| async move { get_history(days).await },
+        |range| async move { get_history(range).await },
     );
     view! {
         <Transition fallback=|| view! { <p class="hint">"Loading …"</p> }>
             {move || Suspend::new(async move {
                 match history.await {
                     Ok(view) => {
-                        let caption = RANGES
-                            .iter()
-                            .find(|(days, _)| *days == range.get())
-                            .map_or(RANGES[0].1, |(_, name)| *name);
+                        let caption = caption(&range.get(), &view);
                         // Ohne PC-Dienst sieht der Proxy nur, was er selbst
                         // auslöst: der Verlauf bleibt lückenhaft.
                         let without_agent = (!view.agent_configured).then(|| {
@@ -47,9 +52,10 @@ pub fn HistoryPage() -> impl IntoView {
                                 <div class="chips" role="group" aria-label="Range">
                                     {RANGES
                                         .iter()
-                                        .map(|(days, name)| preset(range, *days, name))
+                                        .map(|(key, name)| preset(range, key, name))
                                         .collect::<Vec<_>>()}
                                 </div>
+                                <Picker range from=view.from.clone() to=view.to.clone() />
                                 {shown(view)}
                             </section>
                         }
@@ -65,18 +71,64 @@ pub fn HistoryPage() -> impl IntoView {
     }
 }
 
+/// Was über den Balken steht: der Bereich und wie lang ein Balken ist.
+fn caption(range: &str, view: &HistoryView) -> String {
+    let name = RANGES.iter().find(|(key, _)| *key == range).map_or_else(
+        || format!("{} – {}", view.from, view.to),
+        |(_, name)| name.to_string(),
+    );
+    match view.bucket {
+        HistoryBucket::Day => name,
+        HistoryBucket::Week => format!("{name}, by week"),
+        HistoryBucket::Month => format!("{name}, by month"),
+    }
+}
+
 /// Ein Bereich, den die Seite sich holen kann.
-fn preset(range: RwSignal<u32>, days: u32, name: &'static str) -> impl IntoView {
-    let pressed = move || days == range.get();
+fn preset(range: RwSignal<String>, key: &'static str, name: &'static str) -> impl IntoView {
+    let pressed = move || range.with(|r| r == key);
     view! {
         <button
             type="button"
             class="chip"
             aria-pressed=move || if pressed() { "true" } else { "false" }
-            on:click=move |_| range.set(days)
+            on:click=move |_| range.set(key.to_string())
         >
             {name}
         </button>
+    }
+}
+
+/// Zwei Tage, zwischen denen die Seite den Verlauf zeigt, beide mitgezählt.
+#[component]
+fn Picker(range: RwSignal<String>, from: String, to: String) -> impl IntoView {
+    let from = RwSignal::new(from);
+    let to = RwSignal::new(to);
+    let show = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let (a, b) = (from.get(), to.get());
+        if !a.is_empty() && !b.is_empty() {
+            range.set(format!("{a}..{b}"));
+        }
+    };
+    view! {
+        <form class="row-form" aria-label="From – to" on:submit=show>
+            <label class="inline" for="history-from">"From"</label>
+            <input
+                id="history-from"
+                type="date"
+                prop:value=move || from.get()
+                on:input=move |ev| from.set(event_target_value(&ev))
+            />
+            <label class="inline" for="history-to">"to"</label>
+            <input
+                id="history-to"
+                type="date"
+                prop:value=move || to.get()
+                on:input=move |ev| to.set(event_target_value(&ev))
+            />
+            <button type="submit">"Show"</button>
+        </form>
     }
 }
 
@@ -114,15 +166,27 @@ fn shown(view: HistoryView) -> AnyView {
     .into_any()
 }
 
-/// Ein Balken pro Tag, der älteste zuerst.
+/// Ein Balken pro Tag, Woche oder Monat, der älteste zuerst. Sind es viele,
+/// stehen nur der erste und der letzte Name darunter.
 #[component]
 fn Bars(days: Vec<HistoryDay>) -> impl IntoView {
-    let named = days.len() <= 10;
+    let named = days.len() <= NAMED_BARS;
+    let ends = (!named && !days.is_empty()).then(|| {
+        let first = days[0].label.clone();
+        let last = days[days.len() - 1].label.clone();
+        view! {
+            <div class="bars-axis mono">
+                <span>{first}</span>
+                <span>{last}</span>
+            </div>
+        }
+    });
     view! {
         <div
             class="bars"
+            class:dense=!named
             role="img"
-            aria-label="One bar per day, filled with the hours the PC spent awake, gaming, asleep and unobserved"
+            aria-label="One bar per day, week or month, filled with the hours the PC spent awake, gaming, asleep and unobserved"
         >
             {days
                 .into_iter()
@@ -131,13 +195,14 @@ fn Bars(days: Vec<HistoryDay>) -> impl IntoView {
                 })
                 .collect::<Vec<_>>()}
         </div>
+        {ends}
     }
 }
 
 #[component]
 fn Bar(day: HistoryDay, named: bool) -> impl IntoView {
-    // Der Tag selbst ist der Maßstab, damit ein Tag mit Zeitumstellung
-    // gefüllt ist und keiner zu viel wird.
+    // Der Balken selbst ist der Maßstab, damit ein Tag mit Zeitumstellung
+    // oder ein angeschnittener Monat gefüllt ist und keiner zu viel wird.
     let total = (day.awake_h + day.gaming_h + day.asleep_h + day.unknown_h).max(1.0);
     let share = |hours: f64| format!("{:.3}%", hours / total * 100.0);
     let title = format!(
@@ -148,11 +213,12 @@ fn Bar(day: HistoryDay, named: bool) -> impl IntoView {
         hours(day.asleep_h),
         hours(day.unknown_h),
     );
-    // "18 Oct" from "Sun 18 Oct": the weekday does not fit under a bar.
-    let label = day
-        .label
-        .split_once(' ')
-        .map_or(day.label.clone(), |(_, rest)| rest.to_string());
+    // "18 Oct" from a day's "Sun 18 Oct": the weekday does not fit under a
+    // bar. A week ("12 Oct") and a month ("Oct 2026") stay as they are.
+    let label = match day.label.split(' ').collect::<Vec<_>>()[..] {
+        [_, date, month] => format!("{date} {month}"),
+        _ => day.label.clone(),
+    };
     view! {
         <div class="bar">
             <div class="bar-column" title=title>

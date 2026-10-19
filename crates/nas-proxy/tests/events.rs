@@ -158,6 +158,35 @@ async fn a_row_of_an_unknown_kind_hides_no_other_rows() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+#[tokio::test]
+async fn last_before_finds_the_latest_event_of_some_kinds() {
+    let d = fresh_dir("last-before");
+    database(
+        &d,
+        "CREATE TABLE events (ts INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT);
+         INSERT INTO events VALUES (100, 'pc_seen_asleep', NULL);
+         INSERT INTO events VALUES (200, 'awake', NULL);
+         INSERT INTO events VALUES (250, 'password_changed', NULL);
+         INSERT INTO events VALUES (300, 'pc_seen_asleep', NULL);",
+    );
+    let log = History::new(Some(d.clone()));
+    let kinds = [EventKind::Awake, EventKind::PcSeenAsleep];
+    let found = |e: Option<Event>| e.map(|e| (e.ts, e.kind));
+    assert_eq!(
+        found(log.last_before(300, &kinds).await),
+        Some((200, EventKind::Awake))
+    );
+    assert_eq!(
+        found(log.last_before(1000, &kinds).await),
+        Some((300, EventKind::PcSeenAsleep))
+    );
+    assert_eq!(found(log.last_before(100, &kinds).await), None);
+    assert_eq!(log.first_ts().await, Some(100));
+    assert_eq!(History::new(None).first_ts().await, None);
+    drop(log);
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 #[test]
 fn an_unusable_database_falls_back_to_memory() {
     let d = fresh_dir("broken");

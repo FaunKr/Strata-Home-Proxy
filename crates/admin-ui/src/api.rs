@@ -783,12 +783,28 @@ pub struct StrataJobForm {
 
 // --- Verlauf: the PC's states over a range of days ---
 
-/// One day of the history, as the page draws its bar.
+/// How much time one bar of the history covers; the proxy picks it from the
+/// length of the range.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryBucket {
+    /// Ranges up to 62 days.
+    #[default]
+    Day,
+    /// Up to 366 days; weeks start on Monday.
+    Week,
+    Month,
+}
+
+/// One bar of the history: a day, a week or a month, as `HistoryView::bucket`
+/// says.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HistoryDay {
-    /// The day in the NAS's time zone, e.g. `2026-10-19`.
+    /// The first day of the bar in the NAS's time zone, e.g. `2026-10-19`;
+    /// for the first bar not before the range's first day.
     pub date: String,
-    /// The day as the page names it, e.g. `Sat 17 Oct`.
+    /// The bar as the page names it: `Sat 17 Oct`, `12 Oct` for a week from
+    /// that day, `Oct 2026`.
     pub label: String,
     pub awake_h: f64,
     pub gaming_h: f64,
@@ -808,17 +824,26 @@ pub struct HistoryTotals {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HistoryView {
-    /// One entry per day, oldest first.
+    /// One entry per bar, oldest first.
     pub days: Vec<HistoryDay>,
+    pub bucket: HistoryBucket,
     pub totals: HistoryTotals,
+    /// The range's first and last day, `2026-10-13` and `2026-10-19`.
+    pub from: String,
+    pub to: String,
+    /// The day of the first Ereignis, where "All" begins; none on a fresh
+    /// install.
+    pub first_day: Option<String>,
     /// False while no PC service is set up: the proxy cannot see what the PC
     /// does on its own, so the history stays incomplete.
     pub agent_configured: bool,
 }
 
-/// The history of the last `days` days, today included.
+/// The history over `range`: `7d` for the last 7 days today included, `12m`
+/// for the last twelve months, `all` back to the first Ereignis, or two days
+/// as `2026-01-01..2026-03-31`, both included.
 #[server(prefix = "/admin/api", endpoint = "history")]
-pub async fn get_history(days: u32) -> Result<HistoryView, ServerFnError> {
+pub async fn get_history(range: String) -> Result<HistoryView, ServerFnError> {
     require_login(false).await?;
-    Ok(backend().history(days).await)
+    Ok(backend().history(range).await)
 }

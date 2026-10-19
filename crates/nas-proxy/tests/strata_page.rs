@@ -121,7 +121,7 @@ async fn install_wakes_the_pc_and_hands_it_a_new_strata_key() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(strata_key(&s), None);
 
-    s.pc.update_job(json!({"state": "done"}));
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
     eventually("Key gilt", || strata_key(&s).as_deref() == Some(&key)).await;
     // The key reaches Strata with requests, never the page.
     assert!(!text.contains(&key));
@@ -144,7 +144,10 @@ async fn a_failed_install_leaves_the_strata_key_alone() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(install(&mut b).await.status(), 200);
-    s.pc.update_job(json!({"state": "failed", "error": "kein Platz"}));
+    s.pc.update_job(|j| {
+        j.state = StrataJobState::Failed;
+        j.error = Some("kein Platz".into());
+    });
     eventually("Fehlschlag vermerkt", || {
         kinds(&s.state).contains(&EventKind::StrataJobFailed)
     })
@@ -163,7 +166,7 @@ async fn a_new_key_still_counts_after_a_restart_of_the_proxy() {
     let key = last_body(&s)["api_key"].as_str().unwrap().to_string();
 
     let restarted = strata_nas_proxy::AppState::new((*s.state.cfg()).clone());
-    s.pc.update_job(json!({"state": "done"}));
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
     restarted.pc_status(&restarted.agent()).await.unwrap();
     assert_eq!(
         restarted.cfg().strata_api_key.as_deref(),
@@ -181,7 +184,7 @@ async fn a_status_from_before_the_start_does_not_end_the_job() {
     // Like a status answered just before the job began.
     let stale = strata_nas_proxy::agent::PcStatus::default();
     strata_nas_proxy::strata::note_status(&s.state, &s.state.agent(), &stale).await;
-    s.pc.update_job(json!({"state": "done"}));
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
     eventually("neuer Key gilt", || strata_key(&s).as_deref() == Some(&key)).await;
 }
 
@@ -232,10 +235,13 @@ async fn progress_comes_through_the_live_stream() {
     let mut live = Live::open(&b).await;
     live.until("Vorgang", |v| v["strata_job"]["kind"] == "install")
         .await;
-    s.pc.update_job(json!({"step": "4/7: Modell laden", "percent": 40}));
+    s.pc.update_job(|j| {
+        j.step = Some("4/7: Modell laden".into());
+        j.percent = Some(40);
+    });
     live.until("40 %", |v| v["strata_job"]["percent"] == 40)
         .await;
-    s.pc.update_job(json!({"state": "done"}));
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
     live.until("Ende", |v| v["strata_job"].is_null()).await;
     let kinds = own_kinds(&s.state);
     assert!(kinds.contains(&EventKind::StrataJobDone), "{kinds:?}");
@@ -255,7 +261,10 @@ async fn a_failed_job_is_recorded_with_why() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(install(&mut b).await.status(), 200);
-    s.pc.update_job(json!({"state": "failed", "error": "[X] Download abgebrochen"}));
+    s.pc.update_job(|j| {
+        j.state = StrataJobState::Failed;
+        j.error = Some("[X] Download abgebrochen".into());
+    });
     eventually("Fehlschlag vermerkt", || {
         kinds(&s.state).contains(&EventKind::StrataJobFailed)
     })
@@ -296,7 +305,7 @@ async fn a_new_strata_key_counts_once_strata_took_it_over() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(strata_key(&s).as_deref(), Some("alt"));
 
-    s.pc.update_job(json!({"state": "done"}));
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
     eventually("neuer Key gilt", || strata_key(&s).as_deref() == Some(&key)).await;
     assert!(kinds(&s.state).contains(&EventKind::StrataKeyChanged));
 }
@@ -307,7 +316,10 @@ async fn a_failed_key_change_keeps_the_old_key() {
     s.state.settings.set("STRATA_API_KEY", "alt").unwrap();
     let mut b = logged_in(&s.url).await;
     b.call("strata-job", &[("kind", "set_key")]).await;
-    s.pc.update_job(json!({"state": "failed", "error": "Strata startet nicht"}));
+    s.pc.update_job(|j| {
+        j.state = StrataJobState::Failed;
+        j.error = Some("Strata startet nicht".into());
+    });
     eventually("Fehlschlag vermerkt", || {
         kinds(&s.state).contains(&EventKind::StrataJobFailed)
     })
@@ -344,11 +356,10 @@ async fn the_page_lists_installed_models_without_waking() {
 #[tokio::test]
 async fn shows_the_last_benchmark_with_its_local_time() {
     let s = setup(true, |_| {}).await;
-    let mut info = strata_info(true);
-    info["update_available"] = json!(true);
-    info["benchmark"] =
-        json!({"model": "IQ3_XXS", "result": "38.5 Token/s", "at": 1_760_000_000u64});
-    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut report = strata_info(true);
+    report.info.update_available = Some(true);
+    report.info.benchmark = Some(benchmark("IQ3_XXS", "38.5 Token/s"));
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     let v = page(&mut b).await;
     assert_eq!(v["info"]["update_available"], true);
@@ -368,22 +379,33 @@ async fn shows_the_last_benchmark_with_its_local_time() {
 #[tokio::test]
 async fn shows_each_models_benchmark_fastest_first() {
     let s = setup(true, |_| {}).await;
-    let mut info = strata_info(true);
-    info["models"] = json!([
-        {"id": "IQ3_XXS", "family": "qwen", "size": "IQ3_XXS", "disk_bytes": 1, "active": true},
-        {"id": "coder-IQ1_M", "family": "coder", "size": "IQ1_M", "disk_bytes": 1, "active": false},
-        {"id": "swift-IQ2_XS", "family": "swift", "size": "IQ2_XS", "disk_bytes": 1, "active": false},
-    ]);
-    info["benchmarks"] = json!([
-        {"model": "IQ3_XXS", "result": "38.5 Token/s", "at": 1_760_000_000u64,
-         "decode_tps": 38.5, "prompt_tps": 612.0, "context": 65536,
-         "speed_projection": false, "version": "477ac13"},
-        {"model": "coder-IQ1_M", "result": "52 Token/s", "at": 1_760_000_000u64,
-         "decode_tps": 52.0, "context": 32768, "speed_projection": true},
-        {"model": "swift-IQ2_XS", "result": "", "at": 1_760_000_000u64,
-         "error": "Strata kam nicht hoch"},
-    ]);
-    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut report = strata_info(true);
+    report.info.models = vec![
+        model("IQ3_XXS", Some("qwen"), 1, true),
+        model("coder-IQ1_M", Some("coder"), 1, false),
+        model("swift-IQ2_XS", Some("swift"), 1, false),
+    ];
+    report.info.benchmarks = vec![
+        StrataBenchmark {
+            decode_tps: Some(38.5),
+            prompt_tps: Some(612.0),
+            context: Some(65536),
+            speed_projection: Some(false),
+            version: Some("477ac13".into()),
+            ..benchmark("IQ3_XXS", "38.5 Token/s")
+        },
+        StrataBenchmark {
+            decode_tps: Some(52.0),
+            context: Some(32768),
+            speed_projection: Some(true),
+            ..benchmark("coder-IQ1_M", "52 Token/s")
+        },
+        StrataBenchmark {
+            error: Some("Strata kam nicht hoch".into()),
+            ..benchmark("swift-IQ2_XS", "")
+        },
+    ];
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let b = logged_in(&s.url).await;
     let html = b.page("/admin/strata/version").await;
     let coder = html.find("coder-IQ1_M").unwrap();
@@ -494,14 +516,16 @@ async fn connection_tab_holds_exactly_the_strata_settings() {
 #[tokio::test]
 async fn a_running_job_shows_and_locks_the_buttons_in_every_tab() {
     let s = setup(true, |_| {}).await;
-    let mut info = strata_info(true);
-    info["models"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"id": "IQ2_M", "disk_bytes": 60_000_000_000u64, "active": false}));
-    *s.pc.strata_info.lock().unwrap() = Some(info);
-    *s.pc.strata_job.lock().unwrap() =
-        Some(json!({"kind": "update", "state": "running", "percent": 40}));
+    let mut report = strata_info(true);
+    report
+        .info
+        .models
+        .push(model("IQ2_M", None, 60_000_000_000, false));
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    *s.pc.strata_job.lock().unwrap() = Some(StrataJob {
+        percent: Some(40),
+        ..job(StrataJobKind::Update, StrataJobState::Running)
+    });
     let b = logged_in(&s.url).await;
     for (path, button) in [
         ("/admin/strata", "Make active"),
@@ -532,22 +556,20 @@ async fn the_setup_offers_the_speed_projection_with_what_it_does() {
 
 /// Strata with IQ3_XXS (active) and swift-IQ2_XS; `projection` is what the
 /// PC service says about IQ3_XXS, `None` like an older one.
-fn with_two_models(projection: Option<bool>) -> Value {
-    let mut info = strata_info(true);
-    info["families"] = json!([
-        {"id": "qwen", "title": "Qwen3.8-Flash-Next", "speed_projection": true},
-        {"id": "swift", "title": "Swift 1.5", "speed_projection": false},
-    ]);
-    let mut qwen = json!({"id": "IQ3_XXS", "family": "qwen", "size": "IQ3_XXS",
-        "disk_bytes": 81_000_000_000u64, "active": true});
-    let mut swift = json!({"id": "swift-IQ2_XS", "family": "swift", "size": "IQ2_XS",
-        "disk_bytes": 40_000_000_000u64, "active": false});
+fn with_two_models(projection: Option<bool>) -> StrataReport {
+    let mut report = strata_info(true);
+    report.info.families = vec![
+        family("qwen", "Qwen3.8-Flash-Next", true),
+        family("swift", "Swift 1.5", false),
+    ];
+    let mut qwen = model("IQ3_XXS", Some("qwen"), 81_000_000_000, true);
+    let mut swift = model("swift-IQ2_XS", Some("swift"), 40_000_000_000, false);
     if let Some(on) = projection {
-        qwen["speed_projection"] = json!(on);
-        swift["speed_projection"] = json!(false);
+        qwen.speed_projection = Some(on);
+        swift.speed_projection = Some(false);
     }
-    info["models"] = json!([qwen, swift]);
-    info
+    report.info.models = vec![qwen, swift];
+    report
 }
 
 #[tokio::test]
@@ -625,10 +647,10 @@ async fn only_models_that_take_it_offer_to_switch_the_speed_projection() {
 #[tokio::test]
 async fn an_installed_model_shows_its_context() {
     let s = setup(true, |_| {}).await;
-    let mut info = with_two_models(None);
-    info["models"][0]["context"] = json!(65536);
-    info["models"][1]["context"] = json!(524288);
-    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut report = with_two_models(None);
+    report.info.models[0].context = Some(65536);
+    report.info.models[1].context = Some(524288);
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
@@ -675,10 +697,10 @@ async fn switching_the_context_sends_only_its_fields() {
 #[tokio::test]
 async fn a_model_with_a_known_context_offers_to_change_it() {
     let s = setup(true, |_| {}).await;
-    let mut info = with_two_models(None);
-    info["contexts"] = json!([8192, 65536, 262144, 524288]);
-    info["models"][1]["context"] = json!(524288);
-    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut report = with_two_models(None);
+    report.info.contexts = vec![8192, 65536, 262144, 524288];
+    report.info.models[1].context = Some(524288);
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
@@ -705,10 +727,10 @@ async fn without_a_known_context_there_is_nothing_to_change() {
 #[tokio::test]
 async fn the_active_model_offers_to_change_its_context_too() {
     let s = setup(true, |_| {}).await;
-    let mut info = with_two_models(None);
-    info["models"][0]["context"] = json!(65536);
-    info["models"][1]["context"] = json!(65536);
-    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut report = with_two_models(None);
+    report.info.models[0].context = Some(65536);
+    report.info.models[1].context = Some(65536);
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
@@ -720,10 +742,10 @@ async fn the_active_model_offers_to_change_its_context_too() {
 #[tokio::test]
 async fn an_installed_model_shows_its_loop_recovery() {
     let s = setup(true, |_| {}).await;
-    let mut info = with_two_models(None);
-    info["models"][0]["loop_recovery"] = json!("recover");
-    info["models"][1]["loop_recovery"] = json!("off");
-    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut report = with_two_models(None);
+    report.info.models[0].loop_recovery = Some("recover".into());
+    report.info.models[1].loop_recovery = Some("off".into());
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
@@ -744,23 +766,31 @@ async fn without_word_from_the_pc_service_no_loop_recovery_shows() {
 
 // --- #159 the sampling of installed models ---
 
-fn sampling_field(name: &str, value: f64, source: &str) -> Value {
-    json!({"name": name, "value": value, "source": source})
+fn sampling_field(name: &str, value: f64, source: SamplingSource) -> SamplingField {
+    SamplingField {
+        name: name.into(),
+        value,
+        source,
+    }
 }
 
 #[tokio::test]
 async fn an_installed_model_shows_its_sampling_and_its_sources() {
     let s = setup(true, |_| {}).await;
-    let mut info = with_two_models(None);
-    info["models"][0]["sampling"] = json!({
-        "support": "model_card",
-        "thinking": [sampling_field("temperature", 1.0, "model_card"),
-                     sampling_field("top_p", 0.95, "model_card"),
-                     sampling_field("top_k", 20.0, "model_card")],
-        "instruct": [sampling_field("temperature", 0.6, "config"),
-                     sampling_field("presence_penalty", 1.5, "model_card")],
+    let mut report = with_two_models(None);
+    report.info.models[0].sampling = Some(StrataSampling {
+        support: SamplingSupport::ModelCard,
+        thinking: vec![
+            sampling_field("temperature", 1.0, SamplingSource::ModelCard),
+            sampling_field("top_p", 0.95, SamplingSource::ModelCard),
+            sampling_field("top_k", 20.0, SamplingSource::ModelCard),
+        ],
+        instruct: vec![
+            sampling_field("temperature", 0.6, SamplingSource::Config),
+            sampling_field("presence_penalty", 1.5, SamplingSource::ModelCard),
+        ],
     });
-    *s.pc.strata_info.lock().unwrap() = Some(info);
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
@@ -779,9 +809,13 @@ async fn an_installed_model_shows_its_sampling_and_its_sources() {
 #[tokio::test]
 async fn a_strata_that_ignores_sampling_says_to_update_it() {
     let s = setup(true, |_| {}).await;
-    let mut info = with_two_models(None);
-    info["models"][0]["sampling"] = json!({"support": "none", "thinking": [], "instruct": []});
-    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut report = with_two_models(None);
+    report.info.models[0].sampling = Some(StrataSampling {
+        support: SamplingSupport::None,
+        thinking: vec![],
+        instruct: vec![],
+    });
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
@@ -807,14 +841,16 @@ async fn without_word_from_the_pc_service_no_sampling_shows() {
 #[tokio::test]
 async fn sampling_from_chat_settings_is_marked_as_such() {
     let s = setup(true, |_| {}).await;
-    let mut info = with_two_models(None);
-    info["models"][0]["sampling"] = json!({
-        "support": "model_card",
-        "thinking": [sampling_field("temperature", 0.3, "chat_settings"),
-                     sampling_field("top_k", 20.0, "model_card")],
-        "instruct": [],
+    let mut report = with_two_models(None);
+    report.info.models[0].sampling = Some(StrataSampling {
+        support: SamplingSupport::ModelCard,
+        thinking: vec![
+            sampling_field("temperature", 0.3, SamplingSource::ChatSettings),
+            sampling_field("top_k", 20.0, SamplingSource::ModelCard),
+        ],
+        instruct: vec![],
     });
-    *s.pc.strata_info.lock().unwrap() = Some(info);
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;

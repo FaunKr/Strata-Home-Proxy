@@ -23,6 +23,7 @@ use axum::{
 use futures_util::stream;
 use serde_json::{Value, json};
 use strata_nas_proxy::{AppState, Config, api_router, events::EventKind, wol::magic_packet};
+pub use strata_pc_protocol::*;
 use tokio::net::{TcpListener, UdpSocket};
 
 pub const MAC: [u8; 6] = [0x10, 0x20, 0x30, 0x40, 0x50, 0x60];
@@ -67,9 +68,9 @@ pub struct FakePc {
     /// `Authorization` header of the last metrics request.
     pub metrics_auth: Mutex<Option<String>>,
     /// What the PC service's `GET /strata` answers; 404 (an older service) if unset.
-    pub strata_info: Mutex<Option<Value>>,
+    pub strata_info: Mutex<Option<StrataReport>>,
     /// The PC service's running or last Strata job.
-    pub strata_job: Mutex<Option<Value>>,
+    pub strata_job: Mutex<Option<StrataJob>>,
     /// Bodies of the jobs the PC service was asked for.
     pub job_bodies: Mutex<Vec<Value>>,
     /// The PC service refuses jobs with this reason.
@@ -80,7 +81,7 @@ pub struct FakePc {
     pub version: Mutex<Option<String>>,
     /// Hardwarewerte the PC service reports in `/status`; none, like a service
     /// from before them, if unset.
-    pub hardware: Mutex<Option<Value>>,
+    pub hardware: Mutex<Option<Hardware>>,
     pub update_requests: AtomicUsize,
     /// The PC service refuses updates with this reason (409).
     pub refuse_update: Mutex<Option<String>>,
@@ -90,7 +91,7 @@ pub struct FakePc {
     pub update_to: Mutex<Option<String>>,
     /// What the PC service's `GET /strata-log` sends, in order; messages
     /// added later follow live.
-    pub strata_log: Mutex<Vec<Value>>,
+    pub strata_log: Mutex<Vec<StrataOutputMessage>>,
     pub strata_log_requests: AtomicUsize,
     /// The PC service refuses `GET /strata-log` (wrong token, other address).
     pub refuse_log: AtomicBool,
@@ -141,14 +142,28 @@ impl FakePc {
             .lock()
             .unwrap()
             .as_ref()
-            .is_some_and(|j| j["state"] == "running")
+            .is_some_and(|j| j.state == StrataJobState::Running)
     }
-    /// Sets fields of the job, e.g. its progress or its end.
-    pub fn update_job(&self, fields: Value) {
-        let mut job = self.strata_job.lock().unwrap();
-        let job = job.as_mut().expect("kein Vorgang");
-        for (k, v) in fields.as_object().unwrap() {
-            job[k] = v.clone();
+    /// Changes the job, e.g. its progress or its end.
+    pub fn update_job(&self, change: impl FnOnce(&mut StrataJob)) {
+        change(
+            self.strata_job
+                .lock()
+                .unwrap()
+                .as_mut()
+                .expect("kein Vorgang"),
+        );
+    }
+    /// What the PC service's `/status` answers now.
+    fn status(&self) -> PcStatus {
+        PcStatus {
+            gaming_mode: self.gaming.load(Ordering::SeqCst),
+            strata_running: self.strata_running(),
+            strata_job: self.job_running(),
+            mac: self.report_mac.lock().unwrap().clone(),
+            version: self.version.lock().unwrap().clone(),
+            hardware: self.hardware.lock().unwrap().clone(),
+            ..PcStatus::default()
         }
     }
 }
@@ -303,21 +318,7 @@ pub async fn agent_status(State(pc): State<Pc>) -> Response {
         // A sleeping PC does not answer; a refused status is the closest stand-in.
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    let mut status = json!({
-        "gaming_mode": pc.gaming.load(Ordering::SeqCst),
-        "strata_running": pc.strata_running(),
-        "strata_job": pc.job_running(),
-    });
-    if let Some(mac) = pc.report_mac.lock().unwrap().clone() {
-        status["mac"] = json!(mac);
-    }
-    if let Some(version) = pc.version.lock().unwrap().clone() {
-        status["version"] = json!(version);
-    }
-    if let Some(hardware) = pc.hardware.lock().unwrap().clone() {
-        status["hardware"] = hardware;
-    }
-    Json(status).into_response()
+    Json(pc.status()).into_response()
 }
 
 /// `POST /update`: accepted, the service then reports `update_to`.
@@ -330,12 +331,12 @@ pub async fn agent_update(State(pc): State<Pc>) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     }
     if let Some(reason) = pc.refuse_update.lock().unwrap().clone() {
-        return (StatusCode::CONFLICT, Json(json!({"reason": reason}))).into_response();
+        return (StatusCode::CONFLICT, Json(Refused::new(reason))).into_response();
     }
     if let Some(version) = pc.update_to.lock().unwrap().clone() {
         *pc.version.lock().unwrap() = Some(version);
     }
-    (StatusCode::ACCEPTED, Json(json!({"accepted": true}))).into_response()
+    (StatusCode::ACCEPTED, Json(Answer::accepted())).into_response()
 }
 
 /// Strata's `/metrics`: the text set in `metrics` when asked for Prometheus'
@@ -366,13 +367,12 @@ pub async fn metrics(
 pub const METRICS_BUSY: &str = include_str!("../fixtures/strata-metrics-busy.prom");
 pub const METRICS_IDLE: &str = include_str!("../fixtures/strata-metrics-idle.prom");
 
-pub async fn agent_gaming(State(pc): State<Pc>, Json(body): Json<Value>) -> Response {
+pub async fn agent_gaming(State(pc): State<Pc>, Json(body): Json<GamingRequest>) -> Response {
     if !pc.up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    pc.gaming
-        .store(body["enabled"].as_bool().unwrap(), Ordering::SeqCst);
-    Json(json!({"gaming_mode": pc.gaming.load(Ordering::SeqCst)})).into_response()
+    pc.gaming.store(body.enabled, Ordering::SeqCst);
+    Json(pc.status()).into_response()
 }
 
 pub async fn agent_sleep(State(pc): State<Pc>) -> Response {
@@ -380,38 +380,107 @@ pub async fn agent_sleep(State(pc): State<Pc>) -> Response {
     if pc.refuse_sleep.load(Ordering::SeqCst) {
         return (
             StatusCode::CONFLICT,
-            Json(json!({"reason": "Benutzer aktiv"})),
+            Json(Answer::refused("Benutzer aktiv")),
         )
             .into_response();
     }
     pc.awake.store(false, Ordering::SeqCst);
-    Json(json!({"accepted": true})).into_response()
+    Json(Answer::accepted()).into_response()
 }
 
 /// A Strata the PC service reports: installed with one model, or not.
-pub fn strata_info(installed: bool) -> Value {
-    let models = if installed {
-        json!([{"id": "IQ3_XXS", "family": "qwen", "size": "IQ3_XXS",
-                "disk_bytes": 81_000_000_000u64, "active": true}])
-    } else {
-        json!([])
+pub fn strata_info(installed: bool) -> StrataReport {
+    let info = StrataInfo {
+        installed,
+        version: installed.then(|| "477ac13".into()),
+        update_available: None,
+        models: if installed {
+            vec![model("IQ3_XXS", Some("qwen"), 81_000_000_000, true)]
+        } else {
+            vec![]
+        },
+        families: vec![family("qwen", "Qwen3.8-Flash-Next", true)],
+        catalog: vec![StrataSize {
+            id: "IQ3_XXS".into(),
+            family: "qwen".into(),
+            size: "IQ3_XXS".into(),
+            download_gb: 75.8,
+            ram_gb: 60,
+            fits: true,
+            partly_downloaded: false,
+        }],
+        recommended: Some("IQ3_XXS".into()),
+        contexts: vec![32768, 65536],
+        default_context: 65536,
+        ram_gb: 64.0,
+        disk_free_gb: Some(500.0),
+        data_dir: "C:\\Strata-data".into(),
+        benchmark: None,
+        benchmarks: vec![],
+        job: None,
     };
-    json!({
-        "installed": installed,
-        "version": installed.then_some("477ac13"),
-        "models": models,
-        "families": [{"id": "qwen", "title": "Qwen3.8-Flash-Next", "speed_projection": true}],
-        "catalog": [{"id": "IQ3_XXS", "family": "qwen", "size": "IQ3_XXS",
-                     "download_gb": 75.8, "ram_gb": 60, "fits": true,
-                     "partly_downloaded": false}],
-        "recommended": "IQ3_XXS",
-        "contexts": [32768, 65536],
-        "default_context": 65536,
-        "ram_gb": 64.0,
-        "disk_free_gb": 500.0,
-        "data_dir": "C:\\Strata-data",
-        "job": null,
-    })
+    StrataReport { info, update: None }
+}
+
+/// An installed model as an older PC service reports it: without what
+/// newer ones add. `id` is `<family>-<size>`, or the size for Qwen.
+pub fn model(id: &str, family: Option<&str>, disk_bytes: u64, active: bool) -> StrataModel {
+    StrataModel {
+        id: id.into(),
+        family: family.map(Into::into),
+        size: family.map(|f| id.strip_prefix(&format!("{f}-")).unwrap_or(id).into()),
+        disk_bytes,
+        active,
+        speed_projection: None,
+        context: None,
+        loop_recovery: None,
+        sampling: None,
+    }
+}
+
+pub fn family(id: &str, title: &str, speed_projection: bool) -> StrataFamily {
+    StrataFamily {
+        id: id.into(),
+        title: title.into(),
+        speed_projection,
+    }
+}
+
+/// A job of `kind` without progress, output or result.
+pub fn job(kind: StrataJobKind, state: StrataJobState) -> StrataJob {
+    StrataJob {
+        id: None,
+        kind,
+        model: None,
+        state,
+        step: None,
+        percent: None,
+        done_bytes: None,
+        total_bytes: None,
+        bytes_per_sec: None,
+        eta_secs: None,
+        lines: vec![],
+        error: None,
+        result: None,
+        started: 0,
+        ended: None,
+    }
+}
+
+/// A benchmark run of `model` without the values newer services add.
+pub fn benchmark(model: &str, result: &str) -> StrataBenchmark {
+    StrataBenchmark {
+        model: model.into(),
+        result: result.into(),
+        at: 1_760_000_000,
+        at_text: String::new(),
+        decode_tps: None,
+        prompt_tps: None,
+        context: None,
+        speed_projection: None,
+        version: None,
+        error: None,
+    }
 }
 
 pub async fn agent_strata(State(pc): State<Pc>) -> Response {
@@ -419,9 +488,9 @@ pub async fn agent_strata(State(pc): State<Pc>) -> Response {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     match pc.strata_info.lock().unwrap().clone() {
-        Some(mut info) => {
-            info["job"] = pc.strata_job.lock().unwrap().clone().unwrap_or(Value::Null);
-            Json(info).into_response()
+        Some(mut report) => {
+            report.info.job = pc.strata_job.lock().unwrap().clone();
+            Json(report).into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }
@@ -433,16 +502,29 @@ pub async fn agent_start_job(State(pc): State<Pc>, Json(body): Json<Value>) -> R
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     pc.job_bodies.lock().unwrap().push(body.clone());
+    // The PC service takes only what the protocol says.
+    let request: StrataJobRequest = match serde_json::from_value(body) {
+        Ok(request) => request,
+        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    };
     if let Some(reason) = pc.refuse_job.lock().unwrap().clone() {
-        return (StatusCode::CONFLICT, Json(json!({ "reason": reason }))).into_response();
+        return (StatusCode::CONFLICT, Json(Refused::new(reason))).into_response();
     }
-    let job = json!({
-        "id": 1,
-        "kind": body["kind"],
-        "model": body.get("model").or(body.get("size")).cloned().unwrap_or(Value::Null),
-        "state": "running",
-        "lines": [],
-    });
+    let model = match &request {
+        StrataJobRequest::Install { size, .. } | StrataJobRequest::AddModel { size, .. } => {
+            Some(size.clone())
+        }
+        StrataJobRequest::Activate { model }
+        | StrataJobRequest::Delete { model }
+        | StrataJobRequest::SetSpeedProjection { model, .. }
+        | StrataJobRequest::SetContext { model, .. } => Some(model.clone()),
+        _ => None,
+    };
+    let job = StrataJob {
+        id: Some(1),
+        model,
+        ..job(request.kind(), StrataJobState::Running)
+    };
     *pc.strata_job.lock().unwrap() = Some(job.clone());
     (StatusCode::ACCEPTED, Json(job)).into_response()
 }
@@ -459,12 +541,12 @@ pub async fn agent_cancel_job(State(pc): State<Pc>) -> Response {
     if !pc.job_running() {
         return (
             StatusCode::CONFLICT,
-            Json(json!({"reason": "Es läuft kein Vorgang"})),
+            Json(Refused::new("Es läuft kein Vorgang")),
         )
             .into_response();
     }
     pc.job_cancels.fetch_add(1, Ordering::SeqCst);
-    pc.update_job(json!({"state": "cancelled"}));
+    pc.update_job(|j| j.state = StrataJobState::Cancelled);
     StatusCode::ACCEPTED.into_response()
 }
 
@@ -485,6 +567,7 @@ pub async fn agent_strata_log(State(pc): State<Pc>) -> Response {
             }
             let next = pc.strata_log.lock().unwrap().get(sent).cloned();
             if let Some(msg) = next {
+                let msg = serde_json::to_string(&msg).unwrap();
                 let event = Bytes::from(format!("data: {msg}\n\n"));
                 return Some((Ok::<_, std::convert::Infallible>(event), (pc, sent + 1)));
             }

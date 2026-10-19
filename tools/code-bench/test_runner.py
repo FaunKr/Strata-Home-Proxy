@@ -14,10 +14,14 @@ from pathlib import Path
 from threading import Thread
 
 HERE = Path(__file__).parent
-os.environ["OPENCODE_BIN"] = str(HERE / "testdata" / "fake-opencode")
 os.environ["WORK_DIR"] = tempfile.mkdtemp()
 # Like /tmp in the image: the agent reaches its task folders.
 os.chmod(os.environ["WORK_DIR"], 0o755)
+# Like opencode in the image, where the agent can run it; the checkout may
+# sit under a home folder the agent can't enter (CI's runner).
+_bin = tempfile.mkdtemp()
+os.chmod(_bin, 0o755)
+os.environ["OPENCODE_BIN"] = shutil.copy(HERE / "testdata" / "fake-opencode", _bin)
 sys.path.insert(0, str(HERE))
 import runner  # noqa: E402
 

@@ -50,6 +50,13 @@ expect "test=true packages= image=false bench=true" tools/code-bench/runner.py
 expect "test=true packages= image=false bench=true" tools/code-bench/Dockerfile
 expect "test=true packages= image=false bench=false" tools/code-bench/test_runner.py
 expect "test=true packages=strata-nas-proxy image=false bench=false" tools/code-bench/tasks/roman/TASK.md
+# On main the pull request has checked the change already; the test job runs
+# only when the dependencies change, to save their Rust cache for pull requests.
+main_for() { printf '%s\n' "$@" | scripts/ci-select.sh --main | tr '\n' ' '; }
+[[ $(main_for crates/nas-proxy/src/main.rs Dockerfile) == "test=false packages= " ]] || fail "--main: Code -> $(main_for crates/nas-proxy/src/main.rs Dockerfile)"
+for path in Cargo.lock Cargo.toml crates/pc-agent/Cargo.toml rust-toolchain.toml .cargo/config.toml; do
+  [[ $(main_for README.md "$path") == "test=true packages= " ]] || fail "--main: $path -> $(main_for README.md "$path")"
+done
 [[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$all " ]] || fail "--all -> nicht alles"
 
 # Every crate selects itself.

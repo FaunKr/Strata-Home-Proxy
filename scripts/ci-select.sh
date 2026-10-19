@@ -3,6 +3,7 @@
 #
 # Usage: <changed paths, one per line> | scripts/ci-select.sh
 #        scripts/ci-select.sh --all
+#        <changed paths> | scripts/ci-select.sh --main
 # Prints test=, packages=, image= (the proxy's image) and bench= (the code
 # benchmark runner's image) for $GITHUB_OUTPUT. The images build only when
 # their build definition changes: the test job already compiles the code. An empty
@@ -13,6 +14,19 @@ set -euo pipefail
 all() { printf '%s\n' test=true packages= image=true bench=true; }
 if [[ ${1:-} == --all ]]; then
   all
+  exit 0
+fi
+# A push to main: its pull request ran the checks already. The test job runs
+# only when the dependencies change, so that main saves their Rust cache
+# (rust-cache keys on these files) and pull requests start warm.
+if [[ ${1:-} == --main ]]; then
+  test=false
+  while IFS= read -r path; do
+    case $path in
+      Cargo.toml | Cargo.lock | crates/*/Cargo.toml | rust-toolchain* | .cargo/*) test=true ;;
+    esac
+  done
+  printf '%s\n' "test=$test" packages=
   exit 0
 fi
 

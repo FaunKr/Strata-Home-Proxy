@@ -211,6 +211,21 @@ steps() {
     else empty end'
 }
 
+# Appends the steps of log lines after line $1 to the progress file, for
+# --watch; prints the number of lines read. Only whole lines count.
+follow() {
+  local total
+  if [[ ! -f $run_dir/log.jsonl ]]; then
+    echo "$1"
+    return
+  fi
+  total=$(wc -l <"$run_dir/log.jsonl" | tr -d ' ')
+  if ((total > $1)); then
+    sed -n "$(($1 + 1)),${total}p" "$run_dir/log.jsonl" | steps >>"$run_dir/progress"
+  fi
+  echo "$total"
+}
+
 # After the worker died partway: keeps its work, writes what a fallback agent
 # needs to continue, and falls back.
 fail_mid_run() {
@@ -245,13 +260,14 @@ read_only_instructions="This run is read-only: you cannot change files. Answer f
 End with your answer and the files it rests on."
 
 cmd_run() {
-  local task='' arg read_only=0 timeout=2h
+  local task='' arg read_only=0 timeout=2h watch=0
   extra_allow=()
   while (($#)); do
     arg=$1
     shift
     case $arg in
       --read-only) read_only=1 ;;
+      --watch) watch=1 ;;
       --timeout)
         (($#)) || usage_error "--timeout needs a time, e.g. --timeout 30m"
         timeout=$1
@@ -286,6 +302,10 @@ cmd_run() {
   meta_set state queued
   meta_set started "$(date +%s)"
   echo "local-agent: run $id ($run_dir)"
+  if ((watch)); then
+    : >"$run_dir/progress"
+    echo "local-agent: progress in $run_dir/progress"
+  fi
 
   preflight
   local pct=$((compact_share * probe_context / assumed_window))
@@ -327,9 +347,10 @@ cmd_run() {
       --append-system-prompt "$prompt" --permission-mode "$mode" \
       --allowedTools "${allowed[@]}" --disallowedTools "${disallowed[@]}"
   ) <"$run_dir/task" >"$run_dir/log.jsonl" 2>"$run_dir/stderr" &
-  local worker=$! deadline=$((SECONDS + limit)) timed_out=0
+  local worker=$! deadline=$((SECONDS + limit)) timed_out=0 seen=0
   set +m
   while kill -0 "$worker" 2>/dev/null; do
+    ((watch)) && seen=$(follow "$seen")
     if ((SECONDS >= deadline)); then
       timed_out=1
       kill -TERM -- "-$worker" 2>/dev/null || true
@@ -340,6 +361,7 @@ cmd_run() {
     sleep 1
   done
   wait "$worker" 2>/dev/null || rc=$?
+  ((watch)) && follow "$seen" >/dev/null
 
   if ((timed_out)); then
     ((read_only)) || commit_leftovers "$workdir" "$id"
@@ -368,6 +390,25 @@ commit_leftovers() {
   [[ -n $(git -C "$1" status --porcelain) ]] || return 0
   git -C "$1" add -A
   git -C "$1" commit -qm "local-agent: uncommitted changes of run $2"
+}
+
+cmd_status() {
+  resolve_run "${1:-}"
+  local state started ended elapsed
+  state=$(meta_get "$run_dir" state)
+  started=$(meta_get "$run_dir" started)
+  ended=$(meta_get "$run_dir" ended)
+  elapsed=$((${ended:-$(date +%s)} - started))
+  echo "run $(meta_get "$run_dir" id): $state ($((elapsed / 60))m$((elapsed % 60))s)"
+  echo "repo: $(meta_get "$run_dir" repo)"
+  echo "task: $(head -1 "$run_dir/task")"
+  local reason
+  reason=$(meta_get "$run_dir" reason)
+  [[ -z $reason ]] || echo "reason: $reason"
+  if [[ -s $run_dir/log.jsonl ]]; then
+    echo "last steps:"
+    steps <"$run_dir/log.jsonl" | tail -8 | sed 's/^/  /'
+  fi
 }
 
 cmd_result() {
@@ -419,6 +460,7 @@ main() {
   (($#)) && shift
   case $cmd in
     run) cmd_run "$@" ;;
+    status) cmd_status "$@" ;;
     result) cmd_result "$@" ;;
     -h | --help | help) usage ;;
     *)

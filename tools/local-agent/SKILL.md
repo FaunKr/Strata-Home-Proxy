@@ -22,8 +22,10 @@ Offload only when the user asks. When a task is well scoped and mechanical (a re
 
    Options, before the task:
    - `--read-only` for research, review or questions: the worker reads the repo as it is, with no edit tools and no branch.
+   - `--watch` only when the user wants live reports: the run names a progress file; follow it with the Monitor tool (`tail -f <file>`) and relay milestones briefly.
    - `--allow 'Bash(cargo test:*)'` (repeatable) when the task needs a command beyond the base set (read, edit, `git status/diff/add/commit`, `ls`, `grep`) and the repo's own allow rules in `.claude/settings.json`. Network tools and `git push` stay blocked whatever you pass.
-3. When the command ends, act on its exit code.
+3. When the user asks how it's going, answer from `local-agent status <run>`.
+4. When the command ends, act on its exit code.
 
 ## Exit codes
 

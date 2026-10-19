@@ -291,6 +291,48 @@ test_time_limit() {
   [[ $code == 2 ]] || fail "--timeout soon: exit $code"
 }
 
+test_status() {
+  # While running.
+  export FAKE_CLAUDE_MODE=slow FAKE_CLAUDE_SLEEP=3
+  "$here/local-agent" run "First line of the task
+second line" >"$tmp/run.out" 2>&1 &
+  local runner=$! i
+  for i in $(seq 50); do
+    la status
+    [[ $out == *running* ]] && break
+    sleep 0.1
+  done
+  contains "$out" "running"
+  contains "$out" "First line of the task"
+  wait "$runner" || fail "Lauf scheiterte: $(cat "$tmp/run.out")"
+  # Done; without a run id it shows the latest run of this repo.
+  la status
+  [[ $code == 0 ]] || fail "status exit $code"
+  contains "$out" "done"
+  contains "$out" "Edit README"
+  contains "$out" "context compacted"
+  # Fallen back.
+  health '{"status": 503, "tag": "gaming"}'
+  la run "task"
+  la status "$(run_id)"
+  contains "$out" "fallback"
+  contains "$out" "Gaming-Modus"
+}
+
+test_watch() {
+  la run --watch "task"
+  [[ $code == 0 ]] || fail "exit $code: $out"
+  local progress
+  progress=$(sed -n 's/^local-agent: progress in //p' <<<"$out")
+  [[ -f $progress ]] || fail "keine Fortschrittsdatei in: $out"
+  has_line "$progress" "started"
+  has_line "$progress" "Edit README"
+  has_line "$progress" "finished"
+  # Without --watch the run says only when it starts and ends.
+  la run "task"
+  [[ $(wc -l <<<"$out") == 2 ]] || fail "Ausgabe ohne --watch: $out"
+}
+
 tests=("$@")
 if ((${#tests[@]} == 0)); then
   # shellcheck disable=SC2207 # test names have no spaces

@@ -41,6 +41,10 @@ Schon entschiedene Fragen: `docs/adr/`.
   Timer abläuft (Leerlaufzeit, Nachlauf), liegt der Timer mindestens 2 s
   dahinter; der CI-Runner ist langsamer als die Session. Knappe Timer nur,
   wenn der Test danach nur noch wartet.
+- **Ein Test für einen Ersatz- oder Standardwert wählt Eingaben, bei denen
+  ein anderer Wert ein anderes Ergebnis gäbe.** Runden, Untergrenzen und
+  `max`/`min` verdecken das leicht: Ergibt die Formel für viele Werte dasselbe,
+  prüft der Test den Ersatzwert nicht.
 - **Wartezeiten, die ein Test abwarten müsste, sind einstellbar.** Eine Grenze
   oder Wiederholzeit, von der Verhalten abhängt, kommt aus `Config` (wie
   `idle_timeout`) oder über einen Setter für Tests (wie `Monitor::set_poll`,
@@ -51,6 +55,10 @@ Schon entschiedene Fragen: `docs/adr/`.
   derselben Reihenfolge und werden live über `AppState::cfg()` gelesen. Das
   gilt für Werte aus den Einstellungs-Abschnitten der Weboberfläche, nicht für feste Pfade im Image wie
   `LEPTOS_SITE_ROOT` oder `PC_AGENT_EXE`.
+- **Eine neue Einstellung steht überall, wo Einstellungen stehen:** in
+  `config::FIELDS`, `Config::apply` und `Config::value`, mit Titel, Hilfe und
+  Abschnitt in `labels.rs`. Fehlt der Abschnitt, schlägt
+  `each_area_shows_its_own_settings` fehl.
 - **Strata-Vorgänge führen nur feste Programme aus.** Der PC-Dienst nimmt
   Werte nur aus `catalog.rs` und prüft Modell-IDs gegen den Katalog, bevor sie
   in einen Pfad gehen. Der Strata-Key steht in keiner Antwort an die

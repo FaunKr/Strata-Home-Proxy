@@ -4,7 +4,7 @@ mod common;
 
 use common::*;
 use serde_json::Value;
-use strata_nas_proxy::{AppState, Config, Settings, api_router};
+use strata_nas_proxy::{AppState, Config, Settings, api_router, config::FIELDS};
 
 async fn settings(b: &mut Browser) -> Value {
     let resp = b.call("settings", &[]).await;
@@ -51,7 +51,7 @@ async fn shows_every_value_with_its_origin() {
     let view = settings(&mut b).await;
     assert_eq!(view["persistent"], true);
     assert_eq!(view["configured"], true);
-    assert_eq!(view["entries"].as_array().unwrap().len(), 25);
+    assert_eq!(view["entries"].as_array().unwrap().len(), FIELDS.len());
     assert!(!view.to_string().contains("DATA_DIR"));
     assert_eq!(entry(&view, "STRATA_URL")["source"], "Env");
     assert_eq!(entry(&view, "STRATA_URL")["value"], "http://pc:8080");
@@ -121,6 +121,7 @@ async fn each_area_shows_its_own_settings() {
             &[
                 "STRATA_URL",
                 "STRATA_API_KEY",
+                "CODE_BENCH_URL",
                 "UPDATE_SUMMARY_TIMEOUT_SECS",
                 "CODE_BENCH_TASK_TIMEOUT_SECS",
             ][..],
@@ -142,7 +143,12 @@ async fn each_area_shows_its_own_settings() {
         .iter()
         .flat_map(|(_, keys)| keys.iter().copied())
         .collect();
-    assert_eq!(all.len(), 24);
+    // Every setting has its area, so a new one fails here until it is placed.
+    let mut fields: Vec<&str> = FIELDS.iter().map(|f| f.key).collect();
+    let mut placed = all.clone();
+    fields.sort_unstable();
+    placed.sort_unstable();
+    assert_eq!(placed, fields);
     for (path, keys) in areas {
         let html = b.page(path).await;
         for key in &all {

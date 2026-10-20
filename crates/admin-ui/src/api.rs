@@ -604,6 +604,9 @@ pub struct StrataPage {
     pub info: Option<StrataInfo>,
     /// `info` is from an earlier answer.
     pub stale: bool,
+    /// The local time of that earlier answer, while `info` is from one.
+    #[serde(default)]
+    pub as_of: Option<String>,
     /// What an available update brings; `None` without one, or when the PC
     /// service does not report it.
     #[serde(default)]

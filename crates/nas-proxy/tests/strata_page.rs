@@ -862,3 +862,121 @@ async fn sampling_from_chat_settings_is_marked_as_such() {
     );
     assert!(html.contains("Without thinking: greedy"), "{html}");
 }
+
+// --- #208 the last answer kept over a restart ---
+
+fn data_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("strata-last-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+/// A proxy with `dir` as `DATA_DIR` whose PC service answered with `report`
+/// and the running `job`.
+async fn answered(dir: &std::path::Path, report: StrataReport, job: Option<StrataJob>) -> Setup {
+    let data = dir.to_path_buf();
+    let s = setup(true, move |c| c.data_dir = Some(data)).await;
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    *s.pc.strata_job.lock().unwrap() = job;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(page(&mut b).await["stale"], false);
+    s
+}
+
+/// The proxy of `s` started again, with the PC asleep.
+async fn restarted_asleep(s: &Setup) -> Browser {
+    s.pc.awake.store(false, Ordering::SeqCst);
+    let state = strata_nas_proxy::AppState::new((*s.state.cfg()).clone());
+    logged_in_again(&format!(
+        "http://{}",
+        serve(strata_nas_proxy::api_router(state)).await
+    ))
+    .await
+}
+
+#[tokio::test]
+async fn a_restarted_proxy_shows_the_last_answer_while_the_pc_sleeps() {
+    let dir = data_dir("restart");
+    let mut report = strata_info(true);
+    report.info.update_available = Some(true);
+    report.info.benchmarks = vec![benchmark("IQ3_XXS", "ok")];
+    let s = answered(&dir, report, None).await;
+
+    let mut b = restarted_asleep(&s).await;
+    let v = page(&mut b).await;
+    assert!(v["problem"].as_str().unwrap().contains("asleep"), "{v}");
+    assert_eq!(v["stale"], true, "{v}");
+    assert_eq!(v["info"]["version"], "477ac13", "{v}");
+    assert_eq!(v["info"]["update_available"], true, "{v}");
+    assert_eq!(v["info"]["models"][0]["id"], "IQ3_XXS", "{v}");
+    assert_eq!(v["info"]["benchmarks"][0]["model"], "IQ3_XXS", "{v}");
+    let as_of = v["as_of"].as_str().unwrap_or_else(|| panic!("{v}"));
+    assert!(as_of.contains(':'), "{v}");
+
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("477ac13"), "{html}");
+    assert!(html.contains("Update available"), "{html}");
+    assert!(html.contains(as_of), "{html}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn an_answer_from_now_has_no_as_of() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(page(&mut b).await["as_of"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_job_running_at_the_last_answer_is_not_kept() {
+    let dir = data_dir("job");
+    let s = answered(
+        &dir,
+        strata_info(true),
+        Some(job(StrataJobKind::Benchmark, StrataJobState::Running)),
+    )
+    .await;
+
+    let mut b = restarted_asleep(&s).await;
+    let v = page(&mut b).await;
+    assert_eq!(v["stale"], true, "{v}");
+    assert_eq!(v["info"]["job"], Value::Null, "{v}");
+    let html = b.page("/admin/strata/version").await;
+    let at = html
+        .find(">Update Strata<")
+        .unwrap_or_else(|| panic!("{html}"));
+    let tag = &html[html[..at].rfind("<button").unwrap()..at];
+    assert!(!tag.contains("disabled"), "{tag}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn an_unreadable_last_answer_counts_as_none() {
+    let dir = data_dir("broken");
+    let s = answered(&dir, strata_info(true), None).await;
+    std::fs::write(dir.join("strata-last.json"), "{ kaputt").unwrap();
+
+    let mut b = restarted_asleep(&s).await;
+    let v = page(&mut b).await;
+    assert!(v["problem"].as_str().unwrap().contains("asleep"), "{v}");
+    assert_eq!(v["stale"], false, "{v}");
+    assert_eq!(v["info"], Value::Null, "{v}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn update_from_the_kept_answer_wakes_the_pc() {
+    let dir = data_dir("update");
+    let s = answered(&dir, strata_info(true), None).await;
+
+    let mut b = restarted_asleep(&s).await;
+    assert_eq!(page(&mut b).await["stale"], true);
+    let resp = b.call("strata-job", &[("kind", "update")]).await;
+    assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
+    assert!(s.pc.wol_packets.load(Ordering::SeqCst) > 0);
+    assert_eq!(last_body(&s)["kind"], "update");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

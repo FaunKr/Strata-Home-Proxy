@@ -196,14 +196,6 @@ impl Backend for UiBackend {
                 .set_gaming(enabled, BY_UI)
                 .await
                 .map_err(|e| e.to_string());
-            if result.is_ok() {
-                let kind = if enabled {
-                    EventKind::GamingOn
-                } else {
-                    EventKind::GamingOff
-                };
-                state.events.record(kind, Some(BY_UI.into()));
-            }
             state.overview.refresh_now();
             result
         }

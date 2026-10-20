@@ -167,7 +167,9 @@ async fn a_new_key_still_counts_after_a_restart_of_the_proxy() {
 
     let restarted = strata_nas_proxy::AppState::new((*s.state.cfg()).clone());
     s.pc.update_job(|j| j.state = StrataJobState::Done);
-    restarted.pc_status(&restarted.agent()).await.unwrap();
+    let agent = restarted.agent();
+    let status = restarted.pc_status(&agent).await.unwrap();
+    restarted.take_over(&agent, &status).await;
     assert_eq!(
         restarted.cfg().strata_api_key.as_deref(),
         Some(key.as_str())

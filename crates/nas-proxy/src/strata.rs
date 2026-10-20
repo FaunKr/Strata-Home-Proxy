@@ -112,7 +112,11 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             update: None,
         };
     }
-    let Some(status) = state.pc_status(&agent).await else {
+    let status = state.pc_status(&agent).await;
+    if let Some(s) = &status {
+        state.take_over(&agent, s).await;
+    }
+    let Some(status) = status else {
         let info = last();
         return StrataPage {
             problem: Some(ASLEEP.into()),

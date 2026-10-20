@@ -35,12 +35,12 @@ pub enum UpdateError {
 pub async fn update(agent: &Arc<Agent>) -> Result<(), UpdateError> {
     let Some(nas) = agent.cfg.nas_url.clone() else {
         return Err(UpdateError::Refused(
-            "Der PC-Dienst kennt die Adresse des NAS nicht. Einmal mit dem Befehl aus dem Bereich PC der Weboberfläche neu einrichten."
+            "The PC service does not know the NAS's address. Set it up again once with the install command from the PC area of the web UI."
                 .into(),
         ));
     };
     if agent.updating.swap(true, Ordering::SeqCst) {
-        return Err(UpdateError::Refused("Ein Update läuft schon".into()));
+        return Err(UpdateError::Refused("An update is running already".into()));
     }
     // Set first, so no job starts between this check and the restart.
     let busy = if agent.jobs.running() {
@@ -57,7 +57,7 @@ pub async fn update(agent: &Arc<Agent>) -> Result<(), UpdateError> {
     let result = hand_over(agent, &nas).await;
     match &result {
         Ok(()) => {
-            tracing::info!("Update eingesetzt, der PC-Dienst startet neu");
+            tracing::info!("Update in place, the PC service restarts");
             let agent = Arc::clone(agent);
             tokio::spawn(async move {
                 tokio::time::sleep(EXIT_DELAY).await;
@@ -81,7 +81,7 @@ async fn hand_over(agent: &Arc<Agent>, nas: &str) -> Result<(), UpdateError> {
     let marker = marker(agent);
     if was_running && let Err(e) = std::fs::write(&marker, b"") {
         // The watchdog of the new program starts Strata then, only later.
-        tracing::warn!("{} nicht speicherbar: {e}", marker.display());
+        tracing::warn!("{} could not be written: {e}", marker.display());
     }
     let replaced = replace(agent, bytes).await;
     if replaced.is_err() {
@@ -111,7 +111,7 @@ async fn stop_strata(agent: &Arc<Agent>) -> Result<bool, UpdateError> {
     let limit = tokio::time::Instant::now() + agent.cfg.update_stop_wait();
     while agent.strata_healthy().await {
         if tokio::time::Instant::now() >= limit {
-            tracing::warn!("Strata antwortet nach dem Beenden noch, kein Update");
+            tracing::warn!("Strata still answers after the stop, no update");
             return Err(UpdateError::Refused(
                 "Strata did not stop; the PC service was not updated".into(),
             ));
@@ -139,19 +139,19 @@ async fn download(nas: &str) -> Result<Vec<u8>, UpdateError> {
         .timeout(DOWNLOAD_TIMEOUT)
         .send()
         .await
-        .map_err(|e| failed(format!("Download vom NAS fehlgeschlagen ({url}): {e}")))?;
+        .map_err(|e| failed(format!("Download from the NAS failed ({url}): {e}")))?;
     if !resp.status().is_success() {
         return Err(failed(format!(
-            "Der NAS liefert kein Programm (HTTP {})",
+            "The NAS sends no program (HTTP {})",
             resp.status()
         )));
     }
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| failed(format!("Download vom NAS abgebrochen: {e}")))?;
+        .map_err(|e| failed(format!("Download from the NAS was interrupted: {e}")))?;
     if !bytes.starts_with(b"MZ") {
-        return Err(failed("Der NAS lieferte kein Windows-Programm".into()));
+        return Err(failed("The NAS sent no Windows program".into()));
     }
     Ok(bytes.to_vec())
 }
@@ -164,7 +164,7 @@ async fn replace(agent: &Arc<Agent>, bytes: Vec<u8>) -> Result<(), UpdateError> 
     // keeps answering.
     let replaced = tokio::task::spawn_blocking(move || {
         std::fs::write(&downloaded, &bytes)
-            .map_err(|e| anyhow::anyhow!("{} nicht speicherbar: {e}", downloaded.display()))?;
+            .map_err(|e| anyhow::anyhow!("{} cannot be saved: {e}", downloaded.display()))?;
         platform_agent.platform().replace_program(&downloaded)
     })
     .await
@@ -173,7 +173,7 @@ async fn replace(agent: &Arc<Agent>, bytes: Vec<u8>) -> Result<(), UpdateError> 
     if let Err(e) = replaced {
         let _ = std::fs::remove_file(&file);
         return Err(UpdateError::Failed(format!(
-            "Neues Programm nicht eingesetzt: {e:#}"
+            "New program not put in place: {e:#}"
         )));
     }
     Ok(())

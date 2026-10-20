@@ -104,7 +104,7 @@ impl ApiKeys {
             Some(Ok(Some(keys))) => (keys, None),
             Some(Err(e)) => {
                 tracing::error!(
-                    "{KEYS_FILE} nicht lesbar ({e}); bis zur Reparatur gilt kein Key und es wird nichts gespeichert"
+                    "{KEYS_FILE} not readable ({e}); until it is repaired no key is valid and nothing is saved"
                 );
                 (Vec::new(), Some(e))
             }
@@ -224,7 +224,7 @@ impl ApiKeys {
             inner.keys.clone()
         };
         if let Err(e) = self.save(&keys) {
-            tracing::warn!("Letzte Nutzung der API-Keys nicht gespeichert: {e}");
+            tracing::warn!("Last use of the API keys not saved: {e}");
             // Try again with the next flush.
             self.inner.lock().unwrap().last_used_dirty = true;
         }
@@ -237,7 +237,7 @@ impl ApiKeys {
         };
         if let Some(e) = &self.broken {
             return Err(KeyError::NotSaved(format!(
-                "{KEYS_FILE} ist beschädigt ({e}). Bitte reparieren oder löschen und den Proxy neu starten."
+                "{KEYS_FILE} is damaged ({e}). Please repair or delete it and restart the proxy."
             )));
         }
         let file = StoredFile {
@@ -319,13 +319,13 @@ mod tests {
         let dir = dir("keys-broken");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join(KEYS_FILE);
-        write_private(&dir, KEYS_FILE, b"{\"keys\": [ kaputt").unwrap();
+        write_private(&dir, KEYS_FILE, b"{\"keys\": [ broken").unwrap();
         let keys = ApiKeys::new(Some(dir.clone()));
         assert!(keys.list().is_empty());
-        assert!(matches!(keys.create("Neu"), Err(KeyError::NotSaved(_))));
+        assert!(matches!(keys.create("New"), Err(KeyError::NotSaved(_))));
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
-            "{\"keys\": [ kaputt"
+            "{\"keys\": [ broken"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

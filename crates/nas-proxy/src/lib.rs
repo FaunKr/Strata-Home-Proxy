@@ -1,4 +1,4 @@
-//! NAS proxy for Strata: wakes the PC on demand and sends it to sleep when idle.
+//! The proxy for Strata on the NAS: wakes the PC on demand and sends it to sleep when idle.
 
 pub mod admin;
 pub mod agent;
@@ -54,7 +54,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
 async fn fallback(state: State<Arc<AppState>>, req: Request) -> Response {
     let path = req.uri().path();
     if path == "/admin" || path.starts_with("/admin/") {
-        return (StatusCode::NOT_FOUND, "Nicht gefunden").into_response();
+        return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
     proxy::handle(state, req).await
 }
@@ -64,17 +64,17 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     let current = state.cfg();
     let listen = current.listen_addr;
     if current.strata_url.is_none() {
-        tracing::warn!("STRATA_URL fehlt: der Proxy ist nicht eingerichtet");
+        tracing::warn!("STRATA_URL is missing: the proxy is not set up");
     }
     if current.pc_mac.is_none() {
-        tracing::warn!("PC_MAC fehlt: der PC kann nicht geweckt werden");
+        tracing::warn!("PC_MAC is missing: the PC cannot be woken");
     }
     if current.pc_agent_url.is_none() {
-        tracing::warn!("PC_AGENT_URL fehlt: kein Gaming-Modus und kein automatisches Schlafen");
+        tracing::warn!("PC_AGENT_URL is missing: no gaming mode and no automatic sleep");
     }
     if current.strata_api_key.is_none() {
         tracing::warn!(
-            "STRATA_API_KEY fehlt: Anfragen gehen ohne Key an Strata; verlangt Strata einen, antwortet es mit 401"
+            "STRATA_API_KEY is missing: requests go to Strata without a key; if Strata requires one, it answers with 401"
         );
     }
     state.spawn_idle_loop();
@@ -82,7 +82,7 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     state.spawn_beat_loop();
     code_bench::resume(&state);
     let listener = tokio::net::TcpListener::bind(listen).await?;
-    tracing::info!("API-Proxy hört auf {listen}");
+    tracing::info!("API proxy listening on {listen}");
     // The client address is needed to slow down password guessing.
     let app = api_router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app).await?;

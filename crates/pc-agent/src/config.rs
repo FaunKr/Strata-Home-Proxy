@@ -139,13 +139,13 @@ fn default_strata_data_dir() -> PathBuf {
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("Konfiguration {} nicht lesbar", path.display()))?;
+            .with_context(|| format!("Config {} not readable", path.display()))?;
         // Set-Content -Encoding UTF8 in Windows PowerShell writes a BOM.
         let mut cfg: Self = toml::from_str(raw.trim_start_matches('\u{feff}'))
-            .with_context(|| format!("Konfiguration {} ist fehlerhaft", path.display()))?;
+            .with_context(|| format!("Config {} is invalid", path.display()))?;
         cfg.strata_url = cfg.strata_url.trim_end_matches('/').to_string();
         if let Some(mac) = &cfg.mac {
-            parse_mac(mac).with_context(|| format!("mac = {mac:?} ist keine MAC-Adresse"))?;
+            parse_mac(mac).with_context(|| format!("mac = {mac:?} is not a MAC address"))?;
         }
         if cfg.state_dir.is_none() {
             cfg.state_dir = path.parent().map(Path::to_path_buf);
@@ -225,7 +225,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("strata-pc-agent-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("strata-pc-agent.toml");
-        std::fs::write(&path, "token = \"geheim\"\n").unwrap();
+        std::fs::write(&path, "token = \"secret\"\n").unwrap();
         let cfg = Config::load(&path).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(cfg.strata_start, None);
@@ -242,14 +242,14 @@ mod tests {
         std::fs::write(
             &path,
             [
-                "# Konfiguration des PC-Dienstes, angelegt bei der Einrichtung vom NAS.",
+                "# PC service config, written by the install command from the NAS.",
                 "listen = \"0.0.0.0:8091\"",
                 "token = \"0123abcd\"",
                 "allowed_clients = [\"192.168.1.10\"]",
                 "strata_url = \"http://127.0.0.1:8080\"",
                 "nas_url = \"http://192.168.1.10:8090\"",
                 "fresh_strata_after_standby = true",
-                "strata_api_key = \"strata-geheim\"",
+                "strata_api_key = \"strata-secret\"",
             ]
             .join("\r\n")
             // As Windows PowerShell's Set-Content -Encoding UTF8 writes it.

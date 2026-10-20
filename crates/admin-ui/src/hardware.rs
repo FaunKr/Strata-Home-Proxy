@@ -1,5 +1,5 @@
-//! The Hardware card on the overview: the Hardwarewerte of GPU and CPU, and
-//! the Leistung of the Messsteckdose.
+//! The Hardware card on the overview: the hardware readings of GPU and CPU,
+//! and the power of the power plug.
 
 use leptos::prelude::*;
 

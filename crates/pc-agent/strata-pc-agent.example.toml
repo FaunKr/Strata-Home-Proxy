@@ -1,68 +1,68 @@
-# Konfiguration des PC-Dienstes. Als strata-pc-agent.toml neben
-# strata-pc-agent.exe ablegen und anpassen.
+# PC service config. Put it next to strata-pc-agent.exe as
+# strata-pc-agent.toml and adjust it.
 
-# Adresse und Port des Dienstes. Der NAS-Proxy zeigt mit PC_AGENT_URL hierhin.
+# Address and port of the service. The proxy points here with PC_AGENT_URL.
 listen = "0.0.0.0:8091"
 
-# Gemeinsames Geheimnis mit dem NAS (dort PC_AGENT_TOKEN). Lang und zufällig,
-# z. B. in PowerShell: -join ((48..57)+(97..122) | Get-Random -Count 40 | % {[char]$_})
-token = "hier-ein-langes-zufaelliges-geheimnis"
+# Secret shared with the NAS (PC_AGENT_TOKEN there). Long and random,
+# e.g. in PowerShell: -join ((48..57)+(97..122) | Get-Random -Count 40 | % {[char]$_})
+token = "put-a-long-random-secret-here"
 
-# Nur das NAS darf den Dienst aufrufen (die Desktop-Verknüpfung über 127.0.0.1
-# ist immer erlaubt). Leer lassen erlaubt jeden mit Token.
+# Only the NAS may call the service (the desktop shortcut through 127.0.0.1 is
+# always allowed). Left empty, anyone with the token may.
 allowed_clients = ["192.168.1.10"]
 
-# Strata auf diesem PC.
+# Strata on this PC.
 strata_url = "http://127.0.0.1:8080"
-# API-Key von Strata, falls /health oder /slots ihn verlangen.
+# Strata's API key, if /health or /slots ask for it.
 #strata_api_key = "..."
 
-# Womit Strata gestartet wird, und mit welchen Argumenten.
+# What starts Strata, and with which arguments.
 strata_start = 'C:\Strata\START-HERE.bat'
 strata_args = []
 
-# Was zu einem laufenden Strata gehört; wird im Gaming-Modus beendet. Ein
-# Ordner (mit \ am Ende) beendet jedes Programm daraus samt allem, was es
-# gestartet hat: Strata läuft als Python aus .venv, das engine\strata.exe
-# startet und nach einem Absturz neu startet. Ein Programmname (z. B.
-# "strata.exe") beendet nur Programme mit genau diesem Namen.
+# What belongs to a running Strata; stopped in gaming mode. A folder (with \
+# at the end) stops every program from it along with everything it started:
+# Strata runs as Python from .venv, which starts engine\strata.exe and
+# restarts it after a crash. A program name (e.g. "strata.exe") stops only
+# programs with exactly that name.
 strata_processes = ['C:\Strata\']
 
-# Kein Schlafen, solange die letzte Tastatur- oder Mauseingabe jünger ist.
+# No sleep while the last keyboard or mouse input is more recent than this.
 user_idle_minutes = 10
 
-# Strata selbst starten, wenn es nicht läuft und der Gaming-Modus aus ist.
+# Start Strata when it is not running and gaming mode is off.
 auto_start = true
 
-# Strata vor dem Standby beenden und nach dem Aufwachen neu starten. Das
-# Aufwachen dauert dann 1-3 min statt ca. 12 s, dafür startet die Grafikkarte
-# sauber. Auf diesem PC nötig: mit der RX 6800 XT hängt sonst die erste
-# Anfrage nach dem Standby (getestet am 18.10.2026).
+# Stop Strata before standby and start it again after waking. The wake-up
+# then takes 1-3 min instead of about 12 s, but the graphics card starts
+# clean. Needed on this PC: with the RX 6800 XT the first request after
+# standby hangs otherwise (tested on 2026-10-18).
 fresh_strata_after_standby = true
 
-# Antwortet Strata so lange nicht auf /health, wird es neu gestartet.
+# If Strata does not answer /health for this long, it is restarted.
 restart_after_secs = 60
 
-# Nach einem Start so lange warten, bis das Modell geladen ist.
+# After a start, wait this long for the model to load.
 load_time_secs = 240
 
-# Nach einem Kontextwechsel muss das aktive Modell so schnell antworten, sonst
-# kommt sein alter Kontext zurück.
+# After a context change the active model must answer within this time,
+# otherwise its old context comes back.
 context_start_secs = 600
 
-# Pause zwischen dem Beenden von Strata und dem nächsten Start, damit das
-# beendete seinen Port freigibt.
+# Pause between stopping Strata and the next start, so the stopped one frees
+# its port.
 stop_settle_ms = 2000
 
-# So lange wartet ein erzwungenes Schlafen oder ein erzwungener Neustart von
-# Strata auf das Ende des Vorgangs, den es abgebrochen hat; danach geht es
-# trotzdem weiter. Das NAS wartet länger auf die Antwort.
+# How long a forced sleep or a forced restart of Strata waits for the end of
+# the job it cancelled; after that it carries on anyway. The NAS waits longer
+# for the answer.
 cancel_wait_secs = 60
 
-# So lange wartet ein Update des PC-Dienstes, bis das beendete Strata nicht
-# mehr antwortet; antwortet es danach noch, unterbleibt das Update.
+# How long a PC service update waits until the stopped Strata no longer
+# answers; if it still answers then, the update does not happen.
 update_stop_wait_secs = 10
 
-# MAC-Adresse, die dem NAS gemeldet wird. Normalerweise leer lassen: der Dienst
-# meldet dann die der Netzwerkkarte, über die das NAS ihn erreicht.
+# MAC address reported to the NAS. Usually left empty: the service then
+# reports that of the network card through which the NAS reaches it.
 #mac = "AA-BB-CC-DD-EE-FF"

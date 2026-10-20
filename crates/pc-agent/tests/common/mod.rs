@@ -233,7 +233,7 @@ impl Platform for FakePlatform {
         fake.ran.lock().unwrap().push(spec.clone());
         let name = file_name(&spec.program);
         if name == "git" && fake.git_missing.load(Ordering::SeqCst) {
-            anyhow::bail!("git nicht gefunden");
+            anyhow::bail!("git not found");
         }
         if name == "winget" {
             fake.git_missing.store(false, Ordering::SeqCst);
@@ -334,7 +334,7 @@ impl Drop for TempDir {
 pub fn config(strata: SocketAddr, dir: &Path) -> Config {
     Config {
         listen: "127.0.0.1:0".parse().unwrap(),
-        token: "geheim".into(),
+        token: "secret".into(),
         allowed_clients: vec!["192.168.1.10".parse().unwrap()],
         strata_url: format!("http://{strata}"),
         strata_api_key: None,
@@ -399,7 +399,7 @@ pub fn client() -> reqwest::Client {
 pub async fn sleep_answer(s: &Setup) -> (u16, Value) {
     let resp = client()
         .post(format!("{}/sleep", s.url))
-        .bearer_auth("geheim")
+        .bearer_auth("secret")
         .send()
         .await
         .unwrap();
@@ -409,7 +409,7 @@ pub async fn sleep_answer(s: &Setup) -> (u16, Value) {
 pub async fn post(s: &Setup, path: &str, body: Value) -> (u16, Value) {
     let resp = client()
         .post(format!("{}{path}", s.url))
-        .bearer_auth("geheim")
+        .bearer_auth("secret")
         .json(&body)
         .send()
         .await
@@ -423,7 +423,7 @@ pub async fn post(s: &Setup, path: &str, body: Value) -> (u16, Value) {
 pub async fn get(s: &Setup, path: &str) -> Value {
     client()
         .get(format!("{}{path}", s.url))
-        .bearer_auth("geheim")
+        .bearer_auth("secret")
         .send()
         .await
         .unwrap()
@@ -442,20 +442,20 @@ pub async fn job_until(s: &Setup, what: &str, done: impl Fn(&Value) -> bool) -> 
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    panic!("{what} nicht erreicht, zuletzt: {last}");
+    panic!("{what} not reached, last: {last}");
 }
 
 pub async fn finished(s: &Setup) -> Value {
-    job_until(s, "Ende des Vorgangs", |j| j["state"] != "running").await
+    job_until(s, "end of the job", |j| j["state"] != "running").await
 }
 
-/// The service's Strata-Ordner, to add to or look at.
-pub fn strata_ordner(s: &Setup) -> SetupLeaves {
+/// The service's Strata folder, to add to or look at.
+pub fn strata_folder(s: &Setup) -> SetupLeaves {
     SetupLeaves::at(&s.agent.cfg.strata_dir, &s.agent.cfg.strata_data_dir)
 }
 
 /// A model config's fields, read through the service's own module.
 pub fn read_config(s: &Setup, id: &str) -> Value {
-    let model = strata_ordner(s).installation().model(id).unwrap();
+    let model = strata_folder(s).installation().model(id).unwrap();
     Value::Object(model.fields().clone())
 }

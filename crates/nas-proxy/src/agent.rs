@@ -27,7 +27,7 @@ async fn reason(resp: reqwest::Response) -> String {
         .await
         .ok()
         .and_then(|b| b.reason)
-        .unwrap_or_else(|| format!("Der PC-Dienst hat abgelehnt (HTTP {status})."))
+        .unwrap_or_else(|| format!("The PC service refused (HTTP {status})."))
 }
 
 /// The service loads the new program from the NAS before it answers.
@@ -117,7 +117,7 @@ impl AgentClient {
             .ok_or_else(|| anyhow::anyhow!("PC_AGENT_URL is not set"))?;
         let resp = req.json(&GamingRequest { enabled }).send().await?;
         if !resp.status().is_success() {
-            anyhow::bail!("Der PC-Dienst hat abgelehnt (HTTP {}).", resp.status());
+            anyhow::bail!("The PC service refused (HTTP {}).", resp.status());
         }
         Ok(())
     }
@@ -209,7 +209,7 @@ impl AgentClient {
             .map_err(|e| format!("The PC service's answer is unreadable: {e}"))
     }
 
-    /// The Strata-Ausgabe as the service streams it: `None` without an
+    /// The Strata output as the service streams it: `None` without an
     /// answer, `Err` with the status of a refusal.
     pub async fn strata_log(&self) -> Option<Result<reqwest::Response, reqwest::StatusCode>> {
         // Its own client: the stream stays open far longer than a probe may

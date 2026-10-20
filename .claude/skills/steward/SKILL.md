@@ -1,6 +1,6 @@
 ---
 name: steward
-description: Bring a PR in this repo to merge. Read when opening a PR, on every CI or review event and before every merge.
+description: Bring a PR in this repo to merge. Read when opening a PR, after every push, before waiting on CI, on every CI or review event and before every merge.
 ---
 
 1. **Mergeable first.** Before waiting for CI and before merging, read the PR's `mergeable_state`. On `dirty`, merge in `origin/main` with a merge commit, never by rebase, and run `scripts/check.sh`. Then push, and only then wait for CI. A CI run on a head with a conflict does not count.

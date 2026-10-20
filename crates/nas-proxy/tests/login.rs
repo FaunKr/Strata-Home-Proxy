@@ -15,7 +15,7 @@ async fn without_login_only_the_login_page_is_shown() {
     assert!(html.contains("Sign in"), "{html}");
     assert!(!html.contains("class=\"badges\""), "{html}");
     assert_eq!(b.session().await, "Anonymous");
-    let resp = change(&mut b, "admin", "ein langes Passwort").await;
+    let resp = change(&mut b, "admin", "a long password").await;
     assert_eq!(resp.status(), 401);
 }
 
@@ -23,7 +23,7 @@ async fn without_login_only_the_login_page_is_shown() {
 async fn first_login_forces_a_new_password() {
     let s = setup(true, |_| {}).await;
     let mut b = Browser::new(&s.url);
-    let resp = b.call("login", &[("password", "falsch")]).await;
+    let resp = b.call("login", &[("password", "wrong")]).await;
     assert_eq!(resp.status(), 401);
     assert!(resp.text().await.unwrap().contains("Wrong password"));
     assert_eq!(
@@ -34,12 +34,10 @@ async fn first_login_forces_a_new_password() {
     let html = b.page("/admin/").await;
     assert!(html.contains("Set a new password"), "{html}");
 
-    let resp = change(&mut b, "admin", "kurz").await;
+    let resp = change(&mut b, "admin", "short").await;
     assert_ne!(resp.status(), 200);
     assert_eq!(
-        change(&mut b, "admin", "ein langes Passwort")
-            .await
-            .status(),
+        change(&mut b, "admin", "a long password").await.status(),
         200
     );
     assert_eq!(b.session().await, "Ready");
@@ -76,7 +74,7 @@ async fn repeated_failures_are_slowed_down() {
     let s = setup(true, |_| {}).await;
     let mut b = Browser::new(&s.url);
     for _ in 0..5 {
-        b.call("login", &[("password", "falsch")]).await;
+        b.call("login", &[("password", "wrong")]).await;
     }
     let resp = b.call("login", &[("password", "admin")]).await;
     assert_ne!(resp.status(), 200);
@@ -93,15 +91,15 @@ async fn changing_the_password_ends_other_sessions() {
     let s = setup(true, |_| {}).await;
     let mut first = Browser::new(&s.url);
     first.call("login", &[("password", "admin")]).await;
-    change(&mut first, "admin", "erstes Passwort").await;
+    change(&mut first, "admin", "first password").await;
     let mut second = Browser::new(&s.url);
     second
-        .call("login", &[("password", "erstes Passwort")])
+        .call("login", &[("password", "first password")])
         .await;
     assert_eq!(second.session().await, "Ready");
 
     assert_eq!(
-        change(&mut first, "erstes Passwort", "zweites Passwort")
+        change(&mut first, "first password", "second password")
             .await
             .status(),
         200
@@ -124,13 +122,11 @@ async fn wrong_current_password_counts_as_failed_attempt() {
     b.call("login", &[("password", "admin")]).await;
     for _ in 0..5 {
         assert_ne!(
-            change(&mut b, "geraten", "ein langes Passwort")
-                .await
-                .status(),
+            change(&mut b, "guessed", "a long password").await.status(),
             200
         );
     }
-    let resp = change(&mut b, "admin", "ein langes Passwort").await;
+    let resp = change(&mut b, "admin", "a long password").await;
     assert!(
         resp.text()
             .await
@@ -155,7 +151,7 @@ async fn password_and_session_survive_a_restart() {
     let _ = std::fs::remove_dir_all(&dir);
     let mut b = Browser::new(&proxy_on(&dir).await);
     b.call("login", &[("password", "admin")]).await;
-    change(&mut b, "admin", "dauerhaftes Passwort").await;
+    change(&mut b, "admin", "lasting password").await;
 
     // Same data directory, new proxy: the cookie still works.
     b.base = proxy_on(&dir).await;
@@ -163,7 +159,7 @@ async fn password_and_session_survive_a_restart() {
     let mut fresh = Browser::new(&b.base);
     assert_eq!(
         fresh
-            .call("login", &[("password", "dauerhaftes Passwort")])
+            .call("login", &[("password", "lasting password")])
             .await
             .status(),
         200

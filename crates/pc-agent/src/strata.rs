@@ -124,7 +124,7 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
     let (job, record) = JobContext::begin(agent, kind, plan.model()).map_err(|running| {
         Refusal::Conflict(format!("A job is running already ({})", kind_text(running)))
     })?;
-    tracing::info!(kind = ?record.kind, model = ?record.model, "Strata-Vorgang gestartet");
+    tracing::info!(kind = ?record.kind, model = ?record.model, "Strata job started");
     tokio::spawn(async move {
         let result = run(&job, plan).await;
         job.finish(result);
@@ -571,7 +571,7 @@ async fn compare_models(
                 break;
             }
             Err(Step::Failed(error)) => {
-                tracing::warn!("Vergleich: {id} ohne Ergebnis: {error}");
+                tracing::warn!("Comparison: {id} without result: {error}");
                 let model = Installation::of(&agent.cfg).read_model(id);
                 keep_benchmark(
                     agent,
@@ -632,13 +632,13 @@ fn keep_benchmark(agent: &Agent, mut record: StrataBenchmark) {
     if record.error.is_none() {
         let text = serde_json::to_string_pretty(&record).expect("benchmark serializes");
         if let Err(e) = crate::write_replacing(&dir.join(BENCH_FILE), &text) {
-            tracing::warn!("{BENCH_FILE} nicht gespeichert: {e}");
+            tracing::warn!("{BENCH_FILE} not saved: {e}");
         }
     }
     all.push(record);
     let text = serde_json::to_string_pretty(&all).expect("benchmarks serialize");
     if let Err(e) = crate::write_replacing(&dir.join(BENCHES_FILE), &text) {
-        tracing::warn!("{BENCHES_FILE} nicht gespeichert: {e}");
+        tracing::warn!("{BENCHES_FILE} not saved: {e}");
     }
 }
 
@@ -785,7 +785,7 @@ pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output =
     async move {
         if after_update {
             if !agent.gaming() && agent.cfg.auto_start && !agent.jobs.running() {
-                tracing::info!("Strata startet nach dem Update");
+                tracing::info!("Strata starts after the update");
                 agent.strata().start();
             }
             return;
@@ -799,7 +799,7 @@ pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output =
         if agent.gaming() || agent.jobs.running() {
             return;
         }
-        tracing::info!("Konfiguration des aktiven Modells angepasst, Strata startet neu");
+        tracing::info!("Config of the active model changed, Strata restarts");
         agent.strata().restart_unless_job_runs().await;
     }
 }

@@ -4,14 +4,15 @@
 - Before pushing, run `scripts/check.sh`: the same checks as the CI job `test`. To iterate, `scripts/check.sh <crate>…` checks only those crates.
 - Before you suggest merging a PR: `/code-review` over its diff.
 - Check UI changes in the browser: `scripts/ui-check.sh` (`SHOTS=1` for screenshots).
-- New proxy tests use the harness with a simulated PC and Strata in `crates/nas-proxy/tests/common`.
+- New proxy tests use the harness with a simulated PC and Strata in `crates/nas-proxy/tests/common`; a proxy restart over the same `DATA_DIR` is `restarted` there, not a second `setup`.
 - What the PC service takes and answers over HTTP is written down as types in `crates/pc-protocol`; fields are only ever added, rules in `docs/pc-agent-api.md`.
 - Flaky or hanging tests: `scripts/repeat-test.sh` runs one test file many times and names the one that hangs.
 - CI costs, Actions minutes, which jobs a PR starts: `docs/ci.md`.
 
 ## Process
 
-- Each step of the pipeline (/grill-me, /to-spec, /to-tickets, /implement, /code-review, merge, /retro) starts only when Faun calls it; after a step, report and wait.
+- Each step of the pipeline (/grill-me, /to-spec, /to-tickets, /implement, /code-review, merge, /retro) starts only when Faun calls it; after a step, report and wait. Exception: /code-review starts on its own once the PR is up.
+- A retro ends in a PR that fixes everything from it that a PR can fix.
 - A refactor that lands as one PR is one ticket with a checklist, not a tree of sub-tickets.
 - If a spec says "X only in the module", that applies to code, helpers and fixtures. Tests may spell out the outer names they pin down (file names Strata itself reads).
 - Issues, specs, PR text, commit messages and retros are written in English, using the terms in `GLOSSARY.md`.

@@ -23,7 +23,7 @@ fn data_files_are_written_through_write_private() {
     }
     assert!(
         found.is_empty(),
-        "Dateien in DATA_DIR mit files::write_private schreiben:\n{}",
+        "Write files in DATA_DIR with files::write_private:\n{}",
         found.join("\n")
     );
 }
@@ -35,18 +35,18 @@ fn write_private_leaves_only_the_owner_able_to_read() {
     let dir = std::env::temp_dir().join(format!("strata-files-{}", std::process::id()));
     // A leftover from a crash, readable by everyone, is never reused.
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("geheim.tmp"), "alt").unwrap();
+    std::fs::write(dir.join("secret.tmp"), "old").unwrap();
     std::fs::set_permissions(
-        dir.join("geheim.tmp"),
+        dir.join("secret.tmp"),
         std::fs::Permissions::from_mode(0o644),
     )
     .unwrap();
 
-    strata_nas_proxy::files::write_private(&dir, "geheim", b"neu").unwrap();
+    strata_nas_proxy::files::write_private(&dir, "secret", b"new").unwrap();
 
-    let meta = std::fs::metadata(dir.join("geheim")).unwrap();
+    let meta = std::fs::metadata(dir.join("secret")).unwrap();
     assert_eq!(meta.permissions().mode() & 0o777, 0o600);
-    assert_eq!(std::fs::read(dir.join("geheim")).unwrap(), b"neu");
+    assert_eq!(std::fs::read(dir.join("secret")).unwrap(), b"new");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -60,12 +60,12 @@ fn simultaneous_writes_of_one_file_never_mix() {
             let dir = &dir;
             s.spawn(move || {
                 for _ in 0..50 {
-                    strata_nas_proxy::files::write_private(dir, "geheim", bytes).unwrap();
+                    strata_nas_proxy::files::write_private(dir, "secret", bytes).unwrap();
                 }
             });
         }
     });
-    let written = std::fs::read(dir.join("geheim")).unwrap();
-    assert!(contents.contains(&written), "Inhalte vermischt");
+    let written = std::fs::read(dir.join("secret")).unwrap();
+    assert!(contents.contains(&written), "contents mixed");
     std::fs::remove_dir_all(&dir).unwrap();
 }

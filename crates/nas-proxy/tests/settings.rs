@@ -62,7 +62,7 @@ async fn proxy_without_strata_url_says_it_is_not_set_up() {
         body["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("nicht eingerichtet")
+            .contains("not set up")
     );
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 0);
 }

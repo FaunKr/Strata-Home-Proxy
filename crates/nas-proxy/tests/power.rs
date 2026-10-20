@@ -1,5 +1,5 @@
-//! The Leistung of the Messsteckdose on the overview, against the simulated PC
-//! and its plug.
+//! The power of the power plug on the Overview, against the simulated PC and
+//! its plug.
 
 mod common;
 
@@ -12,7 +12,7 @@ async fn without_a_plug_there_is_no_power() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    let v = live.until("PC wach", |v| v["pc"] == "Awake").await;
+    let v = live.until("PC awake", |v| v["pc"] == "Awake").await;
     assert_eq!(v["power"], "NotConfigured");
 }
 
@@ -23,10 +23,9 @@ async fn shows_the_power_of_a_gen2_plug_live() {
     s.state.settings.set("SHELLY_URL", &s.plug).unwrap();
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("Leistung", |v| v["power"]["Watts"] == 87.4)
-        .await;
+    live.until("power", |v| v["power"]["Watts"] == 87.4).await;
     *s.pc.plug_watts.lock().unwrap() = 312.0;
-    live.until("neue Leistung", |v| v["power"]["Watts"] == 312.0)
+    live.until("new power", |v| v["power"]["Watts"] == 312.0)
         .await;
 }
 
@@ -38,7 +37,7 @@ async fn shows_the_power_while_the_pc_sleeps() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
-        .until("Leistung im Schlaf", |v| v["power"]["Watts"] == 1.2)
+        .until("power while asleep", |v| v["power"]["Watts"] == 1.2)
         .await;
     assert_eq!(v["pc"], "Asleep");
 }
@@ -49,13 +48,12 @@ async fn the_plug_is_set_up_on_the_settings_page_by_its_bare_address() {
     *s.pc.plug_watts.lock().unwrap() = 87.0;
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("ohne Steckdose", |v| v["power"] == "NotConfigured")
+    live.until("without a power plug", |v| v["power"] == "NotConfigured")
         .await;
     let resp = save_settings(&mut b, &[("SHELLY_URL", &s.plug)]).await;
     assert_eq!(resp.status(), 200);
     assert_eq!(s.state.cfg().shelly_url, Some(format!("http://{}", s.plug)));
-    live.until("Leistung", |v| v["power"]["Watts"] == 87.0)
-        .await;
+    live.until("power", |v| v["power"]["Watts"] == 87.0).await;
 }
 
 #[tokio::test]
@@ -67,8 +65,7 @@ async fn the_plug_is_set_up_by_a_full_url() {
     let resp = save_settings(&mut b, &[("SHELLY_URL", &url)]).await;
     assert_eq!(resp.status(), 200);
     let mut live = Live::open(&b).await;
-    live.until("Leistung", |v| v["power"]["Watts"] == 87.0)
-        .await;
+    live.until("power", |v| v["power"]["Watts"] == 87.0).await;
 }
 
 #[tokio::test]
@@ -79,7 +76,7 @@ async fn shows_the_power_of_a_gen1_plug() {
     s.state.settings.set("SHELLY_URL", &s.plug).unwrap();
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("Leistung Gen1", |v| v["power"]["Watts"] == 64.5)
+    live.until("power Gen1", |v| v["power"]["Watts"] == 64.5)
         .await;
 }
 
@@ -92,12 +89,12 @@ async fn an_unreachable_plug_is_shown_and_comes_back() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
-        .until("nicht erreichbar", |v| v["power"] == "Unreachable")
+        .until("unreachable", |v| v["power"] == "Unreachable")
         .await;
     assert_eq!(v["pc"], "Awake");
     assert_eq!(v["strata"], "Ready");
     s.pc.plug_down.store(false, Ordering::SeqCst);
-    live.until("wieder da", |v| v["power"]["Watts"] == 87.0)
+    live.until("back again", |v| v["power"]["Watts"] == 87.0)
         .await;
 }
 
@@ -108,7 +105,7 @@ async fn a_plug_that_is_not_there_is_unreachable() {
     s.state.settings.set("SHELLY_URL", "127.0.0.1:9").unwrap();
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("nicht erreichbar", |v| v["power"] == "Unreachable")
+    live.until("unreachable", |v| v["power"] == "Unreachable")
         .await;
 }
 
@@ -120,7 +117,7 @@ async fn a_hanging_plug_holds_back_neither_pc_nor_strata() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
-        .until("nicht erreichbar", |v| v["power"] == "Unreachable")
+        .until("unreachable", |v| v["power"] == "Unreachable")
         .await;
     assert_eq!(v["pc"], "Awake");
     assert_eq!(v["strata"], "Ready");
@@ -136,10 +133,10 @@ async fn an_unreachable_plug_records_no_event() {
     s.state.settings.set("SHELLY_URL", &s.plug).unwrap();
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("nicht erreichbar", |v| v["power"] == "Unreachable")
+    live.until("unreachable", |v| v["power"] == "Unreachable")
         .await;
     let before = kinds(&s.state);
     let rounds = s.state.overview.rounds();
-    eventually("weitere Runden", || s.state.overview.rounds() >= rounds + 5).await;
+    eventually("more rounds", || s.state.overview.rounds() >= rounds + 5).await;
     assert_eq!(kinds(&s.state), before);
 }

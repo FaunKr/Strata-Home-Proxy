@@ -34,12 +34,12 @@ impl Managed {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
             Err(e) => {
-                tracing::error!("{} nicht lesbar, gilt die TOML: {e}", path.display());
+                tracing::error!("{} not readable, the TOML applies: {e}", path.display());
                 return Self::default();
             }
         };
         serde_json::from_str(&text).unwrap_or_else(|e| {
-            tracing::error!("{} ist fehlerhaft, gilt die TOML: {e}", path.display());
+            tracing::error!("{} is invalid, the TOML applies: {e}", path.display());
             Self::default()
         })
     }
@@ -48,7 +48,7 @@ impl Managed {
     pub fn save(&self, dir: &Path) -> Result<()> {
         let text = serde_json::to_string_pretty(self).expect("managed values serialize");
         crate::write_replacing(&dir.join(MANAGED_FILE), &text)
-            .with_context(|| format!("{MANAGED_FILE} nicht gespeichert"))
+            .with_context(|| format!("{MANAGED_FILE} not saved"))
     }
 
     /// What starts Strata, and with which arguments; none until one is set.

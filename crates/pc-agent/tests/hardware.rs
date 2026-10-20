@@ -1,4 +1,4 @@
-//! Hardwarewerte in `/status`, read through the fake platform.
+//! Hardware readings in `/status`, read through the fake platform.
 
 mod common;
 
@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 async fn status_json(s: &Setup) -> Value {
     client()
         .get(format!("{}/status", s.url))
-        .bearer_auth("geheim")
+        .bearer_auth("secret")
         .send()
         .await
         .unwrap()
@@ -114,7 +114,7 @@ fn windows_reads_cpu_and_ram() {
     let cpu = read().cpu;
     let load = cpu.load_pct.expect("CPU-Last");
     assert!((0.0..=100.0).contains(&load), "CPU-Last {load}");
-    let total = cpu.ram_total_bytes.expect("RAM gesamt");
+    let total = cpu.ram_total_bytes.expect("RAM total");
     let used = cpu.ram_used_bytes.expect("RAM belegt");
     assert!(0 < used && used <= total, "RAM {used} von {total}");
 }

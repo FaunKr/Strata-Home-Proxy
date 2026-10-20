@@ -33,13 +33,16 @@ use crate::{
 /// A key handed to the PC that counts once its job is done; kept over a
 /// restart of the proxy.
 const PENDING_FILE: &str = "strata-pending-key.json";
+/// The last answer of the PC service, shown while the PC sleeps; kept over a
+/// restart of the proxy.
+const LAST_FILE: &str = "strata-last.json";
 const BY_UI: &str = "for Strata, from the web UI";
 const ASLEEP: &str = "The PC is asleep or its service does not answer. A button here wakes it.";
 const TOO_OLD: &str = "The PC service cannot manage Strata yet. Please update the PC service.";
 
 pub struct StrataState {
     /// The last answer of the PC service, shown while the PC sleeps.
-    last: Mutex<Option<StrataInfo>>,
+    last: Mutex<Option<LastAnswer>>,
     /// A job was started or reported running, and its end is not noted yet.
     job_running: AtomicBool,
     /// A new Strata key the proxy uses once the PC took it over.
@@ -47,6 +50,15 @@ pub struct StrataState {
     /// What an available update brings.
     pub update: UpdateSummaries,
     dir: Option<PathBuf>,
+}
+
+/// What the PC service reported about Strata, without its job: the job may
+/// have ended unseen by the time the page shows it.
+#[derive(Clone, Serialize, Deserialize)]
+struct LastAnswer {
+    info: StrataInfo,
+    /// When it answered, in Unix seconds.
+    at: u64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -62,8 +74,11 @@ impl StrataState {
             .as_ref()
             .and_then(|dir| std::fs::read(dir.join(PENDING_FILE)).ok())
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let last = data_dir
+            .as_ref()
+            .and_then(|dir| read_last(&dir.join(LAST_FILE)));
         Self {
-            last: Mutex::new(None),
+            last: Mutex::new(last),
             job_running: AtomicBool::new(pending.is_some()),
             pending: Mutex::new(pending),
             update: UpdateSummaries::new(data_dir.clone()),
@@ -85,11 +100,46 @@ impl StrataState {
                 }),
             };
             if let Err(e) = written {
-                tracing::error!("{PENDING_FILE} nicht gespeichert: {e}");
+                tracing::error!("{PENDING_FILE} not saved: {e}");
             }
         }
         *self.pending.lock().unwrap() = pending;
     }
+
+    fn set_last(&self, mut info: StrataInfo) {
+        info.job = None;
+        let last = LastAnswer {
+            info,
+            at: clock::unix_now(),
+        };
+        // Written under the lock: an older answer never overwrites a newer one.
+        let mut kept = self.last.lock().unwrap();
+        if let Some(dir) = &self.dir
+            && let Err(e) = write_private(
+                dir,
+                LAST_FILE,
+                &serde_json::to_vec(&last).expect("last answer serializes"),
+            )
+        {
+            tracing::error!("{LAST_FILE} nicht gespeichert: {e}");
+        }
+        *kept = Some(last);
+    }
+}
+
+/// The kept answer; `None` if there is none or it does not read.
+fn read_last(path: &std::path::Path) -> Option<LastAnswer> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!("{LAST_FILE} nicht lesbar: {e}");
+            return None;
+        }
+    };
+    serde_json::from_slice(&bytes)
+        .inspect_err(|e| tracing::warn!("{LAST_FILE} nicht lesbar: {e}"))
+        .ok()
 }
 
 impl StrataState {
@@ -98,32 +148,41 @@ impl StrataState {
         self.job_running.load(Ordering::SeqCst)
     }
 
-    /// What the PC service reported last; `None` since the Proxy started
-    /// until it answers.
+    /// What the PC service reported last, kept over a restart; `None` until
+    /// it answered once.
     pub fn last_info(&self) -> Option<StrataInfo> {
-        self.last.lock().unwrap().clone()
+        self.last.lock().unwrap().as_ref().map(|l| l.info.clone())
+    }
+
+    /// The last answer with its benchmark times, and the local time it came.
+    fn shown_last(&self) -> Option<(StrataInfo, String)> {
+        let last = self.last.lock().unwrap().clone()?;
+        let mut info = last.info;
+        with_local_times(&mut info);
+        Some((info, clock::local_text(last.at)))
     }
 }
 
 /// The Strata page; asks the PC service but never wakes the PC.
 pub async fn page(state: &Arc<AppState>) -> StrataPage {
     let agent = state.agent();
-    let last = || state.strata.last_info();
     if !agent.configured() {
         return StrataPage {
             problem: Some(NO_AGENT.into()),
             gaming: false,
             info: None,
             stale: false,
+            as_of: None,
             update: None,
         };
     }
     let Some(status) = state.ask_pc(&agent).await else {
-        let info = last();
+        let (info, as_of) = state.strata.shown_last().unzip();
         return StrataPage {
             problem: Some(ASLEEP.into()),
             gaming: false,
             stale: info.is_some(),
+            as_of,
             info,
             update: state.strata.update.stale(),
         };
@@ -134,13 +193,12 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             gaming: status.gaming_mode,
             info: None,
             stale: false,
+            as_of: None,
             update: None,
         };
     };
-    for bench in info.benchmark.iter_mut().chain(info.benchmarks.iter_mut()) {
-        bench.at_text = clock::local_text(bench.at);
-    }
-    *state.strata.last.lock().unwrap() = Some(info.clone());
+    with_local_times(&mut info);
+    state.strata.set_last(info.clone());
     let job = status.strata_job
         || info
             .job
@@ -162,7 +220,15 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
         gaming: status.gaming_mode,
         info: Some(info),
         stale: false,
+        as_of: None,
         update,
+    }
+}
+
+/// Benchmark times in local time, relative to today.
+fn with_local_times(info: &mut StrataInfo) {
+    for bench in info.benchmark.iter_mut().chain(info.benchmarks.iter_mut()) {
+        bench.at_text = clock::local_text(bench.at);
     }
 }
 
@@ -315,12 +381,12 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
             format!(
                 "{}: {}",
                 detail(&job),
-                job.error.as_deref().unwrap_or("ohne Grund")
+                job.error.as_deref().unwrap_or("no reason given")
             ),
         ),
         StrataJobState::Interrupted | StrataJobState::Running => (
             EventKind::StrataJobFailed,
-            format!("{}: unterbrochen", detail(&job)),
+            format!("{}: interrupted", detail(&job)),
         ),
     };
     state.events.record(kind, Some(detail));
@@ -330,7 +396,7 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
         if job.id.unwrap_or_default() == pending.job && job.state == StrataJobState::Done {
             match state.settings.set("STRATA_API_KEY", &pending.key) {
                 Ok(()) => state.events.record(EventKind::StrataKeyChanged, None),
-                Err(e) => tracing::error!("Neuer Strata-Key nicht gespeichert: {e}"),
+                Err(e) => tracing::error!("New Strata key not saved: {e}"),
             }
         }
         strata.set_pending(None);

@@ -116,9 +116,7 @@ impl Agent {
         let gaming = gaming_flag(&cfg).exists();
         let managed = Managed::load(&cfg.state_dir());
         if managed.start(&cfg).is_none() {
-            tracing::info!(
-                "Kein Startskript für Strata eingetragen, der Dienst startet Strata nicht"
-            );
+            tracing::info!("No start script set for Strata, the service does not start Strata");
         }
         let jobs = Jobs::load(&cfg.state_dir());
         let output = Arc::new(StrataOutput::new(cfg.state_dir()));
@@ -244,7 +242,7 @@ impl Agent {
         let idle = self.platform.user_idle();
         if idle < self.cfg.user_idle() {
             return Err(format!(
-                "Jemand arbeitet am PC (letzte Eingabe vor {} s)",
+                "Someone is using the PC (last input {} s ago)",
                 idle.as_secs()
             ));
         }
@@ -290,7 +288,7 @@ impl Agent {
         // kill comes after, so Strata always starts fresh.
         self.wait_for_cancelled_job().await;
         self.refuse_while_updating()?;
-        tracing::warn!("Strata wird zwangsweise neu gestartet");
+        tracing::warn!("Strata is restarted by force");
         let process = self.strata();
         process.stop();
         // An update beginning now hands over to the updated service, which
@@ -318,9 +316,7 @@ impl Agent {
         let limit = Instant::now() + self.cfg.cancel_wait();
         while self.jobs.running() {
             if Instant::now() >= limit {
-                tracing::warn!(
-                    "Der abgebrochene Strata-Vorgang endet nicht, es geht ohne ihn weiter"
-                );
+                tracing::warn!("The cancelled Strata job does not end, carrying on without it");
                 return;
             }
             tokio::time::sleep(crate::job::POLL).await;
@@ -334,7 +330,7 @@ impl Agent {
         self.jobs.cancel().then_some(kind).flatten()
     }
 
-    /// What the Strata-Ausgabe has to say besides its lines.
+    /// What the Strata output has to say besides its lines.
     async fn output_notice(&self) -> StrataOutputNotice {
         if self.gaming() {
             StrataOutputNotice::Gaming
@@ -361,13 +357,13 @@ impl Agent {
             })
         };
         if let Err(e) = written {
-            tracing::warn!("Gaming-Schalter nicht gespeichert: {e}");
+            tracing::warn!("Gaming switch not saved: {e}");
         }
-        tracing::info!(enabled, "Gaming-Modus");
+        tracing::info!(enabled, "Gaming mode");
         if enabled {
             // Downloaded parts stay; the same job continues there later.
             if self.jobs.cancel() {
-                tracing::info!("Gaming an: Strata-Vorgang abgebrochen");
+                tracing::info!("Gaming mode on: Strata job cancelled");
             }
             self.strata().stop();
         } else {
@@ -408,7 +404,7 @@ impl Agent {
             now.duration_since(since) >= Duration::from_secs(self.cfg.restart_after_secs)
         };
         if restart {
-            tracing::warn!("Strata antwortet nicht, Neustart");
+            tracing::warn!("Strata does not answer, restarting");
             self.strata().restart_unless_job_runs().await;
             self.watchdog.lock().unwrap().unhealthy_since = None;
         }
@@ -420,7 +416,7 @@ impl Agent {
     /// With `fresh_strata_after_standby`, Strata was ended before standby and
     /// is started again here, so the GPU begins with an empty memory.
     pub fn resumed(&self) {
-        tracing::info!("PC ist aus dem Standby zurück");
+        tracing::info!("PC is back from standby");
         self.watchdog.lock().unwrap().unhealthy_since = None;
         let just_started = self.strata().started_within(RESUME_GAP);
         if self.cfg.fresh_strata_after_standby && !self.gaming() && !just_started {
@@ -468,10 +464,10 @@ async fn status(State(agent): State<Arc<Agent>>, req: Request) -> Json<PcStatus>
 
 async fn sleep(State(agent): State<Arc<Agent>>) -> Response {
     if let Err(reason) = agent.may_sleep().await {
-        tracing::info!(%reason, "Schlafen abgelehnt");
+        tracing::info!(%reason, "Sleep request refused");
         return (StatusCode::CONFLICT, Json(Answer::refused(reason))).into_response();
     }
-    tracing::info!("Schlafen angenommen");
+    tracing::info!("Sleep request accepted");
     go_to_standby(&agent);
     Json(Answer::accepted()).into_response()
 }
@@ -501,7 +497,7 @@ async fn force_restart(State(agent): State<Arc<Agent>>) -> Response {
 /// the meantime calls it off.
 fn go_to_standby(agent: &Arc<Agent>) {
     if agent.standby_pending.swap(true, Ordering::SeqCst) {
-        tracing::info!("Standby folgt schon");
+        tracing::info!("Standby already follows");
         return;
     }
     let agent = Arc::clone(agent);
@@ -509,7 +505,7 @@ fn go_to_standby(agent: &Arc<Agent>) {
         tokio::time::sleep(SUSPEND_DELAY).await;
         agent.wait_for_cancelled_job().await;
         if agent.updating.load(Ordering::SeqCst) {
-            tracing::warn!("Kein Standby: der PC-Dienst wird aktualisiert");
+            tracing::warn!("No standby: the PC service is updating");
             agent.standby_pending.store(false, Ordering::SeqCst);
             return;
         }
@@ -586,7 +582,7 @@ async fn update(State(agent): State<Arc<Agent>>) -> Response {
 /// How often an open `GET /strata-log` checks whether its notice changed.
 const NOTICE_EVERY: Duration = Duration::from_secs(1);
 
-/// The kept Strata-Ausgabe, then each new line and every change of notice,
+/// The kept Strata output, then each new line and every change of notice,
 /// for as long as the caller stays.
 async fn strata_log(State(agent): State<Arc<Agent>>) -> Response {
     struct Follow {

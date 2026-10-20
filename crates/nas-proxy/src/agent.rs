@@ -3,9 +3,10 @@
 use std::time::Duration;
 
 use reqwest::{Client, StatusCode};
+use serde::de::DeserializeOwned;
 use strata_pc_protocol::{
-    GamingRequest, Incoming, PcStatus, Refused, StrataInfo, StrataJob, StrataJobRequest,
-    StrataReport,
+    ForcedRestart, ForcedSleep, GamingRequest, Incoming, PcStatus, Refused, StrataInfo, StrataJob,
+    StrataJobRequest, StrataReport,
 };
 
 use crate::config::Config;
@@ -41,12 +42,26 @@ pub enum UpdateAnswer {
     NoAnswer,
 }
 
+/// The PC service's answer to a forced sleep or a forced Strata restart.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Forced<T> {
+    Done(T),
+    /// The service said no, with its reason.
+    Refused(String),
+    /// A service from before the endpoint (404).
+    TooOld,
+    NoAnswer,
+}
+
 pub const TOO_OLD_FOR_UPDATE: &str = "This PC service is too old to update from the web UI. Install it once more with the command from the PC area.";
 
 pub struct AgentClient {
     base: Option<String>,
     token: Option<String>,
     http: Client,
+    /// A forced Strata restart waits for a cancelled job to end and for the
+    /// ended Strata to free its port (`Config::force_timeout`).
+    force_timeout: Duration,
 }
 
 impl AgentClient {
@@ -55,6 +70,7 @@ impl AgentClient {
             base: cfg.pc_agent_url.clone(),
             token: cfg.pc_agent_token.clone(),
             http,
+            force_timeout: cfg.force_timeout,
         }
     }
 
@@ -116,6 +132,35 @@ impl AgentClient {
         }
         let reason = reason(resp).await;
         Ok(SleepAnswer::Refused(reason))
+    }
+
+    /// A forced sleep: standby follows unless the service updates itself.
+    pub async fn force_sleep(&self) -> Forced<ForcedSleep> {
+        self.force("/sleep/force").await
+    }
+
+    /// A forced Strata restart: kills Strata and starts it again.
+    pub async fn force_restart(&self) -> Forced<ForcedRestart> {
+        self.force("/strata/kill").await
+    }
+
+    async fn force<T: DeserializeOwned>(&self, path: &str) -> Forced<T> {
+        let Some(req) = self.request(reqwest::Method::POST, path) else {
+            return Forced::Refused("PC_AGENT_URL is not set".into());
+        };
+        let Ok(resp) = req.timeout(self.force_timeout).send().await else {
+            return Forced::NoAnswer;
+        };
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Forced::TooOld;
+        }
+        if !resp.status().is_success() {
+            return Forced::Refused(reason(resp).await);
+        }
+        match resp.json().await {
+            Ok(answer) => Forced::Done(answer),
+            Err(e) => Forced::Refused(format!("The PC service's answer is unreadable: {e}")),
+        }
     }
 
     /// Strata on the PC; `None` if the service does not answer.

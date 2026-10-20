@@ -54,6 +54,11 @@ context_start_secs = 600
 # its port.
 stop_settle_ms = 2000
 
+# How long a forced sleep or a forced restart of Strata waits for the end of
+# the job it cancelled; after that it carries on anyway. The NAS waits longer
+# for the answer.
+cancel_wait_secs = 60
+
 # MAC address reported to the NAS. Usually left empty: the service then
 # reports that of the network card through which the NAS reaches it.
 #mac = "AA-BB-CC-DD-EE-FF"

@@ -40,6 +40,8 @@ pub struct FakeCommand {
     pub exit: Option<i32>,
     /// Keeps running after its lines until cancelled.
     pub hang: bool,
+    /// Keeps running even when cancelled, like a stuck process.
+    pub ignores_cancel: bool,
     /// Files (path, content) it leaves behind when it succeeds, unless they exist.
     pub creates: Vec<(PathBuf, String)>,
 }
@@ -53,6 +55,8 @@ pub struct Fake {
     pub strata_up: AtomicBool,
     /// A started Strata does not answer `/health`.
     pub strata_stays_down: AtomicBool,
+    /// Starting Strata fails.
+    pub start_fails: AtomicBool,
     pub strata_busy: AtomicBool,
     pub mac: Mutex<Option<[u8; 6]>>,
     pub mac_lookups: AtomicUsize,
@@ -151,7 +155,7 @@ impl FakePlatform {
                 }
                 let _ = tx.send(line);
             }
-            while command.hang && !stopped() {
+            while command.ignores_cancel || (command.hang && !stopped()) {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             drop(tx);
@@ -197,6 +201,9 @@ impl Platform for FakePlatform {
     }
     /// Runs the fake command named like the start script for Strata's output.
     fn start_strata(&self, program: &Path, args: &[String]) -> anyhow::Result<Running> {
+        if self.0.start_fails.load(Ordering::SeqCst) {
+            anyhow::bail!("{} not found", program.display());
+        }
         *self.0.started.lock().unwrap() = Some((program.to_path_buf(), args.to_vec()));
         self.0.starts.fetch_add(1, Ordering::SeqCst);
         if !self.0.strata_stays_down.load(Ordering::SeqCst) {
@@ -333,6 +340,7 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         load_time_secs: 1,
         context_start_secs: 1,
         stop_settle_ms: 10,
+        cancel_wait_secs: 30,
         state_dir: Some(dir.to_path_buf()),
         mac: None,
         nas_url: None,

@@ -123,7 +123,7 @@ async fn install_wakes_the_pc_and_hands_it_a_new_strata_key() {
     assert_eq!(strata_key(&s), None);
 
     s.pc.update_job(|j| j.state = StrataJobState::Done);
-    eventually("Key gilt", || strata_key(&s).as_deref() == Some(&key)).await;
+    eventually("key valid", || strata_key(&s).as_deref() == Some(&key)).await;
     // The key reaches Strata with requests, never the page.
     assert!(!text.contains(&key));
     assert!(!page(&mut b).await.to_string().contains(&key));

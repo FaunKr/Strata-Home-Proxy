@@ -482,6 +482,14 @@ impl AppState {
         answer
     }
 
+    /// Notes a forced sleep the PC service took, with `detail`; from then
+    /// on as after an accepted sleep request.
+    pub fn forced_sleep_accepted(&self, detail: String) {
+        let (mut lifecycle, now, t) = self.lifecycle();
+        self.events.record(EventKind::ForcedSleep, Some(detail));
+        self.record(lifecycle.sleep_answered(Some(&SleepAnswer::Accepted), now, t));
+    }
+
     /// Sends magic packets until the PC service answers (not Strata), for
     /// switching gaming mode on a sleeping PC.
     /// Shares the wake lock with `ensure_awake`, so only one wake-up runs.

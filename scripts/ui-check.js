@@ -79,6 +79,87 @@ async function check(page, errors, name, area, texts, shot) {
   return issues.length;
 }
 
+// Drives Force sleep and Force restart Strata against the states
+// scripts/fake-pc.js can take; one line per step, like the areas. Returns the
+// number of findings.
+async function forced(page, errors) {
+  const fakePc = state => fetch(`${process.env.FAKE_PC}/fake/pc?state=${state}`, { method: 'POST' });
+  // The overview stream polls the PC every 5 s.
+  const wait = { timeout: 15000 };
+  const restart = page.getByRole('button', { name: 'Force restart Strata' });
+  const force = page.getByRole('button', { name: 'Force sleep' });
+  const dialog = page.locator('dialog.confirm');
+  let findings = 0;
+  const step = async (name, shot, run) => {
+    errors.length = 0;
+    let issue = null;
+    try {
+      await run();
+    } catch (e) {
+      issue = e.message.split('\n')[0];
+    }
+    if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+    console.log(`${issue ? 'FAIL' : 'ok  '} desk ${name}${issue ? '\n     ' + issue : ''}`);
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/desk_forced-${shot}.jpg`, type: 'jpeg', quality: 60, fullPage: true });
+    }
+    if (issue) findings++;
+  };
+  const sees = async text => page.getByText(text).first().waitFor(wait);
+
+  await step('Force restart Strata: confirm and result', 'restart', async () => {
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await restart.click(wait);
+    await dialog.getByText('killed hard').waitFor(wait);
+    await dialog.getByRole('button', { name: 'Restart Strata' }).click();
+    await sees('stays stopped: nothing to start');
+  });
+  await step('Force restart Strata while Strata loads', 'loading', async () => {
+    await fakePc('loading');
+    await page.locator('.strata-state .badge', { hasText: 'Loading' }).waitFor(wait);
+    await restart.waitFor(wait);
+  });
+  await step('Force restart Strata while Strata hangs', 'hung', async () => {
+    await fakePc('hung');
+    await page.locator('.strata-state .badge', { hasText: 'Offline' }).waitFor(wait);
+    await restart.waitFor(wait);
+  });
+  await step('no Force restart Strata while gaming', 'gaming-strata', async () => {
+    await fakePc('gaming');
+    await page.locator('.strata-state .badge', { hasText: 'Paused' }).waitFor(wait);
+    if (await restart.count()) throw new Error('Force restart Strata shows in gaming mode');
+  });
+  await step('Force sleep in the gaming state', 'gaming-overview', async () => {
+    await page.goto(base + '/admin', { waitUntil: 'domcontentloaded' });
+    await force.click(wait);
+    await dialog.getByText('Gaming mode is on. The PC sleeps anyway').waitFor(wait);
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+  });
+  await step('Force sleep under a refused Sleep now', 'refused', async () => {
+    await fakePc('awake');
+    await page.getByRole('button', { name: 'Sleep now' }).click(wait);
+    await sees('Refused: Someone used the PC 2 min ago');
+    await force.click(wait);
+    await dialog.getByText('open requests fail').waitFor(wait);
+  });
+  await step('forced sleep: the PC sleeps', 'asleep', async () => {
+    await dialog.getByRole('button', { name: 'Force sleep' }).click();
+    await page.locator('.hero-state', { hasText: 'Asleep' }).waitFor(wait);
+    await sees('Forced to sleep; the next request wakes the PC.');
+    if (await force.count()) throw new Error('Force sleep still shows while asleep');
+  });
+  await step('no Force restart Strata while asleep', 'asleep-strata', async () => {
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await page.locator('.strata-state .badge').waitFor(wait);
+    if (await restart.count()) throw new Error('Force restart Strata shows while asleep');
+  });
+  // The phone pass starts from an awake PC again.
+  await fakePc('awake');
+  await page.goto(base + '/admin', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Sleep now' }).waitFor({ timeout: 30000 });
+  return findings;
+}
+
 (async () => {
   const browser = await chromium.launch();
   let findings = 0;
@@ -109,6 +190,7 @@ async function check(page, errors, name, area, texts, shot) {
       }
       // The phone pass starts again from the first upstream and a written summary.
       await fetch(`${process.env.FAKE_PC}/fake/summary?mode=answer`, { method: 'POST' });
+      findings += await forced(page, errors);
     }
     await ctx.close();
   }

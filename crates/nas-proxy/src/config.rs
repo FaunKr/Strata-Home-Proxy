@@ -63,6 +63,10 @@ pub struct Config {
     pub sleep_settle: Duration,
     /// Timeout for `/health` and PC service calls (`PROBE_TIMEOUT_MS`).
     pub probe_timeout: Duration,
+    /// How long a forced sleep or forced Strata restart may take on the PC
+    /// service. Above its `cancel_wait_secs` (60 s) plus the pause after
+    /// stopping Strata, so a slow but sound answer still arrives.
+    pub force_timeout: Duration,
     /// Largest accepted request body in bytes (`MAX_BODY_BYTES`).
     pub max_body_bytes: usize,
     /// Watts the PC draws while awake (`POWER_AWAKE_WATTS`). The history
@@ -177,6 +181,7 @@ impl Default for Config {
             sleep_retry: Duration::from_secs(60),
             sleep_settle: Duration::from_secs(30),
             probe_timeout: Duration::from_millis(2000),
+            force_timeout: Duration::from_secs(90),
             max_body_bytes: 64 * 1024 * 1024,
             power_awake_watts: 75.0,
             power_asleep_watts: 3.0,

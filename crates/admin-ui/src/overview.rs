@@ -6,8 +6,9 @@ use leptos::prelude::*;
 
 use crate::{
     api::{
-        KeepAwake, KeepAwakeChoice, Overview, PcServiceView, PcView, PowerView, SetGaming, Setup,
-        SleepNow, SleepView, StrataView, Wake, error_text, get_setup,
+        ForceSleep, KeepAwake, KeepAwakeChoice, Overview, PcServiceView, PcView, PowerView,
+        SetGaming, Setup, SleepAnswer, SleepNow, SleepView, StrataView, Wake, error_text,
+        get_setup,
     },
     confirm::{Confirm, Question},
     hardware::HardwareCard,
@@ -22,6 +23,7 @@ use crate::{
 struct Actions {
     wake: ServerAction<Wake>,
     sleep: ServerAction<SleepNow>,
+    force_sleep: ServerAction<ForceSleep>,
     gaming: ServerAction<SetGaming>,
     keep: ServerAction<KeepAwake>,
     /// The keep-awake choice pressed last, to mark it while it lasts.
@@ -56,6 +58,7 @@ pub fn OverviewPage() -> impl IntoView {
     let actions = Actions {
         wake: ServerAction::new(),
         sleep: ServerAction::new(),
+        force_sleep: ServerAction::new(),
         gaming: ServerAction::new(),
         keep: ServerAction::new(),
         picked: RwSignal::new(None),
@@ -241,7 +244,13 @@ fn Body(overview: Overview, live: Live, actions: Actions) -> impl IntoView {
 /// The PC's state, large, with the button that fits it.
 #[component]
 fn Hero(overview: Overview, actions: Actions) -> impl IntoView {
-    let Actions { wake, sleep, .. } = actions;
+    let Actions {
+        wake,
+        sleep,
+        force_sleep,
+        ..
+    } = actions;
+    let confirm = expect_context::<Confirm>();
     let pc = overview.pc;
     let (_, class) = pc_badge(pc);
     let (title, sub) = match pc {
@@ -303,7 +312,21 @@ fn Hero(overview: Overview, actions: Actions) -> impl IntoView {
             }
             .into_any()
         }
-        PcView::Gaming => ().into_any(),
+        PcView::Gaming => {
+            let agent = setup.agent_configured;
+            view! {
+                <button
+                    type="button"
+                    class="secondary hero-btn"
+                    disabled=move || !agent || force_sleep.pending().get()
+                    on:click=move |_| ask_force_sleep(confirm, force_sleep, "Gaming mode is on")
+                >
+                    <Icon icon=Icon::Moon size=18 />
+                    "Force sleep"
+                </button>
+            }
+            .into_any()
+        }
     };
     let icon = if pc == PcView::Asleep {
         Icon::Moon
@@ -324,9 +347,92 @@ fn Hero(overview: Overview, actions: Actions) -> impl IntoView {
             </div>
             <div>{button}</div>
             {result_text(wake.value())}
-            {result_text(sleep.value())}
+            <SleepResult
+                sleep
+                force_sleep
+                offer=pc == PcView::Awake && setup.agent_configured
+            />
+            <ForceSleepResult force_sleep asleep=pc == PcView::Asleep />
         </section>
     }
+}
+
+/// What Sleep now answered; under a refusal, Force sleep while `offer`
+/// holds (the PC is awake, and the gaming state has its own button).
+#[component]
+fn SleepResult(
+    sleep: ServerAction<SleepNow>,
+    force_sleep: ServerAction<ForceSleep>,
+    offer: bool,
+) -> impl IntoView {
+    let confirm = expect_context::<Confirm>();
+    move || {
+        let reason = match sleep.value().get()? {
+            Ok(SleepAnswer::Accepted) => return None,
+            Ok(SleepAnswer::Refused { reason }) => reason,
+            Err(e) => {
+                return Some(
+                    view! { <p class="error" role="alert">{error_text(&e)}</p> }.into_any(),
+                );
+            }
+        };
+        let text = format!("Refused: {reason}");
+        let button = offer.then(|| {
+            view! {
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || force_sleep.pending().get()
+                    on:click=move |_| ask_force_sleep(confirm, force_sleep, &reason)
+                >
+                    "Force sleep"
+                </button>
+            }
+        });
+        Some(
+            view! {
+                <div class="refusal">
+                    <p class="error" role="alert">{text}</p>
+                    {button}
+                </div>
+            }
+            .into_any(),
+        )
+    }
+}
+
+/// What Force sleep answered: its error, or, once the PC counts as
+/// asleep, that it was forced to.
+#[component]
+fn ForceSleepResult(force_sleep: ServerAction<ForceSleep>, asleep: bool) -> impl IntoView {
+    move || match force_sleep.value().get()? {
+        Ok(()) => asleep.then(|| {
+            view! {
+                <p class="hint" role="status">
+                    "Forced to sleep; the next request wakes the PC."
+                </p>
+            }
+            .into_any()
+        }),
+        Err(e) => Some(view! { <p class="error" role="alert">{error_text(&e)}</p> }.into_any()),
+    }
+}
+
+/// Opens the confirm dialog for a forced sleep that overrides `reason`.
+fn ask_force_sleep(confirm: Confirm, force_sleep: ServerAction<ForceSleep>, reason: &str) {
+    confirm.ask(
+        Question {
+            title: "Force the PC to sleep?".into(),
+            text: format!(
+                "{reason}. The PC sleeps anyway: open requests fail, and a running Strata job is cancelled (downloaded parts are kept)."
+            ),
+            confirm: "Force sleep",
+            danger: true,
+        },
+        move || {
+            force_sleep.dispatch(ForceSleep {});
+        },
+    );
 }
 
 #[component]
@@ -527,7 +633,7 @@ fn ServiceTile(service: Option<PcServiceView>, agent: bool) -> impl IntoView {
 }
 
 /// What Strata does, as a sentence.
-fn strata_sentence(strata: &StrataView) -> String {
+pub(crate) fn strata_sentence(strata: &StrataView) -> String {
     match strata {
         StrataView::Offline => "Strata is not running.".into(),
         StrataView::Loading => "Strata is loading the model.".into(),

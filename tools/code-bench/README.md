@@ -28,6 +28,13 @@ active model solve three fixed programming tasks. For this a second container,
   really is the proxy that answers under `PROXY_URL` (its login page, which
   never wakes the PC). If another service answers there, or none, it refuses
   runs and the card names the address and the answer.
+- The prompt asks the model to save intermediate state: a first working
+  version of each file early and again after each improvement, so a task
+  stopped at the limit still leaves something to score, and its plan and
+  progress in `NOTES.md`, so it finds its place again after opencode compacts
+  the context. Only `.py` files go into the result, so `NOTES.md` does not.
+  Results from before this prompt are not strictly comparable; a new run
+  replaces a model's old result.
 
 Measured per task: total time, steps of the model, input and output tokens,
 output tokens per second (over the time of the steps) and passed tests. After

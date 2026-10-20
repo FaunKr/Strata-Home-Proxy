@@ -105,8 +105,8 @@ async fn install_wakes_the_pc_and_sends_no_strata_key() {
     assert_eq!(body["family"], "qwen");
     assert_eq!(body["size"], "IQ3_XXS");
     assert_eq!(body["context"], 65536);
-    // The protocol wants the field; the PC service makes the key.
-    assert_eq!(body["api_key"], "");
+    // The PC service makes the key; an older one wants a valid one here.
+    assert_eq!(body["api_key"].as_str().unwrap().len(), 64);
     let kinds = own_kinds(&s.state);
     assert_eq!(
         kinds.last(),

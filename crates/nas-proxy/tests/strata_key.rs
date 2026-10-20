@@ -68,6 +68,17 @@ async fn a_refused_key_is_fetched_again_and_the_request_sent_once_more() {
 }
 
 #[tokio::test]
+async fn right_after_a_start_of_the_proxy_a_refused_request_fetches_the_first_key() {
+    let s = setup(true, |_| {}).await;
+    // The proxy has not asked the PC yet and holds no key.
+    s.pc.set_strata_key("first-key");
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 1);
+    assert!(!kinds(&s.state).contains(&EventKind::StrataKeyChanged));
+}
+
+#[tokio::test]
 async fn a_key_strata_refuses_still_reaches_the_client_as_its_refusal() {
     let s = setup(true, |_| {}).await;
     s.pc.set_strata_key("right-key");

@@ -752,12 +752,8 @@ async fn before_a_start_the_key_is_the_one_in_the_configs() {
 async fn without_a_key_in_any_config_there_is_none() {
     let s = setup("models-key-none").await;
     assert_eq!(key_answer(&s).await.0, 404);
-    assert!(
-        get(&s, "/status")
-            .await
-            .get("strata_key_generation")
-            .is_none()
-    );
+    // The generation still tells the proxy this service makes keys.
+    assert!(get(&s, "/status").await["strata_key_generation"].is_u64());
     // Without model configs nothing holds a key, and Strata starts anyway.
     s.agent.strata().start();
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);

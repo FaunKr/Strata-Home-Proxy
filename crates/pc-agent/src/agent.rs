@@ -207,7 +207,7 @@ impl Agent {
             strata_job: self.jobs.running(),
             version: Some(crate::version().to_string()),
             hardware: Some(self.platform.hardware()),
-            strata_key_generation: self.strata_key.current(&self.cfg).map(|k| k.generation),
+            strata_key_generation: Some(self.strata_key.generation()),
         }
     }
 

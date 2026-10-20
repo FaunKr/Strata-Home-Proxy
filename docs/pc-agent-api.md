@@ -74,8 +74,8 @@ update.
 `strata_key_generation` changes with every new Strata key, never the key
 itself; the proxy then fetches the key from `GET /strata/key`. The number
 starts at a random value with each start of the service, so the proxy
-compares it only for a change. The field is missing while no model
-configuration holds a key, and from services before the key per start.
+compares it only for a change. It is there even while no model
+configuration holds a key; only services before the key per start lack it.
 
 If the service does not answer, the proxy assumes the PC is asleep and wakes
 it.
@@ -296,8 +296,8 @@ little space, deleting the active model).
 | `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 
 The service ignores `api_key` in every job: the key comes with the next start
-of Strata (see `GET /strata/key`). An older proxy still sends one; the field
-stays so its requests still parse. Setup gets the key Strata runs with, if
+of Strata (see `GET /strata/key`). The proxy still sends a random one with
+`install`, because a service from before refuses an empty key. Setup gets the key Strata runs with, if
 there is one. The job's output shows `***` instead of the key.
 
 `experimental_speed_projection` (`false` if not given) passes setup

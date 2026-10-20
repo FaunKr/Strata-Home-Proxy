@@ -15,8 +15,8 @@ use crate::{agent::AgentClient, events::EventKind, state::AppState};
 #[derive(Default)]
 pub struct StrataKey {
     held: Mutex<Option<KeyAnswer>>,
-    /// The last status came without a generation: an older PC service, or
-    /// one that knows no key yet.
+    /// The last status came without a generation: a PC service from before
+    /// the key per start of Strata.
     unreported: AtomicBool,
 }
 
@@ -38,12 +38,9 @@ impl StrataKey {
         self.held.lock().unwrap().as_ref().map(|k| k.generation)
     }
 
-    /// Takes over `key`; true if it differs from the one held.
-    fn take(&self, key: KeyAnswer) -> bool {
-        let mut held = self.held.lock().unwrap();
-        let changed = held.as_ref().is_some_and(|h| h.api_key != key.api_key);
-        *held = Some(key);
-        changed
+    /// Takes over `key`; gives the key held before, if there was one.
+    fn take(&self, key: KeyAnswer) -> Option<String> {
+        self.held.lock().unwrap().replace(key).map(|k| k.api_key)
     }
 }
 
@@ -59,7 +56,7 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
 }
 
 /// Asks the PC service for the key again, after Strata refused the one held;
-/// true if the key changed.
+/// true if it brought another key than the one held, or the first.
 pub async fn refresh(state: &AppState) -> bool {
     fetch(state, &state.agent()).await
 }
@@ -68,9 +65,14 @@ async fn fetch(state: &AppState, agent: &AgentClient) -> bool {
     let Some(key) = agent.strata_key().await else {
         return false;
     };
-    let changed = state.strata_key.take(key);
-    if changed {
-        state.events.record(EventKind::StrataKeyChanged, None);
+    let new = key.api_key.clone();
+    match state.strata_key.take(key) {
+        Some(old) if old == new => false,
+        // The first key after a start of the proxy is no change.
+        None => true,
+        Some(_) => {
+            state.events.record(EventKind::StrataKeyChanged, None);
+            true
+        }
     }
-    changed
 }

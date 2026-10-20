@@ -45,6 +45,12 @@ impl StrataKey {
         })
     }
 
+    /// Reported even while no config holds a key, so the proxy tells this
+    /// service from one before the key per start.
+    pub(crate) fn generation(&self) -> u64 {
+        self.0.lock().unwrap().generation
+    }
+
     pub(crate) fn key(&self, cfg: &Config) -> Option<String> {
         self.current(cfg).map(|k| k.api_key)
     }

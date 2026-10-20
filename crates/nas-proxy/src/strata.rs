@@ -22,6 +22,7 @@ use strata_pc_protocol::{
 
 use crate::{
     agent::AgentClient,
+    auth::{hex, random_key},
     clock,
     events::EventKind,
     files::write_private,
@@ -197,7 +198,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
         stale: false,
         as_of: None,
         update,
-        key_unreported: status.strata_key_generation.is_none(),
+        key_unreported: state.strata_key.unreported(),
     }
 }
 
@@ -276,8 +277,9 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
                     family,
                     size,
                     context: context()?,
-                    // Required by the protocol; the PC service ignores it.
-                    api_key: String::new(),
+                    // The PC service ignores it; one before the key per
+                    // start refuses an empty key, so it gets a random one.
+                    api_key: hex(&random_key()),
                     experimental_speed_projection,
                 }
             } else {

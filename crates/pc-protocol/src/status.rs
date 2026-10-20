@@ -34,7 +34,7 @@ pub struct PcStatus {
     pub hardware: Option<Hardware>,
     /// Changes with every new Strata key, never the key itself: the proxy
     /// then fetches it from `GET /strata/key`. Missing from services before
-    /// the key per start, and while no model config holds a key.
+    /// the key per start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strata_key_generation: Option<u64>,
 }

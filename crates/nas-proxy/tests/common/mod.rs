@@ -169,9 +169,9 @@ impl FakePc {
         self.key_generation.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// The key generation in the status; none without a key or endpoint.
+    /// The key generation in the status; none from an older service.
     fn reported_generation(&self) -> Option<u64> {
-        (!self.no_key_endpoint.load(Ordering::SeqCst) && self.strata_key.lock().unwrap().is_some())
+        (!self.no_key_endpoint.load(Ordering::SeqCst))
             .then(|| self.key_generation.load(Ordering::SeqCst))
     }
 

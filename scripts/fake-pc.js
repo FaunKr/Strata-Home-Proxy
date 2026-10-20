@@ -6,6 +6,10 @@
 // proxy asks for a new summary, and makes Strata hold or refuse the answer;
 // a held request is refused once the mode changes. mode=answer without
 // upstream goes back to the start.
+// POST /fake/pc?state=awake|loading|gaming|asleep sets what the PC service and
+// Strata answer: loading runs Strata without answering, asleep answers nothing.
+// Sleep now is refused; a forced sleep puts the fake PC to sleep, and a forced
+// Strata restart finds nothing to start.
 // The answers start from the PC service's samples in the protocol crate, so a
 // field added there reaches this check too; only what the check needs is set here.
 // Usage: node scripts/fake-pc.js <port>
@@ -80,6 +84,7 @@ const strata = {
   job: null,
 };
 const idleMetrics = 'vllm:num_requests_running{model_name="Qwen3-30B-A3B"} 0\nvllm:num_requests_waiting{model_name="Qwen3-30B-A3B"} 0\n';
+let pcState = 'awake';
 let summaryMode = 'answer';
 let held = [];
 const summary = '- **Run setup again** after this update.\n- Long prompts are read faster.\n- A crash when an answer hits max_tokens in a tool call is fixed.';
@@ -89,7 +94,36 @@ http.createServer((req, res) => {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(body));
   };
-  if (req.url.startsWith('/status')) json(status);
+  const refuse = body => {
+    res.statusCode = 409;
+    json(body);
+  };
+  if (pcState === 'asleep' && !req.url.startsWith('/fake/')) {
+    res.statusCode = 503;
+    res.end();
+  }
+  else if (req.url.startsWith('/status')) {
+    json({ ...status, gaming_mode: pcState === 'gaming', strata_running: pcState !== 'gaming' });
+  }
+  else if (req.url.startsWith('/health') && pcState !== 'awake') {
+    res.statusCode = 503;
+    res.end();
+  }
+  else if (req.method === 'POST' && req.url === '/sleep') {
+    refuse({ ...sample('sleep-refused.json'), reason: 'Someone used the PC 2 min ago' });
+  }
+  else if (req.method === 'POST' && req.url === '/sleep/force') {
+    json({ ...sample('sleep-force.json'), cancelled_job: undefined, strata_busy: false, gaming_mode: pcState === 'gaming' });
+    pcState = 'asleep';
+  }
+  else if (req.method === 'POST' && req.url === '/strata/kill') {
+    if (pcState === 'gaming') refuse(sample('strata-kill-refused.json'));
+    else json({ ...sample('strata-kill.json'), cancelled_job: undefined, started: false });
+  }
+  else if (req.method === 'POST' && req.url.startsWith('/fake/pc')) {
+    pcState = new URL(req.url, 'http://fake').searchParams.get('state');
+    res.end();
+  }
   else if (req.url.startsWith('/health')) json({ status: 'ok', loaded: true, service: 'strata', model: 'Qwen3-30B-A3B', max_context: 32768, opencode: '1.19.3' });
   else if (req.url === '/strata') json(strata);
   else if (req.url === '/strata/job') json(null);

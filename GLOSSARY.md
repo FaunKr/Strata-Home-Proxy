@@ -52,6 +52,10 @@ _Avoid_: Idle-Timeout, Standby-Zeit
 Die Bitte des Proxys an den PC-Dienst, den Standby auszulösen. Der PC-Dienst kann sie mit einem Grund ablehnen.
 _Avoid_: Shutdown, Sleep-Befehl
 
+**Forced sleep**:
+A sleep request from the web UI's *Force sleep* button that the PC-Dienst refuses only while it updates itself. It overrides user activity, a request Strata is processing and gaming mode (which stays on), and cancels a running Strata job first; downloaded parts stay. The proxy treats it like an accepted Schlafen-Anfrage.
+_Avoid_: hard sleep, Zwangsschlaf
+
 **Nachlauf**:
 Die kurze Zeit nach einer angenommenen Schlafen-Anfrage, in der der PC noch antworten kann und trotzdem als schlafend gilt.
 _Avoid_: Settling (nur im Code)
@@ -95,6 +99,10 @@ _Avoid_: Entladen, Unloaded (nur im Code)
 **Lädt**:
 Strata läuft laut PC-Dienst, antwortet aber noch nicht.
 _Avoid_: Startet
+
+**Forced Strata restart**:
+The web UI's *Force restart Strata*: the PC-Dienst cancels a running Strata job, kills Strata hard (one started by hand too) and starts its own Strata again, if it has a start script and starts Strata at all. Refused in gaming mode and while the PC-Dienst updates itself.
+_Avoid_: Strata kill, hard restart
 
 **Ereignis**:
 Ein Eintrag im Verlauf des Proxys über PC, Wecken, Schlafen oder die Weboberfläche.

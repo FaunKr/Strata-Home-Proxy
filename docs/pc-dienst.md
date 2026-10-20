@@ -12,6 +12,20 @@ anmeldest. Er
   nicht auf `/health` antwortet (z. B. nach dem Standby). Nach jedem Start
   wartet er 4 min, bis das Modell geladen ist.
 
+Two buttons in the web UI go past these rules; neither wakes the PC:
+
+- **Force sleep** shows on the overview under a refused *Sleep now* and in
+  the gaming state. After a confirmation the PC sleeps anyway, despite recent
+  mouse or keyboard use, an open Strata request or gaming mode (which stays
+  on). A running Strata job is cancelled first; downloaded parts stay. Only
+  an update of the PC service refuses it.
+- **Force restart Strata** sits in the Strata area while the PC is awake and
+  gaming mode is off, also while Strata loads or doesn't answer. After a
+  confirmation the service cancels a running Strata job, kills Strata hard
+  (also one you started by hand) and starts its own Strata again, without
+  waiting for the watchdog. Without a start script, or with `auto_start`
+  off, Strata stays stopped.
+
 ## Installieren
 
 1. In der Weboberfläche des NAS den Bereich **PC** öffnen und

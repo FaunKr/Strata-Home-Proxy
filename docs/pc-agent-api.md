@@ -77,6 +77,48 @@ Die Antwort (`Answer`) kommt zuerst, Standby folgt 2 s später.
 - `409`, abgelehnt mit Grund, z. B. „Benutzer aktiv“. Der Proxy fragt nach
   `SLEEP_RETRY_SECS` erneut.
 
+## `POST /sleep/force` (für die Weboberfläche)
+
+The forced sleep behind *Force sleep* on the overview, without a request
+body. The service skips every check of `/sleep` except the update: user
+activity, a request Strata is processing and gaming mode don't hold it. A
+running Strata job is cancelled first, the same cancel gaming mode uses, so
+downloaded parts stay. Standby follows 2 s after the answer, once the
+cancelled job has ended, through the same path as an accepted `/sleep`
+(`fresh_strata_after_standby` included). Gaming mode stays as it is, its
+saved flag too.
+
+- `200` (`ForcedSleep`): what it overrode (`user_active`, `strata_busy`,
+  `gaming_mode`) and `cancelled_job` with the kind of the cancelled job,
+  missing without one.
+- `409` (`Refused` with reason): only while the service updates itself.
+
+The proxy sends it only when it doesn't consider the PC asleep or waking and
+never wakes the PC for it; an accepted one counts like an accepted `/sleep`.
+A service without this endpoint answers 404; the web UI then asks to update
+the PC service.
+
+## `POST /strata/kill` (für die Weboberfläche)
+
+The forced Strata restart behind *Force restart Strata* in the Strata area,
+without a request body. The service cancels a running Strata job and waits
+until it has ended (a cancelled `activate` or `set_context` may restart
+Strata while rolling back; the kill comes after). Then it ends Strata like
+gaming mode does, `taskkill /F /T` by the configured programs and folders,
+which also ends a Strata started by hand. With a start script and
+`auto_start` on it starts Strata again after the usual pause; otherwise
+Strata stays stopped. The watchdog counts afresh and leaves the new Strata
+alone while it loads, and `/status` reports it as running (`strata_running`)
+for that time, so the web UI shows it loading.
+
+- `200` (`ForcedRestart`): `cancelled_job` as above, `started` whether
+  Strata starts again.
+- `409` (`Refused` with reason): gaming mode is on, or the service updates
+  itself.
+
+The proxy sends it only when it doesn't consider the PC asleep or waking and
+never wakes the PC for it. A service without it answers 404.
+
 ## `POST /update` (für die Weboberfläche)
 
 Lädt `strata-pc-agent.exe` von `nas_url` aus der Konfiguration
@@ -88,7 +130,7 @@ der alte Dienst, der neue wartet so lange auf den Port und löscht dann die
 
 - `202` (`Answer`): die neue .exe läuft gleich.
   Ab dem Download bis zum Ende lehnt der Dienst Strata-Vorgänge und Schlafen
-  ab.
+  ab, auch `/sleep/force` und `/strata/kill`.
 - `409` (`Refused` mit Grund): nicht jetzt (Strata bearbeitet eine Anfrage, ein
   Strata-Vorgang oder ein Update läuft) oder ohne `nas_url` eingerichtet.
 - `500` (`Refused`): Download oder Austausch gescheitert; der alte Dienst

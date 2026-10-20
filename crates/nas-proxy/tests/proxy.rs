@@ -128,6 +128,101 @@ async fn running_stream_keeps_pc_awake() {
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
 }
 
+/// A setup whose Strata metrics show nothing running, which gives up a
+/// request in flight after 300 ms.
+async fn quiet_strata() -> Setup {
+    let s = setup(true, |c| c.idle_timeout = Duration::from_millis(200)).await;
+    *s.pc.metrics.lock().unwrap() = Some(METRICS_IDLE.into());
+    s.state.set_lost_after(Duration::from_millis(300));
+    s
+}
+
+#[tokio::test]
+async fn lost_stream_is_given_up_and_pc_sleeps() {
+    let s = quiet_strata().await;
+    let started = Instant::now();
+    let resp = post_json(
+        &s,
+        "/v1/messages",
+        json!({"stream": true, "pause_ms": 30000}),
+    )
+    .await;
+    let text = resp.text().await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5), "{text}");
+    assert!(text.contains("message_start"), "{text}");
+    assert!(text.contains("event: error"), "{text}");
+    assert!(!text.contains("message_stop"), "{text}");
+    eventually("no request in flight", || s.state.in_flight() == 0).await;
+    eventually("the PC is sent to sleep", || {
+        s.pc.sleep_requests.load(Ordering::SeqCst) == 1
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn lost_plain_request_is_given_up() {
+    let s = quiet_strata().await;
+    *s.pc.chat_pause.lock().unwrap() = Duration::from_secs(30);
+    let resp = post_json(&s, "/v1/chat/completions", json!({"model": "x"})).await;
+    assert_eq!(resp.status(), 504);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "api_error");
+    eventually("no request in flight", || s.state.in_flight() == 0).await;
+}
+
+#[tokio::test]
+async fn later_request_gets_its_own_time() {
+    let s = quiet_strata().await;
+    s.state.set_lost_after(Duration::from_millis(800));
+    let lost = |s: &Setup| {
+        let s = s.clone();
+        tokio::spawn(async move {
+            let body = json!({"stream": true, "pause_ms": 30000});
+            post_json(&s, "/v1/messages", body)
+                .await
+                .text()
+                .await
+                .unwrap()
+        })
+    };
+    let first = lost(&s);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let second = lost(&s);
+    let text = first.await.unwrap();
+    assert!(text.contains("event: error"), "{text}");
+    assert_eq!(s.state.in_flight(), 1, "the later request is kept");
+    let text = second.await.unwrap();
+    assert!(text.contains("event: error"), "{text}");
+}
+
+#[tokio::test]
+async fn lost_stream_after_a_wake_is_given_up() {
+    let s = setup(false, |_| {}).await;
+    *s.pc.metrics.lock().unwrap() = Some(METRICS_IDLE.into());
+    s.state.set_lost_after(Duration::from_millis(300));
+    let resp = post_json(
+        &s,
+        "/v1/messages",
+        json!({"stream": true, "pause_ms": 30000}),
+    )
+    .await;
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("message_start"), "{text}");
+    assert!(text.contains("event: error"), "{text}");
+    eventually("no request in flight", || s.state.in_flight() == 0).await;
+}
+
+#[tokio::test]
+async fn request_strata_shows_is_kept() {
+    let s = quiet_strata().await;
+    *s.pc.metrics.lock().unwrap() = Some(METRICS_BUSY.into());
+    *s.pc.chat_pause.lock().unwrap() = Duration::from_millis(1200);
+    let resp = post_json(&s, "/v1/chat/completions", json!({"model": "x"})).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "Hallo");
+}
+
 #[tokio::test]
 async fn pings_fill_long_pauses_between_events() {
     let s = setup(true, |c| c.ping_interval = Duration::from_millis(150)).await;

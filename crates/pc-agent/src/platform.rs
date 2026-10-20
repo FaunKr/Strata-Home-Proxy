@@ -290,8 +290,7 @@ pub fn end_replaced(pid: u32) -> Result<()> {
         .into_owned();
     #[cfg(windows)]
     {
-        // Exit code 128 means "not running", which is fine.
-        hidden(Command::new("taskkill").args([
+        let status = hidden(Command::new("taskkill").args([
             "/F",
             "/PID",
             &pid.to_string(),
@@ -299,6 +298,10 @@ pub fn end_replaced(pid: u32) -> Result<()> {
             &format!("IMAGENAME eq {name}"),
         ]))
         .status()?;
+        // Exit code 128 means "not running", which is fine.
+        if !status.success() && status.code() != Some(128) {
+            bail!("taskkill ended with {status}");
+        }
     }
     #[cfg(not(windows))]
     {

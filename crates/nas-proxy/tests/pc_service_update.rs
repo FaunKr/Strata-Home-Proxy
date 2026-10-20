@@ -445,7 +445,7 @@ async fn a_failure_clears_once_the_service_runs_the_new_version() {
 #[tokio::test]
 async fn an_update_whose_page_closes_early_still_records_the_answer() {
     let s = outdated("page-closes").await;
-    *s.pc.update_delay.lock().unwrap() = Duration::from_millis(800);
+    *s.pc.update_delay.lock().unwrap() = Duration::from_secs(3);
     *s.pc.refuse_update.lock().unwrap() = Some("Strata is working on a request".into());
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
@@ -454,7 +454,7 @@ async fn an_update_whose_page_closes_early_still_records_the_answer() {
     let closed = reqwest::Client::new()
         .post(format!("{}/admin/api/pc-service-update", b.base))
         .header("cookie", b.cookie.clone().unwrap())
-        .timeout(Duration::from_millis(200))
+        .timeout(Duration::from_secs(1))
         .send()
         .await;
     assert!(closed.is_err(), "the page closes before the answer");

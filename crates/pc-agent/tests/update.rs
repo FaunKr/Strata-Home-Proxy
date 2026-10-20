@@ -182,7 +182,7 @@ async fn without_the_nas_address_there_is_no_update() {
 /// A NAS that takes a while to send the program.
 async fn slow_nas() -> SocketAddr {
     async fn slow() -> impl IntoResponse {
-        tokio::time::sleep(Duration::from_millis(800)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         PROGRAM.to_vec()
     }
     serve(Router::new().route("/admin/agent/strata-pc-agent.exe", routing::get(slow))).await
@@ -490,7 +490,7 @@ async fn without_strata_programs_to_end_a_running_strata_refuses_the_update() {
 #[tokio::test]
 async fn an_update_whose_request_ends_early_still_hands_over() {
     async fn slow_program() -> impl IntoResponse {
-        tokio::time::sleep(Duration::from_millis(800)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         PROGRAM.to_vec()
     }
     let addr = serve(Router::new().route(
@@ -505,11 +505,11 @@ async fn an_update_whose_request_ends_early_still_hands_over() {
     let gone = client()
         .post(format!("{}/update", s.url))
         .bearer_auth("secret")
-        .timeout(Duration::from_millis(200))
+        .timeout(Duration::from_secs(1))
         .send()
         .await;
     assert!(gone.is_err(), "the request ends during the download");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while s.fake.exits.load(Ordering::SeqCst) == 0 {
         assert!(
             tokio::time::Instant::now() < deadline,

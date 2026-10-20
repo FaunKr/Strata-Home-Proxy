@@ -107,6 +107,9 @@ http.createServer((req, res) => {
   else if (req.url.startsWith('/status')) {
     json({ ...status, gaming_mode: pcState === 'gaming', strata_running: pcState === 'awake' || pcState === 'loading' });
   }
+  else if (req.url.startsWith('/strata/key')) {
+    json(sample('strata-key.json'));
+  }
   else if (req.url.startsWith('/health') && pcState !== 'awake') {
     res.statusCode = 503;
     res.end();

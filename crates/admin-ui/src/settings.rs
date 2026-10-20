@@ -349,12 +349,15 @@ fn SettingRow(
     };
     let suggestion = entry.suggestion.as_ref().map(|s| {
         // Suggestions are whole minutes.
-        let text = format!(
+        let mut text = format!(
             "Suggested: {} s ({} min), from {}.",
             s.secs,
             s.secs / 60,
             s.from
         );
+        if entry.value.is_some() {
+            text.push_str(" Your value is used instead.");
+        }
         view! { <p class="small note">{text}</p> }
     });
     let reported = (entry.source == Source::Reported).then(|| {

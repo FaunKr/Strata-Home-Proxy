@@ -34,6 +34,16 @@ Der Job `publish` läuft nie zweimal gleichzeitig und endet nach 30 Minuten.
 Ein neuerer Push auf `main` wartet, bis der laufende fertig ist; so setzt kein
 älterer Commit `:latest` zurück.
 
+## What gets published
+
+- `publish` pushes both images to ghcr.io as `:latest` and `:<commit>`. The
+  NAS and `deploy/truenas-auto-update.sh` follow `:latest`.
+- The version is the crate version from each `Cargo.toml`. The web UI shows
+  the proxy's under *System* (`crates/nas-proxy/src/admin.rs`). The PC-Dienst
+  reports its own with the build commit appended, e.g. `0.1.0+5e8b9f1`
+  (`crates/pc-agent/build.rs`, from `STRATA_BUILD_ID`).
+- There are no git tags or GitHub releases.
+
 ## Wohin die Minuten gehen
 
 Die schnellste Quelle ist der Nutzungsbericht unter *Settings → Billing →

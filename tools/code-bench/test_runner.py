@@ -336,6 +336,12 @@ class RunnerTest(unittest.TestCase):
         # Under a minute the limit is named in seconds, not as "0 min".
         self.assertEqual(task["error"], "stopped after 1 s")
 
+    def test_a_limit_is_named_in_minutes_only_when_it_is_whole_minutes(self):
+        self.assertEqual(runner.limit_text(1), "1 s")
+        self.assertEqual(runner.limit_text(90), "90 s")
+        self.assertEqual(runner.limit_text(120), "2 min")
+        self.assertEqual(runner.limit_text(3360), "56 min")
+
     def test_a_failing_opencode_keeps_its_message(self):
         os.environ["FAKE_MODE"] = "fail"
         run = self.run_tasks([TASK])

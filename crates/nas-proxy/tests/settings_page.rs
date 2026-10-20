@@ -4,7 +4,7 @@ mod common;
 
 use common::*;
 use serde_json::Value;
-use strata_nas_proxy::{AppState, Config, Settings, api_router};
+use strata_nas_proxy::{AppState, Config, Settings, api_router, config::FIELDS};
 
 async fn settings(b: &mut Browser) -> Value {
     let resp = b.call("settings", &[]).await;
@@ -51,7 +51,7 @@ async fn shows_every_value_with_its_origin() {
     let view = settings(&mut b).await;
     assert_eq!(view["persistent"], true);
     assert_eq!(view["configured"], true);
-    assert_eq!(view["entries"].as_array().unwrap().len(), 25);
+    assert_eq!(view["entries"].as_array().unwrap().len(), FIELDS.len());
     assert!(!view.to_string().contains("DATA_DIR"));
     assert_eq!(entry(&view, "STRATA_URL")["source"], "Env");
     assert_eq!(entry(&view, "STRATA_URL")["value"], "http://pc:8080");
@@ -121,6 +121,7 @@ async fn each_area_shows_its_own_settings() {
             &[
                 "STRATA_URL",
                 "STRATA_API_KEY",
+                "CODE_BENCH_URL",
                 "UPDATE_SUMMARY_TIMEOUT_SECS",
                 "CODE_BENCH_TASK_TIMEOUT_SECS",
             ][..],
@@ -142,7 +143,12 @@ async fn each_area_shows_its_own_settings() {
         .iter()
         .flat_map(|(_, keys)| keys.iter().copied())
         .collect();
-    assert_eq!(all.len(), 24);
+    // Every setting has its area, so a new one fails here until it is placed.
+    let mut fields: Vec<&str> = FIELDS.iter().map(|f| f.key).collect();
+    let mut placed = all.clone();
+    fields.sort_unstable();
+    placed.sort_unstable();
+    assert_eq!(placed, fields);
     for (path, keys) in areas {
         let html = b.page(path).await;
         for key in &all {
@@ -445,7 +451,7 @@ fn with_benchmarks(s: &Setup) {
     };
     report.info.benchmarks = vec![
         bench("IQ3_XXS", Some(40.0), Some(400.0), 32768),
-        bench("coder-IQ1_M", Some(12.0), None, 16384),
+        bench("coder-IQ1_M", Some(12.0), None, 262144),
         bench("qwen-Q2", None, Some(100.0), 65536),
         bench("deleted-Q1", Some(5.0), Some(50.0), 65536),
     ];
@@ -459,9 +465,11 @@ async fn timeouts_follow_the_slowest_installed_model() {
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("strata", &[]).await.status(), 200);
     let view = settings(&mut b).await;
-    // (16384 / 2 / 300 + 2000 / 12) × 2 = 388 s; 50 000 / 12 × 2 = 8333 s.
+    // (262144 / 2 / 300 + 2000 / 12) × 2 = 1207 s; 50 000 / 12 × 2 = 8333 s.
+    // 21 min holds only for prompt speeds of about 283 to 302 tok/s, so the
+    // assumed 300 applies, not 400 or 100 from the other benchmarks.
     for (key, secs) in [
-        ("UPDATE_SUMMARY_TIMEOUT_SECS", 420),
+        ("UPDATE_SUMMARY_TIMEOUT_SECS", 1260),
         ("CODE_BENCH_TASK_TIMEOUT_SECS", 8340),
     ] {
         let suggestion = &entry(&view, key)["suggestion"];
@@ -472,7 +480,7 @@ async fn timeouts_follow_the_slowest_installed_model() {
         );
     }
     let html = b.page("/admin/strata/connection").await;
-    assert!(html.contains("placeholder=\"420\""), "{html}");
+    assert!(html.contains("placeholder=\"1260\""), "{html}");
     assert!(
         html.contains("slowest model coder-IQ1_M at 12 tok/s"),
         "{html}"
@@ -497,11 +505,16 @@ async fn a_saved_timeout_overrides_the_suggestion_until_reset() {
         strata_nas_proxy::timeouts::update_summary(&s.state).as_secs(),
         45
     );
+    let used_instead = "Suggested: 180 s (3 min), from assumed 30 tok/s, run Compare models for a better value. Your value is used instead.";
+    let html = b.page("/admin/strata/connection").await;
+    assert!(html.contains(used_instead), "{html}");
     b.call("reset-setting", &[("key", "UPDATE_SUMMARY_TIMEOUT_SECS")])
         .await;
     let view = settings(&mut b).await;
     let e = entry(&view, "UPDATE_SUMMARY_TIMEOUT_SECS");
     assert!(e["value"].is_null(), "{e}");
+    let html = b.page("/admin/strata/connection").await;
+    assert!(!html.contains("Your value is used instead."), "{html}");
     assert_eq!(e["suggestion"]["secs"], 180, "{e}");
     assert_eq!(
         strata_nas_proxy::timeouts::update_summary(&s.state).as_secs(),

@@ -16,11 +16,11 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use strata_admin_ui::api::{StrataUpdate, UpdateCommit, UpdateSummary};
 use strata_pc_protocol::{ChangedFile, Incoming};
 
-use crate::{clock, files::write_private, overview, state::AppState};
+use crate::{clock, files::write_private, state::AppState};
 
 /// The summary for the newest upstream commit, in `DATA_DIR`.
 const FILE: &str = "strata-update-summary.json";
@@ -282,21 +282,9 @@ fn start(state: &Arc<AppState>, installed: Option<&str>, incoming: Incoming) -> 
     true
 }
 
-/// Strata's `/health` as far as the summary needs it.
-#[derive(Deserialize)]
-struct Health {
-    #[serde(default)]
-    loaded: bool,
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(default)]
-    max_context: Option<u64>,
-}
-
 /// Asks an idle Strata with its model loaded for the bullet points.
 async fn ask(state: &AppState, incoming: &Incoming) -> Result<(Vec<String>, String), String> {
-    let cfg = state.cfg();
-    let strata = cfg.strata_url.as_ref().ok_or("no Strata address")?;
+    let strata = state.strata().ok_or("no Strata address")?;
     let status = state
         .ask_pc(&state.agent())
         .await
@@ -304,22 +292,11 @@ async fn ask(state: &AppState, incoming: &Incoming) -> Result<(Vec<String>, Stri
     if status.gaming_mode || status.strata_job {
         return Err("Gaming-Modus or a Strata job".into());
     }
-    let auth = cfg.strata_authorization();
-    let mut req = state.probe_client().get(format!("{strata}/health"));
-    if let Some(auth) = &auth {
-        req = req.header(reqwest::header::AUTHORIZATION, auth.clone());
-    }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("/health answers {}", resp.status()));
-    }
-    let health: Health = resp.json().await.map_err(|e| e.to_string())?;
+    let health = strata.health().await?;
     if !health.loaded {
         return Err("the model is not loaded".into());
     }
-    let metrics = overview::metrics(state)
-        .await
-        .ok_or("no metrics from Strata")?;
+    let metrics = strata.metrics().await?;
     if metrics.processing > 0 || metrics.deferred > 0 {
         return Err("Strata is busy".into());
     }
@@ -335,29 +312,13 @@ async fn ask(state: &AppState, incoming: &Incoming) -> Result<(Vec<String>, Stri
     if let Some(model) = &health.model {
         body["model"] = json!(model);
     }
-    let mut req = state
-        .upstream
-        .post(format!("{strata}/v1/chat/completions"))
-        .timeout(state.strata.update.limit())
-        .json(&body);
-    if let Some(auth) = auth {
-        req = req.header(reqwest::header::AUTHORIZATION, auth);
-    }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("Strata answers {}", resp.status()));
-    }
-    let answer: Value = resp.json().await.map_err(|e| e.to_string())?;
-    let content = answer["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or_default();
-    let lines = bullets(content);
+    let answer = strata.chat(&body, state.strata.update.limit()).await?;
+    let lines = bullets(&answer.content);
     if lines.is_empty() {
         return Err("the answer has no bullet points".into());
     }
-    let model = answer["model"]
-        .as_str()
-        .map(String::from)
+    let model = answer
+        .model
         .or(health.model)
         .unwrap_or_else(|| "unknown model".into());
     Ok((lines, model))

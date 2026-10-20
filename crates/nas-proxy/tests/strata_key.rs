@@ -63,3 +63,61 @@ async fn strata_key_is_shown_only_as_set() {
     assert_eq!(entry["value"], "set");
     assert_eq!(entry["secret"], true);
 }
+
+#[tokio::test]
+async fn every_call_of_the_strata_client_carries_the_strata_key() {
+    let s = setup(true, |_| {}).await;
+    s.state
+        .settings
+        .set("STRATA_API_KEY", "strata-geheim")
+        .unwrap();
+    *s.pc.metrics.lock().unwrap() = Some(METRICS_IDLE.into());
+    let strata = s.state.strata().unwrap();
+
+    strata.health().await.unwrap();
+    assert_eq!(
+        s.pc.health_auth
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap()
+            .authorization,
+        bearer("strata-geheim")
+    );
+    strata.metrics().await.unwrap();
+    assert_eq!(
+        s.pc.metrics_auth.lock().unwrap().clone(),
+        bearer("strata-geheim")
+    );
+    strata
+        .chat(&json!({"messages": []}), std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        s.pc.api_auth.lock().unwrap().take().unwrap().authorization,
+        bearer("strata-geheim")
+    );
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("authorization", "Bearer client".parse().unwrap());
+    headers.insert("content-type", "application/json".parse().unwrap());
+    let resp = strata
+        .forward(
+            reqwest::Method::POST,
+            "/v1/messages",
+            headers,
+            json!({}).to_string().into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        s.pc.api_auth.lock().unwrap().take().unwrap().authorization,
+        bearer("strata-geheim")
+    );
+}
+
+#[tokio::test]
+async fn without_a_strata_address_there_is_no_strata_client() {
+    let s = setup(true, |c| c.strata_url = None).await;
+    assert!(s.state.strata().is_none());
+}

@@ -237,12 +237,6 @@ impl Config {
         Ok(())
     }
 
-    /// The `authorization` header for calls to Strata, if a Strata key is set.
-    pub fn strata_authorization(&self) -> Option<reqwest::header::HeaderValue> {
-        let key = self.strata_api_key.as_deref()?;
-        reqwest::header::HeaderValue::from_str(&format!("Bearer {key}")).ok()
-    }
-
     /// The text form of one value, as `apply` reads it; `None` when unset.
     pub fn value(&self, key: &str) -> Option<String> {
         let secs = |d: Duration| Some(d.as_secs().to_string());

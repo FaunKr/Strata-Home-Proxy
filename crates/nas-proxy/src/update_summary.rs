@@ -20,7 +20,7 @@ use serde_json::json;
 use strata_admin_ui::api::{StrataUpdate, UpdateCommit, UpdateSummary};
 use strata_pc_protocol::{ChangedFile, Incoming};
 
-use crate::{clock, files::write_private, state::AppState};
+use crate::{clock, files::write_private, state::AppState, timeouts};
 
 /// The summary for the newest upstream commit, in `DATA_DIR`.
 const FILE: &str = "strata-update-summary.json";
@@ -31,14 +31,13 @@ const FALLBACK_AREAS: usize = 5;
 const MAX_LINES: usize = 6;
 /// Changed files the prompt lists at most, those with the most lines first.
 const PROMPT_FILES: usize = 100;
-/// How long Strata may take for a summary.
-const LIMIT: Duration = Duration::from_secs(120);
 /// After a failed attempt, the same upstream commit waits this long.
 const RETRY_AFTER: Duration = Duration::from_secs(3600);
 
 /// How long Strata may take, and how long a failed upstream commit waits.
 struct Timing {
-    limit: Duration,
+    /// Set by tests; otherwise the limit from `timeouts` applies.
+    limit: Option<Duration>,
     retry_after: Duration,
 }
 /// Strata's context when `/health` does not say.
@@ -80,7 +79,7 @@ pub struct UpdateSummaries {
     writing: Mutex<Option<String>>,
     /// The last failed attempt.
     failed: Mutex<Option<(String, Instant)>>,
-    /// `LIMIT` and `RETRY_AFTER`; shorter in tests.
+    /// `RETRY_AFTER` and no own limit; shorter in tests.
     timing: Mutex<Timing>,
 }
 
@@ -150,7 +149,7 @@ impl UpdateSummaries {
             writing: Mutex::new(None),
             failed: Mutex::new(None),
             timing: Mutex::new(Timing {
-                limit: LIMIT,
+                limit: None,
                 retry_after: RETRY_AFTER,
             }),
         }
@@ -230,13 +229,20 @@ impl UpdateSummaries {
         }
     }
 
-    /// Changes how long Strata may take and how long a failure waits; for tests.
-    fn limit(&self) -> Duration {
-        self.timing.lock().unwrap().limit
+    /// How long Strata may take: the test's limit, else the setting or its
+    /// suggestion.
+    fn limit(&self, state: &AppState) -> Duration {
+        let limit = self.timing.lock().unwrap().limit;
+        limit.unwrap_or_else(|| timeouts::update_summary(state))
     }
 
+    /// Changes how long Strata may take and how long a failure waits; for
+    /// tests. The limit wins over `UPDATE_SUMMARY_TIMEOUT_SECS`.
     pub fn set_timing(&self, limit: Duration, retry_after: Duration) {
-        *self.timing.lock().unwrap() = Timing { limit, retry_after };
+        *self.timing.lock().unwrap() = Timing {
+            limit: Some(limit),
+            retry_after,
+        };
     }
 
     fn recently_failed(&self, upstream: &str) -> bool {
@@ -312,7 +318,7 @@ async fn ask(state: &AppState, incoming: &Incoming) -> Result<(Vec<String>, Stri
     if let Some(model) = &health.model {
         body["model"] = json!(model);
     }
-    let answer = strata.chat(&body, state.strata.update.limit()).await?;
+    let answer = strata.chat(&body, state.strata.update.limit(state)).await?;
     let lines = bullets(&answer.content);
     if lines.is_empty() {
         return Err("the answer has no bullet points".into());

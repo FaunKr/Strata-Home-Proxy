@@ -46,6 +46,14 @@ pub fn label(key: &str) -> Label {
             "Code benchmark address",
             "Optional: where the proxy reaches the code-bench container, e.g. http://127.0.0.1:8096. Without it there is no code benchmark.",
         ),
+        "UPDATE_SUMMARY_TIMEOUT_SECS" => (
+            "Update summary limit",
+            "How long Strata may take to write the summary of an update. Empty uses the suggestion below.",
+        ),
+        "CODE_BENCH_TASK_TIMEOUT_SECS" => (
+            "Code benchmark limit per task",
+            "How long opencode may work on each task of the code benchmark; what it wrote by then is still scored. Empty uses the suggestion below.",
+        ),
         "PLUG_SAMPLE_SECS" => (
             "Power history interval",
             "Time between two readings of the power plug kept for the history.",
@@ -152,6 +160,17 @@ pub const STRATA_CONNECTION: SectionDef = SectionDef {
     title: "Connection",
     help: "Where Strata runs, and the key the proxy uses to talk to it.",
     keys: &["STRATA_URL", "STRATA_API_KEY", "CODE_BENCH_URL"],
+    advanced: &[],
+};
+
+pub const STRATA_TIMEOUTS: SectionDef = SectionDef {
+    id: "strata-timeouts",
+    title: "Timeouts",
+    help: "How long work on the model may take. Empty fields use a suggestion from the slowest installed model in Compare models.",
+    keys: &[
+        "UPDATE_SUMMARY_TIMEOUT_SECS",
+        "CODE_BENCH_TASK_TIMEOUT_SECS",
+    ],
     advanced: &[],
 };
 

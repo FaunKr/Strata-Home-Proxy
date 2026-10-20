@@ -23,7 +23,7 @@ commit() {
 
 dir=$(repo)
 trap 'rm -rf "$dir"' EXIT
-echo "plain English" >"$dir/a.md"
+printf 'plain English\nMIT License, so the job will die\n' >"$dir/a.md"
 commit "$dir"
 "$check" "$dir" 2>/dev/null || fail "a clean repo fails"
 
@@ -33,6 +33,15 @@ if out=$("$check" "$dir" 2>&1); then
   fail "an umlaut passes"
 fi
 [[ $out == *"b.rs:2:"* ]] || fail "the hit does not name file and line: $out"
+
+printf 'one\nlast.json nicht lesbar\n' >"$dir/d.rs"
+commit "$dir"
+if out=$("$check" "$dir" 2>&1); then
+  fail "a German word passes"
+fi
+[[ $out == *"d.rs:2:"* ]] || fail "the word hit does not name file and line: $out"
+git -C "$dir" rm -q d.rs
+commit "$dir"
 
 printf '# a comment\n\nb.rs\n' >"$dir/scripts/language-allowlist"
 commit "$dir"

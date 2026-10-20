@@ -12,19 +12,24 @@ anmeldest. Er
   nicht auf `/health` antwortet (z. B. nach dem Standby). Nach jedem Start
   wartet er 4 min, bis das Modell geladen ist.
 
-Two buttons in the web UI go past these rules; neither wakes the PC:
+Zwei Knöpfe der Weboberfläche gehen über diese Regeln hinweg; keiner weckt
+den PC:
 
-- **Force sleep** shows on the overview under a refused *Sleep now* and in
-  the gaming state. After a confirmation the PC sleeps anyway, despite recent
-  mouse or keyboard use, an open Strata request or gaming mode (which stays
-  on). A running Strata job is cancelled first; downloaded parts stay. Only
-  an update of the PC service refuses it.
-- **Force restart Strata** sits in the Strata area while the PC is awake and
-  gaming mode is off, also while Strata loads or doesn't answer. After a
-  confirmation the service cancels a running Strata job, kills Strata hard
-  (also one you started by hand) and starts its own Strata again, without
-  waiting for the watchdog. Without a start script, or with `auto_start`
-  off, Strata stays stopped.
+- **Force sleep** erscheint in der Übersicht unter einer abgelehnten
+  Schlafen-Anfrage (*Sleep now*) und im Gaming-Modus. Nach einer Rückfrage
+  schläft der PC trotzdem, auch wenn gerade jemand Maus oder Tastatur benutzt
+  hat, Strata eine Anfrage bearbeitet oder der Gaming-Modus an ist (er bleibt
+  an). Ein laufender Strata-Vorgang wird vorher abgebrochen; heruntergeladene
+  Teile bleiben. Nur ein Update des PC-Dienstes lehnt ab.
+- **Force restart Strata** steht im Bereich Strata, solange der PC wach und
+  der Gaming-Modus aus ist, auch wenn Strata lädt oder nicht antwortet. Nach
+  einer Rückfrage bricht der PC-Dienst einen laufenden Strata-Vorgang ab,
+  beendet Strata hart (auch ein von Hand gestartetes) und startet sein eigenes
+  Strata gleich wieder, ohne auf den Watchdog zu warten. Ohne Startskript
+  oder mit `auto_start = false` bleibt Strata aus.
+
+Beide warten höchstens `cancel_wait_secs` (60 s) auf das Ende des
+abgebrochenen Vorgangs und machen danach trotzdem weiter.
 
 ## Installieren
 

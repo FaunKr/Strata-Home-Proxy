@@ -53,8 +53,8 @@ Die Bitte des Proxys an den PC-Dienst, den Standby auszulösen. Der PC-Dienst ka
 _Avoid_: Shutdown, Sleep-Befehl
 
 **Forced sleep**:
-A sleep request from the web UI's *Force sleep* button that the PC-Dienst refuses only while it updates itself. It overrides user activity, a request Strata is processing and gaming mode (which stays on), and cancels a running Strata job first; downloaded parts stay. The proxy treats it like an accepted Schlafen-Anfrage.
-_Avoid_: hard sleep, Zwangsschlaf
+Eine Schlafen-Anfrage über den Knopf *Force sleep* der Weboberfläche, die der PC-Dienst nur während eines Updates ablehnt. Sie übergeht Benutzeraktivität, eine Anfrage in Strata und den Gaming-Modus (er bleibt an) und bricht einen laufenden Strata-Vorgang vorher ab; heruntergeladene Teile bleiben. Der Proxy behandelt sie wie eine angenommene Schlafen-Anfrage.
+_Avoid_: hard sleep
 
 **Nachlauf**:
 Die kurze Zeit nach einer angenommenen Schlafen-Anfrage, in der der PC noch antworten kann und trotzdem als schlafend gilt.
@@ -101,7 +101,7 @@ Strata läuft laut PC-Dienst, antwortet aber noch nicht.
 _Avoid_: Startet
 
 **Forced Strata restart**:
-The web UI's *Force restart Strata*: the PC-Dienst cancels a running Strata job, kills Strata hard (one started by hand too) and starts its own Strata again, if it has a start script and starts Strata at all. Refused in gaming mode and while the PC-Dienst updates itself.
+*Force restart Strata* in der Weboberfläche: Der PC-Dienst bricht einen laufenden Strata-Vorgang ab, beendet Strata hart (auch ein von Hand gestartetes) und startet sein eigenes Strata wieder, wenn er ein Startskript hat und Strata überhaupt startet. Abgelehnt im Gaming-Modus und während eines Updates des PC-Dienstes.
 _Avoid_: Strata kill, hard restart
 
 **Ereignis**:

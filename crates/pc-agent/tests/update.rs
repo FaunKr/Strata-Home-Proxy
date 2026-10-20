@@ -429,3 +429,56 @@ async fn the_marker_starts_no_strata_without_a_start_script() {
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
     assert!(!marker(&s).exists());
 }
+
+#[tokio::test]
+async fn a_request_that_began_during_the_download_refuses_the_update() {
+    let addr = slow_nas().await;
+    let s = setup_with("update-busy-later", |c| {
+        c.nas_url = Some(format!("http://{addr}"))
+    })
+    .await;
+    let update = start_update(&s);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    s.fake.strata_busy.store(true, Ordering::SeqCst);
+    assert_eq!(update.await.unwrap(), 409);
+    unchanged(&s);
+    assert_eq!(
+        s.fake.stops.load(Ordering::SeqCst),
+        0,
+        "the request goes on"
+    );
+}
+
+#[tokio::test]
+async fn a_loading_strata_that_cannot_be_stopped_refuses_the_update() {
+    let s = with_nas("update-stop-fails", StatusCode::OK, PROGRAM).await;
+    // Started by the service, not answering yet.
+    s.fake.strata_up.store(false, Ordering::SeqCst);
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    s.agent.strata().start();
+    s.fake.stop_fails.store(true, Ordering::SeqCst);
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 409, "{body}");
+    assert!(
+        body["reason"].as_str().unwrap().contains("did not stop"),
+        "{body}"
+    );
+    unchanged(&s);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1, "no second Strata");
+}
+
+#[tokio::test]
+async fn without_strata_programs_to_end_a_running_strata_refuses_the_update() {
+    let (addr, _) = nas(StatusCode::OK, PROGRAM).await;
+    let s = setup_with("update-no-processes", |c| {
+        c.strata_processes = vec![];
+        c.nas_url = Some(format!("http://{addr}"));
+    })
+    .await;
+    s.fake.strata_up.store(false, Ordering::SeqCst);
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    s.agent.strata().start();
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 409, "{body}");
+    unchanged(&s);
+}

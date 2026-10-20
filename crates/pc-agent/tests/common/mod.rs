@@ -59,6 +59,8 @@ pub struct Fake {
     pub start_fails: AtomicBool,
     /// A stopped Strata keeps answering `/health`, like one that does not end.
     pub strata_ignores_stop: AtomicBool,
+    /// Stopping Strata fails, as `taskkill` may.
+    pub stop_fails: AtomicBool,
     pub strata_busy: AtomicBool,
     pub mac: Mutex<Option<[u8; 6]>>,
     pub mac_lookups: AtomicUsize,
@@ -220,6 +222,9 @@ impl Platform for FakePlatform {
     fn stop_strata(&self, processes: &[String]) -> anyhow::Result<()> {
         *self.0.stopped.lock().unwrap() = Some(processes.to_vec());
         self.0.stops.fetch_add(1, Ordering::SeqCst);
+        if self.0.stop_fails.load(Ordering::SeqCst) {
+            anyhow::bail!("taskkill failed");
+        }
         if !self.0.strata_ignores_stop.load(Ordering::SeqCst) {
             self.0.strata_up.store(false, Ordering::SeqCst);
         }

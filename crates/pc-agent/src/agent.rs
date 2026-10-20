@@ -372,16 +372,19 @@ impl Agent {
         self.watchdog.lock().unwrap().unhealthy_since = None;
     }
 
+    /// Whether the service starts Strata on its own now: auto-start on,
+    /// gaming mode off, and no job, which sets Strata up or switches it, so
+    /// starting it then would get in the way.
+    pub(crate) fn may_start_strata_itself(&self) -> bool {
+        self.cfg.auto_start && !self.gaming() && !self.jobs.running()
+    }
+
     /// One watchdog pass: starts Strata when it is missing and restarts it
     /// when it stopped answering, e.g. after standby upset the graphics driver.
     pub async fn watchdog_tick(&self) {
-        // A job sets Strata up or switches it; starting it now would get in the way.
-        // An update stopped Strata for the updated service to start.
-        if self.gaming()
-            || !self.cfg.auto_start
-            || self.jobs.running()
-            || self.updating.load(Ordering::SeqCst)
-        {
+        // An update stopped Strata for the updated service to start; checked
+        // here too, so the watchdog neither waits on `/health` nor stops it.
+        if !self.may_start_strata_itself() || self.updating.load(Ordering::SeqCst) {
             return;
         }
         // Nothing to start yet: the Strata page has not set a start script.

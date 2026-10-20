@@ -159,9 +159,10 @@ waking from standby, gaming mode switched off).
   From the download until the end, the service refuses Strata jobs and
   sleeping.
 - `409` (`Refused` with a reason): not now (Strata is handling a request, a
-  Strata job or an update is running), set up without `nas_url`, or Strata
-  still answered after the stop ("Strata did not stop"); then nothing was
-  swapped and no second Strata is started next to it.
+  Strata job or an update is running; a request that began during the
+  download counts too), set up without `nas_url`, or a running Strata could
+  not be stopped or still answered after the stop ("Strata did not stop");
+  then nothing was swapped and no second Strata is started next to it.
 - `500` (`Refused`): download or replacement failed; the old service keeps
   running. A failed download leaves Strata alone; after a failed replacement
   the old service starts the Strata it stopped again.

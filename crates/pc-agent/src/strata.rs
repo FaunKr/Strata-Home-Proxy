@@ -779,12 +779,12 @@ fn active_changed(agent: &Agent, changed: &[String]) -> bool {
 /// After an update that stopped Strata, it starts Strata once, with the
 /// configs as they are now.
 pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output = ()> + use<> {
-    let after_update = crate::update::take_marker(agent);
+    let after_update = crate::update::take_start_after_update(agent);
     let changed = manage(agent).await;
     let agent = Arc::clone(agent);
     async move {
         if after_update {
-            if !agent.gaming() && agent.cfg.auto_start && !agent.jobs.running() {
+            if agent.may_start_strata_itself() {
                 tracing::info!("Strata starts after the update");
                 agent.strata().start();
             }

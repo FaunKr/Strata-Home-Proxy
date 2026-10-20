@@ -24,6 +24,20 @@ git -C strata grep -n 'GB ({\|=== Step' HEAD -- setup.py   # the lines the PC se
 
 `serve/server.py` has over 8000 lines. A web fetch with a summary cuts it off and quotes no handlers. The routes are in `do_GET` from line 5950.
 
+## Re-checking this page
+
+Move the pin above only after comparing the code, not only the commit subjects: a change with a plain subject can still break the PC service. For each item, diff it from the pin to `HEAD` (`git -C strata diff cbfd5b9..HEAD -- <file>`) and follow a change to every place that reads it here:
+
+| In Strata | Mirrored in | Read by |
+|---|---|---|
+| `setup.py`: `MODELS`, `FAMILIES`, `CONTEXTS`, `MEMORY_TIERS`, `mem_have` | `crates/pc-agent/src/catalog.rs` | `fits`, `recommended`, the Web UI's preselect in the model choice |
+| `setup.py`: speed projection flags, `--max-context`, rope flags, `choices_from_config` | `crates/pc-agent/src/install.rs` (`set_speed_projection`, `set_context`) | the jobs `set_speed_projection` and `set_context` |
+| `strata_control/user_args.py`, `engine_args` in `serve/server.py` | `install.rs` (`started_args`, `change_args`) | `speed_projection` and `context` in `GET /strata` |
+| `setup.py`: `step`, `fail`, download and check lines | the PC service's setup output reader | the job's step and progress |
+| `serve/prometheus.py` | `crates/nas-proxy/tests/fixtures/strata-metrics-*.prom` | the Overview |
+| `serve/server.py`: `do_GET`, `_authorized`, `/health`, `MODEL_CARD_SAMPLING`, `sampling_defaults_from_config` | `strata_client.rs`, `crates/pc-agent/src/sampling.rs` | the proxy, the sampling the PC service writes |
+| `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_bench.py` | `crates/pc-agent/src/strata.rs` | install, update and benchmark jobs |
+
 ## API key
 
 If a key is set in Strata, the protected endpoints require `Authorization: Bearer <key>` or `x-api-key: <key>`. If it is missing, they answer with 401 (`_authorized`, line 5929). The PC service writes a new key into `api_key` of every model configuration before each start of Strata, and the proxy fetches it from the PC service (see [pc-agent-api.md](pc-agent-api.md), `GET /strata/key`).

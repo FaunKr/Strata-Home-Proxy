@@ -3,7 +3,7 @@
   "kind": "benchmark",
   "model": "IQ3_XXS",
   "state": "done",
-  "step": "Benchmark läuft (etwa 10 min)",
+  "step": "Running the benchmark (about 10 min)",
   "percent": 100,
   "done_bytes": null,
   "total_bytes": null,

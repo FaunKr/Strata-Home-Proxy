@@ -541,7 +541,7 @@ pub async fn agent_cancel_job(State(pc): State<Pc>) -> Response {
     if !pc.job_running() {
         return (
             StatusCode::CONFLICT,
-            Json(Refused::new("Es läuft kein Vorgang")),
+            Json(Refused::new("No job is running")),
         )
             .into_response();
     }

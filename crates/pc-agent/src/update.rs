@@ -41,7 +41,7 @@ pub async fn update(agent: &Arc<Agent>) -> Result<(), UpdateError> {
     // A restart of the service can take Strata down with it (its output runs
     // through the service); Strata then restarts, which only hurts mid-work.
     let busy = if agent.jobs.running() {
-        Some("Ein Strata-Vorgang läuft")
+        Some("A Strata job is running")
     } else if agent.strata_busy().await {
         Some("Strata bearbeitet eine Anfrage")
     } else {

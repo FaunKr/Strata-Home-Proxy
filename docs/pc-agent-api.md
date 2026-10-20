@@ -15,10 +15,13 @@ PC-Dienst mit einem neueren Proxy. Deshalb:
 - Ein Antwortfeld, das nach der ersten Version dazukam, hat einen
   Standardwert, damit die Antwort eines älteren PC-Dienstes lesbar bleibt.
 - Ein optionales Anfragefeld fehlt, solange es nicht gesetzt ist: Der
-  PC-Dienst lehnt Anfragefelder ab, die er nicht kennt.
+  PC-Dienst lehnt Anfragefelder ab, die er nicht kennt. Arten ohne Felder
+  (`update`, `benchmark`, `compare_models`) ignorieren zusätzliche Felder.
 
 Die Tests des Crates lesen die gespeicherten Antworten und dazu Antworten,
-denen die neueren Felder fehlen.
+denen die neueren Felder fehlen. Ein Test des PC-Dienstes prüft, dass die
+Beispiele jedes Feld zeigen, das er sendet; ein neues Feld kommt also mit
+seinem Beispiel. `scripts/fake-pc.js` baut auf denselben Beispielen auf.
 
 Alle Anfragen tragen `Authorization: Bearer <PC_AGENT_TOKEN>`; der Dienst
 verlangt das Token immer. Er nimmt Anfragen nur von `allowed_clients` (dem

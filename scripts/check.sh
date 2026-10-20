@@ -34,6 +34,20 @@ else
 fi
 selected() { [[ $packages == all || $packages == *" $1 "* ]]; }
 
+# A full disk fails the build late and cryptically ("linking with cc failed").
+# Locally stop early instead; CI runners start empty, so there it only warns.
+free_gb=$(($(df -Pk . | awk 'NR == 2 {print $4}') / 1024 / 1024))
+if ((free_gb < 10)); then
+  target=$(du -sh target 2>/dev/null | cut -f1 || true)
+  message="Kaum Platz frei: ${free_gb} GB, target/ ist ${target:-0} groß; rm -rf target/debug"
+  if [[ -n ${CI:-} ]]; then
+    echo "WARNUNG: $message" >&2
+  else
+    echo "$message" >&2
+    exit 2
+  fi
+fi
+
 cargo fmt --check
 # The Node scripts of the browser check (eslint.config.mjs). Cloud sessions
 # have ESLint under /opt/node-tools; elsewhere: npm install -g eslint@10.1.0 (the version CI installs).

@@ -289,7 +289,7 @@ async fn cancel_ends_the_job() {
     .await;
     let resp = b.call("strata-cancel", &[]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("Es läuft kein Vorgang"));
+    assert!(resp.text().await.unwrap().contains("No job is running"));
 }
 
 #[tokio::test]

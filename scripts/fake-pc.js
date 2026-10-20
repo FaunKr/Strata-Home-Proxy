@@ -6,19 +6,19 @@
 // proxy asks for a new summary, and makes Strata hold or refuse the answer;
 // a held request is refused once the mode changes. mode=answer without
 // upstream goes back to the start.
+// The answers start from the PC service's samples in the protocol crate, so a
+// field added there reaches this check too; only what the check needs is set here.
 // Usage: node scripts/fake-pc.js <port>
+const fs = require('fs');
 const http = require('http');
+const path = require('path');
 
-const status = {
-  gaming_mode: false,
-  strata_running: true,
-  strata_job: false,
-  version: '0.1.0+ui-check',
-  hardware: {
-    gpu: { load_pct: 37.0, temp_c: 61.5, vram_used_bytes: 12670000000, vram_total_bytes: 17163091968, fan_rpm: 0, power_pct: 41.0 },
-    cpu: { load_pct: 12.0, ram_used_bytes: 22980000000, ram_total_bytes: 34359738368 },
-  },
-};
+const sample = name =>
+  JSON.parse(fs.readFileSync(path.join(__dirname, '../crates/pc-protocol/tests/samples', name), 'utf8'));
+
+// No MAC: the check does not cover a reported one.
+const status = { ...sample('status.json'), version: '0.1.0+ui-check', user_idle_secs: 0, mac: undefined };
+const strataSample = sample('strata.json');
 
 const at = Math.floor(Date.now() / 1000) - 3600;
 const field = (name, value, source = 'model_card') => ({ name, value, source });
@@ -29,11 +29,14 @@ const sampling = (temperature) => ({
   instruct: [field('temperature', 0.7), field('top_p', 0.8), field('top_k', 20), field('presence_penalty', 1.5)],
 });
 const model = (id, family, size, active, context, projection, temperature = field('temperature', 1)) => ({
-  id, family, size, disk_bytes: 60e9, active, speed_projection: projection, context,
+  ...strataSample.models[0], id, family, size, disk_bytes: 60e9, active, speed_projection: projection, context,
   loop_recovery: 'recover', sampling: sampling(temperature),
 });
 const firstUpstream = 'fedcba9876543210fedcba9876543210fedcba98';
 const strata = {
+  ...strataSample,
+  // The page's benchmark rows come from `benchmarks`.
+  benchmark: undefined,
   installed: true,
   version: '477ac13',
   update_available: true,
@@ -72,7 +75,7 @@ const strata = {
   benchmarks: [
     { model: 'IQ3_XXS', result: '38.5 Token/s', at, decode_tps: 38.5, prompt_tps: 612, context: 65536, speed_projection: false, version: '477ac13' },
     { model: 'coder-IQ1_M', result: '52.3 Token/s', at, decode_tps: 52.3, prompt_tps: 845.5, context: 65536, speed_projection: true, version: '477ac13' },
-    { model: 'swift-IQ2_XS', result: '', at, context: 32768, speed_projection: false, version: '477ac13', error: 'BENCH.bat endete mit Code 1' },
+    { model: 'swift-IQ2_XS', result: '', at, context: 32768, speed_projection: false, version: '477ac13', error: 'BENCH.bat ended with code 1' },
   ],
   job: null,
 };

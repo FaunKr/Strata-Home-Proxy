@@ -9,9 +9,11 @@
 //! - A response field added after the first version has a default, so an
 //!   older PC-Dienst's answer still parses.
 //! - An optional request field stays out when unset: the PC-Dienst refuses
-//!   request fields it does not know.
+//!   request fields it does not know. Job kinds without fields (`update`,
+//!   `benchmark`, `compare_models`) ignore extra ones.
 //!
-//! `tests/samples` holds an answer of today's PC-Dienst per endpoint.
+//! `tests/samples` holds an answer of today's PC-Dienst per endpoint; a
+//! PC-Dienst test checks that they show every field it sends.
 
 mod job;
 mod output;

@@ -88,7 +88,7 @@ pub fn spawn(spec: &CommandSpec) -> Result<Running> {
     cmd.process_group(0);
     let mut child = cmd
         .spawn()
-        .with_context(|| format!("{} lässt sich nicht starten", spec.program.display()))?;
+        .with_context(|| format!("{} cannot be started", spec.program.display()))?;
     let pid = child.id();
     let (tx, lines) = mpsc::unbounded_channel();
     if let Some(out) = child.stdout.take() {

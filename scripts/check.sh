@@ -58,6 +58,14 @@ if [[ -z ${CARGO_TARGET_DIR:-} && $git_dir != "$common_dir" ]]; then
 fi
 target_dir=${CARGO_TARGET_DIR:-target}
 
+# The tree this run checks, untracked files included, read through an index of
+# its own. A full run that passes leaves a mark for it; the push guard
+# (.claude/hooks/push-guard.sh) lets through only commits with that tree.
+tree_index=$(mktemp)
+cp "$(git rev-parse --git-path index)" "$tree_index"
+tree=$(GIT_INDEX_FILE=$tree_index git add -A && GIT_INDEX_FILE=$tree_index git write-tree)
+rm -f "$tree_index"
+
 # shellcheck source=scripts/free-space.sh
 source "$(dirname "$0")/free-space.sh"
 
@@ -136,3 +144,8 @@ python3 tools/code-bench/test_runner.py
 # ("has been running for over 60 seconds").
 cargo test "${package_args[@]}" --no-run
 timeout 10m cargo test "${package_args[@]}"
+
+if [[ $packages == all ]]; then
+  mkdir -p "$target_dir/check-ok"
+  touch "$target_dir/check-ok/$tree"
+fi

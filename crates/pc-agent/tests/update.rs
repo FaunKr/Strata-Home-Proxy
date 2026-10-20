@@ -482,3 +482,40 @@ async fn without_strata_programs_to_end_a_running_strata_refuses_the_update() {
     assert_eq!(code, 409, "{body}");
     unchanged(&s);
 }
+
+/// The NAS's request may end before the update does (the page that asked
+/// was closed, the connection dropped after a wake). The update goes on: the
+/// program is replaced and the old service ends, so the new one gets the
+/// port.
+#[tokio::test]
+async fn an_update_whose_request_ends_early_still_hands_over() {
+    async fn slow_program() -> impl IntoResponse {
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        PROGRAM.to_vec()
+    }
+    let addr = serve(Router::new().route(
+        "/admin/agent/strata-pc-agent.exe",
+        routing::get(slow_program),
+    ))
+    .await;
+    let s = setup_with("update-request-ends", |c| {
+        c.nas_url = Some(format!("http://{addr}"))
+    })
+    .await;
+    let gone = client()
+        .post(format!("{}/update", s.url))
+        .bearer_auth("secret")
+        .timeout(Duration::from_millis(200))
+        .send()
+        .await;
+    assert!(gone.is_err(), "the request ends during the download");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while s.fake.exits.load(Ordering::SeqCst) == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the old service never ended"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(s.fake.replaced.lock().unwrap().as_deref(), Some(PROGRAM));
+}

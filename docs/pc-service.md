@@ -63,7 +63,10 @@ the idle timeout.
 The service downloads the .exe from the NAS, stops Strata (a hand-started one
 too), puts the new .exe in the same place (task and shortcut stay valid),
 starts it and exits. The new service starts Strata again right away if it was
-running before. As long as Strata is handling a request or a Strata job is
+running before. The update goes through even when the page that pressed the
+button closes. Should the old service still hold the port 5 s after the new one
+started, the new one ends it; a new service that cannot start writes why to its
+log instead of a message box. As long as Strata is handling a request or a Strata job is
 running, it refuses; so it does when Strata still answers 10 s after the stop.
 If the update fails, the old service keeps running, starts the Strata it
 stopped again, and the **PC** area names the reason. A service set up before the update button existed needs

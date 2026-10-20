@@ -40,6 +40,9 @@ und bittet ihn nach Leerlauf, schlafen zu gehen.
   Wecken mit `503` und `no_mac`.
 - **Leerlauf:** 15 min ohne Anfrage und ohne offene Antwort, dann Schlafen-
   Anfrage an den PC-Dienst. Lehnt er ab, fragt der Proxy nach 1 min erneut.
+  Zeigen Strata-Metriken 5 min lang keine laufende oder wartende Anfrage,
+  gibt der Proxy die offenen auf (Fehler an den Client), damit eine verlorene
+  Antwort den PC nicht wach hält.
 - **MAC-Adresse:** Der PC-Dienst meldet sie selbst; der Proxy merkt sie sich in
   `/data/pc-mac` und weckt damit. `PC_MAC` braucht es nur für den allerersten
   Start, bevor der PC-Dienst je geantwortet hat.

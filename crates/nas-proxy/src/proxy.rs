@@ -1,6 +1,11 @@
 //! Forwarding of the Strata API (OpenAI and Anthropic format).
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    io,
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{
     body::{Body, Bytes},
@@ -265,6 +270,17 @@ fn with_pings(
     )
 }
 
+/// What a client reads when its request is given up as lost.
+const LOST: &str = "Strata bearbeitet die Anfrage nicht mehr.";
+
+fn lost(flavor: Flavor) -> Response {
+    (
+        StatusCode::GATEWAY_TIMEOUT,
+        axum::Json(flavor.error_json("api_error", LOST)),
+    )
+        .into_response()
+}
+
 fn upstream_failed(flavor: Flavor, e: &str) -> Response {
     tracing::warn!("Weiterleitung an Strata fehlgeschlagen: {e}");
     (
@@ -282,7 +298,12 @@ async fn forward(
     req: Incoming,
     flavor: Flavor,
 ) -> Response {
-    let resp = match send_upstream(&st, &req).await {
+    let mut given_up = Box::pin(guard.given_up(Instant::now()));
+    let sent = tokio::select! {
+        sent = send_upstream(&st, &req) => sent,
+        () = &mut given_up => return lost(flavor),
+    };
+    let resp = match sent {
         Ok(r) => r,
         Err(e) => return upstream_failed(flavor, &e),
     };
@@ -292,9 +313,15 @@ async fn forward(
     let ping_interval = st.cfg().ping_interval;
     let body = resp.bytes_stream();
     let body = if sse {
-        Body::from_stream(keep_guard(with_pings(body, flavor, ping_interval), guard))
+        let tail = flavor.error_event("api_error", LOST);
+        Body::from_stream(keep_guard(
+            with_pings(body, flavor, ping_interval),
+            guard,
+            given_up,
+            Some(tail),
+        ))
     } else {
-        Body::from_stream(keep_guard(body, guard))
+        Body::from_stream(keep_guard(body, guard, given_up, None))
     };
     let mut out = Response::new(body);
     *out.status_mut() = status;
@@ -322,16 +349,32 @@ fn strata_refused(st: &AppState) -> &'static str {
     message
 }
 
-/// Holds the activity guard until the body stream ends or is dropped.
-fn keep_guard<S, T>(inner: S, guard: ActivityGuard) -> impl Stream<Item = T> + Send
+/// Holds the activity guard until the body stream ends or is dropped. A
+/// request given up as lost ends with `tail` (an error event), or without
+/// one with an error, so the client never takes a cut answer for a whole one.
+fn keep_guard<S, G>(
+    inner: S,
+    guard: ActivityGuard,
+    given_up: Pin<Box<G>>,
+    tail: Option<Bytes>,
+) -> impl Stream<Item = io::Result<Bytes>> + Send
 where
-    S: Stream<Item = T> + Send + 'static,
-    T: Send,
+    S: Stream<Item = reqwest::Result<Bytes>> + Send + 'static,
+    G: Future<Output = ()> + Send + 'static,
 {
     let inner = Box::pin(inner);
-    stream::unfold((inner, guard), |(mut inner, guard)| async move {
-        let item = inner.next().await?;
-        Some((item, (inner, guard)))
+    stream::unfold(Some((inner, given_up, guard, tail)), |held| async move {
+        let (mut inner, mut given_up, guard, tail) = held?;
+        tokio::select! {
+            item = inner.next() => {
+                let item = item?.map_err(io::Error::other);
+                Some((item, Some((inner, given_up, guard, tail))))
+            }
+            () = &mut given_up => {
+                let end = tail.ok_or_else(|| io::Error::other(LOST));
+                Some((end, None))
+            }
+        }
     })
 }
 
@@ -345,73 +388,7 @@ fn wake_then_stream(
     flavor: Flavor,
 ) -> Response {
     let (tx, mut rx) = mpsc::channel::<Bytes>(16);
-    tokio::spawn(async move {
-        let _guard = guard;
-        if tx.send(flavor.ping()).await.is_err() {
-            return;
-        }
-        let wake = st.ensure_awake();
-        tokio::pin!(wake);
-        let woke = loop {
-            tokio::select! {
-                r = &mut wake => break r,
-                _ = tokio::time::sleep(st.cfg().ping_interval) => {
-                    if tx.send(flavor.ping()).await.is_err() {
-                        return;
-                    }
-                }
-            }
-        };
-        if let Err(err) = woke {
-            if err == WakeError::Gaming {
-                st.events.record(EventKind::GamingRejected, None);
-            }
-            let (_, _, kind, message) = wake_error_parts(&err);
-            let _ = tx.send(flavor.error_event(kind, message)).await;
-            return;
-        }
-        let resp = match send_upstream(&st, &req).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("Weiterleitung an Strata fehlgeschlagen: {e}");
-                let _ = tx
-                    .send(flavor.error_event("api_error", "Strata hat nicht geantwortet."))
-                    .await;
-                return;
-            }
-        };
-        if resp.status() == StatusCode::UNAUTHORIZED {
-            let message = strata_refused(&st);
-            let _ = tx.send(flavor.error_event("api_error", message)).await;
-            return;
-        }
-        if !resp.status().is_success() || !is_event_stream(resp.headers()) {
-            // The status line is already sent; pass the error on as an event.
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            let message = format!("Strata antwortete mit {status}: {text}");
-            let _ = tx.send(flavor.error_event("api_error", &message)).await;
-            return;
-        }
-        let mut body = Box::pin(with_pings(
-            resp.bytes_stream(),
-            flavor,
-            st.cfg().ping_interval,
-        ));
-        while let Some(chunk) = body.next().await {
-            match chunk {
-                Ok(chunk) => {
-                    if tx.send(chunk).await.is_err() {
-                        return;
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Antwort von Strata abgebrochen: {e}");
-                    return;
-                }
-            }
-        }
-    });
+    tokio::spawn(wake_and_pass_on(st, guard, req, flavor, tx));
     let body = stream::poll_fn(move |cx| rx.poll_recv(cx)).map(Ok::<_, std::convert::Infallible>);
     let mut resp = Response::new(Body::from_stream(body));
     let headers = resp.headers_mut();
@@ -421,6 +398,91 @@ fn wake_then_stream(
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     resp
+}
+
+/// The task behind `wake_then_stream`: pings while the PC wakes, then the answer.
+async fn wake_and_pass_on(
+    st: Arc<AppState>,
+    guard: ActivityGuard,
+    req: Incoming,
+    flavor: Flavor,
+    tx: mpsc::Sender<Bytes>,
+) {
+    if tx.send(flavor.ping()).await.is_err() {
+        return;
+    }
+    let wake = st.ensure_awake();
+    tokio::pin!(wake);
+    let woke = loop {
+        tokio::select! {
+            r = &mut wake => break r,
+            _ = tokio::time::sleep(st.cfg().ping_interval) => {
+                if tx.send(flavor.ping()).await.is_err() {
+                    return;
+                }
+            }
+        }
+    };
+    if let Err(err) = woke {
+        if err == WakeError::Gaming {
+            st.events.record(EventKind::GamingRejected, None);
+        }
+        let (_, _, kind, message) = wake_error_parts(&err);
+        let _ = tx.send(flavor.error_event(kind, message)).await;
+        return;
+    }
+    let given_up = guard.given_up(Instant::now());
+    tokio::select! {
+        () = pass_on(&st, &req, flavor, &tx) => {}
+        () = given_up => {
+            let _ = tx.send(flavor.error_event("api_error", LOST)).await;
+        }
+    }
+}
+
+/// Sends the request to Strata and passes its event stream on.
+async fn pass_on(st: &AppState, req: &Incoming, flavor: Flavor, tx: &mpsc::Sender<Bytes>) {
+    let resp = match send_upstream(st, req).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("Weiterleitung an Strata fehlgeschlagen: {e}");
+            let _ = tx
+                .send(flavor.error_event("api_error", "Strata hat nicht geantwortet."))
+                .await;
+            return;
+        }
+    };
+    if resp.status() == StatusCode::UNAUTHORIZED {
+        let message = strata_refused(st);
+        let _ = tx.send(flavor.error_event("api_error", message)).await;
+        return;
+    }
+    if !resp.status().is_success() || !is_event_stream(resp.headers()) {
+        // The status line is already sent; pass the error on as an event.
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        let message = format!("Strata antwortete mit {status}: {text}");
+        let _ = tx.send(flavor.error_event("api_error", &message)).await;
+        return;
+    }
+    let mut body = Box::pin(with_pings(
+        resp.bytes_stream(),
+        flavor,
+        st.cfg().ping_interval,
+    ));
+    while let Some(chunk) = body.next().await {
+        match chunk {
+            Ok(chunk) => {
+                if tx.send(chunk).await.is_err() {
+                    return;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Antwort von Strata abgebrochen: {e}");
+                return;
+            }
+        }
+    }
 }
 
 pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {

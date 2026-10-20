@@ -85,9 +85,23 @@ pub struct AppState {
     /// The code benchmark in the container code-bench.
     pub code_bench: crate::code_bench::CodeBench,
     in_flight: AtomicUsize,
+    /// Requests sent to Strata up to this moment are given up: Strata has
+    /// shown nothing since (`drop_lost_requests`).
+    give_up: tokio::sync::watch::Sender<Option<Instant>>,
+    /// Since when Strata shows nothing running while requests are in flight.
+    quiet_since: Mutex<Option<Instant>>,
+    /// `LOST_AFTER`; shorter in tests.
+    lost_after: Mutex<Duration>,
     lifecycle: Mutex<Lifecycle>,
     wake_lock: tokio::sync::Mutex<()>,
 }
+
+/// How long Strata may show nothing running or waiting while requests are in
+/// flight before those requests count as lost. Strata keeps a request it
+/// works on in its metrics, prefill included; a lost one (an answer that
+/// never comes, a connection left open) would otherwise keep the PC awake,
+/// since the pings keep the client waiting too.
+const LOST_AFTER: Duration = Duration::from_secs(300);
 
 /// How often the PC service is asked for its status while waiting for a wake-up.
 const AGENT_CHECK_WHILE_WAKING: Duration = Duration::from_secs(3);
@@ -129,6 +143,9 @@ impl AppState {
             code_bench: crate::code_bench::CodeBench::new(cfg.data_dir.clone()),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
+            give_up: tokio::sync::watch::Sender::new(None),
+            quiet_since: Mutex::new(None),
+            lost_after: Mutex::new(LOST_AFTER),
             lifecycle: Mutex::new(Lifecycle::new(Now::read(), keep_awake_until)),
             wake_lock: tokio::sync::Mutex::new(()),
             settings,
@@ -395,6 +412,43 @@ impl AppState {
         Ok(())
     }
 
+    /// Gives up the requests in flight that were sent to Strata at least
+    /// `LOST_AFTER` ago, once Strata has shown nothing running or waiting for
+    /// that long; a request Strata has not had that long to pick up is left
+    /// alone.
+    pub async fn drop_lost_requests(&self) {
+        if self.in_flight() == 0 {
+            *self.quiet_since.lock().unwrap() = None;
+            return;
+        }
+        let metrics = match self.strata() {
+            Some(strata) => strata.metrics().await.ok(),
+            None => None,
+        };
+        let quiet = metrics.is_some_and(|m| m.processing == 0 && m.deferred == 0);
+        let mut quiet_since = self.quiet_since.lock().unwrap();
+        if !quiet {
+            *quiet_since = None;
+            return;
+        }
+        let since = *quiet_since.get_or_insert_with(Instant::now);
+        let Some(cutoff) = Instant::now().checked_sub(*self.lost_after.lock().unwrap()) else {
+            return;
+        };
+        if since > cutoff {
+            return;
+        }
+        let before = self.give_up.send_replace(Some(cutoff));
+        if before.is_none_or(|b| b < since) {
+            tracing::warn!("Offene Anfragen aufgegeben: Strata zeigt sie nicht mehr");
+        }
+    }
+
+    /// Changes `LOST_AFTER`; for tests.
+    pub fn set_lost_after(&self, after: Duration) {
+        *self.lost_after.lock().unwrap() = after;
+    }
+
     /// One pass of the idle check: asks the PC to sleep when nothing has
     /// happened for `idle_timeout`.
     pub async fn idle_tick(&self) {
@@ -513,6 +567,7 @@ impl AppState {
             loop {
                 // Read each round, so a changed IDLE_CHECK_SECS applies at once.
                 tokio::time::sleep(state.cfg().idle_check).await;
+                state.drop_lost_requests().await;
                 state.idle_tick().await;
                 state.api_keys.flush_last_used();
             }
@@ -556,6 +611,21 @@ impl ActivityGuard {
         state.in_flight.fetch_add(1, Ordering::SeqCst);
         state.lifecycle.lock().unwrap().request_seen(Now::read());
         Self(Arc::clone(state))
+    }
+
+    /// Resolves once the request, sent to Strata at `sent`, is given up as lost.
+    pub fn given_up(&self, sent: Instant) -> impl Future<Output = ()> + Send + use<> {
+        let mut rx = self.0.give_up.subscribe();
+        async move {
+            let closed = rx
+                .wait_for(|cutoff| cutoff.is_some_and(|c| sent <= c))
+                .await
+                .is_err();
+            if closed {
+                // The state is gone, so nothing gives the request up anymore.
+                std::future::pending::<()>().await;
+            }
+        }
     }
 }
 

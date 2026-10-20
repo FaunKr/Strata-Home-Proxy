@@ -33,7 +33,7 @@ Always 200 and without a key (line 5460):
 
 ## Summary of an update: `POST /v1/chat/completions`
 
-For the summary of a Strata update on the *Version & benchmark* tab, the proxy asks Strata itself, with its key and without streaming. Strata takes `reasoning_effort` per request (`none`, `low`, `medium` or `high`); the proxy sets `medium`. The answer is in `choices[0].message.content`, the thinking is not in it. It only asks when `/health` reports `loaded: true` and the metrics show no running or waiting request; `max_context` from `/health` limits the length of the request.
+For the summary of a Strata update on the *Version & benchmark* tab, the proxy asks Strata itself, with its key and without streaming. Strata takes `reasoning_effort` per request (`none`, `low`, `medium` or `high`); the proxy sets `medium`. The answer is in `choices[0].message.content`, the thinking is not in it. On its own it only asks when `/health` reports `loaded: true` and the metrics show no running or waiting request; the *Generate summary now* button also asks a busy or unloaded Strata and then gives it two more minutes to load. `max_context` from `/health` limits the length of the request.
 
 ## Metrics: `GET /metrics?format=prometheus`
 

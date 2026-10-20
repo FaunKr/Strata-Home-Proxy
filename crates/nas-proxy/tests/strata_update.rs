@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 
 use common::*;
 use serde_json::{Value, json};
+use strata_nas_proxy::events::EventKind;
 
 /// Two incoming commits on a github.com remote, the installed version 477ac13.
 fn with_update(remote: &str) -> StrataReport {
@@ -436,4 +437,163 @@ async fn a_slow_strata_hits_the_limit_and_is_asked_again_later() {
     let v = settled(&mut b).await;
     assert_eq!(v["update"]["summary"]["state"], "written", "{v}");
     assert_eq!(s.pc.chat_bodies.lock().unwrap().len(), 2);
+}
+
+// --- #193 Generate summary now ---
+
+async fn generate(b: &mut Browser) -> reqwest::Response {
+    b.call("strata-update-summary", &[]).await
+}
+
+#[tokio::test]
+async fn a_click_asks_an_unloaded_or_busy_strata() {
+    let unloaded = ready().await;
+    unloaded.pc.unloaded.store(true, Ordering::SeqCst);
+    let busy = ready().await;
+    *busy.pc.metrics.lock().unwrap() = Some(METRICS_BUSY.into());
+    for (what, s) in [("unloaded", unloaded), ("busy", busy)] {
+        let mut b = logged_in(&s.url).await;
+        page(&mut b).await;
+        let v = settled(&mut b).await;
+        assert_eq!(
+            v["update"]["summary"]["state"], "unavailable",
+            "{what}: {v}"
+        );
+        assert_eq!(generate(&mut b).await.status(), 200, "{what}");
+        let v = settled(&mut b).await;
+        assert_eq!(v["update"]["summary"]["state"], "written", "{what}: {v}");
+        assert_eq!(s.pc.chat_bodies.lock().unwrap().len(), 1, "{what}");
+    }
+}
+
+#[tokio::test]
+async fn a_failed_summary_says_why_and_a_click_asks_again_at_once() {
+    let s = ready().await;
+    s.pc.chat_fails.store(true, Ordering::SeqCst);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let v = settled(&mut b).await;
+    let summary = &v["update"]["summary"];
+    assert_eq!(summary["state"], "unavailable", "{v}");
+    assert!(
+        summary["reason"].as_str().unwrap().contains("500"),
+        "{summary}"
+    );
+    // Without a click it waits.
+    page(&mut b).await;
+    assert_eq!(s.pc.chat_bodies.lock().unwrap().len(), 1);
+    s.pc.chat_fails.store(false, Ordering::SeqCst);
+    assert_eq!(generate(&mut b).await.status(), 200);
+    let v = settled(&mut b).await;
+    assert_eq!(v["update"]["summary"]["state"], "written", "{v}");
+    assert_eq!(s.pc.chat_bodies.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_click_wakes_a_sleeping_pc_and_counts_as_use() {
+    let s = setup(false, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_update("https://github.com/Niko1221/Strata.git"));
+    *s.pc.chat_answer.lock().unwrap() = Some(BULLETS.into());
+    let before = s.state.snapshot().last_activity_at;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(generate(&mut b).await.status(), 200);
+    assert!(s.pc.wol_packets.load(Ordering::SeqCst) > 0);
+    let v = settled(&mut b).await;
+    assert_eq!(v["update"]["summary"]["state"], "written", "{v}");
+    let kinds = own_kinds(&s.state);
+    assert!(
+        kinds.contains(&EventKind::UpdateSummaryRequested),
+        "{kinds:?}"
+    );
+    assert!(kinds.contains(&EventKind::WakeRequested), "{kinds:?}");
+    assert_ne!(s.state.snapshot().last_activity_at, before);
+}
+
+#[tokio::test]
+async fn the_page_says_when_a_click_would_wake_the_pc() {
+    let s = ready().await;
+    s.pc.chat_fails.store(true, Ordering::SeqCst);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let v = settled(&mut b).await;
+    assert_eq!(v["update"]["wakes_pc"], false, "{v}");
+    assert_eq!(v["update"]["blocked"], Value::Null, "{v}");
+    s.pc.awake.store(false, Ordering::SeqCst);
+    let v = page(&mut b).await;
+    assert_eq!(v["update"]["summary"]["state"], "unavailable", "{v}");
+    assert_eq!(v["update"]["wakes_pc"], true, "{v}");
+}
+
+#[tokio::test]
+async fn gaming_mode_or_a_job_refuse_a_click() {
+    let gaming = ready().await;
+    gaming.pc.gaming.store(true, Ordering::SeqCst);
+    let job = ready().await;
+    *job.pc.strata_job.lock().unwrap() = Some(StrataJob {
+        id: Some(1),
+        ..common::job(StrataJobKind::Benchmark, StrataJobState::Running)
+    });
+    for (what, s, text) in [
+        ("gaming", gaming, "Gaming mode"),
+        ("job", job, "Strata job is running"),
+    ] {
+        let mut b = logged_in(&s.url).await;
+        let v = settled(&mut b).await;
+        assert!(
+            v["update"]["blocked"].as_str().unwrap().contains(text),
+            "{what}: {v}"
+        );
+        let resp = generate(&mut b).await;
+        assert_eq!(resp.status(), 400, "{what}");
+        assert!(resp.text().await.unwrap().contains(text), "{what}");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert_eq!(s.pc.chat_bodies.lock().unwrap().len(), 0, "{what}");
+        assert!(
+            !own_kinds(&s.state).contains(&EventKind::UpdateSummaryRequested),
+            "{what}: a refused click is no use"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_click_while_strata_writes_asks_only_once() {
+    let s = ready().await;
+    // Room for the click before Strata answers.
+    *s.pc.chat_pause.lock().unwrap() = std::time::Duration::from_millis(2500);
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(page(&mut b).await["update"]["summary"]["state"], "writing");
+    assert_eq!(generate(&mut b).await.status(), 200);
+    let v = settled(&mut b).await;
+    assert_eq!(v["update"]["summary"]["state"], "written", "{v}");
+    assert_eq!(s.pc.chat_bodies.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn an_unloaded_model_gets_extra_time_to_load() {
+    for (unloaded, state) in [(true, "written"), (false, "unavailable")] {
+        let s = ready().await;
+        s.state.strata.update.set_timing(
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(3600),
+        );
+        s.state
+            .strata
+            .update
+            .set_load_allowance(std::time::Duration::from_millis(3000));
+        // Neither path asks on its own: the PC reports a job until the click.
+        *s.pc.metrics.lock().unwrap() = Some(METRICS_BUSY.into());
+        s.pc.unloaded.store(unloaded, Ordering::SeqCst);
+        *s.pc.chat_pause.lock().unwrap() = std::time::Duration::from_millis(700);
+        let mut b = logged_in(&s.url).await;
+        assert_eq!(generate(&mut b).await.status(), 200);
+        let v = settled(&mut b).await;
+        assert_eq!(
+            v["update"]["summary"]["state"], state,
+            "unloaded {unloaded}: {v}"
+        );
+        if !unloaded {
+            let reason = v["update"]["summary"]["reason"].as_str().unwrap();
+            assert!(reason.contains("did not answer within"), "{reason}");
+        }
+    }
 }

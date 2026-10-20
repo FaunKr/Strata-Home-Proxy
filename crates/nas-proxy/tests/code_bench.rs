@@ -292,6 +292,22 @@ async fn a_run_the_proxy_lost_is_followed_again_and_can_be_cancelled() {
 }
 
 #[tokio::test]
+async fn the_update_summary_waits_for_the_code_benchmark() {
+    let (s, _runner) = with_runner().await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    let resp = b.call("strata-update-summary", &[]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(
+        resp.text()
+            .await
+            .unwrap()
+            .contains("code benchmark is running")
+    );
+    assert!(s.pc.chat_bodies.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn a_strata_job_and_the_code_benchmark_wait_for_each_other() {
     let (s, _runner) = with_runner().await;
     let mut b = logged_in(&s.url).await;

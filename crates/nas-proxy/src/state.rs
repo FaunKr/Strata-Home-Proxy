@@ -26,6 +26,7 @@ use crate::{
     lifecycle::{Lifecycle, Now, Observed, Record, Timings},
     overview::Monitor,
     settings::Settings,
+    strata_client::StrataClient,
     wol,
 };
 
@@ -47,7 +48,7 @@ pub enum WakeError {
     NoMac,
 }
 
-/// Strata's answer on `/health`.
+/// Whether Strata answers on `/health`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Health {
     /// Answers; `loaded` is false while the model is not in memory (Strata
@@ -56,16 +57,6 @@ pub enum Health {
         loaded: bool,
     },
     Down,
-}
-
-#[derive(Deserialize)]
-struct HealthBody {
-    #[serde(default = "loaded_default")]
-    loaded: bool,
-}
-
-fn loaded_default() -> bool {
-    true
 }
 
 #[derive(Serialize, Deserialize)]
@@ -187,6 +178,13 @@ impl AppState {
         Some(status)
     }
 
+    /// Strata at the current address with the current key; `None` without
+    /// an address.
+    pub fn strata(&self) -> Option<StrataClient> {
+        let cfg = self.cfg();
+        StrataClient::new(&cfg, self.probe(&cfg), self.upstream.clone())
+    }
+
     /// Client for the PC service with the current address and token.
     pub fn agent(&self) -> AgentClient {
         let cfg = self.cfg();
@@ -276,20 +274,12 @@ impl AppState {
     /// Asks Strata's `/health`. A ready answer marks the PC awake, except
     /// while a PC that accepted sleep may still answer.
     pub async fn strata_health(&self) -> Health {
-        let cfg = self.cfg();
-        let Some(strata) = &cfg.strata_url else {
+        let Some(strata) = self.strata() else {
             return Health::Down;
         };
-        let mut req = self.probe(&cfg).get(format!("{strata}/health"));
-        if let Some(auth) = cfg.strata_authorization() {
-            req = req.header(reqwest::header::AUTHORIZATION, auth);
-        }
-        let health = match req.send().await {
-            Ok(r) if r.status().is_success() => Health::Up {
-                // Strata says `{"status": "ok", "loaded": ...}`; other builds may not.
-                loaded: r.json::<HealthBody>().await.map_or(true, |b| b.loaded),
-            },
-            _ => Health::Down,
+        let health = match strata.health().await {
+            Ok(h) => Health::Up { loaded: h.loaded },
+            Err(_) => Health::Down,
         };
         let healthy = matches!(health, Health::Up { .. });
         if self.note(|l, now, t| l.strata_answered(healthy, now, t)) {

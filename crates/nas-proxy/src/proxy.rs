@@ -98,14 +98,11 @@ fn copy_headers(from: &HeaderMap, drop_length: bool) -> HeaderMap {
 const CLIENT_CREDENTIALS: [&str; 2] = ["authorization", "x-api-key"];
 
 /// The request headers for Strata: the client's, minus hop-by-hop headers and
-/// its credentials, plus the Strata key if one is set.
-fn upstream_headers(from: &HeaderMap, strata_auth: Option<HeaderValue>) -> HeaderMap {
+/// its credentials. The Strata client adds the Proxy's key.
+fn upstream_headers(from: &HeaderMap) -> HeaderMap {
     let mut out = copy_headers(from, true);
     for name in CLIENT_CREDENTIALS {
         out.remove(name);
-    }
-    if let Some(value) = strata_auth {
-        out.insert(header::AUTHORIZATION, value);
     }
     out
 }
@@ -224,19 +221,18 @@ struct Incoming {
     body: Bytes,
 }
 
-async fn send_upstream(st: &AppState, req: &Incoming) -> reqwest::Result<reqwest::Response> {
-    let cfg = st.cfg();
-    // Checked before forwarding; an empty base only fails if it was unset since.
-    let strata = cfg.strata_url.as_deref().unwrap_or_default();
-    st.upstream
-        .request(
+async fn send_upstream(st: &AppState, req: &Incoming) -> Result<reqwest::Response, String> {
+    // Checked before forwarding; only fails if the address was unset since.
+    let strata = st.strata().ok_or("STRATA_URL is not set")?;
+    strata
+        .forward(
             req.method.clone(),
-            format!("{strata}{}", req.path_and_query),
+            &req.path_and_query,
+            upstream_headers(&req.headers),
+            req.body.clone(),
         )
-        .headers(upstream_headers(&req.headers, cfg.strata_authorization()))
-        .body(req.body.clone())
-        .send()
         .await
+        .map_err(|e| e.to_string())
 }
 
 /// Passes upstream chunks through and inserts a ping whenever the stream has
@@ -269,7 +265,7 @@ fn with_pings(
     )
 }
 
-fn upstream_failed(flavor: Flavor, e: &reqwest::Error) -> Response {
+fn upstream_failed(flavor: Flavor, e: &str) -> Response {
     tracing::warn!("Weiterleitung an Strata fehlgeschlagen: {e}");
     (
         StatusCode::BAD_GATEWAY,
@@ -433,10 +429,10 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
     if !client_keys(&parts.headers).any(|key| st.api_keys.check(key).is_some()) {
         return unauthorized(flavor);
     }
-    let cfg = st.cfg();
-    if cfg.strata_url.is_none() {
+    if st.strata().is_none() {
         return not_configured(flavor);
     }
+    let cfg = st.cfg();
     let guard = ActivityGuard::new(&st);
     let body = match axum::body::to_bytes(body, cfg.max_body_bytes).await {
         Ok(b) => b,

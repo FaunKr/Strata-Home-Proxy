@@ -22,6 +22,7 @@ use tokio::sync::{Notify, watch};
 use crate::{
     clock,
     state::{AppState, Health},
+    strata_client::Metrics,
 };
 
 /// How often the PC and Strata are asked while a page watches.
@@ -35,14 +36,6 @@ const EVENTS_SHOWN: usize = 10;
 /// How often the Verlauf of the last 7 days is summed again for the overview;
 /// it changes by the hour, not by the tick.
 const WEEK_REFRESH: Duration = Duration::from_secs(60);
-
-/// Strata's numbers from `/metrics?format=prometheus` (see docs/strata-api.md).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Metrics {
-    pub processing: u32,
-    pub deferred: u32,
-    pub tokens_per_sec: Option<f64>,
-}
 
 /// The answers of the last round of asking.
 #[derive(Clone, Debug)]
@@ -242,6 +235,11 @@ async fn power(state: &AppState) -> PowerView {
     }
 }
 
+/// Strata's metrics, or none when it is not set up or does not answer.
+async fn metrics(state: &AppState) -> Option<Metrics> {
+    state.strata()?.metrics().await.ok()
+}
+
 async fn probe_pc(
     state: &AppState,
 ) -> (Health, Option<Metrics>, Option<PcStatus>, Option<StrataJob>) {
@@ -257,40 +255,6 @@ async fn probe_pc(
         _ => None,
     };
     (health, metrics, pc, job)
-}
-
-pub(crate) async fn metrics(state: &AppState) -> Option<Metrics> {
-    let cfg = state.cfg();
-    // Not `/metrics/prometheus`: its tokens/s counts finished requests only,
-    // and each scrape resets that window for other scrapers.
-    let url = format!("{}/metrics?format=prometheus", cfg.strata_url.as_ref()?);
-    let mut req = state.probe_client().get(url);
-    if let Some(auth) = cfg.strata_authorization() {
-        req = req.header(reqwest::header::AUTHORIZATION, auth);
-    }
-    let resp = req.send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    parse_metrics(&resp.text().await.ok()?)
-}
-
-/// Reads the few values the overview needs from Prometheus text.
-pub fn parse_metrics(text: &str) -> Option<Metrics> {
-    let value = |name: &str| {
-        text.lines().filter(|l| !l.starts_with('#')).find_map(|l| {
-            let (key, value) = l.split_once(' ')?;
-            // Without or with labels, e.g. `name{model="x"} 1`.
-            let key = key.split('{').next()?;
-            (key == name).then(|| value.trim().parse::<f64>().ok())?
-        })
-    };
-    let processing = value("vllm:num_requests_running")?;
-    Some(Metrics {
-        processing: processing as u32,
-        deferred: value("vllm:num_requests_waiting").unwrap_or(0.0) as u32,
-        tokens_per_sec: value("strata:live_tok_s").filter(|v| *v > 0.0),
-    })
 }
 
 fn strata_view(probe: &Probe, in_flight: usize) -> StrataView {
@@ -411,28 +375,5 @@ fn build(state: &AppState, probe: &Probe, week: HistoryView) -> Overview {
         hardware: hardware_view(pc, probe.pc.as_ref()),
         power: probe.power.clone(),
         week,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reads_strata_metrics() {
-        // Real output of Strata's serve/prometheus.py, see docs/strata-api.md.
-        assert_eq!(
-            parse_metrics(include_str!("../tests/fixtures/strata-metrics-busy.prom")),
-            Some(Metrics {
-                processing: 1,
-                deferred: 1,
-                tokens_per_sec: Some(38.5)
-            })
-        );
-        assert_eq!(
-            parse_metrics(include_str!("../tests/fixtures/strata-metrics-idle.prom")),
-            Some(Metrics::default())
-        );
-        assert_eq!(parse_metrics("other 1\n"), None);
     }
 }

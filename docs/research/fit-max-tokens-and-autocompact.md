@@ -95,8 +95,8 @@ The proxy does nothing for `fit_max_tokens`:
   (`proxy.rs:281-305`).
 
 A 400 from Strata therefore reaches Claude Code exactly as Strata sent it. The
-repo tells you to turn the option on for `local-agent`: "`fit_max_tokens` on,
-so that Strata trims `max_tokens` instead of refusing with 400"
+repo tells you to turn `fit_max_tokens` on for `local-agent`, so that Strata
+trims `max_tokens` instead of refusing with 400
 (`tools/local-agent/README.md:32`; also `docs/setup.md:116` and
 `/mnt/project-files/plaene/local-agent.md:27`).
 

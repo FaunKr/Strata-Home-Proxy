@@ -29,7 +29,7 @@ Always 200 and without a key (line 5460):
  "image_generation": false, "loaded": true, "service": "strata"}
 ```
 
-`loaded` is false as long as the model is not in memory. Strata loads it with the next request. If `/health` does not answer at all, Strata is not running or is still starting.
+`loaded` is false as long as the model is not in memory. Strata loads it with the next request. If `/health` does not answer at all, Strata is not running or not up yet.
 
 ## Summary of an update: `POST /v1/chat/completions`
 
@@ -73,14 +73,14 @@ Sources: `setup.py`, `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_
   - For this, setup writes these flags into `args` of the model configuration (`setup.py`, line 7011): `--control-vector-scaled <Strata>\data\experimental-speed-projection\Qwen3.8-Flash-Next-experimental-speed-projection.gguf:1.0 --control-vector-layer-range 4 44 --cvec-mode project --cvec-dir per-layer`. A later setup reads them back (`choices_from_config`); calibration does not depend on them.
   - For installed models, the PC service writes these flags itself (`set_speed_projection`). If Strata changes them, update `strata.rs` (`write_speed_projection`).
 - **Sampling without values in the request** (`Service._run`): first the model card's set for the thinking state (`MODEL_CARD_SAMPLING` by `arch` of the configuration, without `arch` `qwen4exp`; since commit a8091f4d, 2026-10-15), on top of that the configuration's `sampling` block (`sampling_defaults_from_config`, since 9e6e5b7a, 2026-09-26; Strata names unknown keys at startup and skips them), on top of that the chat settings from Strata's web app (`strata-<id>.shared-settings.json`). The request's fields always win. Before 9e6e5b7a a request without sampling is greedy. Values at e88ee39d: `qwen4exp` with thinking temperature 1.0, top_p 0.95, top_k 20, without 0.7, 0.8, 20, presence_penalty 1.5; `qwen35moe` with thinking adds presence_penalty 1.5, without the same as `qwen4exp`. `crates/pc-agent/src/sampling.rs` mirrors them.
-  - The block has one set for both states and hides the model card. So the PC service writes the thinking set only into a Strata without `MODEL_CARD_SAMPLING` that knows `sampling_defaults_from_config`; otherwise it removes the block (see [pc-agent-api.md](pc-agent-api.md)). It recognizes the version by these names in `serve/server.py`.
+  - The block has one set for both states and hides the model card. So the PC service writes the thinking set only into a Strata without `MODEL_CARD_SAMPLING` that knows `sampling_defaults_from_config`; otherwise it removes the block (see [pc-agent-api.md](pc-agent-api.md)). It recognises the version by these names in `serve/server.py`.
 - **Loops:** Strata ends an answer that repeats a token `repeat_stop_tokens` times (256) in a row (#606, commit bb162e2e). Thinking that repeats whole passages is only handled with `"reasoning_loop_recovery"` in the model configuration (commit c3473262): `"stop"` ends the answer, `"recover"` (or `true`) continues with the instruction for low effort; without the key, off. The PC service sets `"recover"` (see [pc-agent-api.md](pc-agent-api.md)). Older Strata versions read the configuration with `cfg.get` and skip unknown keys.
 - **Setup output:** steps as `=== Step N: title ===`, downloads as `file: x / y GB (p%)`, errors start with `[X]`.
 - **Where a model's files go:**
   - `strata-<id lowercase>.json` (configuration), `run-<id lowercase>.bat` (start) and `strata-<id lowercase>.log` in the Strata folder
   - `<data>/models/<ID>` (GGUF files, also `.part`) and `<data>/packs/<id lowercase>` (tokenizer)
   - `<data>/mtp` is shared by all models.
-- **Model configuration:** a `strata-*.json` with `exe` and an array `args` (that is how `find_configs` in `strata_bench.py` recognizes them). `strata-*.shared-settings.json` is not one. Strata writes them with `json.dumps(cfg, indent=1)`. The key is in `api_key`.
+- **Model configuration:** a `strata-*.json` with `exe` and an array `args` (that is how `find_configs` in `strata_bench.py` recognises them). `strata-*.shared-settings.json` is not one. Strata writes them with `json.dumps(cfg, indent=1)`. The key is in `api_key`.
 - **Context:** setup writes `--context` as `--max-context <tokens>` into `args` and reads it back that way (`choices_from_config`). Above 262144 (the trained length), `--rope-scaling yarn --rope-scale <context / 262144>` is added. From the context, setup also derives KV streaming (`--kv-resident`), parallel slots and the calibration key; the PC service's context switch leaves these as they are.
 - **Active model:** `run-<id>.bat` starts `serve/server.py`, which starts `strata.exe` and restarts it when it dies; so stop it via the folder. Without its own start script, `START-HERE.bat` starts the configuration that was used last (the most recent modification time, because a start touches it).
 - **Setup's recommendation:** from 60 GB RAM `IQ3_XXS`, from 44 GB `Q2_0`, from 28 GB `coder-IQ1_M`. Context 64K with 14–20 GB VRAM; the skill `local-agent` needs more (see `tools/local-agent/README.md`).

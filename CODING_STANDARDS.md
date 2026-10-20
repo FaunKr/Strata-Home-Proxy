@@ -10,7 +10,7 @@ Questions already decided: `docs/adr/`.
   `admin-password.json` invalidate existing cookies, copied ones too.
   Deleting a cookie only in the browser is not enough.
 - **Tokens are unique.** Two logins in the same second yield
-  different tokens; a revocation hits only its own session.
+  different tokens; a revocation ends only its own session.
 - **Every password check counts towards the lockout**, including the check of the
   current password when changing it.
 - **Errors when saving are reported.** A value that does not end up in `DATA_DIR`
@@ -38,7 +38,7 @@ Questions already decided: `docs/adr/`.
   timeout. `no_server_function_wakes_the_pc` checks server functions on its own;
   a route of its own like `overview-stream` needs a test of its own.
 - **Timers in tests with a margin.** If a test must see something before a
-  timer expires (idle timeout, settling), the timer lies at least 2 s
+  timer expires (idle timeout, settling), the timer fires at least 2 s
   after it; the CI runner is slower than the session. Tight timers only
   when the test only waits afterwards.
 - **Waits a test would have to sit through are configurable.** A limit

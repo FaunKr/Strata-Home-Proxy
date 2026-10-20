@@ -3,7 +3,7 @@
 `strata-pc-agent.exe` runs invisibly in the background as soon as you
 log in. It
 
-- puts the PC into standby when the NAS asks for it and nothing speaks
+- puts the PC into standby when the NAS asks for it and nothing
   against it: gaming mode on, someone used the mouse or keyboard in the
   last 10 min, or Strata is computing;
 - switches gaming mode: **on** stops Strata and blocks sleep,
@@ -22,10 +22,10 @@ log in. It
    ```
    Windows asks once for administrator rights. The script downloads
    `strata-pc-agent.exe` from the NAS to `%LOCALAPPDATA%\StrataHome`, registers the PC
-   with the NAS, sets up the start at login, opens port 8091 only for
+   with the NAS, makes it start at login, opens port 8091 only for
    the NAS and creates the desktop shortcut **Gaming an-aus**. The NAS fills in the token,
    `PC_AGENT_URL` and the Strata key itself.
-3. The **Strata** area sets the start script and Strata programs. Until then
+3. The **Strata** area is where you set the start script and Strata programs. Until then
    the service runs, but does not start Strata itself.
 
 The code in the command is valid for 15 minutes and for one PC; a new command makes
@@ -39,8 +39,8 @@ stays.
 new image). The **Update to …** button works only when the PC is awake and never wakes it.
 The service downloads the .exe from the NAS, puts it in the same place (task and
 shortcut stay valid), starts it and exits. As long as Strata is handling a
-request or a Strata operation is running, it refuses; Strata may be
-stopped along with the service on its restart and then starts again. If
+request or a Strata job is running, it refuses; Strata may be
+stopped along with the service when it restarts and then starts again. If
 the update fails, the old service keeps running and the **PC** area names the
 reason. A service set up before the update button existed needs
 the command from above once.

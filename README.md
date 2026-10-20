@@ -139,8 +139,8 @@ container (mount on `/data`).
 
 Next to the script are:
 
-- `auto-update.log`: every update and every error (from 200 KB on, rotated to
-  `auto-update.log.1`).
+- `auto-update.log`: every update and every error (rotated into
+  `auto-update.log.1` at 200 KB).
 - `backups/data-*.tar.gz`: the last 10 backups of `/data`, with
   password hash and API keys, so readable only by root.
 - `auto-update.bad-images`: images that did not come up. Delete a line
@@ -177,8 +177,8 @@ is in English and split into five areas: *Overview*, *PC*, *Strata*
   *Gaming mode* (wakes a sleeping PC first; after *off* the
   idle timeout restarts) and *Keep awake* for 1 h, 4 h, 8 h or until 8 am tomorrow.
   Keep awake survives a restart (`/data/keep-awake.json`). "8 am
-  tomorrow" follows the time zone in `TZ` (e.g. `Europe/Berlin`), without
-  `TZ` UTC. If a request is running, *Gaming mode* asks first in
+  tomorrow" follows the time zone in `TZ` (e.g. `Europe/Berlin`), or UTC
+  without `TZ`. If a request is running, *Gaming mode* asks first in
   a dialog. Every button ends up in the history with "from the web UI".
 - **PC service version:** shown in the *PC* area, even when the PC is asleep
   (the last one reported). If the image contains a different one,
@@ -195,7 +195,7 @@ is in English and split into five areas: *Overview*, *PC*, *Strata*
 - **Settings:** Every value from [deploy/env.example](deploy/env.example)
   except `DATA_DIR` can be changed in its area (*PC*: connection,
   waking and sleeping; *Strata → Connection*: address and key; *System*: the
-  rest) and applies right after *Save* of the section, only the address of the
+  rest) and applies as soon as the section is saved, only the address of the
   proxy (`LISTEN_ADDR`) not until a restart. The value from the
   page applies, otherwise the environment variable, otherwise the default; *Reset* discards
   the value from the page. For the MAC, the one reported by the PC service takes precedence.
@@ -204,8 +204,8 @@ is in English and split into five areas: *Overview*, *PC*, *Strata*
   never shown.
 - **PC service:** *Create install command* in the *PC* area shows a PowerShell command (with *Copy*) that
   downloads the PC service from the NAS, installs it and registers it with the proxy; the proxy then
-  fills in the token and `PC_AGENT_URL` itself. The code in it is valid for 15 min
-  and once. The .exe is in the image and can be fetched without login at
+  fills in the token and `PC_AGENT_URL` itself. The code in it is valid once,
+  for 15 min. The .exe is in the image and can be fetched without login at
   `/admin/agent/strata-pc-agent.exe`. Details:
   [docs/pc-service.md](docs/pc-service.md).
 - **Benchmark** (*Strata → Version & benchmark*): *Run benchmark* measures the

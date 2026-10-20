@@ -36,7 +36,7 @@ fn sleep_and_update_answers() {
     assert!(same::<Answer>("update-accepted.json").accepted);
     assert_eq!(
         same::<Refused>("update-refused.json"),
-        Refused::new("Ein Strata-Vorgang läuft")
+        Refused::new("A Strata job is running")
     );
 }
 

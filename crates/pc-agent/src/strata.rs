@@ -193,15 +193,13 @@ impl Jobs {
 pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob, Refusal> {
     // The service ends after an update, and a job with it.
     if agent.updating.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err(Refusal::Conflict(
-            "Der PC-Dienst wird gerade aktualisiert".into(),
-        ));
+        return Err(Refusal::Conflict("The PC service is updating".into()));
     }
     let kind = request.kind();
     let plan = check(agent, request)?;
     if agent.gaming() {
         return Err(Refusal::Conflict(
-            "Gaming-Modus ist an: erst Gaming ausschalten".into(),
+            "Gaming mode is on: switch it off first".into(),
         ));
     }
     if let Plan::Install { size, .. } | Plan::AddModel { size, .. } = &plan {
@@ -215,7 +213,7 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
             .filter(|j| j.state == StrataJobState::Running)
         {
             return Err(Refusal::Conflict(format!(
-                "Es läuft schon ein Vorgang ({})",
+                "A job is running already ({})",
                 kind_text(running.kind)
             )));
         }
@@ -269,8 +267,8 @@ fn check_speed_projection(size: &Size, wanted: bool) -> Result<bool, Refusal> {
             .map(|f| f.title)
             .collect();
         return Err(Refusal::BadRequest(format!(
-            "Die experimentelle Speed-Projection gibt es nur für {}, nicht für {}",
-            offered.join(" und "),
+            "The experimental speed projection is only for {}, not for {}",
+            offered.join(" and "),
             size.id()
         )));
     }
@@ -286,14 +284,14 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
     let install = Installation::of(&agent.cfg);
     let size = |family: &str, size: &str| {
         catalog::find(family, size)
-            .ok_or_else(|| Refusal::BadRequest(format!("{family} {size} gibt es nicht im Katalog")))
+            .ok_or_else(|| Refusal::BadRequest(format!("{family} {size} is not in the catalog")))
     };
     let context = |n: u32| {
         if catalog::CONTEXTS.contains(&n) {
             Ok(n)
         } else {
             Err(Refusal::BadRequest(format!(
-                "Kontextlänge {n} gibt es nicht"
+                "There is no context length {n}"
             )))
         }
     };
@@ -333,7 +331,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         StrataJobRequest::Activate { model } => {
             let id = installed_model(&install, &model)?;
             if active_model(agent).as_deref() == Some(id.as_str()) {
-                return Err(Refusal::Conflict(format!("{id} ist schon aktiv")));
+                return Err(Refusal::Conflict(format!("{id} is active already")));
             }
             Ok(Plan::Activate { id })
         }
@@ -341,7 +339,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             let id = installed_model(&install, &model)?;
             if active_model(agent).as_deref() == Some(id.as_str()) {
                 return Err(Refusal::Conflict(format!(
-                    "{id} ist aktiv und lässt sich nicht löschen; erst ein anderes Modell aktivieren"
+                    "{id} is active and cannot be deleted; activate another model first"
                 )));
             }
             Ok(Plan::Delete { id })
@@ -350,7 +348,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             strata_installed(&install)?;
             if !dir.join(".git").exists() {
                 return Err(Refusal::Conflict(format!(
-                    "{} ist kein Git-Klon und lässt sich nur von Hand aktualisieren",
+                    "{} is no Git clone and can only be updated by hand",
                     dir.display()
                 )));
             }
@@ -359,7 +357,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         StrataJobRequest::Benchmark => {
             strata_installed(&install)?;
             let id = active_model(agent).ok_or_else(|| {
-                Refusal::Conflict("Kein aktives Modell bekannt; erst ein Modell aktivieren".into())
+                Refusal::Conflict("No active model known; activate a model first".into())
             })?;
             Ok(Plan::Benchmark { id })
         }
@@ -378,7 +376,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             let context = context(c)?;
             if context > MAX_SWITCHED_CONTEXT {
                 return Err(Refusal::BadRequest(format!(
-                    "Kontextlänge {context} braucht Rope-Scaling und geht nur über Setup"
+                    "Context length {context} needs rope scaling and only works through setup"
                 )));
             }
             let id = installed_model(&install, &model)?;
@@ -387,7 +385,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         StrataJobRequest::CompareModels => {
             strata_installed(&install)?;
             let active = active_model(agent).ok_or_else(|| {
-                Refusal::Conflict("Kein aktives Modell bekannt; erst ein Modell aktivieren".into())
+                Refusal::Conflict("No active model known; activate a model first".into())
             })?;
             let mut ids: Vec<String> = install
                 .models()
@@ -404,19 +402,17 @@ fn strata_installed(install: &Installation) -> Result<(), Refusal> {
     if install.is_set_up() {
         Ok(())
     } else {
-        Err(Refusal::Conflict(
-            "Strata ist noch nicht eingerichtet".into(),
-        ))
+        Err(Refusal::Conflict("Strata is not set up yet".into()))
     }
 }
 
 /// The catalog id of an installed model, in the catalog's letter case.
 fn installed_model(install: &Installation, model: &str) -> Result<String, Refusal> {
     let id = catalog::by_id(model)
-        .ok_or_else(|| Refusal::BadRequest(format!("{model} gibt es nicht im Katalog")))?
+        .ok_or_else(|| Refusal::BadRequest(format!("{model} is not in the catalog")))?
         .id();
     if !install.has(&id) {
-        return Err(Refusal::Conflict(format!("{id} ist nicht installiert")));
+        return Err(Refusal::Conflict(format!("{id} is not installed")));
     }
     Ok(id)
 }
@@ -443,7 +439,7 @@ fn check_key(key: String) -> Result<String, Refusal> {
         Ok(key)
     } else {
         Err(Refusal::BadRequest(
-            "Der Strata-Key muss 16 bis 256 Zeichen aus Buchstaben, Ziffern, - und _ haben".into(),
+            "The Strata key must have 16 to 256 characters of letters, digits, - and _".into(),
         ))
     }
 }
@@ -460,7 +456,7 @@ fn check_space(agent: &Agent, size: &Size) -> Result<(), Refusal> {
     let free_gb = free as f64 / 1e9;
     if free_gb < need_gb {
         return Err(Refusal::Conflict(format!(
-            "Zu wenig Platz auf dem Laufwerk von {}: {need_gb:.0} GB nötig, {free_gb:.0} GB frei",
+            "Not enough space on the drive of {}: {need_gb:.0} GB needed, {free_gb:.0} GB free",
             data.display()
         )));
     }
@@ -527,13 +523,13 @@ async fn install(
     if !strata.is_set_up() {
         if dir.read_dir().is_ok_and(|mut d| d.next().is_some()) {
             return Err(format!(
-                "{} ist nicht leer, aber kein Strata-Ordner; bitte leeren oder strata_dir ändern",
+                "{} is not empty but no Strata folder; empty it or change strata_dir",
                 dir.display()
             )
             .into());
         }
         let git = git(agent).await?;
-        set_step(agent, "Strata holen");
+        set_step(agent, "Fetching Strata");
         let clone = CommandSpec {
             program: git,
             args: vec![
@@ -577,7 +573,7 @@ async fn add_model(
     setup(agent, size, context, &key, speed_projection).await?;
     if active_changed(agent, &manage(agent).await) {
         wait_idle(agent).await?;
-        set_step(agent, "Strata neu starten");
+        set_step(agent, "Restarting Strata");
         agent.stop_strata();
         restart_strata(agent).await;
     }
@@ -588,7 +584,7 @@ async fn add_model(
 async fn wait_idle(agent: &Agent) -> Result<(), Step> {
     wait_for(
         agent,
-        "Warten, bis Strata die laufende Anfrage beendet hat",
+        "Waiting until Strata finishes the running request",
         None,
         || async { !agent.strata_busy().await },
     )
@@ -641,7 +637,7 @@ async fn restart_strata(agent: &Agent) {
 
 async fn activate(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
     wait_idle(agent).await?;
-    set_step(agent, "Strata mit dem neuen Modell starten");
+    set_step(agent, "Starting Strata with the new model");
     agent.stop_strata();
     let dir = &agent.cfg.strata_dir;
     let mut managed = agent.managed();
@@ -660,7 +656,7 @@ async fn activate(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> 
 }
 
 async fn delete(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
-    set_step(agent, "Dateien löschen");
+    set_step(agent, "Deleting files");
     let install = Installation::of(&agent.cfg);
     let id = id.to_string();
     tokio::task::spawn_blocking(move || install.remove(&id))
@@ -674,7 +670,7 @@ async fn delete(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
 async fn update(agent: &Arc<Agent>) -> Result<Option<String>, Step> {
     let dir = agent.cfg.strata_dir.clone();
     let git = git(agent).await?;
-    set_step(agent, "Neue Version holen");
+    set_step(agent, "Fetching the new version");
     let pull = CommandSpec {
         program: git,
         args: vec!["pull".into(), "--ff-only".into()],
@@ -750,12 +746,12 @@ async fn measure(agent: &Arc<Agent>, id: &str) -> Result<StrataBenchmark, Step> 
     }
     wait_for(
         agent,
-        "Warten, bis Strata bereit ist",
+        "Waiting until Strata is ready",
         Some(READY_TIMEOUT),
         || agent.strata_healthy(),
     )
     .await?;
-    set_step(agent, "Benchmark läuft (etwa 10 min)");
+    set_step(agent, "Running the benchmark (about 10 min)");
     agent.jobs.inner.lock().unwrap().bench = BenchReading::default();
     let dir = agent.cfg.strata_dir.clone();
     let install = Installation::of(&agent.cfg);
@@ -769,7 +765,7 @@ async fn measure(agent: &Arc<Agent>, id: &str) -> Result<StrataBenchmark, Step> 
     let reading = agent.jobs.inner.lock().unwrap().bench;
     let tps = reading
         .decode
-        .ok_or_else(|| "Der Benchmark hat keine Tokens/s gemeldet".to_string())?;
+        .ok_or_else(|| "The benchmark reported no tokens/s".to_string())?;
     let model = install.read_model(id);
     Ok(StrataBenchmark {
         model: id.to_string(),
@@ -836,7 +832,7 @@ async fn compare_models(
         // Back to the model from before, also after a cancel: the job's
         // own cancel is spent, the switch must not end on it.
         agent.jobs.inner.lock().unwrap().cancelled = false;
-        set_step(agent, &format!("{active} wieder aktivieren"));
+        set_step(agent, &format!("Activating {active} again"));
         activate(agent, active).await?;
     }
     outcome?;
@@ -847,7 +843,7 @@ async fn compare_models(
         .filter_map(|b| Some((b, b.decode_tps?)))
         // The first of equal ones.
         .reduce(|a, b| if b.1 > a.1 { b } else { a });
-    Ok(fastest.map(|(b, _)| format!("Am schnellsten: {} mit {}", b.model, b.result)))
+    Ok(fastest.map(|(b, _)| format!("Fastest: {} with {}", b.model, b.result)))
 }
 
 /// Keeps a model's record in place of its last one; the newest also goes
@@ -909,7 +905,7 @@ fn load_benchmarks(agent: &Agent) -> Vec<StrataBenchmark> {
 /// Puts the key into every model's config and restarts Strata with it.
 async fn set_key(agent: &Arc<Agent>, api_key: String) -> Result<Option<String>, Step> {
     wait_idle(agent).await?;
-    set_step(agent, "Key eintragen");
+    set_step(agent, "Setting the key");
     let install = Installation::of(&agent.cfg);
     let key = api_key.clone();
     tokio::task::spawn_blocking(move || install.set_key(&key))
@@ -920,7 +916,7 @@ async fn set_key(agent: &Arc<Agent>, api_key: String) -> Result<Option<String>, 
     agent
         .set_managed(managed)
         .map_err(|e| Step::Failed(e.to_string()))?;
-    set_step(agent, "Strata neu starten");
+    set_step(agent, "Restarting Strata");
     agent.stop_strata();
     restart_strata(agent).await;
     Ok(None)
@@ -934,12 +930,12 @@ async fn set_speed_projection(
     id: &str,
     on: bool,
 ) -> Result<Option<String>, Step> {
-    set_step(agent, "Konfiguration ändern");
+    set_step(agent, "Changing the configuration");
     change_model(agent, id, move |model| model.set_speed_projection(on)).await?;
     // The engine reads its flags at the start: the active model starts again.
     if active_model(agent).as_deref() == Some(id) {
         wait_idle(agent).await?;
-        set_step(agent, "Strata neu starten");
+        set_step(agent, "Restarting Strata");
         agent.stop_strata();
         restart_strata(agent).await;
     }
@@ -951,7 +947,7 @@ async fn set_speed_projection(
 /// Strata has no request at work; if it does not come up, its old config
 /// comes back and Strata starts with that.
 async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Option<String>, Step> {
-    set_step(agent, "Konfiguration ändern");
+    set_step(agent, "Changing the configuration");
     let before = change_model(agent, id, move |model| {
         model.set_context(context);
         Ok(())
@@ -961,7 +957,7 @@ async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Optio
         return Ok(None);
     }
     wait_idle(agent).await?;
-    set_step(agent, "Strata neu starten");
+    set_step(agent, "Restarting Strata");
     agent.stop_strata();
     restart_strata(agent).await;
     let started = if agent.gaming() {
@@ -973,7 +969,7 @@ async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Optio
         return Ok(None);
     }
     let output = agent.output.last_lines(KEPT_LINES);
-    set_step(agent, "Alten Kontext zurückholen");
+    set_step(agent, "Restoring the old context");
     change_model(agent, id, move |model| {
         model.restore_args(&before);
         Ok(())
@@ -987,7 +983,7 @@ async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Optio
     // A cancelled wait also leaves the old context, not an unproven one.
     started?;
     Err(Step::Failed(format!(
-        "Strata ist mit {}K Kontext nicht angelaufen; der alte Kontext gilt wieder",
+        "Strata did not start with {}K context; the old context applies again",
         context / 1024
     )))
 }
@@ -1015,7 +1011,7 @@ async fn change_model(
 /// Whether the restarted Strata answers: `false` once it has ended or not
 /// answered within `context_start_secs`.
 async fn started_with_new_args(agent: &Agent) -> Result<bool, Step> {
-    set_step(agent, "Warten, bis Strata bereit ist");
+    set_step(agent, "Waiting until Strata is ready");
     let limit = Duration::from_secs(agent.cfg.context_start_secs);
     let started = Instant::now();
     loop {
@@ -1264,7 +1260,7 @@ async fn git(agent: &Arc<Agent>) -> Result<PathBuf, Step> {
     if let Some(git) = find_git(agent).await {
         return Ok(git);
     }
-    set_step(agent, "Git installieren");
+    set_step(agent, "Installing Git");
     let winget = CommandSpec {
         program: "winget".into(),
         args: [
@@ -1285,12 +1281,12 @@ async fn git(agent: &Arc<Agent>) -> Result<PathBuf, Step> {
     };
     command(agent, winget, false).await.map_err(|e| match e {
         Step::Failed(e) => Step::Failed(format!(
-            "Git fehlt und ließ sich nicht installieren ({e}); bitte Git für Windows installieren"
+            "Git is missing and could not be installed ({e}); please install Git for Windows"
         )),
         cancelled => cancelled,
     })?;
     find_git(agent).await.ok_or_else(|| {
-        "Git wurde installiert, ist aber nicht zu finden; bitte den PC-Dienst neu starten"
+        "Git was installed but cannot be found; please restart the PC service"
             .to_string()
             .into()
     })
@@ -1414,8 +1410,8 @@ async fn command(agent: &Arc<Agent>, spec: CommandSpec, progress: bool) -> Resul
                 |n| n.to_string_lossy().into_owned(),
             );
             let ended = match code {
-                Some(code) => format!("{program} endete mit Code {code}"),
-                None => format!("{program} wurde beendet"),
+                Some(code) => format!("{program} ended with code {code}"),
+                None => format!("{program} was ended"),
             };
             Err(Step::Failed(match error {
                 Some(error) => format!("{ended}: {error}"),
@@ -1548,16 +1544,16 @@ fn folder_entry(dir: &Path) -> String {
 
 fn kind_text(kind: StrataJobKind) -> &'static str {
     match kind {
-        StrataJobKind::Install => "Einrichtung",
-        StrataJobKind::AddModel => "Modell hinzufügen",
-        StrataJobKind::Activate => "Modell aktivieren",
-        StrataJobKind::Delete => "Modell löschen",
+        StrataJobKind::Install => "Setup",
+        StrataJobKind::AddModel => "Add model",
+        StrataJobKind::Activate => "Activate model",
+        StrataJobKind::Delete => "Delete model",
         StrataJobKind::Update => "Update",
         StrataJobKind::Benchmark => "Benchmark",
-        StrataJobKind::SetKey => "Strata-Key setzen",
-        StrataJobKind::SetSpeedProjection => "Speed-Projection umschalten",
-        StrataJobKind::SetContext => "Kontext ändern",
-        StrataJobKind::CompareModels => "Modelle vergleichen",
+        StrataJobKind::SetKey => "Set Strata key",
+        StrataJobKind::SetSpeedProjection => "Switch speed projection",
+        StrataJobKind::SetContext => "Change context",
+        StrataJobKind::CompareModels => "Compare models",
     }
 }
 

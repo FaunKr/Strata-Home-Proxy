@@ -189,7 +189,7 @@ async fn the_speed_projection_is_refused_for_other_families() {
     let (code, answer) = post(&s, "/strata/jobs", body).await;
     assert_eq!(code, 400, "{answer}");
     assert!(
-        answer.to_string().contains("nicht für swift-IQ2_XS"),
+        answer.to_string().contains("not for swift-IQ2_XS"),
         "{answer}"
     );
     assert!(s.fake.ran.lock().unwrap().is_empty());
@@ -227,7 +227,10 @@ async fn a_second_job_is_refused_while_one_runs() {
     let (code, answer) = post(&s, "/strata/jobs", install()).await;
     assert_eq!(code, 409);
     assert!(
-        answer["reason"].as_str().unwrap().contains("läuft schon"),
+        answer["reason"]
+            .as_str()
+            .unwrap()
+            .contains("running already"),
         "{answer}"
     );
 }
@@ -251,7 +254,7 @@ async fn a_running_job_keeps_the_pc_awake_and_the_watchdog_away() {
 
     let (code, answer) = sleep_answer(&s).await;
     assert_eq!(code, 409);
-    assert_eq!(answer["reason"], "Strata-Einrichtung läuft");
+    assert_eq!(answer["reason"], "A Strata job is running");
     assert_eq!(get(&s, "/status").await["strata_job"], true);
 
     s.fake.strata_up.store(false, Ordering::SeqCst);
@@ -285,7 +288,7 @@ async fn a_download_that_does_not_fit_is_refused() {
         answer["reason"]
             .as_str()
             .unwrap()
-            .contains("Zu wenig Platz"),
+            .contains("Not enough space"),
         "{answer}"
     );
 }

@@ -9,6 +9,12 @@
 - Wackelnde oder hängende Tests: `scripts/repeat-test.sh` lässt eine Testdatei vielfach laufen und nennt, welcher hängt.
 - CI-Kosten, Actions-Minuten, welche Jobs ein PR startet: `docs/ci.md`.
 
+## Ablauf
+
+- Jeder Schritt der Pipeline (/grill-me, /to-spec, /to-tickets, /implement, /code-review, Merge, /retro) startet erst, wenn Faun ihn aufruft; nach einem Schritt berichten und warten.
+- Ein Refactor, der als ein PR landet, ist ein Ticket mit Checkliste, kein Baum aus Unter-Tickets.
+- Schreibt ein Spec „X nur im Modul“, gilt das für Code, Helfer und Fixtures. Tests dürfen die äußeren Namen ausschreiben, die sie festnageln (Dateinamen, die Strata selbst liest).
+
 ## Agent skills
 
 ### Issue tracker

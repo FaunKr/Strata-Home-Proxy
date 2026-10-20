@@ -221,13 +221,13 @@ impl Agent {
     /// Checks whether the PC may sleep; `Err` carries the reason it may not.
     pub async fn may_sleep(&self) -> Result<(), String> {
         if self.gaming() {
-            return Err("Gaming-Modus ist an".into());
+            return Err("Gaming mode is on".into());
         }
         if self.jobs.running() {
-            return Err("Strata-Einrichtung läuft".into());
+            return Err("A Strata job is running".into());
         }
         if self.updating.load(Ordering::SeqCst) {
-            return Err("Der PC-Dienst wird aktualisiert".into());
+            return Err("The PC service is updating".into());
         }
         let idle = self.platform.user_idle();
         if idle < self.cfg.user_idle() {
@@ -491,7 +491,7 @@ async fn cancel_job(State(agent): State<Arc<Agent>>) -> Response {
     } else {
         (
             StatusCode::CONFLICT,
-            Json(Refused::new("Es läuft kein Vorgang")),
+            Json(Refused::new("No job is running")),
         )
             .into_response()
     }

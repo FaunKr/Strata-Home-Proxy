@@ -165,7 +165,7 @@ async fn activating_waits_for_a_running_request_and_switches_the_start_script() 
     .await;
     assert_eq!(code, 202, "{answer}");
     job_until(&s, "Warten auf die Anfrage", |j| {
-        j["step"].as_str().is_some_and(|t| t.contains("Anfrage"))
+        j["step"].as_str().is_some_and(|t| t.contains("request"))
     })
     .await;
     tokio::time::sleep(Duration::from_millis(600)).await;
@@ -577,7 +577,7 @@ async fn comparing_benchmarks_every_model_and_the_active_one_comes_back() {
     assert_eq!(code, 202, "{answer}");
     let done = finished_slowly(&s).await;
     assert_eq!(done["state"], "done", "{done}");
-    assert_eq!(done["result"], "Am schnellsten: IQ3_XXS mit 20 Token/s");
+    assert_eq!(done["result"], "Fastest: IQ3_XXS with 20 Token/s");
     let dir = &s.agent.cfg.strata_dir;
     let configs: Vec<String> = s
         .fake
@@ -613,7 +613,7 @@ async fn a_model_without_a_result_keeps_its_error_and_the_next_follows() {
     assert_eq!(s.fake.runs_of("BENCH.bat").len(), 2);
     let view = get(&s, "/strata").await;
     for row in view["benchmarks"].as_array().unwrap() {
-        assert!(row["error"].as_str().unwrap().contains("Tokens/s"), "{row}");
+        assert!(row["error"].as_str().unwrap().contains("tokens/s"), "{row}");
         assert!(row.get("decode_tps").is_none(), "{row}");
     }
 }
@@ -632,7 +632,7 @@ async fn a_failed_run_keeps_the_models_last_result_next_to_its_error() {
     let active = rows.iter().find(|r| r["model"] == "IQ3_XXS").unwrap();
     assert_eq!(active["decode_tps"], 38.5, "{active}");
     assert!(
-        active["error"].as_str().unwrap().contains("Tokens/s"),
+        active["error"].as_str().unwrap().contains("tokens/s"),
         "{active}"
     );
     let other = rows.iter().find(|r| r["model"] != "IQ3_XXS").unwrap();
@@ -1095,7 +1095,7 @@ async fn switching_the_active_model_restarts_strata_after_the_running_request() 
     let (code, answer) = post(&s, "/strata/jobs", body).await;
     assert_eq!(code, 202, "{answer}");
     job_until(&s, "Warten auf die Anfrage", |j| {
-        j["step"].as_str().is_some_and(|t| t.contains("Anfrage"))
+        j["step"].as_str().is_some_and(|t| t.contains("request"))
     })
     .await;
     tokio::time::sleep(Duration::from_millis(600)).await;
@@ -1329,7 +1329,7 @@ async fn switching_the_active_models_context_restarts_strata_after_the_running_r
     let (code, answer) = post(&s, "/strata/jobs", body).await;
     assert_eq!(code, 202, "{answer}");
     job_until(&s, "Warten auf die Anfrage", |j| {
-        j["step"].as_str().is_some_and(|t| t.contains("Anfrage"))
+        j["step"].as_str().is_some_and(|t| t.contains("request"))
     })
     .await;
     tokio::time::sleep(Duration::from_millis(600)).await;
@@ -1437,7 +1437,7 @@ async fn a_context_strata_answers_with_after_a_while_stays() {
     let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144});
     assert_eq!(post(&s, "/strata/jobs", body).await.0, 202);
     job_until(&s, "Warten auf Strata", |j| {
-        j["step"].as_str().is_some_and(|t| t.contains("bereit"))
+        j["step"].as_str().is_some_and(|t| t.contains("ready"))
     })
     .await;
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1458,7 +1458,7 @@ async fn cancelling_the_wait_for_the_new_context_brings_the_old_one_back() {
     let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144});
     assert_eq!(post(&s, "/strata/jobs", body).await.0, 202);
     job_until(&s, "Warten auf Strata", |j| {
-        j["step"].as_str().is_some_and(|t| t.contains("bereit"))
+        j["step"].as_str().is_some_and(|t| t.contains("ready"))
     })
     .await;
     let (code, _) = post(&s, "/strata/job/cancel", json!({})).await;
@@ -1466,4 +1466,64 @@ async fn cancelling_the_wait_for_the_new_context_brings_the_old_one_back() {
     assert_eq!(finished_slowly(&s).await["state"], "cancelled");
     assert_eq!(args_of(&s, "iq3_xxs"), before, "the old args");
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 2, "started again");
+}
+
+// --- The protocol's samples ---
+
+/// The keys in `actual` that `sample` lacks, at every level; a list is
+/// held against the sample's first entry.
+fn keys_missing(actual: &Value, sample: &Value, at: &str, missing: &mut Vec<String>) {
+    match (actual, sample) {
+        (Value::Object(actual), Value::Object(sample)) => {
+            for (key, value) in actual {
+                let path = format!("{at}.{key}");
+                match sample.get(key) {
+                    Some(expected) => keys_missing(value, expected, &path, missing),
+                    None => missing.push(path),
+                }
+            }
+        }
+        (Value::Array(actual), Value::Array(sample)) => {
+            if let Some(expected) = sample.first() {
+                for (i, value) in actual.iter().enumerate() {
+                    keys_missing(value, expected, &format!("{at}[{i}]"), missing);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sample(name: &str) -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../pc-protocol/tests/samples")
+        .join(name);
+    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+}
+
+/// Every field the service sends shows in the protocol's sample of that
+/// answer, so a new field fails here until its sample has it.
+#[tokio::test]
+async fn the_protocol_samples_show_every_field_the_service_sends() {
+    let s = setup("models-samples").await;
+    installed(&s);
+    upstream_git(&s);
+    bench(
+        &s,
+        &[
+            "  chat decode tok/s   38.50   (37.10 - 39.20, n=3)",
+            "  4K prompt tok/s    612.00   (600.00 - 620.00, n=3)",
+        ],
+    );
+    let job = job(&s, json!({"kind": "benchmark"})).await;
+    let answers = [
+        ("status.json", get(&s, "/status").await),
+        ("strata.json", view_once_checked(&s).await),
+        ("strata-job.json", job),
+    ];
+    let mut missing = Vec::new();
+    for (name, answer) in &answers {
+        keys_missing(answer, &sample(name), name, &mut missing);
+    }
+    assert!(missing.is_empty(), "the samples lack {missing:?}");
 }

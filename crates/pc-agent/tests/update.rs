@@ -204,7 +204,7 @@ async fn no_job_starts_and_no_sleep_while_an_update_loads() {
     let (code, body) = post(&s, "/strata/jobs", serde_json::json!({"kind": "benchmark"})).await;
     assert_eq!(code, 409, "{body}");
     assert!(
-        body["reason"].as_str().unwrap().contains("aktualisiert"),
+        body["reason"].as_str().unwrap().contains("updating"),
         "{body}"
     );
     let (code, body) = sleep_answer(&s).await;

@@ -158,15 +158,14 @@ async fn a_failed_install_leaves_the_strata_key_alone() {
 
 #[tokio::test]
 async fn a_new_key_still_counts_after_a_restart_of_the_proxy() {
-    let dir = std::env::temp_dir().join(format!("strata-pending-key-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = data_dir("pending-key");
     let data = dir.clone();
     let s = setup(true, move |c| c.data_dir = Some(data)).await;
     let mut b = logged_in(&s.url).await;
     b.call("strata-job", &[("kind", "set_key")]).await;
     let key = last_body(&s)["api_key"].as_str().unwrap().to_string();
 
-    let restarted = strata_nas_proxy::AppState::new((*s.state.cfg()).clone());
+    let restarted = restarted(&s);
     s.pc.update_job(|j| j.state = StrataJobState::Done);
     restarted.ask_pc(&restarted.agent()).await.unwrap();
     assert_eq!(
@@ -865,12 +864,6 @@ async fn sampling_from_chat_settings_is_marked_as_such() {
 
 // --- #208 the last answer kept over a restart ---
 
-fn data_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("strata-last-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
-}
-
 /// A proxy with `dir` as `DATA_DIR` whose PC service answered with `report`
 /// and the running `job`.
 async fn answered(dir: &std::path::Path, report: StrataReport, job: Option<StrataJob>) -> Setup {
@@ -886,12 +879,7 @@ async fn answered(dir: &std::path::Path, report: StrataReport, job: Option<Strat
 /// The proxy of `s` started again, with the PC asleep.
 async fn restarted_asleep(s: &Setup) -> Browser {
     s.pc.awake.store(false, Ordering::SeqCst);
-    let state = strata_nas_proxy::AppState::new((*s.state.cfg()).clone());
-    logged_in_again(&format!(
-        "http://{}",
-        serve(strata_nas_proxy::api_router(state)).await
-    ))
-    .await
+    logged_in_again(&serve_proxy(restarted(s)).await).await
 }
 
 #[tokio::test]

@@ -8,6 +8,20 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The last line always says how the run ended, so a log read with `tail` or
+# a grep cannot mistake a failed run for a passed one.
+sample=""
+finish() {
+  local status=$?
+  rm -f "$sample"
+  if ((status == 0)); then
+    echo "check.sh: PASSED"
+  else
+    echo "check.sh: FAILED (exit $status)"
+  fi
+}
+trap finish EXIT
+
 if (($#)); then
   names=()
   for package in "$@"; do
@@ -102,7 +116,6 @@ fi
 # The Docker build's version check, on a sample file: a full commit hash
 # matches the shortened ID in the .exe, a different one does not.
 sample="$(mktemp)"
-trap 'rm -f "$sample"' EXIT
 # shellcheck disable=SC2016 # the backticks are part of the sample.
 printf 'MZ strata-pc-agent-version:called `unwrap()`\nstrata-pc-agent-version:0.1.0+5e8b9f1\n' > "$sample"
 scripts/check-exe-version.sh "$sample" 5e8b9f13827f6f68bb56ea7e3e91c7654e0023b4

@@ -684,6 +684,21 @@ pub async fn serve_strata(pc: Pc) -> SocketAddr {
     .await
 }
 
+/// A stand-in for the image's `strata-pc-agent.exe` that carries `version`
+/// as the real program does, with the marker's prefix on its own before it
+/// (the compiler may put other text right after such a copy).
+pub fn agent_program(name: &str, version: &str) -> std::path::PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("strata-test-program-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join("strata-pc-agent.exe");
+    let mut bytes = b"MZ\x90\x00 code strata-pc-agent-version:called `Result::unwrap()`\n".to_vec();
+    bytes.extend_from_slice(format!("strata-pc-agent-version:{version}\n").as_bytes());
+    bytes.extend_from_slice(b"\x00 more code");
+    std::fs::write(&exe, bytes).unwrap();
+    exe
+}
+
 /// An empty `DATA_DIR` of its own for one test. A second `setup` over it
 /// fails (its API key exists already); restart with `restarted`.
 pub fn data_dir(name: &str) -> std::path::PathBuf {

@@ -210,6 +210,11 @@ class Stats:
         return round(self.output_tokens / (self.step_ms / 1000), 1)
 
 
+def limit_text(secs):
+    """A time limit in minutes when it is whole minutes, else in seconds."""
+    return f"{secs // 60} min" if secs >= 60 and secs % 60 == 0 else f"{secs} s"
+
+
 class Run:
     def __init__(self, run_id, model, api_key, tasks, timeout):
         self.lock = threading.Lock()
@@ -396,7 +401,7 @@ class Run:
                 self.process = None
         error = stats.error
         if timed_out.is_set():
-            error = f"stopped after {self.timeout // 60} min"
+            error = f"stopped after {limit_text(self.timeout)}"
         elif code != 0 and not self.cancelled and not error:
             tail = "".join(errors)[-500:].strip()
             error = f"opencode ended with code {code}" + (f": {tail}" if tail else "")

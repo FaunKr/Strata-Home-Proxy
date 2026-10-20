@@ -33,6 +33,13 @@ pub struct Config {
     /// (`CODE_BENCH_URL`), e.g. `http://127.0.0.1:8096`. Without it there is
     /// no code benchmark.
     pub code_bench_url: Option<String>,
+    /// How long Strata may take for the update summary
+    /// (`UPDATE_SUMMARY_TIMEOUT_SECS`); without it the suggestion from
+    /// `timeouts` applies.
+    pub update_summary_timeout: Option<Duration>,
+    /// How long opencode may work on one code benchmark task
+    /// (`CODE_BENCH_TASK_TIMEOUT_SECS`); without it the suggestion applies.
+    pub code_bench_task_timeout: Option<Duration>,
     /// How often the Leistung of the Messsteckdose is recorded for the Verlauf
     /// (`PLUG_SAMPLE_SECS`).
     pub plug_sample: Duration,
@@ -120,6 +127,8 @@ pub const FIELDS: &[Field] = &[
     },
     optional("SHELLY_URL"),
     optional("CODE_BENCH_URL"),
+    optional("UPDATE_SUMMARY_TIMEOUT_SECS"),
+    optional("CODE_BENCH_TASK_TIMEOUT_SECS"),
     field("PLUG_SAMPLE_SECS"),
     field("IDLE_TIMEOUT_SECS"),
     field("WAKE_TIMEOUT_SECS"),
@@ -156,6 +165,8 @@ impl Default for Config {
             pc_agent_token: None,
             shelly_url: None,
             code_bench_url: None,
+            update_summary_timeout: None,
+            code_bench_task_timeout: None,
             plug_sample: Duration::from_secs(60),
             idle_timeout: Duration::from_secs(900),
             wake_timeout: Duration::from_secs(240),
@@ -218,6 +229,12 @@ impl Config {
             "PC_AGENT_TOKEN" => self.pc_agent_token = text,
             "SHELLY_URL" => self.shelly_url = text.map(|u| plug_url(&u)).transpose()?,
             "CODE_BENCH_URL" => self.code_bench_url = text.map(|u| url(&u)).transpose()?,
+            "UPDATE_SUMMARY_TIMEOUT_SECS" => {
+                self.update_summary_timeout = text.map(|t| limit(&t)).transpose()?
+            }
+            "CODE_BENCH_TASK_TIMEOUT_SECS" => {
+                self.code_bench_task_timeout = text.map(|t| limit(&t)).transpose()?
+            }
             "PLUG_SAMPLE_SECS" => self.plug_sample = positive(secs(raw)?)?,
             "IDLE_TIMEOUT_SECS" => self.idle_timeout = secs(raw)?,
             "WAKE_TIMEOUT_SECS" => self.wake_timeout = secs(raw)?,
@@ -251,6 +268,8 @@ impl Config {
             "PC_AGENT_TOKEN" => self.pc_agent_token.clone(),
             "SHELLY_URL" => self.shelly_url.clone(),
             "CODE_BENCH_URL" => self.code_bench_url.clone(),
+            "UPDATE_SUMMARY_TIMEOUT_SECS" => self.update_summary_timeout.and_then(secs),
+            "CODE_BENCH_TASK_TIMEOUT_SECS" => self.code_bench_task_timeout.and_then(secs),
             "PLUG_SAMPLE_SECS" => secs(self.plug_sample),
             "IDLE_TIMEOUT_SECS" => secs(self.idle_timeout),
             "WAKE_TIMEOUT_SECS" => secs(self.wake_timeout),
@@ -290,6 +309,15 @@ fn secs(raw: &str) -> Result<Duration> {
 
 fn millis(raw: &str) -> Result<Duration> {
     Ok(Duration::from_millis(number(raw, "Millisekunden")?))
+}
+
+/// A time limit for work on the PC; below 10 s nothing could finish.
+fn limit(raw: &str) -> Result<Duration> {
+    let d = secs(raw)?;
+    if d < Duration::from_secs(10) {
+        bail!("must be at least 10 seconds");
+    }
+    Ok(d)
 }
 
 fn positive(d: Duration) -> Result<Duration> {
@@ -389,6 +417,8 @@ mod tests {
         cfg.apply("SHELLY_URL", "192.168.1.228").unwrap();
         cfg.apply("CODE_BENCH_URL", "http://127.0.0.1:8096")
             .unwrap();
+        cfg.apply("UPDATE_SUMMARY_TIMEOUT_SECS", "300").unwrap();
+        cfg.apply("CODE_BENCH_TASK_TIMEOUT_SECS", "10").unwrap();
         for f in FIELDS {
             let text = cfg
                 .value(f.key)
@@ -412,6 +442,10 @@ mod tests {
         assert!(cfg.apply("WOL_ADDR", "255.255.255.255").is_err());
         assert!(cfg.apply("DATA_DIR", "/data").is_err());
         assert!(cfg.apply("STRATA_API_KEY", "a\u{7f}b").is_err());
+        assert!(cfg.apply("UPDATE_SUMMARY_TIMEOUT_SECS", "9").is_err());
+        assert!(cfg.apply("CODE_BENCH_TASK_TIMEOUT_SECS", "1.5").is_err());
+        cfg.apply("CODE_BENCH_TASK_TIMEOUT_SECS", "").unwrap();
+        assert_eq!(cfg.code_bench_task_timeout, None);
         cfg.apply("PC_AGENT_URL", "http://pc").unwrap();
         cfg.apply("PC_AGENT_URL", "").unwrap();
         assert_eq!(cfg.pc_agent_url, None);

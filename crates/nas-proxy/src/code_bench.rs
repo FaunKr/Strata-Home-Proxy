@@ -15,7 +15,7 @@ use std::{
 use serde_json::json;
 use strata_admin_ui::api::{CodeBenchPage, CodeBenchRun, CodeBenchState};
 
-use crate::{api_keys::KeyError, clock, files::write_private, state::AppState};
+use crate::{api_keys::KeyError, clock, files::write_private, state::AppState, timeouts};
 
 const RESULTS_FILE: &str = "code-bench.json";
 /// The prefix of the run's key, so a restarted proxy still knows which key
@@ -23,8 +23,6 @@ const RESULTS_FILE: &str = "code-bench.json";
 const KEY_FILE: &str = "code-bench-key";
 /// The name of the run's key under Access; it is revoked when the run ends.
 pub const KEY_NAME: &str = "Code benchmark";
-/// How long opencode may work on one task.
-const TASK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const POLL: Duration = Duration::from_secs(2);
 /// Unanswered polls after which the run counts as lost, e.g. after the
 /// container restarted.
@@ -239,7 +237,8 @@ pub async fn start(state: &std::sync::Arc<AppState>) -> Result<(), String> {
         "model": model,
         "api_key": key,
         "tasks": tasks,
-        "timeout_secs": TASK_TIMEOUT.as_secs(),
+        // After `active_model`, so from the speeds the PC service just reported.
+        "timeout_secs": timeouts::code_bench_task(state).as_secs(),
     });
     let answer = async {
         let resp = state

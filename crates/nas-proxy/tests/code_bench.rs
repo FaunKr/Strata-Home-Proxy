@@ -140,7 +140,8 @@ async fn a_run_gets_the_tasks_the_active_model_and_a_key_of_its_own() {
     assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
     let body = runner.started.lock().unwrap().clone().unwrap();
     assert_eq!(body["model"], "IQ3_XXS");
-    assert_eq!(body["timeout_secs"], 1800);
+    // The suggestion at the assumed speeds: no model has a benchmark.
+    assert_eq!(body["timeout_secs"], 3360);
     let names: Vec<&str> = body["tasks"]
         .as_array()
         .unwrap()
@@ -316,6 +317,34 @@ async fn a_strata_job_and_the_code_benchmark_wait_for_each_other() {
     assert_eq!(resp.status(), 400);
     assert!(resp.text().await.unwrap().contains("Strata job is running"));
     assert!(runner.started.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn each_task_gets_the_suggested_or_the_saved_limit() {
+    let (s, runner) = with_runner().await;
+    {
+        let mut report = s.pc.strata_info.lock().unwrap();
+        let mut bench = benchmark("IQ3_XXS", "20 Token/s");
+        bench.decode_tps = Some(20.0);
+        report.as_mut().unwrap().info.benchmarks = vec![bench];
+    }
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    // 50 000 / 20 × 2 = 5000 s, up to the full minute.
+    let body = runner.started.lock().unwrap().clone().unwrap();
+    assert_eq!(body["timeout_secs"], 5040);
+    b.call("code-bench-cancel", &[]).await;
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+
+    assert_eq!(
+        save_settings(&mut b, &[("CODE_BENCH_TASK_TIMEOUT_SECS", "45")])
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    let body = runner.started.lock().unwrap().clone().unwrap();
+    assert_eq!(body["timeout_secs"], 45);
 }
 
 async fn eventually_for(limit: Duration, what: &str, check: impl Fn() -> bool) {

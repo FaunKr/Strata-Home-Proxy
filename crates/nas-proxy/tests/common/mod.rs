@@ -677,6 +677,8 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         pc_agent_token: None,
         shelly_url: None,
         code_bench_url: None,
+        update_summary_timeout: None,
+        code_bench_task_timeout: None,
         idle_timeout: Duration::from_secs(3600),
         wake_timeout: Duration::from_secs(10),
         wol_resend: Duration::from_secs(1),

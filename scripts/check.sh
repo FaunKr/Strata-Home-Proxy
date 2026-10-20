@@ -44,19 +44,8 @@ if [[ -z ${CARGO_TARGET_DIR:-} && $git_dir != "$common_dir" ]]; then
 fi
 target_dir=${CARGO_TARGET_DIR:-target}
 
-# A full disk fails the build late and cryptically ("linking with cc failed").
-# Locally stop early instead; CI runners start empty, so there it only warns.
-free_gb=$(($(df -Pk . | awk 'NR == 2 {print $4}') / 1024 / 1024))
-if ((free_gb < 10)); then
-  target=$(du -sh "$target_dir" 2>/dev/null | cut -f1 || true)
-  message="Hardly any space left: ${free_gb} GB, $target_dir is ${target:-0}; rm -rf $target_dir/debug, and remove old worktrees (git worktree list)"
-  if [[ -n ${CI:-} ]]; then
-    echo "WARNING: $message" >&2
-  else
-    echo "$message" >&2
-    exit 2
-  fi
-fi
+# shellcheck source=scripts/free-space.sh
+source "$(dirname "$0")/free-space.sh"
 
 cargo fmt --check
 # Strata starts and stops only in strata_process.rs (#184): the pause after a

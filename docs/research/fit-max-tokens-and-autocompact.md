@@ -95,9 +95,9 @@ The proxy does nothing for `fit_max_tokens`:
   (`proxy.rs:281-305`).
 
 A 400 from Strata therefore reaches Claude Code exactly as Strata sent it. The
-repo tells you to turn the option on for `local-agent`: "`fit_max_tokens` an,
-damit Strata `max_tokens` kürzt statt mit 400 abzulehnen"
-(`tools/local-agent/README.md:32`; also `docs/einrichtung.md:116` and
+repo tells you to turn `fit_max_tokens` on for `local-agent`, so that Strata
+trims `max_tokens` instead of refusing with 400
+(`tools/local-agent/README.md:32`; also `docs/setup.md:116` and
 `/mnt/project-files/plaene/local-agent.md:27`).
 
 ### Upsides
@@ -219,7 +219,7 @@ How Claude Code detects the window behind a proxy:
 - **Requirement for `local-agent`:** at least 64K (65536), and 128K if memory
   allows (`tools/local-agent/README.md:29-31`, `local-agent:46`).
 - **Setup's recommendation:** 64K for a 14–20 GB card (`docs/strata-api.md:77`;
-  `docs/einrichtung.md:74`).
+  `docs/setup.md:74`).
 - **At run time:** Strata reports the actual value as `max_context` in
   `/health` (`docs/strata-api.md:26`). Read it there instead of assuming.
 
@@ -299,7 +299,7 @@ In Strata's `strata-<model>.json`: `"fit_max_tokens": true` (and
 Notes on the example:
 
 - **The key.** The setup checklist uses `ANTHROPIC_API_KEY`, which goes out as
-  `x-api-key` (`docs/einrichtung.md:118`). The runner uses
+  `x-api-key` (`docs/setup.md:118`). The runner uses
   `ANTHROPIC_AUTH_TOKEN` (`local-agent:351`). The proxy accepts either header
   (`proxy.rs:161`).
 - **Budget check.** About 49K for the compaction trigger, plus 8192 output,

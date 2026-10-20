@@ -97,17 +97,17 @@ async fn a_sleeping_pc_keeps_its_last_version_and_is_woken_for_an_update() {
     assert_eq!(b.call("pc-service-update", &[]).await.status(), 200);
     assert!(s.pc.wol_packets.load(Ordering::SeqCst) >= 1);
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 1);
-    live.until("neue Version", |v| v["pc_service"]["version"] == NEW)
+    live.until("new version", |v| v["pc_service"]["version"] == NEW)
         .await;
     let kinds = kinds(&s.state);
     let requested = kinds
         .iter()
         .position(|k| *k == EventKind::PcServiceUpdateRequested)
-        .expect("Update im Verlauf");
+        .expect("update in the history");
     let woken = kinds
         .iter()
         .position(|k| *k == EventKind::WakeRequested)
-        .expect("Wecken im Verlauf");
+        .expect("wake in the history");
     assert_eq!(
         kinds
             .iter()
@@ -164,7 +164,7 @@ async fn a_service_updated_by_hand_while_asleep_is_not_updated_after_the_wake() 
     live.until("Version", |v| v["pc_service"]["version"] == OLD)
         .await;
     s.pc.awake.store(false, Ordering::SeqCst);
-    live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    live.until("PC asleep", |v| v["pc"] == "Asleep").await;
     // Set up again with the command, say, while the proxy did not look.
     *s.pc.version.lock().unwrap() = Some(NEW.into());
 
@@ -172,7 +172,7 @@ async fn a_service_updated_by_hand_while_asleep_is_not_updated_after_the_wake() 
     assert!(s.pc.wol_packets.load(Ordering::SeqCst) >= 1);
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
     let v = live
-        .until("aktuelle Version", |v| v["pc_service"]["version"] == NEW)
+        .until("current version", |v| v["pc_service"]["version"] == NEW)
         .await;
     assert_eq!(v["pc_service"]["update_available"], false);
     assert_eq!(v["pc_service"]["updating"], false);
@@ -190,13 +190,13 @@ async fn a_pc_that_does_not_wake_gets_no_update() {
     live.until("Version", |v| v["pc_service"]["version"] == OLD)
         .await;
     s.pc.awake.store(false, Ordering::SeqCst);
-    live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    live.until("PC asleep", |v| v["pc"] == "Asleep").await;
 
     let resp = b.call("pc-service-update", &[]).await;
     assert_eq!(resp.status(), 400);
     assert!(resp.text().await.unwrap().contains("did not wake"));
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
-    let v = live.until("Stand", |v| v["pc"] == "Asleep").await;
+    let v = live.until("still asleep", |v| v["pc"] == "Asleep").await;
     assert_eq!(v["pc_service"]["updating"], false);
 }
 
@@ -250,7 +250,7 @@ async fn the_last_version_survives_a_restart() {
         .await;
     // The saved version follows the reported one.
     *first.pc.version.lock().unwrap() = Some("0.1.0+mitte".into());
-    live.until("andere Version", |v| {
+    live.until("other version", |v| {
         v["pc_service"]["version"] == "0.1.0+mitte"
     })
     .await;
@@ -258,7 +258,7 @@ async fn the_last_version_survives_a_restart() {
     let b = after_restart(&first, "restart").await;
     let v = Live::open(&b)
         .await
-        .until("gespeicherte Version", |v| !v["pc_service"].is_null())
+        .until("saved version", |v| !v["pc_service"].is_null())
         .await;
     assert_eq!(v["pc_service"]["version"], "0.1.0+mitte");
     assert_eq!(v["pc_service"]["update_available"], true);
@@ -276,13 +276,13 @@ async fn a_service_without_version_stays_outdated_after_a_restart() {
     let b = logged_in(&first.url).await;
     Live::open(&b)
         .await
-        .until("gemeldet", |v| !v["pc_service"].is_null())
+        .until("reported", |v| !v["pc_service"].is_null())
         .await;
 
     let b = after_restart(&first, "restart-none").await;
     let v = Live::open(&b)
         .await
-        .until("gespeicherte Version", |v| !v["pc_service"].is_null())
+        .until("saved version", |v| !v["pc_service"].is_null())
         .await;
     assert!(v["pc_service"]["version"].is_null());
     assert_eq!(v["pc_service"]["update_available"], true);

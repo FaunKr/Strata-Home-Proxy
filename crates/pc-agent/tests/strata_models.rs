@@ -1,7 +1,7 @@
 //! Jobs on an installed Strata: another model, switching and deleting
 //! models, update, benchmark and a new Strata key.
 
-mod common;
+use crate::common;
 
 use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 

@@ -1,7 +1,7 @@
 //! The page "Strata output": Strata's console output from the PC service,
 //! live and only while the page is open, without ever waking the PC.
 
-mod common;
+use crate::common;
 
 use std::{sync::atomic::Ordering, time::Duration};
 

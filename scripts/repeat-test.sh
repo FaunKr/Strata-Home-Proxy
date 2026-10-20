@@ -14,11 +14,37 @@ if (($# < 3)); then
 fi
 pkg=$1 test=$2 count=$3
 shift 3
+dir=$(cargo metadata --no-deps --format-version 1 \
+  | jq -r --arg pkg "$pkg" '.packages[] | select(.name == $pkg) | .manifest_path | rtrimstr("/Cargo.toml")')
+# A crate with tests/main.rs has one test binary, `integration`, with each
+# file as a module; there a test file is the filter "<file>::".
+target=$test prefix=
+if [[ -f $dir/tests/main.rs ]]; then
+  target=integration prefix="$test::"
+fi
+bin=$(cargo test -q -p "$pkg" --test "$target" --no-run --message-format=json \
+  | jq -r 'select(.executable != null and .target.kind == ["test"]) | .executable' | tail -n1)
 # As cargo test does: from the package's directory.
-read -r bin dir < <(cargo test -q -p "$pkg" --test "$test" --no-run --message-format=json \
-  | jq -r 'select(.executable != null and .target.kind == ["test"]) | "\(.executable) \(.manifest_path | rtrimstr("/Cargo.toml"))"' | tail -n1)
 cd "$dir"
-all=$("$bin" --list "$@" 2>/dev/null | sed -n 's/: test$//p' | sort)
+all=$("$bin" --list 2>/dev/null | sed -n 's/: test$//p' | awk -v p="$prefix" 'index($0, p) == 1' | sort)
+# Arguments starting with - go to the test binary (--nocapture,
+# --test-threads=1, …); the others pick tests of this file by name, as
+# libtest's filters do. Without any, the whole file runs.
+flags=() filters=()
+for arg in "$@"; do
+  if [[ $arg == -* ]]; then flags+=("$arg"); else filters+=("$arg"); fi
+done
+if ((${#filters[@]})); then
+  all=$(awk -v p="$prefix" -v f="$(printf '%s\n' "${filters[@]}")" '
+    BEGIN { n = split(f, fs, "\n") }
+    { name = substr($0, length(p) + 1); for (i = 1; i <= n; i++) if (index(name, fs[i])) { print; next } }' <<<"$all")
+fi
+if [[ -z $all ]]; then
+  echo "No test matches: $test $*" >&2
+  exit 2
+fi
+mapfile -t names <<<"$all"
+set -- ${flags[@]+"${flags[@]}"} --exact "${names[@]}"
 failed=0 hung=0
 for i in $(seq "$count"); do
   rc=0

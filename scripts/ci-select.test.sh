@@ -36,6 +36,7 @@ all="test=true packages= image=true bench=true ui=true"
 expect "test=false packages= image=false bench=false ui=false" README.md docs/strata-api.md
 expect "$all" Cargo.lock
 expect "$all" .github/workflows/ci.yml
+expect "$all" .config/nextest.toml
 expect "$all" scripts/check-exe-version.sh
 # Code alone runs the tests of its crates; the images build only when their
 # build definition changes.

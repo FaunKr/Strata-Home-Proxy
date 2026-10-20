@@ -1,7 +1,7 @@
 //! The power of the power plug on the Overview, against the simulated PC and
 //! its plug.
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::Ordering;
 

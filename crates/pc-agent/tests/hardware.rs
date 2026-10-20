@@ -1,6 +1,6 @@
 //! Hardware readings in `/status`, read through the fake platform.
 
-mod common;
+use crate::common;
 
 use common::*;
 use serde_json::{Value, json};

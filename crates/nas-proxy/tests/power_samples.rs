@@ -1,7 +1,7 @@
 //! The power of the power plug recorded at fixed times (`PLUG_SAMPLE_SECS`),
 //! against the simulated PC and its plug. The rig samples every 100 ms.
 
-mod common;
+use crate::common;
 
 use std::{
     sync::atomic::Ordering,

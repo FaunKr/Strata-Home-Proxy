@@ -1,7 +1,7 @@
 //! The Strata page: what the PC service reports about Strata, and jobs
 //! started from the page, against the simulated PC and its service.
 
-mod common;
+use crate::common;
 
 use std::{sync::atomic::Ordering, time::Duration};
 

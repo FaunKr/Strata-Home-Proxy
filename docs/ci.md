@@ -18,6 +18,15 @@ runs what a change needs (spec #146).
   manifests and the rustc version. On `main` the `test` job only checks
   whether the cache is there, and only runs in full to refill it.
 
+## Test runner and disk
+
+The `test` job installs cargo-nextest as a prebuilt binary with
+`taiki-e/install-action`, at the version `.config/nextest.toml` pins (a few
+seconds, no compile). Each crate's integration tests are one binary
+(`tests/main.rs`): one per test file linked the whole proxy 25 times, about
+10 GB, and the job had to delete preinstalled SDKs first to fit on the runner.
+The last step still prints the free disk space.
+
 ## What a run needs
 
 Which jobs a pull request starts is decided by `scripts/ci-select.sh` from

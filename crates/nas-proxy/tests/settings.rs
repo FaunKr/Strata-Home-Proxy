@@ -1,6 +1,6 @@
 //! Settings changed at runtime take effect without a restart.
 
-mod common;
+use crate::common;
 
 use std::{sync::Arc, sync::atomic::Ordering, time::Duration};
 

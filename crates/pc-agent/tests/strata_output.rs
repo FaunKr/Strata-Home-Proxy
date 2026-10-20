@@ -1,7 +1,7 @@
 //! The Strata output: what Strata writes to its console, as `GET /strata-log`
 //! hands it on.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

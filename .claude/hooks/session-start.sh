@@ -12,6 +12,13 @@ cd "$CLAUDE_PROJECT_DIR"
 rustup target add wasm32-unknown-unknown
 # cargo-leptos for scripts/ui-check.sh.
 scripts/install-cargo-leptos.sh || true
+# cargo-nextest, the test runner of scripts/check.sh, at the version
+# .config/nextest.toml pins; get.nexte.st is blocked here, GitHub is not.
+nextest_version=$(scripts/nextest-version.sh)
+if [[ $(cargo nextest --version 2>/dev/null | head -n1) != "cargo-nextest $nextest_version "* ]]; then
+  curl -fsSL "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$nextest_version/cargo-nextest-$nextest_version-$(uname -m)-unknown-linux-gnu.tar.gz" \
+    | tar xz -C "$HOME/.cargo/bin" || echo "cargo-nextest $nextest_version not installed" >&2
+fi
 cargo test --no-run --quiet
 # The same arguments as scripts/check.sh, or clippy checks again; a warning
 # here is for the session to fix, not a reason to fail the start.

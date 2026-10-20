@@ -1,7 +1,7 @@
 //! Setting up the PC service from the NAS: the program to download, the
 //! one-time code and the sign-up of a new PC. None of it wakes the PC.
 
-mod common;
+use crate::common;
 
 use std::{sync::atomic::Ordering, time::Duration};
 

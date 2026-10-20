@@ -84,6 +84,25 @@ if [[ ! -x $eslint ]]; then
   exit 2
 fi
 "$eslint" scripts
+# The test runner, at least the version .config/nextest.toml pins (CI installs it).
+nextest_version=$(scripts/nextest-version.sh)
+installed=$(cargo nextest --version 2>/dev/null | sed -n '1s/^cargo-nextest \([0-9.]*\).*/\1/p' || true)
+if [[ -z $installed || $(printf '%s\n' "$nextest_version" "$installed" | sort -V | head -n1) != "$nextest_version" ]]; then
+  echo "cargo-nextest ${installed:-missing}, needs $nextest_version: cargo install cargo-nextest@$nextest_version --locked" >&2
+  exit 2
+fi
+# The integration tests are one binary per crate (autotests = false): a file
+# in tests/ that tests/main.rs does not list would silently never run.
+for main in crates/*/tests/main.rs; do
+  for file in "${main%/main.rs}"/*.rs "${main%/main.rs}"/*/mod.rs; do
+    [[ -e $file ]] || continue
+    name=$(basename "${file%/mod.rs}" .rs)
+    if [[ $name != main ]] && ! grep -qE "(^|[] ])mod $name;" "$main"; then
+      echo "$file does not run: add \"mod $name;\" to $main" >&2
+      exit 1
+    fi
+  done
+done
 # Which jobs CI runs for a pull request, checked against the workspace.
 scripts/ci-select.test.sh
 # The repo is English: no umlauts in tracked files (scripts/language-allowlist).
@@ -139,11 +158,12 @@ fi
 tools/local-agent/test.sh
 # The code benchmark's runner, against a faked opencode.
 python3 tools/code-bench/test_runner.py
-# Build first, then test with a time limit: a hanging test aborts instead of
-# blocking the run forever. Which one hangs is in the output
-# ("has been running for over 60 seconds").
-cargo test "${package_args[@]}" --no-run
-timeout 10m cargo test "${package_args[@]}"
+# Build first, then test. nextest kills a test after 60 s and names it
+# (.config/nextest.toml); a package without tests passes, as with cargo test.
+# nextest runs no doctests; there are none (cargo test --doc: 0 everywhere).
+cargo nextest run "${package_args[@]}" --no-run
+# The time limit catches a run that hangs outside a single test.
+timeout 15m cargo nextest run "${package_args[@]}" --no-tests=pass
 
 if [[ $packages == all ]]; then
   mkdir -p "$target_dir/check-ok"

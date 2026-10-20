@@ -1,7 +1,7 @@
 //! Forced sleep and forced Strata restart from the web UI. Neither wakes
 //! the PC.
 
-mod common;
+use crate::common;
 
 use std::{sync::atomic::Ordering, time::Duration};
 

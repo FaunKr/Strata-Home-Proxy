@@ -1,7 +1,7 @@
 //! The web UI under `/admin/`: answered by the proxy itself, never forwarded,
 //! never wakes the PC and never counts as activity.
 
-mod common;
+use crate::common;
 
 use std::{sync::atomic::Ordering, time::Duration};
 

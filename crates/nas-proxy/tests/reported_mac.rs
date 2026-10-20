@@ -1,6 +1,6 @@
 //! The PC service reports its MAC; the proxy learns it and wakes with it.
 
-mod common;
+use crate::common;
 
 use std::{sync::atomic::Ordering, time::Duration};
 

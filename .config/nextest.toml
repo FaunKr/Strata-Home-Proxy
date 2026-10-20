@@ -1,0 +1,13 @@
+# cargo-nextest, the test runner of scripts/check.sh and CI.
+# The one place its version is pinned: check.sh names it in its install hint,
+# CI installs this version, and nextest refuses to run as an older one.
+nextest-version = { required = "0.9.148" }
+
+[profile.default]
+# A test running for 30 s is reported as slow, at 60 s it is killed and named.
+# The longest test takes about 5 s.
+slow-timeout = { period = "30s", terminate-after = 2 }
+# A flaky test fails instead of passing on a second try.
+retries = 0
+# One run shows every failing test.
+fail-fast = false

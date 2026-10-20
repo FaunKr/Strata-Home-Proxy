@@ -1,6 +1,6 @@
 //! Login and password of the web UI, over HTTP like a browser.
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 

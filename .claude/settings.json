@@ -2,6 +2,7 @@
   "permissions": {
     "allow": [
       "Bash(cargo test:*)",
+      "Bash(cargo nextest:*)",
       "Bash(cargo check:*)",
       "Bash(cargo clippy:*)",
       "Bash(cargo fmt:*)",

@@ -1,6 +1,6 @@
 //! Service tests with a fake PC and a fake Strata on localhost.
 
-mod common;
+use crate::common;
 
 use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 

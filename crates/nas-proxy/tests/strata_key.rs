@@ -1,7 +1,7 @@
 //! The Strata key (#217): the PC service makes a new one at every start of
 //! Strata, the proxy fetches it and sends it to Strata, never the client's.
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::Ordering;
 

@@ -1,6 +1,6 @@
 //! API keys: every request to Strata needs a key created on the API keys page.
 
-mod common;
+use crate::common;
 
 use std::{sync::atomic::Ordering, time::Duration};
 

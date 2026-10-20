@@ -1,7 +1,7 @@
 //! End-to-end tests against a simulated PC: Strata, the PC service and a Wake
 //! on LAN listener, all on localhost.
 
-mod common;
+use crate::common;
 
 use std::{
     sync::atomic::Ordering,

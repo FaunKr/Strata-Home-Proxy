@@ -21,6 +21,7 @@ pub mod state;
 pub mod strata;
 pub mod strata_client;
 pub mod strata_output;
+pub mod timeouts;
 pub mod update_summary;
 pub mod wol;
 

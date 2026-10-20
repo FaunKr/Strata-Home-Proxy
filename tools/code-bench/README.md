@@ -33,8 +33,11 @@ neben dem Proxy ein zweiter Container, `code-bench`:
 
 Gemessen wird pro Aufgabe: Gesamtzeit, Schritte des Modells, Ein- und
 Ausgabe-Tokens, Ausgabe-Tokens pro Sekunde (über die Zeit der Schritte) und
-bestandene Tests. Nach 30 Minuten wird opencode beendet; was es geschrieben
-hat, wird trotzdem geprüft.
+bestandene Tests. Nach der Grenze je Aufgabe wird opencode beendet; was es
+geschrieben hat, wird trotzdem geprüft. Die Grenze schickt der Proxy beim
+Start (`timeout_secs`): `CODE_BENCH_TASK_TIMEOUT_SECS` unter Strata →
+Timeouts, sonst ein Vorschlag aus dem langsamsten installierten Modell in
+„Compare models“.
 
 Tests: `python3 tools/code-bench/test_runner.py` (mit einem nachgebildeten
 opencode; `scripts/check.sh` führt sie aus).

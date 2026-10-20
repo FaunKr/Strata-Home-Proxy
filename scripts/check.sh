@@ -34,12 +34,22 @@ else
 fi
 selected() { [[ $packages == all || $packages == *" $1 "* ]]; }
 
+# A git worktree builds into the main checkout's target/: dependencies are
+# built once, not 5 GB again per worktree. Cargo's lock lets parallel runs
+# take turns.
+git_dir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null || true)
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+if [[ -z ${CARGO_TARGET_DIR:-} && $git_dir != "$common_dir" ]]; then
+  export CARGO_TARGET_DIR=${common_dir%/.git}/target
+fi
+target_dir=${CARGO_TARGET_DIR:-target}
+
 # A full disk fails the build late and cryptically ("linking with cc failed").
 # Locally stop early instead; CI runners start empty, so there it only warns.
 free_gb=$(($(df -Pk . | awk 'NR == 2 {print $4}') / 1024 / 1024))
 if ((free_gb < 10)); then
-  target=$(du -sh target 2>/dev/null | cut -f1 || true)
-  message="Kaum Platz frei: ${free_gb} GB, target/ ist ${target:-0} groß; rm -rf target/debug"
+  target=$(du -sh "$target_dir" 2>/dev/null | cut -f1 || true)
+  message="Kaum Platz frei: ${free_gb} GB, $target_dir ist ${target:-0} groß; rm -rf $target_dir/debug, und alte Worktrees entfernen (git worktree list)"
   if [[ -n ${CI:-} ]]; then
     echo "WARNUNG: $message" >&2
   else

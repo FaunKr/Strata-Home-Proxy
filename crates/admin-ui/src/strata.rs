@@ -15,7 +15,7 @@ use crate::{
         UpdateSummary, error_text, get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
-    labels::{STRATA_CONNECTION, strata_badge, strata_job_label},
+    labels::{STRATA_CONNECTION, STRATA_TIMEOUTS, strata_badge, strata_job_label},
     overview::{Live, strata_sentence},
     settings::SettingsSections,
 };
@@ -398,7 +398,7 @@ pub fn ConnectionTab() -> impl IntoView {
                 .filter(|i| i.installed)
                 .map(|_| view! { <StrataKey actions blocked /> })
         })}
-        <SettingsSections sections=&[&STRATA_CONNECTION] />
+        <SettingsSections sections=&[&STRATA_CONNECTION, &STRATA_TIMEOUTS] />
     }
 }
 

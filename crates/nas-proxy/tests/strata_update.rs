@@ -416,6 +416,13 @@ async fn a_slow_strata_hits_the_limit_and_is_asked_again_later() {
     );
     *s.pc.chat_pause.lock().unwrap() = std::time::Duration::from_millis(1000);
     let mut b = logged_in(&s.url).await;
+    // The test's limit wins over the setting.
+    assert_eq!(
+        save_settings(&mut b, &[("UPDATE_SUMMARY_TIMEOUT_SECS", "600")])
+            .await
+            .status(),
+        200
+    );
     page(&mut b).await;
     let v = settled(&mut b).await;
     assert_eq!(v["update"]["summary"]["state"], "unavailable", "{v}");

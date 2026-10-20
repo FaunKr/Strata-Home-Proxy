@@ -1,320 +1,318 @@
-# Schnittstelle zwischen NAS-Proxy und PC-Dienst
+# Interface between proxy and PC service
 
-Der PC-Dienst bietet diese Endpunkte an, der Proxy nutzt sie. Was jeder
-Endpunkt nimmt und antwortet, steht als Typen im Crate `strata-pc-protocol`
-(`crates/pc-protocol`); dieses Dokument beschreibt, was dahinter passiert.
-Gespeicherte Antworten des heutigen PC-Dienstes liegen in
+The PC service offers these endpoints, the proxy uses them. What each
+endpoint takes and answers is defined as types in the crate `strata-pc-protocol`
+(`crates/pc-protocol`); this document describes what happens behind them.
+Saved responses of today's PC service live in
 `crates/pc-protocol/tests/samples`.
 
-## Ältere PC-Dienste
+## Older PC services
 
-Der PC-Dienst aktualisiert sich vom NAS, also spricht oft ein älterer
-PC-Dienst mit einem neueren Proxy. Deshalb:
+The PC service updates itself from the NAS, so an older PC service often
+talks to a newer proxy. Therefore:
 
-- Felder kommen nur dazu; keins wird umbenannt oder entfernt.
-- Ein Antwortfeld, das nach der ersten Version dazukam, hat einen
-  Standardwert, damit die Antwort eines älteren PC-Dienstes lesbar bleibt.
-- Ein optionales Anfragefeld fehlt, solange es nicht gesetzt ist: Der
-  PC-Dienst lehnt Anfragefelder ab, die er nicht kennt. Arten ohne Felder
-  (`update`, `benchmark`, `compare_models`) ignorieren zusätzliche Felder.
+- Fields are only added; none is renamed or removed.
+- A response field added after the first version has a default value, so
+  that an older PC service's response stays readable.
+- An optional request field is absent as long as it is not set: the
+  PC service rejects request fields it does not know. Kinds without fields
+  (`update`, `benchmark`, `compare_models`) ignore extra fields.
 
-Die Tests des Crates lesen die gespeicherten Antworten und dazu Antworten,
-denen die neueren Felder fehlen. Ein Test des PC-Dienstes prüft, dass die
-Beispiele jedes Feld zeigen, das er sendet; ein neues Feld kommt also mit
-seinem Beispiel. `scripts/fake-pc.js` baut auf denselben Beispielen auf.
+The crate's tests read the saved responses plus responses that lack the
+newer fields. A PC service test checks that the samples show every field it
+sends; so a new field comes with its sample. `scripts/fake-pc.js` builds on
+the same samples.
 
-Alle Anfragen tragen `Authorization: Bearer <PC_AGENT_TOKEN>`; der Dienst
-verlangt das Token immer. Er nimmt Anfragen nur von `allowed_clients` (dem
-NAS) und von 127.0.0.1 an.
+All requests carry `Authorization: Bearer <PC_AGENT_TOKEN>`; the service
+always requires the token. It accepts requests only from `allowed_clients`
+(the NAS) and from 127.0.0.1.
 
 ## `GET /status`
 
-Antwort: `PcStatus`.
+Response: `PcStatus`.
 
-`strata_running` ist `true`, wenn Strata auf `/health` antwortet oder der
-Dienst es vor weniger als `load_time_secs` gestartet und seitdem nicht beendet
-hat. Ein Strata, das sein Modell noch lädt (etwa nach einem erzwungenen
-Neustart), zählt so schon als laufend; die Übersicht zeigt es als „lädt“.
+`strata_running` is `true` when Strata answers `/health`, or when the
+service started it less than `load_time_secs` ago and has not stopped it
+since. A Strata still loading its model (e.g. after a forced restart) thus
+already counts as running; the Overview shows it as loading.
 
-`strata_job` ist `true`, solange ein Strata-Vorgang läuft (siehe unten).
+`strata_job` is `true` while a Strata job is running (see below).
 
-`version` ist die Crate-Version plus der Commit des Baus (`STRATA_BUILD_ID`
-beim Bauen, sonst `dev`). Dieselbe Angabe steht als Text
-`strata-pc-agent-version:<version>` in der .exe; so liest der Proxy die
-Version der .exe in seinem Image, ohne sie auszuführen. Weicht sie ab oder
-fehlt `version` (Dienst von vor dem Update-Knopf), zeigt der Bereich *PC*
-„Update available“.
+`version` is the crate version plus the build's commit (`STRATA_BUILD_ID`
+at build time, otherwise `dev`). The same value is in the .exe as the text
+`strata-pc-agent-version:<version>`; this is how the proxy reads the
+version of the .exe in its image without running it. If it differs or
+`version` is missing (service from before the update button), the *PC* area
+shows "Update available".
 
-`mac` ist die MAC-Adresse der Netzwerkkarte, über die die Anfrage kam (also
-die, die das Weckpaket empfangen muss), oder der Wert `mac` aus der
-Konfiguration. Ist sie unbekannt, fehlt das Feld. Der Proxy merkt sich die
-gemeldete MAC in `DATA_DIR` und weckt damit; sie hat Vorrang vor `PC_MAC` und
-den Werten aus der Weboberfläche.
+`mac` is the MAC address of the network card the request came through (that
+is, the one that must receive the wake packet), or the value `mac` from the
+configuration. If it is unknown, the field is missing. The proxy remembers the
+reported MAC in `DATA_DIR` and wakes with it; it takes precedence over `PC_MAC`
+and the values from the web UI.
 
-`hardware` sind die Hardwarewerte für die Übersicht. Der Dienst liest sie aus
-Windows selbst, ohne Treiber: Solange `/status` gefragt wird, misst er alle 2 s
-im Hintergrund und antwortet mit der letzten Messung. Die erste Anfrage nach
-30 s Ruhe startet die Messung und bekommt nur `null`-Werte (`Hardware`).
+`hardware` are the hardware readings for the Overview. The service reads them
+from Windows itself, without drivers: as long as `/status` is being asked, it
+measures every 2 s in the background and answers with the last measurement.
+The first request after 30 s of quiet starts measuring and gets only `null`
+values (`Hardware`).
 
-- `gpu` ist die Grafikkarte mit dem meisten VRAM, `null` ohne Grafikkarte.
-- `power_pct` ist die Leistungsaufnahme als Anteil am Leistungslimit der
-  Karte, keine Watt.
-- `fan_rpm: 0` heißt, der Lüfter steht. Meldet der Treiber 0 und keine
-  Höchstdrehzahl, kennt er den Lüfter nicht, und der Wert ist `null`.
-- Temperatur und Leistung meldet der Treiber als 0, wenn er sie nicht kennt;
-  der Dienst macht daraus `null`.
-- Jeder Wert, den der Dienst nicht lesen kann, ist `null`; die anderen bleiben.
-- Die CPU-Last gilt seit der vorigen Messung und ist in der ersten `null`.
+- `gpu` is the graphics card with the most VRAM, `null` without a graphics card.
+- `power_pct` is the power draw as a share of the card's power limit, not
+  watts.
+- `fan_rpm: 0` means the fan is stopped. If the driver reports 0 and no
+  maximum speed, it does not know the fan, and the value is `null`.
+- The driver reports temperature and power as 0 when it does not know them;
+  the service turns that into `null`.
+- Every value the service cannot read is `null`; the others stay.
+- CPU load covers the time since the previous measurement and is `null` in
+  the first.
 
-Fehlt `hardware`, ist der Dienst älter; die Übersicht bittet dann um ein Update.
+If `hardware` is missing, the service is older; the Overview then asks for an
+update.
 
-Antwortet der Dienst nicht, geht der Proxy davon aus, dass der PC schläft,
-und weckt ihn.
+If the service does not answer, the proxy assumes the PC is asleep and wakes
+it.
 
 ## `POST /sleep`
 
-Der Proxy schickt das nach der Leerlaufzeit. Der Dienst prüft Gaming-Modus,
-laufende Strata-Anfragen (über `/slots`, falls Strata das anbietet) und
-Benutzeraktivität (letzte Tastatur- oder Mauseingabe, Vorgabe 10 min).
-Die Antwort (`Answer`) kommt zuerst, Standby folgt 2 s später.
+The proxy sends this after the idle timeout. The service checks gaming mode,
+running Strata requests (via `/slots`, if Strata offers it) and user activity
+(last keyboard or mouse input, default 10 min).
+The response (`Answer`) comes first, standby follows 2 s later.
 
-- `200`, angenommen: Standby wird ausgelöst.
-- `409`, abgelehnt mit Grund, z. B. „Benutzer aktiv“. Der Proxy fragt nach
-  `SLEEP_RETRY_SECS` erneut.
+- `200`, accepted: standby is triggered.
+- `409`, refused with a reason, e.g. "User active". The proxy asks again
+  after `SLEEP_RETRY_SECS`.
 
-## `POST /sleep/force` (für die Weboberfläche)
+## `POST /sleep/force` (for the web UI)
 
-Das erzwungene Schlafen hinter *Force sleep* in der Übersicht, ohne
-Request-Body. Der Dienst lässt alle Prüfungen von `/sleep` weg bis auf das
-Update: Benutzeraktivität, eine Anfrage in Strata und der Gaming-Modus halten
-ihn nicht auf. Einen laufenden Strata-Vorgang bricht er vorher ab, wie der
-Gaming-Modus; heruntergeladene Teile bleiben. Standby folgt 2 s nach der
-Antwort, sobald der abgebrochene Vorgang geendet hat (höchstens
-`cancel_wait_secs`, danach trotzdem), auf demselben Weg wie nach einem
-angenommenen `/sleep` (`fresh_strata_after_standby` eingeschlossen). Der
-Gaming-Modus bleibt, wie er ist, auch sein gespeicherter Schalter.
+The forced sleep behind *Force sleep* on the Overview, with no request body.
+The service skips every check of `/sleep` except the update: user activity, a
+request in Strata and gaming mode don't stop it. It cancels a running Strata
+job first, as gaming mode does; downloaded parts are kept. Standby follows 2 s
+after the answer, once the cancelled job has ended (at most
+`cancel_wait_secs`, then anyway), on the same path as after an accepted
+`/sleep` (`fresh_strata_after_standby` included). Gaming mode stays as it is,
+its saved switch too.
 
-- `200` (`ForcedSleep`): was es übergangen hat (`user_active`, `strata_busy`,
-  `gaming_mode`), und in `cancelled_job` die Art des abgebrochenen Vorgangs;
-  ohne einen fehlt das Feld.
-- `409` (`Refused` mit Grund): nur während eines Updates des Dienstes.
+- `200` (`ForcedSleep`): what it overrode (`user_active`, `strata_busy`,
+  `gaming_mode`), and in `cancelled_job` the kind of the cancelled job; the
+  field is missing without one.
+- `409` (`Refused` with reason): only during an update of the service.
 
-Für `/sleep` und `/sleep/force` gilt: Folgt der Standby schon, nimmt der
-Dienst eine weitere Schlafen-Anfrage an, ohne einen zweiten Standby
-anzustoßen; ein Doppelklick legt den PC also nicht nach dem Aufwachen gleich
-wieder schlafen. Beginnt vor dem Standby ein Update, fällt der Standby aus.
+For `/sleep` and `/sleep/force`: while a standby is already pending, the
+service accepts another sleep request without starting a second standby, so a
+double click doesn't put the PC back to sleep right after it wakes. If an
+update begins before the standby, the standby is skipped.
 
-Der Proxy schickt es nur, wenn er den PC weder für schlafend noch für
-aufwachend hält, und weckt den PC nie dafür. Ein angenommenes zählt wie ein
-angenommenes `/sleep` (Nachlauf, dann schlafend). Ein Dienst ohne diesen
-Endpunkt antwortet 404; die Weboberfläche bittet dann um ein Update des
-PC-Dienstes.
+The proxy sends it only when it considers the PC neither asleep nor waking,
+and never wakes the PC for it. An accepted one counts like an accepted
+`/sleep` (settling, then asleep). A service without this endpoint answers 404;
+the web UI then asks for a PC service update.
 
-## `POST /strata/kill` (für die Weboberfläche)
+## `POST /strata/kill` (for the web UI)
 
-Der erzwungene Neustart von Strata hinter *Force restart Strata* im Bereich
-Strata, ohne Request-Body. Der Dienst bricht einen laufenden Strata-Vorgang ab
-und wartet auf dessen Ende, höchstens `cancel_wait_secs` (ein abgebrochenes
-`activate` oder `set_context` kann Strata beim Zurückrollen selbst neu
-starten; das Beenden kommt danach). Dann beendet er Strata wie der
-Gaming-Modus, mit `taskkill /F /T` nach den eingetragenen Programmen und
-Ordnern; das trifft auch ein von Hand gestartetes Strata. Mit Startskript und
-`auto_start` startet er Strata nach der üblichen Pause wieder, außer ein
-Strata-Vorgang hat inzwischen begonnen (der kümmert sich dann um Strata);
-sonst bleibt Strata aus. Der Watchdog zählt neu und lässt das neue Strata
-in Ruhe, solange es lädt, und `/status` meldet es so lange als laufend
-(`strata_running`), damit die Weboberfläche es als ladend zeigt.
+The forced restart of Strata behind *Force restart Strata* in the Strata area,
+with no request body. The service cancels a running Strata job and waits for it
+to end, at most `cancel_wait_secs` (a cancelled `activate` or `set_context`
+may restart Strata itself while rolling back; the kill comes after that). Then
+it ends Strata as gaming mode does, with `taskkill /F /T` by the configured
+programs and folders; that also hits a Strata started by hand. With a start
+script and `auto_start` it starts Strata again after the usual pause, unless a
+Strata job has begun meanwhile (that job then takes care of Strata); otherwise
+Strata stays stopped. The watchdog counts afresh and leaves the new Strata
+alone while it loads, and `/status` reports it as running meanwhile
+(`strata_running`), so the web UI shows it as loading.
 
-- `200` (`ForcedRestart`): `cancelled_job` wie oben; `started`, ob Strata
-  seit dem Beenden wieder gestartet wurde. `false` ohne Startskript, mit
-  `auto_start = false`, bei gescheitertem Start oder wenn ein neuer Vorgang
-  Strata übernimmt.
-- `409` (`Refused` mit Grund): Gaming-Modus an, oder der Dienst wird
-  aktualisiert. Beginnt das Update erst während des Wartens oder der Pause
-  nach dem Beenden, lehnt der Dienst ebenfalls ab und startet Strata nicht;
-  das tut der aktualisierte Dienst.
+- `200` (`ForcedRestart`): `cancelled_job` as above; `started`, whether Strata
+  was started again since the kill. `false` without a start script, with
+  `auto_start = false`, after a failed start, or when a new job takes over
+  Strata.
+- `409` (`Refused` with reason): gaming mode on, or the service is updating. If
+  the update only begins during the wait or the pause after the kill, the
+  service refuses too and doesn't start Strata; the updated service does.
 
-Der Proxy schickt es nur, wenn er den PC weder für schlafend noch für
-aufwachend hält, und weckt den PC nie dafür. Ein Dienst ohne diesen Endpunkt
-antwortet 404.
+The proxy sends it only when it considers the PC neither asleep nor waking, and
+never wakes the PC for it. A service without this endpoint answers 404.
 
-## `POST /update` (für die Weboberfläche)
+## `POST /update` (for the web UI)
 
-Lädt `strata-pc-agent.exe` von `nas_url` aus der Konfiguration
-(`/admin/agent/strata-pc-agent.exe`), benennt die laufende .exe in
-`strata-pc-agent.exe.alt` um, legt die neue an ihre Stelle und startet sie
-mit denselben Argumenten. Die Antwort kommt danach; 1 s später beendet sich
-der alte Dienst, der neue wartet so lange auf den Port und löscht dann die
+Downloads `strata-pc-agent.exe` from `nas_url` in the configuration
+(`/admin/agent/strata-pc-agent.exe`), renames the running .exe to
+`strata-pc-agent.exe.alt`, puts the new one in its place and starts it
+with the same arguments. The response comes after that; 1 s later the old
+service exits, the new one waits for the port until then and then deletes the
 `.alt`.
 
-- `202` (`Answer`): die neue .exe läuft gleich.
-  Ab dem Download bis zum Ende lehnt der Dienst Strata-Vorgänge und Schlafen
-  ab, auch `/sleep/force` und `/strata/kill`.
-- `409` (`Refused` mit Grund): nicht jetzt (Strata bearbeitet eine Anfrage, ein
-  Strata-Vorgang oder ein Update läuft) oder ohne `nas_url` eingerichtet.
-- `500` (`Refused`): Download oder Austausch gescheitert; der alte Dienst
-  läuft weiter, nichts ist verändert.
+- `202` (`Answer`): the new .exe is about to run.
+  From the download until the end, the service refuses Strata jobs and
+  sleeping.
+- `409` (`Refused` with a reason): not now (Strata is handling a request, a
+  Strata job or an update is running) or set up without `nas_url`.
+- `500` (`Refused`): download or replacement failed; the old service keeps
+  running, nothing has changed.
 
-Der Proxy schickt das nur bei wachem PC und weckt ihn dafür nie. Ein Dienst
-ohne diesen Endpunkt antwortet 404; der Bereich *PC* sagt dann, ihn einmal
-mit dem Befehl von dort neu einzurichten.
+The proxy sends this only while the PC is awake and never wakes it for it. A
+service without this endpoint answers 404; the *PC* area then says to set it
+up again once with the command from there.
 
-## `POST /gaming` (für die Weboberfläche)
+## `POST /gaming` (for the web UI)
 
-Anfrage: `GamingRequest`, Antwort: `PcStatus`. An: Strata beenden, Schlafen
-sperren. Aus: Strata starten, Schlafen erlauben.
+Request: `GamingRequest`, response: `PcStatus`. On: stop Strata, block
+sleeping. Off: start Strata, allow sleeping.
 
-## `GET /strata-log` (für den Reiter *Output* im Bereich *Strata*)
+## `GET /strata-log` (for the *Output* tab in the *Strata* area)
 
-Die Strata-Ausgabe als Server-Sent Events: was ein vom Dienst gestartetes
-Strata auf seine Konsole schreibt. Zuerst kommen die gemerkten Zeilen (höchstens
-500, Trennzeilen eingeschlossen), dann jede neue, dazu jeder Wechsel des
-Hinweises. Jede Nachricht ist eine `StrataOutputMessage` als JSON in
-`data:`; `replace` ersetzt die letzte Zeile (Fortschritt, der in der Konsole
-dieselbe Zeile mit `\r` überschreibt), `notice` sagt, ob es Ausgabe gibt
-und warum nicht. `not_started_by_agent`: Strata antwortet, wurde aber nicht
-vom Dienst gestartet, also kann er seine Ausgabe nicht lesen.
+The Strata output as Server-Sent Events: what a Strata started by the service
+writes to its console. First come the remembered lines (at most 500,
+separator lines included), then each new one, plus every change of the
+notice. Each message is a `StrataOutputMessage` as JSON in
+`data:`; `replace` replaces the last line (progress that overwrites the same
+line with `\r` in the console), `notice` says whether there is output
+and why not. `not_started_by_agent`: Strata answers but was not started
+by the service, so it cannot read its output.
 
-Farbcodes und andere Steuerzeichen sind entfernt. Kommt der Abrufer nicht
-hinterher, endet der Strom; beim nächsten Verbinden kommen die gemerkten
-Zeilen neu. Der Proxy öffnet den Strom nur, solange jemand die Seite offen hat
-und der PC ohnehin wach ist.
+Color codes and other control characters are removed. If the reader cannot
+keep up, the stream ends; on the next connect the remembered lines come
+again. The proxy opens the stream only while someone has the page open and
+the PC is awake anyway.
 
-## Strata verwalten (für den Bereich *Strata*)
+## Managing Strata (for the *Strata* area)
 
-Der Dienst richtet Strata selbst ein und verwaltet es. Jeder Vorgang ruft
-feste Programme mit Werten aus Stratas eigenen Tabellen auf; eine Anfrage
-enthält nie Befehle oder Pfade. Es läuft höchstens ein Vorgang; solange er
-läuft, lehnt der Dienst Schlafen ab und der Watchdog hält still. Gaming an
-bricht ihn ab, ein begonnener Download macht beim nächsten Mal weiter.
+The service sets up and manages Strata itself. Every job calls fixed
+programs with values from Strata's own tables; a request never contains
+commands or paths. At most one job runs; while it runs, the service refuses
+sleeping and the watchdog stays quiet. Turning gaming on cancels it; a
+started download resumes next time.
 
 ### `GET /strata`
 
-Antwort: `StrataReport`, also `StrataInfo` und daneben `update`. Was
-installiert ist, Stratas Katalog mit Empfehlung für den RAM des PCs,
-freier Platz, letzter Benchmark und der laufende oder letzte Vorgang.
-Enthält nie den Strata-Key. Fragt nebenbei höchstens einmal pro Stunde Git,
-ob es eine neuere Strata-Version gibt (`update_available`).
+Response: `StrataReport`, that is `StrataInfo` and `update` next to it. What
+is installed, Strata's catalog with a recommendation for the PC's RAM,
+free space, last benchmark and the running or last job.
+Never contains the Strata key. Along the way it asks Git at most once per
+hour whether there is a newer Strata version (`update_available`).
 
-Kommen Commits herein, steht in `update` (`Incoming`), was sie bringen; ohne
-Update, vor der ersten Prüfung und bei einem älteren PC-Dienst fehlt das
-Feld. `commits` sind die neuesten zuerst, höchstens 200 (`total` zählt alle).
-`files` kommt aus `git diff --numstat HEAD..@{u}`; Binärdateien zählen 0
-Zeilen. Der Proxy behält das alles auf dem NAS; die Weboberfläche bekommt nur
-Kurz-Hash, Betreff und Datum.
+If commits are incoming, `update` (`Incoming`) says what they bring; without
+an update, before the first check and with an older PC service the field is
+missing. `commits` are newest first, at most 200 (`total` counts all).
+`files` comes from `git diff --numstat HEAD..@{u}`; binary files count 0
+lines. The proxy keeps all of this on the NAS; the web UI only gets
+short hash, subject and date.
 
-Jedes installierte Modell sagt mit `speed_projection`, ob seine Konfiguration
-einen Steuervektor lädt (`--control-vector-scaled`, Stratas oder ein eigener).
-Ein älterer PC-Dienst lässt das Feld weg.
+Each installed model says with `speed_projection` whether its configuration
+loads a control vector (`--control-vector-scaled`, Strata's or a custom one).
+An older PC service leaves the field out.
 
-`context` ist der Wert von `--max-context` in seiner Konfiguration (Tokens),
-`null`, wenn das Flag fehlt oder sein Wert keine Zahl ist. Ein älterer
-PC-Dienst lässt das Feld weg.
+`context` is the value of `--max-context` in its configuration (tokens),
+`null` if the flag is missing or its value is not a number. An older
+PC service leaves the field out.
 
-`loop_recovery` ist `reasoning_loop_recovery` aus seiner Konfiguration, wie
-Strata es liest: `recover` (auch `true`), `stop` oder `off` (fehlt der Wert
-oder ist er unbekannt). Ein älterer PC-Dienst lässt das Feld weg.
+`loop_recovery` is `reasoning_loop_recovery` from its configuration, as
+Strata reads it: `recover` (also `true`), `stop` or `off` (if the value is
+missing or unknown). An older PC service leaves the field out.
 
-`sampling` sagt, was eine Anfrage ohne Sampling-Felder bekommt: `support`
-ist `model_card`, `config` oder `none` (dieses Strata liest keins und ist
-greedy), `thinking` und `instruct` sind Listen von `{"name", "value",
-"source"}` mit `source` `model_card`, `config` oder `chat_settings`, in der
-Reihenfolge temperature, top_p, top_k, min_p, presence_penalty,
-repetition_penalty, frequency_penalty. Eine leere Liste ist greedy. Aus den
-Chat-Einstellungen (`strata-<id>.shared-settings.json`, Stratas Web-App)
-zählen temperature, top_p und top_k; der PC-Dienst liest die Datei nur und
-nimmt eine, die kein gültiges JSON ist, wie Strata als leer. `sampling` ist
-`null`, solange `serve/server.py` nicht lesbar ist. Ein älterer PC-Dienst
-lässt das Feld weg.
+`sampling` says what a request without sampling fields gets: `support`
+is `model_card`, `config` or `none` (this Strata reads none and is
+greedy), `thinking` and `instruct` are lists of `{"name", "value",
+"source"}` with `source` `model_card`, `config` or `chat_settings`, in the
+order temperature, top_p, top_k, min_p, presence_penalty,
+repetition_penalty, frequency_penalty. An empty list is greedy. From the
+chat settings (`strata-<id>.shared-settings.json`, Strata's web app)
+temperature, top_p and top_k count; the PC service only reads the file and,
+like Strata, takes one that is not valid JSON as empty. `sampling` is
+`null` as long as `serve/server.py` is not readable. An older PC service
+leaves the field out.
 
-`benchmarks` hält den letzten Lauf jedes Modells: `decode_tps` (`chat decode
-tok/s`), `prompt_tps` (`4K prompt tok/s`, fehlt, wenn der Benchmark die Zeile
-nicht druckt), dazu `context`, `speed_projection` und `version` (Strata-Commit)
-zur Zeit des Laufs. Ein Modell, das im Vergleich nicht anlief oder nichts
-meldete, hat statt der Werte `error`. `benchmark` bleibt der letzte
-erfolgreiche Lauf, für Proxys, die nur einen kennen. Ein älterer PC-Dienst
-lässt `benchmarks` weg.
+`benchmarks` holds the last run of each model: `decode_tps` (`chat decode
+tok/s`), `prompt_tps` (`4K prompt tok/s`, missing if the benchmark does not
+print the line), plus `context`, `speed_projection` and `version` (Strata commit)
+at the time of the run. A model that did not start in the comparison or
+reported nothing has `error` instead of the values. `benchmark` stays the last
+successful run, for proxies that only know one. An older PC service
+leaves out `benchmarks`.
 
-### Was der PC-Dienst in den Modell-Konfigurationen hält
+### What the PC service keeps in the model configurations
 
-Beim Start des PC-Dienstes, nach `install`, `add_model` und `update` setzt er
-in jeder `strata-<id>.json` `"reasoning_loop_recovery": "recover"` (siehe
-[strata-api.md](strata-api.md)) und überschreibt einen anderen Wert. Den
-Block `sampling` setzt er auf den Denk-Satz der Modellkarte, wenn das
-installierte Strata nur den Block kennt; kennt es die Modellkarte oder den
-Block nicht, nimmt er ihn heraus. Ein Block von Hand wird dabei ersetzt.
-Ist `serve/server.py` nicht lesbar, bleibt der Block, wie er ist. Seine
-Änderungen macht er beim Start, bevor er Vorgänge annimmt. Alles
-andere in der Konfiguration bleibt, auch ihre Änderungszeit. Eine
-Konfiguration, die er nicht lesen oder schreiben kann, steht im Log und
-bleibt, wie sie ist. Ändert sich die Konfiguration des aktiven Modells,
-während Strata läuft, startet er Strata neu, sobald es keine Anfrage
-bearbeitet; nach `install` und `update` startet Strata ohnehin mit ihr.
+When the PC service starts, and after `install`, `add_model` and `update`, it
+sets `"reasoning_loop_recovery": "recover"` in every `strata-<id>.json` (see
+[strata-api.md](strata-api.md)) and overwrites any other value. It sets the
+`sampling` block to the model card's thinking set if the installed Strata
+only knows the block; if it knows the model card or does not know the
+block, it removes it. A hand-written block is replaced in the process.
+If `serve/server.py` is not readable, the block stays as it is. It makes its
+changes at startup, before it accepts jobs. Everything else in the
+configuration stays, including its modification time. A configuration it
+cannot read or write is noted in its log and stays as it is. If the
+configuration of the active model changes while Strata is running, it
+restarts Strata as soon as Strata is not handling a request; after `install`
+and `update` Strata starts with it anyway.
 
 ### `POST /strata/jobs`
 
-Anfrage: `StrataJobRequest`, ein Fall pro Art. Antwort `202` mit dem
-Vorgang (`StrataJob`). `400` (`Refused`) bei Werten außerhalb des Katalogs,
-`409`, wenn es gerade nicht geht (Gaming an, ein Vorgang läuft, zu wenig
-Platz, aktives Modell löschen).
+Request: `StrataJobRequest`, one case per kind. Response `202` with the
+job (`StrataJob`). `400` (`Refused`) for values outside the catalog,
+`409` if it is not possible right now (gaming on, a job is running, too
+little space, deleting the active model).
 
-| `kind` | Felder | Was passiert |
+| `kind` | Fields | What happens |
 | --- | --- | --- |
-| `install` | `family`, `size`, `context`, `api_key`, optional `experimental_speed_projection` | Git (per winget, falls nötig), `git clone`, Setup ohne Fragen, startet Strata |
-| `add_model` | `family`, `size`, `context`, optional `api_key` und `experimental_speed_projection` | Setup mit `--setup` und dem Key des Proxys (sonst dem eigenen), das aktive Modell bleibt aktiv |
-| `activate` | `model` | wartet, bis Strata keine Anfrage bearbeitet, startet mit dem anderen Startskript neu |
-| `delete` | `model` | löscht Modellordner, Pack, Konfiguration, Startskript und Log dieses Modells |
-| `update` | – | `git pull --ff-only`, dann `START-HERE.bat --update` bei beendetem Strata, startet neu |
-| `benchmark` | – | `BENCH.bat --config <aktives Modell>`, behält Tokens/s mit Modell und Datum |
-| `compare_models` | – | `benchmark` für jedes installierte Modell nacheinander, jedes wie es eingerichtet ist; aktiviert dafür das jeweilige Modell und am Ende (auch nach Abbrechen) wieder das vorher aktive |
-| `set_key` | `api_key` | trägt den Key in alle Modell-Konfigurationen ein und startet Strata neu |
-| `set_speed_projection` | `model`, `on` | schaltet die Speed-Projection in der Konfiguration dieses Modells ein oder aus, ohne Setup; beim aktiven Modell wartet er, bis Strata keine Anfrage bearbeitet, und startet es neu |
-| `set_context` | `model`, `context` | setzt den Kontext in der Konfiguration dieses Modells, ohne Setup; beim aktiven Modell wartet er, bis Strata keine Anfrage bearbeitet, und startet es neu |
+| `install` | `family`, `size`, `context`, `api_key`, optional `experimental_speed_projection` | Git (via winget, if needed), `git clone`, setup without questions, starts Strata |
+| `add_model` | `family`, `size`, `context`, optional `api_key` and `experimental_speed_projection` | setup with `--setup` and the proxy's key (otherwise its own), the active model stays active |
+| `activate` | `model` | waits until Strata is not handling a request, restarts with the other start script |
+| `delete` | `model` | deletes this model's model folder, pack, configuration, start script and log |
+| `update` | – | `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts |
+| `benchmark` | – | `BENCH.bat --config <active model>`, keeps tokens/s with model and date |
+| `compare_models` | – | `benchmark` for each installed model in turn, each as it is set up; activates each model for this and at the end (also after cancelling) the previously active one again |
+| `set_key` | `api_key` | writes the key into all model configurations and restarts Strata |
+| `set_speed_projection` | `model`, `on` | turns speed projection on or off in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
+| `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 
-Den Strata-Key erzeugt der Proxy. Er gilt erst, wenn der Vorgang fertig ist
-(auch über einen Neustart des Proxys); scheitert er, bleibt der alte. In der
-Ausgabe des Vorgangs steht statt des Keys `***`.
+The proxy generates the Strata key. It only applies once the job is finished
+(also across a proxy restart); if the job fails, the old one stays. The job's
+output shows `***` instead of the key.
 
-`experimental_speed_projection` (ohne Angabe `false`) gibt Setup bei Qwen und
-Coder `--experimental-speed-projection on` statt `off` mit. Bei anderen
-Familien ist `true` ein `400`. Der Proxy schickt das Feld nur, wenn es
-angehakt ist (siehe „Ältere PC-Dienste“).
+`experimental_speed_projection` (`false` if not given) passes setup
+`--experimental-speed-projection on` instead of `off` for Qwen and Coder. For
+other families, `true` is a `400`. The proxy sends the field only when it is
+checked (see "Older PC services").
 
-`set_speed_projection` ändert nur `args` in `strata-<id>.json`. `on: true`
-nimmt Setups Flags heraus und hängt sie neu an, mit Stratas Vektor aus dem
-Strata-Ordner (siehe [strata-api.md](strata-api.md)); fehlt der Vektor,
-scheitert der Vorgang und die Konfiguration bleibt. `on: false` nimmt die
-vier Flags mit ihren Werten heraus, auch einen eigenen Vektor. Andere
-Familien als Qwen und Coder sind ein `400`, ein Modell aus dem Katalog, das
-nicht installiert ist, wie bei `activate` ein `409`. Die Änderungszeit der
-Konfiguration bleibt, denn ohne eigenes Startskript startet Strata die
-zuletzt geänderte.
+`set_speed_projection` only changes `args` in `strata-<id>.json`. `on: true`
+removes setup's flags and appends them again, with Strata's vector from the
+Strata folder (see [strata-api.md](strata-api.md)); if the vector is missing,
+the job fails and the configuration stays. `on: false` removes the
+four flags with their values, including a custom vector. Families other
+than Qwen and Coder are a `400`, a model from the catalog that is
+not installed is a `409`, as with `activate`. The configuration's modification
+time stays, because without its own start script Strata starts the
+most recently modified one.
 
-`set_context` setzt nur den Wert von `--max-context` in `args` (fehlt das
-Flag, hängt er es an) und nimmt `--rope-scaling` und `--rope-scale` mit ihren
-Werten heraus. Er nimmt nur Kontexte aus dem Katalog bis 262144, der
-trainierten Länge
-(`MAX_SWITCHED_CONTEXT`): darüber braucht das Modell Rope-Scaling, das nur Setup
-einrichtet (`400`). Was Setup aus dem alten Kontext abgeleitet hat
-(KV-Streaming mit `--kv-resident`, `--kv`, parallele Slots, Kalibrierung),
-bleibt. Ein Modell aus dem Katalog, das nicht installiert ist, ist ein
-`409`. Die Änderungszeit bleibt wie bei `set_speed_projection`.
+`set_context` only sets the value of `--max-context` in `args` (if the flag
+is missing, it appends it) and removes `--rope-scaling` and `--rope-scale` with
+their values. It only takes contexts from the catalog up to 262144, the
+trained length
+(`MAX_SWITCHED_CONTEXT`): above that the model needs rope scaling, which only
+setup sets up (`400`). What setup derived from the old context
+(KV streaming with `--kv-resident`, `--kv`, parallel slots, calibration)
+stays. A model from the catalog that is not installed is a
+`409`. The modification time stays as with `set_speed_projection`.
 
-Beim aktiven Modell wartet der Vorgang nach dem Neustart, bis Strata auf
-`/health` antwortet. Endet Strata vorher oder antwortet es nicht innerhalb
-von `context_start_secs` (Standard 600), schreibt er die alten `args` zurück,
-startet Strata damit neu und scheitert; die letzten Zeilen der
-Strata-Ausgabe stehen dann in `lines` des Vorgangs. Wird das Warten
-abgebrochen, kommen die alten `args` ebenso zurück. Im Gaming-Modus startet
-Strata nicht neu, und es wird nicht gewartet.
+For the active model, the job waits after the restart until Strata answers on
+`/health`. If Strata exits before that or does not answer within
+`context_start_secs` (default 600), it writes the old `args` back,
+restarts Strata with them and fails; the last lines of the
+Strata output are then in the job's `lines`. If the wait is
+cancelled, the old `args` are restored as well. In gaming mode Strata
+does not restart, and there is no waiting.
 
 ### `GET /strata/job`
 
-Der laufende oder letzte Vorgang (`StrataJob`, `null` ohne einen): `state` (`running`, `done`, `failed`,
-`cancelled`, `interrupted` nach einem Neustart), Schritt, Fortschritt mit
-Bytes, Tempo und Restzeit, die letzten 20 Ausgabezeilen, `error`, `result`.
+The running or last job (`StrataJob`, `null` without one): `state` (`running`, `done`, `failed`,
+`cancelled`, `interrupted` after a restart), step, progress with
+bytes, speed and remaining time, the last 20 output lines, `error`, `result`.
 
 ### `POST /strata/job/cancel`
 
-Bricht den laufenden Vorgang ab (`202` mit dem Vorgang), sonst `409`
+Cancels the running job (`202` with the job), otherwise `409`
 (`Refused`).

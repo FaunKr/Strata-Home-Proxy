@@ -1,9 +1,9 @@
 ---
 name: steward
-description: PR in diesem Repo zum Merge bringen. Lesen beim Öffnen eines PRs, bei jedem CI- oder Review-Ereignis und vor jedem Merge.
+description: Bring a PR in this repo to merge. Read when opening a PR, on every CI or review event and before every merge.
 ---
 
-1. **Mergebar zuerst.** Vor dem Warten auf CI und vor dem Merge `mergeable_state` des PRs lesen. Bei `dirty` `origin/main` per Merge-Commit einmischen, nie per Rebase, und `scripts/check.sh` ausführen. Danach pushen und erst dann auf CI warten. Ein CI-Lauf auf einem Kopf mit Konflikt zählt nicht.
-2. **Grün heißt:** der Check `ci-ok` ist erfolgreich auf dem aktuellen Kopf (er fasst `test`, `image` und `ui` zusammen; nicht nötige Jobs werden übersprungen), und `mergeable_state` ist `clean`.
-3. **Mergen** mit Merge-Commit (`merge_method: merge`), wie bei allen bisherigen PRs, und mit `expectedHeadSha` auf dem geprüften Kopf.
-4. **Review-Anfrage:** Bei PRs, die Faun angestoßen hat, ist Faun der Autor. Eine Review-Anfrage an Faun scheitert deshalb. Die Zuweisung reicht.
+1. **Mergeable first.** Before waiting for CI and before merging, read the PR's `mergeable_state`. On `dirty`, merge in `origin/main` with a merge commit, never by rebase, and run `scripts/check.sh`. Then push, and only then wait for CI. A CI run on a head with a conflict does not count.
+2. **Green means:** the check `ci-ok` succeeded on the current head (it combines `test`, `image` and `ui`; jobs that are not needed are skipped), and `mergeable_state` is `clean`.
+3. **Merge** with a merge commit (`merge_method: merge`), as with all previous PRs, and with `expectedHeadSha` on the checked head.
+4. **Review request:** For PRs that Faun started, Faun is the author. A review request to Faun therefore fails. The assignment is enough.

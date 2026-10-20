@@ -11,8 +11,8 @@ use strata_admin_ui::{
     api::{self as ui, ForcedRestart},
     api::{
         ApiKeyInfo, ApiKeysView, CodeBenchPage, CreatedKey, HistoryView, KeepAwakeChoice,
-        OutputMessage, Overview, PcSetupCommand, Session, SettingEntry, SettingValue, SettingsView,
-        Setup, Source, StrataJobForm, StrataPage,
+        OutputMessage, Overview, PcSetupCommand, Session, SettingEntry, SettingSuggestion,
+        SettingValue, SettingsView, Setup, Source, StrataJobForm, StrataPage,
     },
     labels::{NO_AGENT, NO_ANSWER, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
@@ -26,6 +26,7 @@ use crate::{
     events::EventKind,
     overview, settings,
     state::AppState,
+    timeouts,
 };
 
 /// Detail of events caused by a button on the overview.
@@ -90,6 +91,10 @@ impl Backend for UiBackend {
                 restart: e.field.restart,
                 secret: e.field.secret,
                 optional: e.field.optional,
+                suggestion: timeouts::suggestion(&self.0, e.field.key).map(|s| SettingSuggestion {
+                    secs: s.secs,
+                    from: s.from,
+                }),
             })
             .collect();
         SettingsView {

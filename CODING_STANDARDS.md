@@ -1,90 +1,98 @@
 # Coding Standards
 
-Regeln für das Review. Was ein Test oder Clippy schon prüft, steht hier nicht.
-Verhalten von Strata (Endpunkte, Auth, Metriken): `docs/strata-api.md`.
-Schon entschiedene Fragen: `docs/adr/`.
+Rules for review. What a test or Clippy already checks is not listed here.
+Behaviour of Strata (endpoints, auth, metrics): `docs/strata-api.md`.
+Questions already decided: `docs/adr/`.
 
-## Weboberfläche und Login
+## Web UI and login
 
-- **Sitzungen enden auf dem Server.** Abmelden, Passwort ändern und das Löschen
-  von `admin-password.json` machen bestehende Cookies ungültig, auch kopierte.
-  Ein Cookie nur im Browser zu löschen reicht nicht.
-- **Tokens sind eindeutig.** Zwei Anmeldungen in derselben Sekunde ergeben
-  verschiedene Tokens; ein Widerruf trifft nur die eigene Sitzung.
-- **Jede Passwortprüfung zählt zur Sperre**, auch die des aktuellen Passworts
-  beim Ändern.
-- **Fehler beim Speichern werden gemeldet.** Ein Wert, der nicht in `DATA_DIR`
-  landet, gilt nicht als gespeichert, und die Seite sagt das.
-- **Kein veralteter Stand überschreibt einen neueren.** Wer eine Kopie unter
-  einem Lock zieht und außerhalb schreibt, hält dabei eine Schreibsperre, die
-  auch jeder andere Write derselben Datei nimmt.
-- **Was Leptos beim Bau des Routers tut, geschieht einmal pro Prozess.** Das
-  Erzeugen der Routenliste setzt einen prozessweiten Schalter, der jede
-  Ressource anhält, die währenddessen startet (#69). Neuer Code, der das
-  bei jedem Router-Bau wiederholt, braucht denselben `OnceLock` wie
+- **Sessions end on the server.** Logging out, changing the password and deleting
+  `admin-password.json` invalidate existing cookies, copied ones too.
+  Deleting a cookie only in the browser is not enough.
+- **Tokens are unique.** Two logins in the same second yield
+  different tokens; a revocation ends only its own session.
+- **Every password check counts towards the lockout**, including the check of the
+  current password when changing it.
+- **Errors when saving are reported.** A value that does not end up in `DATA_DIR`
+  does not count as saved, and the page says so.
+- **No stale state overwrites a newer one.** Whoever takes a copy under
+  a lock and writes outside it holds a write lock while doing so, which
+  every other write of the same file takes too.
+- **What Leptos does while building the router happens once per process.**
+  Generating the route list sets a process-wide switch that halts every
+  resource started meanwhile (#69). New code that repeats this
+  on every router build needs the same `OnceLock` as
   `server::router`.
-- **Eine Ressource entsteht nicht im Inhalt eines `Suspend`.** Wird sie dort
-  angelegt, hydratisiert die Seite nicht („expected a marker node“). Die
-  Komponente legt sie an und zeigt sie neben dem `Suspend`, wie
-  `CodeBenchCard` neben `with_page`.
-- **Server-Funktionen lesen Kontext ohne Panik** (`backend()?`, `use_context`).
-  Der Server zeichnet den Inhalt einer `Transition` pro Anfrage mehrmals; die
-  Ressourcen der verworfenen Durchläufe laufen weiter, ohne Kontext. Eine
-  Panik dort lässt die Antwort nie enden.
+- **A resource is not created inside a `Suspend`'s content.** If it is
+  created there, the page does not hydrate ("expected a marker node"). The
+  component creates it and shows it next to the `Suspend`, like
+  `CodeBenchCard` next to `with_page`.
+- **Server functions read context without panicking** (`backend()?`, `use_context`).
+  The server renders the content of a `Transition` several times per request; the
+  resources of the discarded passes keep running, without context. A
+  panic there means the response never ends.
 
-## Proxy und PC
+## Proxy and PC
 
-- **`/admin` weckt den PC nie** und setzt die Zeit bis zum Standby nicht
-  zurück. Server-Funktionen prüft `no_server_function_wakes_the_pc` von selbst;
-  eine eigene Route wie `overview-stream` braucht einen eigenen Test.
-- **Timer in Tests mit Abstand.** Muss ein Test erst etwas sehen, bevor ein
-  Timer abläuft (Leerlaufzeit, Nachlauf), liegt der Timer mindestens 2 s
-  dahinter; der CI-Runner ist langsamer als die Session. Knappe Timer nur,
-  wenn der Test danach nur noch wartet.
-- **Wartezeiten, die ein Test abwarten müsste, sind einstellbar.** Eine Grenze
-  oder Wiederholzeit, von der Verhalten abhängt, kommt aus `Config` (wie
-  `idle_timeout`) oder über einen Setter für Tests (wie `Monitor::set_poll`,
-  `UpdateSummaries::set_timing`), nicht aus einer festen `const`. Sonst bleibt
-  das Verhalten ungetestet.
-- **Vorrang der Einstellungen:** vom PC gemeldete MAC, dann Wert von der
-  Seite, dann Umgebungsvariable, dann Standardwert. Neue Einstellungen folgen
-  derselben Reihenfolge und werden live über `AppState::cfg()` gelesen. Das
-  gilt für Werte aus den Einstellungs-Abschnitten der Weboberfläche, nicht für feste Pfade im Image wie
-  `LEPTOS_SITE_ROOT` oder `PC_AGENT_EXE`.
-- **Strata-Vorgänge führen nur feste Programme aus.** Der PC-Dienst nimmt
-  Werte nur aus `catalog.rs` und prüft Modell-IDs gegen den Katalog, bevor sie
-  in einen Pfad gehen. Der Strata-Key steht in keiner Antwort an die
-  Weboberfläche und in keinem gespeicherten Vorgang.
-- **Jeder Weg aus einem Strata-Vorgang hinterlässt einen Stand, mit dem
-  Strata lief.** Das Review geht jedes `?`, jede Abbruchprüfung und jeden
-  gescheiterten Schritt durch: Was liegt danach auf der Platte, läuft Strata?
-  Eine zurückgerollte Konfiguration kommt in `cleanup` zurück, auch nach
-  einem Abbruch, und Stratas letzte Zeilen bleiben sichtbar, ob das
-  Zurückschreiben klappt oder nicht (`StrataProcess::restart_or_roll_back`).
-- **Clients für Dienste auf demselben Rechner setzen ein kurzes
-  `connect_timeout`** (wie `STRATA_CONNECT_TIMEOUT` in `pc-agent/src/agent.rs`).
-  Windows wiederholt eine abgewiesene Verbindung zu localhost rund 2 s lang;
-  ohne Grenze wartet jede Abfrage eines gestoppten Strata so lange.
-- **Wird ein Feld optional, geht das Review jeden Leser durch.** Wer bisher
-  einen Wert voraussetzte, braucht einen Weg für „fehlt“, der zum Zustand
-  passt (fehlendes Startskript heißt nicht „PC schläft“).
+- **`/admin` never wakes the PC** and does not reset the idle
+  timeout. `no_server_function_wakes_the_pc` checks server functions on its own;
+  a route of its own like `overview-stream` needs a test of its own.
+- **Timers in tests with a margin.** If a test must see something before a
+  timer expires (idle timeout, settling), the timer fires at least 2 s
+  after it; the CI runner is slower than the session. Tight timers only
+  when the test only waits afterwards.
+- **A test for a fallback or default value picks inputs for which another
+  value would give another result.** Rounding, lower bounds and
+  `max`/`min` hide this easily: if the formula gives the same result for many
+  values, the test does not check the fallback.
+- **Waits a test would have to sit through are configurable.** A limit
+  or retry interval that behaviour depends on comes from `Config` (like
+  `idle_timeout`) or through a setter for tests (like `Monitor::set_poll`,
+  `UpdateSummaries::set_timing`), not from a fixed `const`. Otherwise the
+  behaviour stays untested.
+- **Precedence of settings:** MAC reported by the PC, then value from the
+  page, then environment variable, then default. New settings follow
+  the same order and are read live via `AppState::cfg()`. This
+  applies to values from the web UI's settings sections, not to fixed paths in the image like
+  `LEPTOS_SITE_ROOT` or `PC_AGENT_EXE`.
+- **A new setting appears everywhere settings appear:** in
+  `config::FIELDS`, `Config::apply` and `Config::value`, with title, help and
+  section in `labels.rs`. If the section is missing,
+  `each_area_shows_its_own_settings` fails.
+- **Strata jobs run only fixed programs.** The PC service takes
+  values only from `catalog.rs` and checks model IDs against the catalog before they
+  go into a path. The Strata key is in no response to the
+  web UI and in no stored job.
+- **Every way out of a Strata job leaves a state Strata
+  ran with.** The review goes through every `?`, every cancellation check and every
+  failed step: what is on disk afterwards, is Strata running?
+  A rolled-back configuration comes back in `cleanup`, even after
+  a cancellation, and Strata's last lines stay visible whether
+  writing back works or not (`StrataProcess::restart_or_roll_back`).
+- **Clients for services on the same machine set a short
+  `connect_timeout`** (like `STRATA_CONNECT_TIMEOUT` in `pc-agent/src/agent.rs`).
+  Windows retries a refused connection to localhost for about 2 s;
+  without a limit every query to a stopped Strata waits that long.
+- **When a field becomes optional, the review goes through every reader.** Whoever
+  assumed a value so far needs a path for "missing" that fits the
+  state (a missing start script does not mean "PC is asleep").
 
-## Code-Benchmark (`tools/code-bench`)
+## Code benchmark (`tools/code-bench`)
 
-- **Jede Änderung am Runner oder an seinem Aufruf durch den Proxy geht durch
-  das Bedrohungsmodell** in `tools/code-bench/README.md`: Erreicht fremder Code
-  danach etwas aus der Tabelle, oder fällt eine der Schranken weg? Ein neuer
-  Zugang (Port, Pfad, Nutzer, Mount) bekommt eine Zeile mit seiner Schranke.
+- **Every change to the runner or to how the proxy calls it goes through
+  the threat model** in `tools/code-bench/README.md`: does foreign code
+  then reach anything from the table, or does one of the barriers fall away? A new
+  access (port, path, user, mount) gets a row with its barrier.
 
-## Installationsskript (`deploy/windows/install.ps1`)
+## Install script (`deploy/windows/install.ps1`)
 
-Es läuft in Windows PowerShell 5.1, nicht in PowerShell 7:
+It runs in Windows PowerShell 5.1, not in PowerShell 7:
 
-- **Dateien für den PC-Dienst ohne BOM schreiben**
-  (`[IO.File]::WriteAllLines`). `Set-Content -Encoding UTF8` setzt eins davor.
-- **Fehler des NAS kommen als Skript mit Meldung**, nicht als Fehlerstatus:
-  `irm` zeigt bei einem Fehlerstatus nur „(403)“ und keinen Text.
-- **Was der Einzeiler braucht, setzt der NAS ins Skript ein.** `irm … | iex`
-  nimmt keine Parameter.
-- **Erst laden, dann den laufenden Dienst beenden**, und alles, was scheitern
-  kann, vor dem Verbrauch des Einmalcodes prüfen.
+- **Write files for the PC service without a BOM**
+  (`[IO.File]::WriteAllLines`). `Set-Content -Encoding UTF8` puts one in front.
+- **Errors from the NAS come as a script with a message**, not as an error status:
+  on an error status `irm` shows only "(403)" and no text.
+- **What the one-liner needs, the NAS inserts into the script.** `irm … | iex`
+  takes no parameters.
+- **Download first, then stop the running service**, and check everything that can
+  fail before the one-time code is used up.

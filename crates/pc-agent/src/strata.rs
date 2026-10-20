@@ -1074,6 +1074,7 @@ pub fn view(agent: &Agent) -> StrataReport {
     let cfg = &agent.cfg;
     let dir = &cfg.strata_dir;
     let ram_gb = agent.platform().ram_bytes() as f64 / (1u64 << 30) as f64;
+    let vram_gb = agent.platform().vram_bytes() as f64 / (1u64 << 30) as f64;
     let active = active_model(agent);
     let install = Installation::of(cfg);
     let support = install.support();
@@ -1119,11 +1120,12 @@ pub fn view(agent: &Agent) -> StrataReport {
                 size: s.size.into(),
                 download_gb: s.download_gb,
                 ram_gb: s.ram_gb,
-                fits: ram_gb == 0.0 || f64::from(s.ram_gb) <= ram_gb + 0.5,
+                memory_with_vram: s.with_vram,
+                fits: ram_gb == 0.0 || s.fits(ram_gb, vram_gb),
                 partly_downloaded: install.partly_downloaded(&s.id()),
             })
             .collect(),
-        recommended: catalog::recommend(ram_gb).map(Size::id),
+        recommended: catalog::recommend(ram_gb, vram_gb).map(Size::id),
         contexts: catalog::CONTEXTS.to_vec(),
         default_context: catalog::DEFAULT_CONTEXT,
         ram_gb,

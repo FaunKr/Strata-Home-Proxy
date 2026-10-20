@@ -503,6 +503,7 @@ pub fn strata_info(installed: bool) -> StrataReport {
             size: "IQ3_XXS".into(),
             download_gb: 75.8,
             ram_gb: 60,
+            memory_with_vram: false,
             fits: true,
             partly_downloaded: false,
         }],

@@ -10,6 +10,12 @@ pub fn read() -> Hardware {
     windows::read()
 }
 
+/// Dedicated VRAM of the biggest card; 0 without one.
+#[cfg(windows)]
+pub fn vram_bytes() -> u64 {
+    windows::vram_bytes()
+}
+
 #[cfg(windows)]
 mod windows {
     use std::{
@@ -168,6 +174,10 @@ mod windows {
             .iter()
             .map(|(_, sum)| sum.clamp(0.0, 100.0) as f32)
             .reduce(f32::max)
+    }
+
+    pub fn vram_bytes() -> u64 {
+        biggest_adapter().map_or(0, |a| a.vram_total)
     }
 
     struct Adapter {

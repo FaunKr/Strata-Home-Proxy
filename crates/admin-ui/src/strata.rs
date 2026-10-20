@@ -588,8 +588,14 @@ fn ModelChoice(
     let options = sizes
         .iter()
         .map(|s| {
+            // Gyro's memory is RAM and VRAM together.
+            let memory = if s.memory_with_vram {
+                "RAM + VRAM"
+            } else {
+                "RAM"
+            };
             let mut text = format!(
-                "{} {} · {} download · needs {} GB RAM",
+                "{} {} · {} download · needs {} GB {memory}",
                 family_title(&s.family),
                 s.size,
                 gb(s.download_gb),
@@ -599,7 +605,7 @@ fn ModelChoice(
                 text.push_str(" (recommended)");
             }
             if !s.fits {
-                text.push_str(" (not enough RAM)");
+                text.push_str(&format!(" (not enough {memory})"));
             }
             if s.partly_downloaded {
                 text.push_str(" (partly downloaded)");

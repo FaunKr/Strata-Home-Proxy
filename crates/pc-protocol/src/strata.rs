@@ -143,7 +143,10 @@ pub struct StrataSize {
     pub size: String,
     pub download_gb: f64,
     pub ram_gb: u32,
-    /// The PC has the RAM for it.
+    /// `ram_gb` is RAM and VRAM together (Gyro); `false` from older services.
+    #[serde(default)]
+    pub memory_with_vram: bool,
+    /// The PC has the memory for it.
     pub fits: bool,
     /// Parts are downloaded already; installing continues there.
     pub partly_downloaded: bool,

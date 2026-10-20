@@ -112,6 +112,7 @@
       "size": "IQ3_XXS",
       "download_gb": 75.8,
       "ram_gb": 60,
+      "memory_with_vram": false,
       "fits": true,
       "partly_downloaded": true
     },
@@ -121,6 +122,7 @@
       "size": "IQ1_M",
       "download_gb": 58.4,
       "ram_gb": 32,
+      "memory_with_vram": false,
       "fits": true,
       "partly_downloaded": true
     },
@@ -130,7 +132,18 @@
       "size": "UD-Q5_K_XL",
       "download_gb": 158.3,
       "ram_gb": 108,
+      "memory_with_vram": false,
       "fits": false,
+      "partly_downloaded": false
+    },
+    {
+      "id": "gyro-Gyro-S",
+      "family": "gyro",
+      "size": "Gyro-S",
+      "download_gb": 58.5,
+      "ram_gb": 28,
+      "memory_with_vram": true,
+      "fits": true,
       "partly_downloaded": false
     }
   ],

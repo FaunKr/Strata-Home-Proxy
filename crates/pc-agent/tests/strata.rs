@@ -331,7 +331,7 @@ async fn the_catalog_marks_what_fits_and_recommends_setups_pick() {
     let s = setup("strata-view").await;
     let view = get(&s, "/strata").await;
     assert_eq!(view["installed"], false);
-    assert_eq!(view["recommended"], "IQ3_XXS");
+    assert_eq!(view["recommended"], "IQ3_S", "64 GB of RAM, no card");
     assert_eq!(view["default_context"], 65536);
     let entry = |id: &str| {
         view["catalog"]
@@ -353,6 +353,111 @@ async fn the_catalog_marks_what_fits_and_recommends_setups_pick() {
         .map(|f| f["id"].as_str().unwrap())
         .collect();
     assert_eq!(projection, ["qwen", "coder"]);
+}
+
+/// A PC with this much RAM and a card with this much VRAM, in GiB as setup
+/// counts them; no card for 0.
+fn pc_with(s: &Setup, ram_gib: f64, vram_gib: f64) {
+    let gib = |v: f64| (v * (1u64 << 30) as f64) as u64;
+    s.fake.ram.store(gib(ram_gib), Ordering::SeqCst);
+    s.fake.hardware.lock().unwrap().gpu = (vram_gib > 0.0).then(|| Gpu {
+        vram_total_bytes: Some(gib(vram_gib)),
+        ..Gpu::default()
+    });
+}
+
+fn catalog_entry(view: &Value, id: &str) -> Value {
+    view["catalog"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == id)
+        .unwrap_or_else(|| panic!("{id} missing: {view}"))
+        .clone()
+}
+
+/// Setup's `MEMORY_TIERS` (Strata aa82a886) by RAM + VRAM, below them the
+/// older rule by RAM alone.
+#[tokio::test]
+async fn the_recommendation_follows_setups_memory_tiers() {
+    let s = setup("strata-tiers").await;
+    for (ram, vram, expected) in [
+        (64.0, 0.0, json!("IQ3_S")),
+        (32.0, 30.0, json!("IQ3_S")),
+        (61.9, 0.0, json!("IQ3_XXS")),
+        (32.0, 14.0, json!("IQ3_XXS")),
+        (45.9, 0.0, json!("swift-IQ2_XS")),
+        (24.0, 14.0, json!("swift-IQ2_XS")),
+        (37.9, 0.0, json!("coder-IQ1_M")),
+        (28.0, 8.0, json!("coder-IQ1_M")),
+        (16.0, 16.0, Value::Null),
+    ] {
+        pc_with(&s, ram, vram);
+        let view = get(&s, "/strata").await;
+        assert_eq!(
+            view["recommended"], expected,
+            "{ram} GB RAM + {vram} GB VRAM"
+        );
+    }
+}
+
+#[tokio::test]
+async fn gyro_fits_by_ram_and_vram_and_is_never_recommended() {
+    let s = setup("strata-gyro-view").await;
+    pc_with(&s, 16.0, 16.0);
+    let view = get(&s, "/strata").await;
+    let gyro_s = catalog_entry(&view, "gyro-Gyro-S");
+    assert_eq!(gyro_s["family"], "gyro");
+    assert_eq!(gyro_s["download_gb"], 58.5);
+    assert_eq!(gyro_s["ram_gb"], 28);
+    assert_eq!(gyro_s["memory_with_vram"], true);
+    assert_eq!(gyro_s["fits"], true, "16 + 16 GB: {gyro_s}");
+    let gyro_m = catalog_entry(&view, "gyro-Gyro-M");
+    assert_eq!(gyro_m["download_gb"], 92.0);
+    assert_eq!(gyro_m["ram_gb"], 35);
+    assert_eq!(gyro_m["fits"], false, "{gyro_m}");
+    assert_eq!(
+        catalog_entry(&view, "coder-IQ1_M")["memory_with_vram"],
+        false
+    );
+    assert_eq!(
+        catalog_entry(&view, "coder-IQ1_M")["fits"],
+        false,
+        "RAM alone"
+    );
+    assert_eq!(view["recommended"], Value::Null, "{view}");
+    let gyro = view["families"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "gyro")
+        .unwrap();
+    assert_eq!(gyro["title"], "Qwen3.8-Flash-Next (Gyro)");
+    assert_eq!(gyro["speed_projection"], false);
+}
+
+#[tokio::test]
+async fn gyro_installs_through_setup_like_any_family() {
+    let s = setup("strata-gyro-install").await;
+    installable(&s);
+    let body = json!({"kind": "install", "family": "gyro", "size": "Gyro-S", "context": 65536,
+        "api_key": KEY});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 202, "{answer}");
+    finished(&s).await;
+    let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+    assert!(
+        args.windows(4)
+            .any(|w| w == ["--family", "gyro", "--model", "Gyro-S"]),
+        "{args:?}"
+    );
+    assert!(
+        !args.contains(&"--experimental-speed-projection".to_string()),
+        "{args:?}"
+    );
+    let body = json!({"kind": "install", "family": "gyro", "size": "Gyro-M", "context": 65536,
+        "api_key": KEY, "experimental_speed_projection": true});
+    assert_eq!(post(&s, "/strata/jobs", body).await.0, 400);
 }
 
 // --- Progress, cancel, resume (#30) ---

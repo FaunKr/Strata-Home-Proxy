@@ -1,5 +1,5 @@
 //! The models Strata's setup offers, from its tables (`MODELS`, `FAMILIES`,
-//! `CONTEXTS` in `setup.py`, Strata commit 477ac13). Only values from here
+//! `CONTEXTS`, `MEMORY_TIERS` in `setup.py`, Strata commit cbfd5b9). Only values from here
 //! reach the setup; there are no free arguments. Left out: the NVIDIA-only
 //! NVFP4 packs.
 
@@ -24,6 +24,8 @@ pub struct Size {
     pub size: &'static str,
     pub download_gb: f64,
     pub ram_gb: u32,
+    /// `ram_gb` counts RAM and VRAM together (setup's `mem_total`: Gyro).
+    pub with_vram: bool,
 }
 
 pub const FAMILIES: &[Family] = &[
@@ -57,6 +59,12 @@ pub const FAMILIES: &[Family] = &[
         tag: "qwen36-",
         speed_projection: false,
     },
+    Family {
+        id: "gyro",
+        title: "Qwen3.8-Flash-Next (Gyro)",
+        tag: "gyro-",
+        speed_projection: false,
+    },
 ];
 
 const fn size(family: &'static str, size: &'static str, download_gb: f64, ram_gb: u32) -> Size {
@@ -65,6 +73,15 @@ const fn size(family: &'static str, size: &'static str, download_gb: f64, ram_gb
         size,
         download_gb,
         ram_gb,
+        with_vram: false,
+    }
+}
+
+/// A size whose memory is RAM and VRAM together; setup's 27.6 GB rounded up.
+const fn with_vram(family: &'static str, size: &'static str, download_gb: f64, gb: u32) -> Size {
+    Size {
+        with_vram: true,
+        ..self::size(family, size, download_gb, gb)
     }
 }
 
@@ -85,6 +102,16 @@ pub const SIZES: &[Size] = &[
     size("qwen36", "UD-Q4_K_XL", 22.9, 32),
     size("qwen36", "UD-Q6_K_XL", 32.6, 44),
     size("qwen36", "Q8_0", 37.8, 52),
+    with_vram("gyro", "Gyro-S", 58.5, 28),
+    with_vram("gyro", "Gyro-M", 92.0, 35),
+];
+
+/// Setup's `MEMORY_TIERS`: the size for RAM + VRAM from each floor, 2 GB
+/// below the tiers' names because the OS reports a little less.
+const MEMORY_TIERS: [(f64, &str, &str); 3] = [
+    (62.0, "qwen", "IQ3_S"),
+    (46.0, "qwen", "IQ3_XXS"),
+    (38.0, "swift", "IQ2_XS"),
 ];
 
 pub const CONTEXTS: &[u32] = &[8192, 32768, 65536, 131072, 204800, 262144, 393216, 524288];
@@ -104,25 +131,38 @@ pub fn find(family: &str, size: &str) -> Option<&'static Size> {
     SIZES.iter().find(|s| s.family == family && s.size == size)
 }
 
+/// The size an id names, in any letter case (`strata-coder-iq1_m.json`).
+pub fn by_id(id: &str) -> Option<&'static Size> {
+    SIZES.iter().find(|s| s.id().eq_ignore_ascii_case(id))
+}
+
 impl Size {
     /// The model id setup uses: `IQ3_XXS`, `coder-IQ1_M`.
     pub fn id(&self) -> String {
         let tag = family(self.family).map_or("", |f| f.tag);
         format!("{tag}{}", self.size)
     }
+
+    /// Whether a PC with this RAM and VRAM (GiB, as setup counts) has the
+    /// memory for it.
+    pub fn fits(&self, ram_gb: f64, vram_gb: f64) -> bool {
+        let have = if self.with_vram {
+            ram_gb + vram_gb
+        } else {
+            ram_gb
+        };
+        f64::from(self.ram_gb) <= have + 0.5
+    }
 }
 
-/// The size an id names, in any letter case (`strata-coder-iq1_m.json`).
-pub fn by_id(id: &str) -> Option<&'static Size> {
-    SIZES.iter().find(|s| s.id().eq_ignore_ascii_case(id))
-}
-
-/// Setup's own pick for a PC with `ram_gb` of RAM.
-pub fn recommend(ram_gb: f64) -> Option<&'static Size> {
-    if ram_gb >= 60.0 {
-        find("qwen", "IQ3_XXS")
-    } else if ram_gb >= 44.0 {
-        find("qwen", "Q2_0")
+/// Setup's own pick for a PC with this RAM and VRAM (GiB): its memory tiers,
+/// below them the Coder from 28 GB of RAM. Never Gyro, as setup.
+pub fn recommend(ram_gb: f64, vram_gb: f64) -> Option<&'static Size> {
+    if let Some((_, family, size)) = MEMORY_TIERS
+        .iter()
+        .find(|(floor, _, _)| ram_gb + vram_gb >= *floor)
+    {
+        find(family, size)
     } else if ram_gb >= 28.0 {
         find("coder", "IQ1_M")
     } else {

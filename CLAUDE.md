@@ -14,6 +14,8 @@
 - Each step of the pipeline (/grill-me, /to-spec, /to-tickets, /implement, /code-review, merge, /retro) starts only when Faun calls it; after a step, report and wait. Exception: /code-review starts on its own once the PR is up.
 - A retro ends in a PR that fixes everything from it that a PR can fix.
 - A refactor that lands as one PR is one ticket with a checklist, not a tree of sub-tickets.
+- A spec that lands as one PR is implemented in the thread itself: no implementer subagents, worktrees or merger.
+- When Strata changed something the PC service reads (setup's output, a file it writes), extend the reader's unit test with the new line copied from Strata's source, not a made-up one, and update `docs/strata-api.md`.
 - If a spec says "X only in the module", that applies to code, helpers and fixtures. Tests may spell out the outer names they pin down (file names Strata itself reads).
 - Issues, specs, PR text, commit messages and retros are written in English, using the terms in `GLOSSARY.md`.
 

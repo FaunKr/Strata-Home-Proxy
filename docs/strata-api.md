@@ -14,6 +14,14 @@ Download a file raw into the scratchpad and read it with `grep` and `sed`:
 curl -sS -o server.py https://raw.githubusercontent.com/Niko1221/Strata/477ac13/serve/server.py
 ```
 
+To see what changed in Strata since the commit this page is pinned to, clone it without the file contents and read the log of the files the proxy and the PC service depend on (`setup.py` for setup's output, `serve/` for the HTTP API). The GitHub API without a token may refuse the request; a clone works.
+
+```sh
+git clone -q --filter=blob:none https://github.com/Niko1221/Strata.git strata
+git -C strata log --oneline 477ac13..HEAD -- setup.py serve/
+git -C strata grep -n 'GB ({\|=== Step' HEAD -- setup.py   # the lines the PC service reads
+```
+
 `serve/server.py` has over 7000 lines. A web fetch with a summary cuts it off and quotes no handlers. The routes are in `do_GET` from line 5372.
 
 ## API key

@@ -41,6 +41,10 @@ Questions already decided: `docs/adr/`.
   timer expires (idle timeout, settling), the timer fires at least 2 s
   after it; the CI runner is slower than the session. Tight timers only
   when the test only waits afterwards.
+- **A test for a fallback or default value picks inputs for which another
+  value would give another result.** Rounding, lower bounds and
+  `max`/`min` hide this easily: if the formula gives the same result for many
+  values, the test does not check the fallback.
 - **Waits a test would have to sit through are configurable.** A limit
   or retry interval that behaviour depends on comes from `Config` (like
   `idle_timeout`) or through a setter for tests (like `Monitor::set_poll`,
@@ -51,6 +55,10 @@ Questions already decided: `docs/adr/`.
   the same order and are read live via `AppState::cfg()`. This
   applies to values from the web UI's settings sections, not to fixed paths in the image like
   `LEPTOS_SITE_ROOT` or `PC_AGENT_EXE`.
+- **A new setting appears everywhere settings appear:** in
+  `config::FIELDS`, `Config::apply` and `Config::value`, with title, help and
+  section in `labels.rs`. If the section is missing,
+  `each_area_shows_its_own_settings` fails.
 - **Strata jobs run only fixed programs.** The PC service takes
   values only from `catalog.rs` and checks model IDs against the catalog before they
   go into a path. The Strata key is in no response to the

@@ -1,7 +1,24 @@
 # Schnittstelle zwischen NAS-Proxy und PC-Dienst
 
-Der Dienst auf dem PC (Schritt 3) bietet diese Endpunkte an. Der Proxy nutzt
-sie schon jetzt; die Tests bilden den Dienst nach.
+Der PC-Dienst bietet diese Endpunkte an, der Proxy nutzt sie. Was jeder
+Endpunkt nimmt und antwortet, steht als Typen im Crate `strata-pc-protocol`
+(`crates/pc-protocol`); dieses Dokument beschreibt, was dahinter passiert.
+Gespeicherte Antworten des heutigen PC-Dienstes liegen in
+`crates/pc-protocol/tests/samples`.
+
+## Ältere PC-Dienste
+
+Der PC-Dienst aktualisiert sich vom NAS, also spricht oft ein älterer
+PC-Dienst mit einem neueren Proxy. Deshalb:
+
+- Felder kommen nur dazu; keins wird umbenannt oder entfernt.
+- Ein Antwortfeld, das nach der ersten Version dazukam, hat einen
+  Standardwert, damit die Antwort eines älteren PC-Dienstes lesbar bleibt.
+- Ein optionales Anfragefeld fehlt, solange es nicht gesetzt ist: Der
+  PC-Dienst lehnt Anfragefelder ab, die er nicht kennt.
+
+Die Tests des Crates lesen die gespeicherten Antworten und dazu Antworten,
+denen die neueren Felder fehlen.
 
 Alle Anfragen tragen `Authorization: Bearer <PC_AGENT_TOKEN>`; der Dienst
 verlangt das Token immer. Er nimmt Anfragen nur von `allowed_clients` (dem
@@ -9,9 +26,7 @@ NAS) und von 127.0.0.1 an.
 
 ## `GET /status`
 
-```json
-{ "gaming_mode": false, "strata_running": true, "user_idle_secs": 1840, "mac": "AA:BB:CC:DD:EE:FF", "strata_job": false, "version": "0.1.0+558db97", "hardware": { … } }
-```
+Antwort: `PcStatus`.
 
 `strata_job` ist `true`, solange ein Strata-Vorgang läuft (siehe unten).
 
@@ -31,15 +46,7 @@ den Werten aus der Weboberfläche.
 `hardware` sind die Hardwarewerte für die Übersicht. Der Dienst liest sie aus
 Windows selbst, ohne Treiber: Solange `/status` gefragt wird, misst er alle 2 s
 im Hintergrund und antwortet mit der letzten Messung. Die erste Anfrage nach
-30 s Ruhe startet die Messung und bekommt nur `null`-Werte.
-
-```json
-"hardware": {
-  "gpu": { "load_pct": 37.0, "temp_c": 61.5, "vram_used_bytes": 12670000000,
-           "vram_total_bytes": 17163091968, "fan_rpm": 0, "power_pct": 41.0 },
-  "cpu": { "load_pct": 12.0, "ram_used_bytes": 22980000000, "ram_total_bytes": 34359738368 }
-}
-```
+30 s Ruhe startet die Messung und bekommt nur `null`-Werte (`Hardware`).
 
 - `gpu` ist die Grafikkarte mit dem meisten VRAM, `null` ohne Grafikkarte.
 - `power_pct` ist die Leistungsaufnahme als Anteil am Leistungslimit der
@@ -61,11 +68,11 @@ und weckt ihn.
 Der Proxy schickt das nach der Leerlaufzeit. Der Dienst prüft Gaming-Modus,
 laufende Strata-Anfragen (über `/slots`, falls Strata das anbietet) und
 Benutzeraktivität (letzte Tastatur- oder Mauseingabe, Vorgabe 10 min).
-Die Antwort kommt zuerst, Standby folgt 2 s später.
+Die Antwort (`Answer`) kommt zuerst, Standby folgt 2 s später.
 
-- `200 {"accepted": true}`: Standby wird ausgelöst.
-- `409 {"accepted": false, "reason": "Benutzer aktiv"}`: abgelehnt. Der
-  Proxy fragt nach `SLEEP_RETRY_SECS` erneut.
+- `200`, angenommen: Standby wird ausgelöst.
+- `409`, abgelehnt mit Grund, z. B. „Benutzer aktiv“. Der Proxy fragt nach
+  `SLEEP_RETRY_SECS` erneut.
 
 ## `POST /update` (für die Weboberfläche)
 
@@ -76,12 +83,12 @@ mit denselben Argumenten. Die Antwort kommt danach; 1 s später beendet sich
 der alte Dienst, der neue wartet so lange auf den Port und löscht dann die
 `.alt`.
 
-- `202 {"accepted": true}`: die neue .exe läuft gleich.
+- `202` (`Answer`): die neue .exe läuft gleich.
   Ab dem Download bis zum Ende lehnt der Dienst Strata-Vorgänge und Schlafen
   ab.
-- `409 {"reason": …}`: nicht jetzt (Strata bearbeitet eine Anfrage, ein
+- `409` (`Refused` mit Grund): nicht jetzt (Strata bearbeitet eine Anfrage, ein
   Strata-Vorgang oder ein Update läuft) oder ohne `nas_url` eingerichtet.
-- `500 {"reason": …}`: Download oder Austausch gescheitert; der alte Dienst
+- `500` (`Refused`): Download oder Austausch gescheitert; der alte Dienst
   läuft weiter, nichts ist verändert.
 
 Der Proxy schickt das nur bei wachem PC und weckt ihn dafür nie. Ein Dienst
@@ -90,25 +97,19 @@ mit dem Befehl von dort neu einzurichten.
 
 ## `POST /gaming` (für die Weboberfläche)
 
-```json
-{ "enabled": true }
-```
-
-An: Strata beenden, Schlafen sperren. Aus: Strata starten, Schlafen erlauben.
+Anfrage: `GamingRequest`, Antwort: `PcStatus`. An: Strata beenden, Schlafen
+sperren. Aus: Strata starten, Schlafen erlauben.
 
 ## `GET /strata-log` (für den Reiter *Output* im Bereich *Strata*)
 
 Die Strata-Ausgabe als Server-Sent Events: was ein vom Dienst gestartetes
 Strata auf seine Konsole schreibt. Zuerst kommen die gemerkten Zeilen (höchstens
 500, Trennzeilen eingeschlossen), dann jede neue, dazu jeder Wechsel des
-Hinweises. Jede Nachricht ist ein JSON-Objekt in `data:`:
-
-| `kind` | Felder | Bedeutung |
-| --- | --- | --- |
-| `started` | `at` (Unix-Sekunden) | Der Dienst hat Strata gestartet; die Zeilen davor bleiben |
-| `line` | `text` | eine neue Zeile |
-| `replace` | `text` | ersetzt die letzte Zeile (Fortschritt, der in der Konsole dieselbe Zeile mit `\r` überschreibt) |
-| `notice` | `reason`: `running`, `gaming`, `not_running`, `not_started_by_agent` | ob es Ausgabe gibt und warum nicht; `not_started_by_agent`: Strata antwortet, wurde aber nicht vom Dienst gestartet |
+Hinweises. Jede Nachricht ist eine `StrataOutputMessage` als JSON in
+`data:`; `replace` ersetzt die letzte Zeile (Fortschritt, der in der Konsole
+dieselbe Zeile mit `\r` überschreibt), `notice` sagt, ob es Ausgabe gibt
+und warum nicht. `not_started_by_agent`: Strata antwortet, wurde aber nicht
+vom Dienst gestartet, also kann er seine Ausgabe nicht lesen.
 
 Farbcodes und andere Steuerzeichen sind entfernt. Kommt der Abrufer nicht
 hinterher, endet der Strom; beim nächsten Verbinden kommen die gemerkten
@@ -125,21 +126,15 @@ bricht ihn ab, ein begonnener Download macht beim nächsten Mal weiter.
 
 ### `GET /strata`
 
-Was installiert ist, Stratas Katalog mit Empfehlung für den RAM des PCs,
+Antwort: `StrataReport`, also `StrataInfo` und daneben `update`. Was
+installiert ist, Stratas Katalog mit Empfehlung für den RAM des PCs,
 freier Platz, letzter Benchmark und der laufende oder letzte Vorgang.
 Enthält nie den Strata-Key. Fragt nebenbei höchstens einmal pro Stunde Git,
 ob es eine neuere Strata-Version gibt (`update_available`).
 
-Kommen Commits herein, steht in `update`, was sie bringen; ohne Update, vor
-der ersten Prüfung und bei einem älteren PC-Dienst fehlt das Feld:
-
-```json
-{"upstream": "fedcba98…", "total": 14, "remote": "https://github.com/Niko1221/Strata.git",
- "commits": [{"hash": "fedcba98…", "time": 1760000000, "subject": "…", "body": "…"}],
- "files": [{"path": "serve/server.py", "added": 120, "removed": 30}]}
-```
-
-`commits` sind die neuesten zuerst, höchstens 200 (`total` zählt alle).
+Kommen Commits herein, steht in `update` (`Incoming`), was sie bringen; ohne
+Update, vor der ersten Prüfung und bei einem älteren PC-Dienst fehlt das
+Feld. `commits` sind die neuesten zuerst, höchstens 200 (`total` zählt alle).
 `files` kommt aus `git diff --numstat HEAD..@{u}`; Binärdateien zählen 0
 Zeilen. Der Proxy behält das alles auf dem NAS; die Weboberfläche bekommt nur
 Kurz-Hash, Betreff und Datum.
@@ -194,9 +189,10 @@ bearbeitet; nach `install` und `update` startet Strata ohnehin mit ihr.
 
 ### `POST /strata/jobs`
 
-Startet einen Vorgang, Antwort `202` mit dem Vorgang. `400 {"reason": …}`
-bei Werten außerhalb des Katalogs, `409 {"reason": …}`, wenn es gerade nicht
-geht (Gaming an, ein Vorgang läuft, zu wenig Platz, aktives Modell löschen).
+Anfrage: `StrataJobRequest`, ein Fall pro Art. Antwort `202` mit dem
+Vorgang (`StrataJob`). `400` (`Refused`) bei Werten außerhalb des Katalogs,
+`409`, wenn es gerade nicht geht (Gaming an, ein Vorgang läuft, zu wenig
+Platz, aktives Modell löschen).
 
 | `kind` | Felder | Was passiert |
 | --- | --- | --- |
@@ -218,7 +214,7 @@ Ausgabe des Vorgangs steht statt des Keys `***`.
 `experimental_speed_projection` (ohne Angabe `false`) gibt Setup bei Qwen und
 Coder `--experimental-speed-projection on` statt `off` mit. Bei anderen
 Familien ist `true` ein `400`. Der Proxy schickt das Feld nur, wenn es
-angehakt ist, denn ein älterer PC-Dienst lehnt unbekannte Felder ab.
+angehakt ist (siehe „Ältere PC-Dienste“).
 
 `set_speed_projection` ändert nur `args` in `strata-<id>.json`. `on: true`
 nimmt Setups Flags heraus und hängt sie neu an, mit Stratas Vektor aus dem
@@ -233,7 +229,8 @@ zuletzt geänderte.
 `set_context` setzt nur den Wert von `--max-context` in `args` (fehlt das
 Flag, hängt er es an) und nimmt `--rope-scaling` und `--rope-scale` mit ihren
 Werten heraus. Er nimmt nur Kontexte aus dem Katalog bis 262144, der
-trainierten Länge: darüber braucht das Modell Rope-Scaling, das nur Setup
+trainierten Länge
+(`MAX_SWITCHED_CONTEXT`): darüber braucht das Modell Rope-Scaling, das nur Setup
 einrichtet (`400`). Was Setup aus dem alten Kontext abgeleitet hat
 (KV-Streaming mit `--kv-resident`, `--kv`, parallele Slots, Kalibrierung),
 bleibt. Ein Modell aus dem Katalog, das nicht installiert ist, ist ein
@@ -249,10 +246,11 @@ Strata nicht neu, und es wird nicht gewartet.
 
 ### `GET /strata/job`
 
-Der laufende oder letzte Vorgang: `state` (`running`, `done`, `failed`,
+Der laufende oder letzte Vorgang (`StrataJob`, `null` ohne einen): `state` (`running`, `done`, `failed`,
 `cancelled`, `interrupted` nach einem Neustart), Schritt, Fortschritt mit
 Bytes, Tempo und Restzeit, die letzten 20 Ausgabezeilen, `error`, `result`.
 
 ### `POST /strata/job/cancel`
 
-Bricht den laufenden Vorgang ab (`202`), sonst `409`.
+Bricht den laufenden Vorgang ab (`202` mit dem Vorgang), sonst `409`
+(`Refused`).

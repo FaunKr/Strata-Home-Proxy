@@ -1,0 +1,18 @@
+[
+  {
+    "kind": "started",
+    "at": 1792448205
+  },
+  {
+    "kind": "line",
+    "text": "Loading the model"
+  },
+  {
+    "kind": "replace",
+    "text": "Loading 40%"
+  },
+  {
+    "kind": "notice",
+    "reason": "not_started_by_agent"
+  }
+]

@@ -3,6 +3,12 @@
 
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
+// What the PC-Dienst reports, shown as it comes (docs/adr/0002).
+pub use strata_pc_protocol::{
+    Cpu, Gpu, Hardware, SamplingField, SamplingSource, SamplingSupport, StrataBenchmark,
+    StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
+    StrataSampling, StrataSize,
+};
 
 #[cfg(feature = "ssr")]
 use crate::server::{
@@ -313,34 +319,6 @@ pub enum HardwareView {
     Values(Hardware),
 }
 
-/// What the PC service reports about GPU and CPU in `/status` (see
-/// docs/pc-agent-api.md). A value it could not read is `None`.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Hardware {
-    /// The GPU with the most VRAM; `None` if there is none.
-    pub gpu: Option<Gpu>,
-    pub cpu: Cpu,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Gpu {
-    pub load_pct: Option<f32>,
-    pub temp_c: Option<f32>,
-    pub vram_used_bytes: Option<u64>,
-    pub vram_total_bytes: Option<u64>,
-    /// 0 while the fan stands still.
-    pub fan_rpm: Option<u32>,
-    /// Power draw as a share of the card's power limit.
-    pub power_pct: Option<f32>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Cpu {
-    pub load_pct: Option<f32>,
-    pub ram_used_bytes: Option<u64>,
-    pub ram_total_bytes: Option<u64>,
-}
-
 /// The PC service's version against the one the NAS carries.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PcServiceView {
@@ -580,215 +558,6 @@ pub async fn keep_awake(choice: KeepAwakeChoice) -> Result<(), ServerFnError> {
 }
 
 // --- Strata on the PC: setup, models, update, benchmark ---
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StrataJobKind {
-    Install,
-    AddModel,
-    Activate,
-    Delete,
-    Update,
-    Benchmark,
-    SetKey,
-    SetSpeedProjection,
-    SetContext,
-    CompareModels,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StrataJobState {
-    Running,
-    Done,
-    Failed,
-    Cancelled,
-    /// The PC or its service restarted while it ran.
-    Interrupted,
-}
-
-/// A job on the PC as its service reports it (see docs/pc-agent-api.md).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct StrataJob {
-    /// Counts up per job on the PC; missing from older services.
-    #[serde(default)]
-    pub id: Option<u64>,
-    pub kind: StrataJobKind,
-    #[serde(default)]
-    pub model: Option<String>,
-    pub state: StrataJobState,
-    /// Setup's step, e.g. "4/7: Downloading the model".
-    #[serde(default)]
-    pub step: Option<String>,
-    #[serde(default)]
-    pub percent: Option<u8>,
-    #[serde(default)]
-    pub done_bytes: Option<u64>,
-    #[serde(default)]
-    pub total_bytes: Option<u64>,
-    #[serde(default)]
-    pub bytes_per_sec: Option<u64>,
-    #[serde(default)]
-    pub eta_secs: Option<u64>,
-    /// The last lines of output.
-    #[serde(default)]
-    pub lines: Vec<String>,
-    #[serde(default)]
-    pub error: Option<String>,
-    /// A benchmark's result.
-    #[serde(default)]
-    pub result: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct StrataModel {
-    /// Setup's id, e.g. `IQ3_XXS` or `coder-IQ1_M`.
-    pub id: String,
-    #[serde(default)]
-    pub family: Option<String>,
-    #[serde(default)]
-    pub size: Option<String>,
-    pub disk_bytes: u64,
-    pub active: bool,
-    /// Its config loads the speed projection's control vector; `None` from
-    /// an older PC service, which does not say.
-    #[serde(default)]
-    pub speed_projection: Option<bool>,
-    /// Tokens it starts with; `None` from an older PC service, which does
-    /// not say, or a config without it.
-    #[serde(default)]
-    pub context: Option<u32>,
-    /// Strata's recovery from repeated reasoning passages: `off`, `stop` or
-    /// `recover`; `None` from an older PC service, which does not say.
-    #[serde(default)]
-    pub loop_recovery: Option<String>,
-    /// What a request without sampling fields gets; `None` from an older
-    /// PC service, which does not say.
-    #[serde(default)]
-    pub sampling: Option<StrataSampling>,
-}
-
-/// Which defaults the PC's Strata applies to a request without sampling
-/// fields.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SamplingSupport {
-    /// The model card's sets, then the config and the Chat settings.
-    ModelCard,
-    /// Only the config's block and the Chat settings.
-    Config,
-    /// None: Strata decodes greedily.
-    None,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SamplingSource {
-    ModelCard,
-    Config,
-    ChatSettings,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SamplingField {
-    pub name: String,
-    pub value: f64,
-    pub source: SamplingSource,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct StrataSampling {
-    pub support: SamplingSupport,
-    /// With thinking; empty means greedy.
-    pub thinking: Vec<SamplingField>,
-    /// Without thinking.
-    pub instruct: Vec<SamplingField>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct StrataFamily {
-    pub id: String,
-    pub title: String,
-    /// Setup offers the experimental speed projection; an older PC service
-    /// does not say so.
-    #[serde(default)]
-    pub speed_projection: bool,
-}
-
-/// A size from Strata's catalog.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct StrataSize {
-    pub id: String,
-    pub family: String,
-    pub size: String,
-    pub download_gb: f64,
-    pub ram_gb: u32,
-    /// The PC has the RAM for it.
-    pub fits: bool,
-    /// Parts are downloaded already; installing continues there.
-    pub partly_downloaded: bool,
-}
-
-/// A model's last benchmark run.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct StrataBenchmark {
-    pub model: String,
-    /// Tokens per second as the benchmark reported them.
-    pub result: String,
-    /// Unix seconds.
-    pub at: u64,
-    /// Local time text, filled in by the proxy.
-    #[serde(default)]
-    pub at_text: String,
-    /// Chat decode tokens per second; `None` from an older PC service or
-    /// when the run failed.
-    #[serde(default)]
-    pub decode_tps: Option<f64>,
-    /// Tokens per second reading a 4K prompt, if the benchmark said.
-    #[serde(default)]
-    pub prompt_tps: Option<f64>,
-    /// What it was measured with.
-    #[serde(default)]
-    pub context: Option<u32>,
-    #[serde(default)]
-    pub speed_projection: Option<bool>,
-    #[serde(default)]
-    pub version: Option<String>,
-    /// Why its run in a comparison gave no result.
-    #[serde(default)]
-    pub error: Option<String>,
-}
-
-/// Strata on the PC as its service reports it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct StrataInfo {
-    pub installed: bool,
-    /// Short commit of the Strata folder.
-    #[serde(default)]
-    pub version: Option<String>,
-    /// Whether the source has newer commits; `None` if unknown.
-    #[serde(default)]
-    pub update_available: Option<bool>,
-    pub models: Vec<StrataModel>,
-    pub families: Vec<StrataFamily>,
-    pub catalog: Vec<StrataSize>,
-    #[serde(default)]
-    pub recommended: Option<String>,
-    pub contexts: Vec<u32>,
-    pub default_context: u32,
-    pub ram_gb: f64,
-    #[serde(default)]
-    pub disk_free_gb: Option<f64>,
-    pub data_dir: String,
-    /// The last successful run.
-    #[serde(default)]
-    pub benchmark: Option<StrataBenchmark>,
-    /// Each model's last run; empty from an older PC service.
-    #[serde(default)]
-    pub benchmarks: Vec<StrataBenchmark>,
-    #[serde(default)]
-    pub job: Option<StrataJob>,
-}
 
 /// The Strata page.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

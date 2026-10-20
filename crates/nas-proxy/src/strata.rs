@@ -11,14 +11,17 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use strata_admin_ui::{
-    api::{StrataInfo, StrataJob, StrataJobForm, StrataJobKind, StrataJobState, StrataPage},
+    api::{StrataJobForm, StrataPage},
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED, strata_job_label},
 };
 
+use strata_pc_protocol::{
+    PcStatus, StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState,
+};
+
 use crate::{
-    agent::{AgentClient, PcStatus},
+    agent::AgentClient,
     auth::{hex, random_key},
     clock,
     events::EventKind,
@@ -175,8 +178,8 @@ pub async fn start_job(state: &AppState, form: StrataJobForm) -> Result<(), Stri
     let current = (form.kind == StrataJobKind::AddModel)
         .then(|| state.cfg().strata_api_key.clone())
         .flatten();
-    let body = body(&form, key.as_deref().or(current.as_deref()));
-    let job = agent.start_strata_job(&body).await?;
+    let request = request(&form, key.as_deref().or(current.as_deref()))?;
+    let job = agent.start_strata_job(&request).await?;
     // Strata has the key once the job is done; until then the old one holds.
     // The key first: whoever then sees the job end takes it over.
     if let Some(key) = key {
@@ -221,40 +224,53 @@ async fn wake(state: &AppState) -> Result<(), String> {
     })
 }
 
-/// The request for the PC service; only fields its job kind takes.
-fn body(form: &StrataJobForm, key: Option<&str>) -> serde_json::Value {
-    let mut body = json!({ "kind": form.kind });
-    let mut put = |name: &str, value: serde_json::Value| {
-        body[name] = value;
-    };
-    match form.kind {
+/// The request for the PC service; `Err` if the form lacks what its job
+/// kind takes.
+fn request(form: &StrataJobForm, key: Option<&str>) -> Result<StrataJobRequest, String> {
+    let need = |what: &str| format!("The job needs a {what}.");
+    let model = || form.model.clone().ok_or_else(|| need("model"));
+    let context = || form.context.ok_or_else(|| need("context"));
+    let key = key.map(str::to_string);
+    Ok(match form.kind {
         StrataJobKind::Install | StrataJobKind::AddModel => {
-            put("family", json!(form.family));
-            put("size", json!(form.size));
-            put("context", json!(form.context));
-            // Only when ticked: an older PC service refuses fields it does not know.
-            if form.speed_projection {
-                put("experimental_speed_projection", json!(true));
+            let family = form.family.clone().ok_or_else(|| need("family"))?;
+            let size = form.size.clone().ok_or_else(|| need("size"))?;
+            let experimental_speed_projection = form.speed_projection;
+            if form.kind == StrataJobKind::Install {
+                StrataJobRequest::Install {
+                    family,
+                    size,
+                    context: context()?,
+                    api_key: key.ok_or_else(|| need("Strata key"))?,
+                    experimental_speed_projection,
+                }
+            } else {
+                StrataJobRequest::AddModel {
+                    family,
+                    size,
+                    context: context()?,
+                    api_key: key,
+                    experimental_speed_projection,
+                }
             }
         }
-        StrataJobKind::Activate | StrataJobKind::Delete => put("model", json!(form.model)),
-        StrataJobKind::SetSpeedProjection => {
-            put("model", json!(form.model));
-            put("on", json!(form.speed_projection));
-        }
-        StrataJobKind::SetContext => {
-            put("model", json!(form.model));
-            put("context", json!(form.context));
-        }
-        StrataJobKind::Update
-        | StrataJobKind::Benchmark
-        | StrataJobKind::SetKey
-        | StrataJobKind::CompareModels => {}
-    }
-    if let Some(key) = key {
-        put("api_key", json!(key));
-    }
-    body
+        StrataJobKind::Activate => StrataJobRequest::Activate { model: model()? },
+        StrataJobKind::Delete => StrataJobRequest::Delete { model: model()? },
+        StrataJobKind::Update => StrataJobRequest::Update,
+        StrataJobKind::Benchmark => StrataJobRequest::Benchmark,
+        StrataJobKind::SetKey => StrataJobRequest::SetKey {
+            api_key: key.ok_or_else(|| need("Strata key"))?,
+        },
+        StrataJobKind::SetSpeedProjection => StrataJobRequest::SetSpeedProjection {
+            model: model()?,
+            on: form.speed_projection,
+        },
+        StrataJobKind::SetContext => StrataJobRequest::SetContext {
+            model: model()?,
+            context: context()?,
+        },
+        StrataJobKind::CompareModels => StrataJobRequest::CompareModels,
+    })
 }
 
 fn detail(job: &StrataJob) -> String {

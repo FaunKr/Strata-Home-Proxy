@@ -14,3 +14,13 @@ Ausnahme ist die Übersicht: `nas-proxy/src/overview.rs` baut `Overview`,
 Diese Werte entstehen nur für die Seite; im Proxy gibt es keinen eigenen Typ,
 den sie spiegeln könnten. Neue Teile der Übersicht folgen diesem Muster, ohne
 Umwandlung in `admin.rs`.
+
+Zweite Ausnahme ist, was der PC-Dienst meldet: Strata, seine Vorgänge und
+die Hardwarewerte. Dafür nimmt die Weboberfläche die Typen aus
+`strata-pc-protocol` (`StrataInfo`, `StrataJob`, `Hardware` …), die auch der
+PC-Dienst schreibt und der Proxy liest; `strata_admin_ui::api` reicht sie
+weiter. Das Crate hängt nur von serde ab und baut auch für wasm. Diese Werte
+enthalten nichts, was der Browser nicht sehen darf (nie den Strata-Key). Was
+der Proxy dazugibt, steht in eigenen Typen wie `StrataPage`; einzig die
+Ortszeit eines Benchmarks (`StrataBenchmark::at_text`) trägt er im
+Protokolltyp ein, der PC-Dienst schickt sie nie.

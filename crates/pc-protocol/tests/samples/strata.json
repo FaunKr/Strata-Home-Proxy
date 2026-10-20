@@ -1,0 +1,182 @@
+{
+  "installed": true,
+  "version": "0123456",
+  "update_available": true,
+  "update": {
+    "upstream": "fedcba9876543210fedcba9876543210fedcba98",
+    "total": 2,
+    "commits": [
+      {
+        "hash": "fedcba9876543210fedcba9876543210fedcba98",
+        "time": 1760000000,
+        "subject": "Faster prefill",
+        "body": "Reads the prompt in bigger chunks.\nNeeds setup again."
+      },
+      {
+        "hash": "aaaabbbbccccddddaaaabbbbccccddddaaaabbbb",
+        "time": 1759990000,
+        "subject": "Fix a crash",
+        "body": ""
+      }
+    ],
+    "files": [
+      {
+        "path": "serve/server.py",
+        "added": 120,
+        "removed": 30
+      },
+      {
+        "path": "docs/logo.png",
+        "added": 0,
+        "removed": 0
+      },
+      {
+        "path": "setup.py",
+        "added": 4,
+        "removed": 0
+      }
+    ],
+    "remote": "https://github.com/Niko1221/Strata.git"
+  },
+  "models": [
+    {
+      "id": "IQ3_XXS",
+      "family": "qwen",
+      "size": "IQ3_XXS",
+      "disk_bytes": 81000000000,
+      "active": true,
+      "speed_projection": true,
+      "context": 262144,
+      "loop_recovery": "recover",
+      "sampling": {
+        "support": "model_card",
+        "thinking": [
+          {
+            "name": "temperature",
+            "value": 0.6,
+            "source": "model_card"
+          },
+          {
+            "name": "top_p",
+            "value": 0.95,
+            "source": "model_card"
+          },
+          {
+            "name": "top_k",
+            "value": 20.0,
+            "source": "chat_settings"
+          }
+        ],
+        "instruct": [
+          {
+            "name": "temperature",
+            "value": 0.7,
+            "source": "config"
+          }
+        ]
+      }
+    },
+    {
+      "id": "coder-IQ1_M",
+      "family": "coder",
+      "size": "IQ1_M",
+      "disk_bytes": 62000000000,
+      "active": false,
+      "speed_projection": false,
+      "context": null,
+      "loop_recovery": "stop",
+      "sampling": null
+    }
+  ],
+  "families": [
+    {
+      "id": "qwen",
+      "title": "Qwen3.8-Flash-Next",
+      "speed_projection": true
+    },
+    {
+      "id": "swift",
+      "title": "Swift 1.5",
+      "speed_projection": false
+    },
+    {
+      "id": "coder",
+      "title": "Qwen3.8-Flash-Next Coder",
+      "speed_projection": true
+    }
+  ],
+  "catalog": [
+    {
+      "id": "IQ3_XXS",
+      "family": "qwen",
+      "size": "IQ3_XXS",
+      "download_gb": 75.8,
+      "ram_gb": 60,
+      "fits": true,
+      "partly_downloaded": true
+    },
+    {
+      "id": "coder-IQ1_M",
+      "family": "coder",
+      "size": "IQ1_M",
+      "download_gb": 58.4,
+      "ram_gb": 32,
+      "fits": true,
+      "partly_downloaded": true
+    },
+    {
+      "id": "unsloth-UD-Q5_K_XL",
+      "family": "unsloth",
+      "size": "UD-Q5_K_XL",
+      "download_gb": 158.3,
+      "ram_gb": 108,
+      "fits": false,
+      "partly_downloaded": false
+    }
+  ],
+  "recommended": "IQ3_XXS",
+  "contexts": [
+    8192,
+    32768,
+    65536,
+    131072,
+    204800,
+    262144,
+    393216,
+    524288
+  ],
+  "default_context": 65536,
+  "ram_gb": 64.0,
+  "disk_free_gb": 500.0,
+  "data_dir": "C:\\Strata-data",
+  "benchmark": {
+    "model": "IQ3_XXS",
+    "result": "38.5 Token/s",
+    "at": 1792448205,
+    "decode_tps": 38.5,
+    "prompt_tps": 612.0,
+    "speed_projection": false,
+    "version": "0123456"
+  },
+  "benchmarks": [
+    {
+      "model": "IQ3_XXS",
+      "result": "38.5 Token/s",
+      "at": 1792448205,
+      "decode_tps": 38.5,
+      "prompt_tps": 612.0,
+      "speed_projection": false,
+      "version": "0123456"
+    },
+    {
+      "model": "coder-IQ1_M",
+      "result": "",
+      "at": 1792448800,
+      "context": 65536,
+      "speed_projection": false,
+      "version": "0123456",
+      "error": "Strata did not answer"
+    }
+  ],
+  "job": null
+}

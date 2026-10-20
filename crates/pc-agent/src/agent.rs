@@ -25,17 +25,16 @@ use axum::{
     routing::{get, post},
     serve::IncomingStream,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde::Deserialize;
+use strata_pc_protocol::{Answer, GamingRequest, PcStatus, Refused};
 use tokio::sync::broadcast;
 
 use crate::{
     config::{Config, format_mac, parse_mac},
-    hardware::Hardware,
     managed::Managed,
-    output::{Message, Notice, StrataOutput},
+    output::{StrataOutput, StrataOutputMessage, StrataOutputNotice},
     platform::Platform,
-    strata::{self, JobRequest, Jobs, Refusal, UpdateCheck},
+    strata::{self, Jobs, Refusal, StrataJobRequest, UpdateCheck},
     update::UpdateError,
 };
 
@@ -88,30 +87,6 @@ pub struct Agent {
 struct Watchdog {
     unhealthy_since: Option<Instant>,
     last_start: Option<Instant>,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub struct Status {
-    pub gaming_mode: bool,
-    pub strata_running: bool,
-    pub user_idle_secs: u64,
-    /// MAC address of the network card the caller reached, so the NAS can
-    /// wake this PC without it being typed in.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mac: Option<String>,
-    /// A Strata job (setup, download, update, benchmark) is running.
-    #[serde(default)]
-    pub strata_job: bool,
-    /// This program's version, e.g. `0.1.0+558db97`.
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub hardware: Hardware,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct GamingRequest {
-    pub enabled: bool,
 }
 
 /// One entry of llama.cpp-style `/slots`; only the busy flag matters.
@@ -201,21 +176,21 @@ impl Agent {
         }
     }
 
-    pub async fn status(&self) -> Status {
-        Status {
+    pub async fn status(&self) -> PcStatus {
+        PcStatus {
             gaming_mode: self.gaming(),
             strata_running: self.strata_healthy().await,
             user_idle_secs: self.platform.user_idle().as_secs(),
             mac: None,
             strata_job: self.jobs.running(),
-            version: crate::version().to_string(),
-            hardware: self.platform.hardware(),
+            version: Some(crate::version().to_string()),
+            hardware: Some(self.platform.hardware()),
         }
     }
 
     /// The status for a caller that reached this PC at `local`, with the MAC
     /// address of that network card (or the one from the configuration).
-    pub async fn status_for(self: &Arc<Self>, local: Option<IpAddr>) -> Status {
+    pub async fn status_for(self: &Arc<Self>, local: Option<IpAddr>) -> PcStatus {
         let mut status = self.status().await;
         status.mac = self.mac_for(local).await.map(format_mac);
         status
@@ -311,15 +286,15 @@ impl Agent {
     }
 
     /// What the Strata-Ausgabe has to say besides its lines.
-    async fn output_notice(&self) -> Notice {
+    async fn output_notice(&self) -> StrataOutputNotice {
         if self.gaming() {
-            Notice::Gaming
+            StrataOutputNotice::Gaming
         } else if self.output.reading() {
-            Notice::Running
+            StrataOutputNotice::Running
         } else if self.strata_healthy().await {
-            Notice::NotStartedByAgent
+            StrataOutputNotice::NotStartedByAgent
         } else {
-            Notice::NotRunning
+            StrataOutputNotice::NotRunning
         }
     }
 
@@ -448,7 +423,7 @@ fn gaming_flag(cfg: &Config) -> PathBuf {
     cfg.state_dir().join("gaming-mode")
 }
 
-async fn status(State(agent): State<Arc<Agent>>, req: Request) -> Json<Status> {
+async fn status(State(agent): State<Arc<Agent>>, req: Request) -> Json<PcStatus> {
     let local = req
         .extensions()
         .get::<ConnectInfo<Peer>>()
@@ -460,11 +435,7 @@ async fn status(State(agent): State<Arc<Agent>>, req: Request) -> Json<Status> {
 async fn sleep(State(agent): State<Arc<Agent>>) -> Response {
     if let Err(reason) = agent.may_sleep().await {
         tracing::info!(%reason, "Schlafen abgelehnt");
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({"accepted": false, "reason": reason})),
-        )
-            .into_response();
+        return (StatusCode::CONFLICT, Json(Answer::refused(reason))).into_response();
     }
     tracing::info!("Schlafen angenommen");
     let agent = Arc::clone(&agent);
@@ -479,15 +450,15 @@ async fn sleep(State(agent): State<Arc<Agent>>) -> Response {
         // Also after a failed standby, so a stopped Strata comes back.
         agent.resumed();
     });
-    Json(json!({"accepted": true})).into_response()
+    Json(Answer::accepted()).into_response()
 }
 
-async fn gaming(State(agent): State<Arc<Agent>>, Json(req): Json<GamingRequest>) -> Json<Status> {
+async fn gaming(State(agent): State<Arc<Agent>>, Json(req): Json<GamingRequest>) -> Json<PcStatus> {
     agent.set_gaming(req.enabled);
     Json(agent.status().await)
 }
 
-async fn strata_view(State(agent): State<Arc<Agent>>) -> Json<strata::StrataView> {
+async fn strata_view(State(agent): State<Arc<Agent>>) -> Json<strata::StrataReport> {
     strata::check_for_update(&agent);
     let view = tokio::task::spawn_blocking(move || strata::view(&agent))
         .await
@@ -495,18 +466,21 @@ async fn strata_view(State(agent): State<Arc<Agent>>) -> Json<strata::StrataView
     Json(view)
 }
 
-async fn strata_job(State(agent): State<Arc<Agent>>) -> Json<Option<strata::Job>> {
+async fn strata_job(State(agent): State<Arc<Agent>>) -> Json<Option<strata::StrataJob>> {
     Json(agent.jobs.current())
 }
 
-async fn start_job(State(agent): State<Arc<Agent>>, Json(request): Json<JobRequest>) -> Response {
+async fn start_job(
+    State(agent): State<Arc<Agent>>,
+    Json(request): Json<StrataJobRequest>,
+) -> Response {
     match strata::start(&agent, request) {
         Ok(job) => (StatusCode::ACCEPTED, Json(job)).into_response(),
         Err(Refusal::BadRequest(reason)) => {
-            (StatusCode::BAD_REQUEST, Json(json!({"reason": reason}))).into_response()
+            (StatusCode::BAD_REQUEST, Json(Refused::new(reason))).into_response()
         }
         Err(Refusal::Conflict(reason)) => {
-            (StatusCode::CONFLICT, Json(json!({"reason": reason}))).into_response()
+            (StatusCode::CONFLICT, Json(Refused::new(reason))).into_response()
         }
     }
 }
@@ -517,7 +491,7 @@ async fn cancel_job(State(agent): State<Arc<Agent>>) -> Response {
     } else {
         (
             StatusCode::CONFLICT,
-            Json(json!({"reason": "Es läuft kein Vorgang"})),
+            Json(Refused::new("Es läuft kein Vorgang")),
         )
             .into_response()
     }
@@ -525,13 +499,13 @@ async fn cancel_job(State(agent): State<Arc<Agent>>) -> Response {
 
 async fn update(State(agent): State<Arc<Agent>>) -> Response {
     match crate::update::update(&agent).await {
-        Ok(()) => (StatusCode::ACCEPTED, Json(json!({"accepted": true}))).into_response(),
+        Ok(()) => (StatusCode::ACCEPTED, Json(Answer::accepted())).into_response(),
         Err(UpdateError::Refused(reason)) => {
-            (StatusCode::CONFLICT, Json(json!({"reason": reason}))).into_response()
+            (StatusCode::CONFLICT, Json(Refused::new(reason))).into_response()
         }
         Err(UpdateError::Failed(reason)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"reason": reason})),
+            Json(Refused::new(reason)),
         )
             .into_response(),
     }
@@ -545,9 +519,9 @@ const NOTICE_EVERY: Duration = Duration::from_secs(1);
 async fn strata_log(State(agent): State<Arc<Agent>>) -> Response {
     struct Follow {
         agent: Arc<Agent>,
-        rx: broadcast::Receiver<Message>,
-        queue: VecDeque<Message>,
-        notice: Option<Notice>,
+        rx: broadcast::Receiver<StrataOutputMessage>,
+        queue: VecDeque<StrataOutputMessage>,
+        notice: Option<StrataOutputNotice>,
         tick: tokio::time::Interval,
     }
     let (backlog, rx) = agent.output.subscribe();
@@ -577,7 +551,7 @@ async fn strata_log(State(agent): State<Arc<Agent>>) -> Response {
                     let notice = f.agent.output_notice().await;
                     if f.notice != Some(notice) {
                         f.notice = Some(notice);
-                        f.queue.push_back(Message::Notice { reason: notice });
+                        f.queue.push_back(StrataOutputMessage::Notice { reason: notice });
                     }
                 }
             }

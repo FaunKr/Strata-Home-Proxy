@@ -1,34 +1,7 @@
 //! Hardwarewerte: what `/status` reports about GPU and CPU (see
 //! docs/pc-agent-api.md). Read from Windows itself, without a driver.
 
-use serde::{Deserialize, Serialize};
-
-/// A value that could not be read is `None`, sent as `null`.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Hardware {
-    /// The GPU with the most VRAM; `None` if there is none.
-    pub gpu: Option<Gpu>,
-    pub cpu: Cpu,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Gpu {
-    pub load_pct: Option<f32>,
-    pub temp_c: Option<f32>,
-    pub vram_used_bytes: Option<u64>,
-    pub vram_total_bytes: Option<u64>,
-    /// 0 while the fan stands still.
-    pub fan_rpm: Option<u32>,
-    /// Power draw as a share of the card's power limit.
-    pub power_pct: Option<f32>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Cpu {
-    pub load_pct: Option<f32>,
-    pub ram_used_bytes: Option<u64>,
-    pub ram_total_bytes: Option<u64>,
-}
+pub use strata_pc_protocol::{Cpu, Gpu, Hardware};
 
 /// The latest sample, without waiting. A thread takes one every `SAMPLE`
 /// while `/status` is asked; the first call starts it and gets no values.

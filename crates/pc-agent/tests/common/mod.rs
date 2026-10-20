@@ -21,7 +21,7 @@ use axum::{
 use serde_json::{Value, json};
 #[allow(unused_imports)]
 pub use strata_pc_agent::{
-    Agent, Config, Peer, Status,
+    Agent, Config, PcStatus, Peer,
     agent::router,
     command::{CommandSpec, Running},
     hardware::{Cpu, Gpu, Hardware},

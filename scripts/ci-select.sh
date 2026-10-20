@@ -33,6 +33,8 @@ while IFS= read -r path; do
     crates/admin-ui/*) packages+=(strata-admin-ui strata-nas-proxy) ui=true ;;
     crates/nas-proxy/*) packages+=(strata-nas-proxy) ui=true ;;
     crates/pc-agent/*) packages+=(strata-pc-agent) ;;
+    # The protocol between them: the PC-Dienst writes it, the proxy and the web UI read it.
+    crates/pc-protocol/*) packages+=(strata-pc-protocol strata-pc-agent strata-admin-ui strata-nas-proxy) ui=true ;;
     # A crate without its own rule: the whole workspace.
     crates/*) unscoped=true ;;
     # The proxy embeds the install script (include_str!); check.sh also checks

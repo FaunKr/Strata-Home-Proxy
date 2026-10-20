@@ -17,9 +17,10 @@ use strata_admin_ui::{
     api::PcView,
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
 };
+use strata_pc_protocol::PcStatus;
 
 use crate::{
-    agent::{AgentClient, PcStatus, SleepAnswer},
+    agent::{AgentClient, SleepAnswer},
     api_keys::ApiKeys,
     auth::Auth,
     clock,

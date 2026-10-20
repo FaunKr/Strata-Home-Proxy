@@ -11,15 +11,17 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use serde::{Deserialize, Serialize};
-
 use crate::{
     agent::Agent,
     catalog::{self, Size},
     command::{Cancel, CommandSpec},
     install::{Installation, Model},
     managed::Managed,
-    sampling::ModelSampling,
+};
+pub use strata_pc_protocol::{
+    ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, StrataBenchmark, StrataFamily,
+    StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState, StrataModel,
+    StrataReport, StrataSize,
 };
 
 const JOB_FILE: &str = "strata-job.json";
@@ -41,114 +43,6 @@ const KEPT_LINES: usize = 20;
 /// Strata's port and network access, as the proxy expects them.
 const STRATA_PORT: &str = "8080";
 const STRATA_HOST: &str = "0.0.0.0";
-/// The longest context the switch takes: the model's trained length, which
-/// needs no rope scaling.
-const MAX_SWITCHED_CONTEXT: u32 = 262_144;
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JobKind {
-    Install,
-    AddModel,
-    Activate,
-    Delete,
-    Update,
-    Benchmark,
-    SetKey,
-    SetSpeedProjection,
-    SetContext,
-    CompareModels,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JobState {
-    Running,
-    Done,
-    Failed,
-    Cancelled,
-    /// The service or the PC restarted while it ran.
-    Interrupted,
-}
-
-/// A job as the NAS sees it. Never holds a key.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Job {
-    pub id: u64,
-    pub kind: JobKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    pub state: JobState,
-    /// Setup's step, e.g. "4/7: Downloading the model".
-    #[serde(default)]
-    pub step: Option<String>,
-    #[serde(default)]
-    pub percent: Option<u8>,
-    #[serde(default)]
-    pub done_bytes: Option<u64>,
-    #[serde(default)]
-    pub total_bytes: Option<u64>,
-    #[serde(default)]
-    pub bytes_per_sec: Option<u64>,
-    #[serde(default)]
-    pub eta_secs: Option<u64>,
-    /// The last lines of output.
-    #[serde(default)]
-    pub lines: Vec<String>,
-    #[serde(default)]
-    pub error: Option<String>,
-    /// What came out, e.g. a benchmark's tokens per second.
-    #[serde(default)]
-    pub result: Option<String>,
-    pub started: u64,
-    #[serde(default)]
-    pub ended: Option<u64>,
-}
-
-/// A job as the NAS asks for it.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum JobRequest {
-    Install {
-        family: String,
-        size: String,
-        context: u32,
-        api_key: String,
-        /// Strata's experimental speed projection; only for families whose catalog entry offers it.
-        #[serde(default)]
-        experimental_speed_projection: bool,
-    },
-    AddModel {
-        family: String,
-        size: String,
-        context: u32,
-        /// The key the proxy uses; without it the service's own.
-        #[serde(default)]
-        api_key: Option<String>,
-        /// Strata's experimental speed projection; only for families whose catalog entry offers it.
-        #[serde(default)]
-        experimental_speed_projection: bool,
-    },
-    Activate {
-        model: String,
-    },
-    Delete {
-        model: String,
-    },
-    Update,
-    Benchmark,
-    SetKey {
-        api_key: String,
-    },
-    SetSpeedProjection {
-        model: String,
-        on: bool,
-    },
-    SetContext {
-        model: String,
-        context: u32,
-    },
-    CompareModels,
-}
 
 /// Why a job was not started: a value outside the catalog (400), or a state
 /// that forbids it now (409).
@@ -201,21 +95,6 @@ enum Plan {
 }
 
 impl Plan {
-    fn kind(&self) -> JobKind {
-        match self {
-            Self::Install { .. } => JobKind::Install,
-            Self::AddModel { .. } => JobKind::AddModel,
-            Self::Activate { .. } => JobKind::Activate,
-            Self::Delete { .. } => JobKind::Delete,
-            Self::Update => JobKind::Update,
-            Self::Benchmark { .. } => JobKind::Benchmark,
-            Self::SetKey { .. } => JobKind::SetKey,
-            Self::SetSpeedProjection { .. } => JobKind::SetSpeedProjection,
-            Self::SetContext { .. } => JobKind::SetContext,
-            Self::CompareModels { .. } => JobKind::CompareModels,
-        }
-    }
-
     fn model(&self) -> Option<String> {
         match self {
             Self::Install { size, .. } | Self::AddModel { size, .. } => Some(size.id()),
@@ -236,7 +115,7 @@ pub struct Jobs {
 
 #[derive(Default)]
 struct JobsInner {
-    current: Option<Job>,
+    current: Option<StrataJob>,
     /// Ends the command the running job waits for.
     cancel: Option<Cancel>,
     cancelled: bool,
@@ -254,10 +133,10 @@ impl Jobs {
     pub fn load(dir: &Path) -> Self {
         let current = std::fs::read_to_string(dir.join(JOB_FILE))
             .ok()
-            .and_then(|text| serde_json::from_str::<Job>(&text).ok())
+            .and_then(|text| serde_json::from_str::<StrataJob>(&text).ok())
             .map(|mut job| {
-                if job.state == JobState::Running {
-                    job.state = JobState::Interrupted;
+                if job.state == StrataJobState::Running {
+                    job.state = StrataJobState::Interrupted;
                     job.ended = Some(unix_now());
                 }
                 job
@@ -270,7 +149,7 @@ impl Jobs {
         }
     }
 
-    pub fn current(&self) -> Option<Job> {
+    pub fn current(&self) -> Option<StrataJob> {
         self.inner.lock().unwrap().current.clone()
     }
 
@@ -280,7 +159,7 @@ impl Jobs {
             .unwrap()
             .current
             .as_ref()
-            .is_some_and(|j| j.state == JobState::Running)
+            .is_some_and(|j| j.state == StrataJobState::Running)
     }
 
     /// Ends the running job; downloaded parts stay for the next start.
@@ -290,7 +169,7 @@ impl Jobs {
             if !inner
                 .current
                 .as_ref()
-                .is_some_and(|j| j.state == JobState::Running)
+                .is_some_and(|j| j.state == StrataJobState::Running)
             {
                 return false;
             }
@@ -303,7 +182,7 @@ impl Jobs {
         true
     }
 
-    fn update(&self, f: impl FnOnce(&mut Job)) {
+    fn update(&self, f: impl FnOnce(&mut StrataJob)) {
         if let Some(job) = self.inner.lock().unwrap().current.as_mut() {
             f(job);
         }
@@ -311,13 +190,14 @@ impl Jobs {
 }
 
 /// Starts a job, or says why not.
-pub fn start(agent: &Arc<Agent>, request: JobRequest) -> Result<Job, Refusal> {
+pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob, Refusal> {
     // The service ends after an update, and a job with it.
     if agent.updating.load(std::sync::atomic::Ordering::SeqCst) {
         return Err(Refusal::Conflict(
             "Der PC-Dienst wird gerade aktualisiert".into(),
         ));
     }
+    let kind = request.kind();
     let plan = check(agent, request)?;
     if agent.gaming() {
         return Err(Refusal::Conflict(
@@ -332,19 +212,23 @@ pub fn start(agent: &Arc<Agent>, request: JobRequest) -> Result<Job, Refusal> {
         if let Some(running) = inner
             .current
             .as_ref()
-            .filter(|j| j.state == JobState::Running)
+            .filter(|j| j.state == StrataJobState::Running)
         {
             return Err(Refusal::Conflict(format!(
                 "Es läuft schon ein Vorgang ({})",
                 kind_text(running.kind)
             )));
         }
-        let id = inner.current.as_ref().map_or(1, |j| j.id + 1);
-        let job = Job {
-            id,
-            kind: plan.kind(),
+        let id = inner
+            .current
+            .as_ref()
+            .and_then(|j| j.id)
+            .map_or(1, |id| id + 1);
+        let job = StrataJob {
+            id: Some(id),
+            kind,
             model: plan.model(),
-            state: JobState::Running,
+            state: StrataJobState::Running,
             step: None,
             percent: None,
             done_bytes: None,
@@ -397,7 +281,7 @@ fn takes_speed_projection(size: &Size) -> bool {
     catalog::family(size.family).is_some_and(|f| f.speed_projection)
 }
 
-fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
+fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
     let dir = &agent.cfg.strata_dir;
     let install = Installation::of(&agent.cfg);
     let size = |family: &str, size: &str| {
@@ -414,7 +298,7 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
         }
     };
     match request {
-        JobRequest::Install {
+        StrataJobRequest::Install {
             family,
             size: s,
             context: c,
@@ -429,7 +313,7 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
                 speed_projection: check_speed_projection(size, wanted)?,
             })
         }
-        JobRequest::AddModel {
+        StrataJobRequest::AddModel {
             family,
             size: s,
             context: c,
@@ -446,14 +330,14 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             strata_installed(&install)?;
             Ok(plan)
         }
-        JobRequest::Activate { model } => {
+        StrataJobRequest::Activate { model } => {
             let id = installed_model(&install, &model)?;
             if active_model(agent).as_deref() == Some(id.as_str()) {
                 return Err(Refusal::Conflict(format!("{id} ist schon aktiv")));
             }
             Ok(Plan::Activate { id })
         }
-        JobRequest::Delete { model } => {
+        StrataJobRequest::Delete { model } => {
             let id = installed_model(&install, &model)?;
             if active_model(agent).as_deref() == Some(id.as_str()) {
                 return Err(Refusal::Conflict(format!(
@@ -462,7 +346,7 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             }
             Ok(Plan::Delete { id })
         }
-        JobRequest::Update => {
+        StrataJobRequest::Update => {
             strata_installed(&install)?;
             if !dir.join(".git").exists() {
                 return Err(Refusal::Conflict(format!(
@@ -472,25 +356,25 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             }
             Ok(Plan::Update)
         }
-        JobRequest::Benchmark => {
+        StrataJobRequest::Benchmark => {
             strata_installed(&install)?;
             let id = active_model(agent).ok_or_else(|| {
                 Refusal::Conflict("Kein aktives Modell bekannt; erst ein Modell aktivieren".into())
             })?;
             Ok(Plan::Benchmark { id })
         }
-        JobRequest::SetKey { api_key } => {
+        StrataJobRequest::SetKey { api_key } => {
             let api_key = check_key(api_key)?;
             strata_installed(&install)?;
             Ok(Plan::SetKey { api_key })
         }
-        JobRequest::SetSpeedProjection { model, on } => {
+        StrataJobRequest::SetSpeedProjection { model, on } => {
             let id = installed_model(&install, &model)?;
             let size = catalog::by_id(&id).expect("installed_model checks the catalog");
             check_speed_projection(size, true)?;
             Ok(Plan::SetSpeedProjection { id, on })
         }
-        JobRequest::SetContext { model, context: c } => {
+        StrataJobRequest::SetContext { model, context: c } => {
             let context = context(c)?;
             if context > MAX_SWITCHED_CONTEXT {
                 return Err(Refusal::BadRequest(format!(
@@ -500,7 +384,7 @@ fn check(agent: &Agent, request: JobRequest) -> Result<Plan, Refusal> {
             let id = installed_model(&install, &model)?;
             Ok(Plan::SetContext { id, context })
         }
-        JobRequest::CompareModels => {
+        StrataJobRequest::CompareModels => {
             strata_installed(&install)?;
             let active = active_model(agent).ok_or_else(|| {
                 Refusal::Conflict("Kein aktives Modell bekannt; erst ein Modell aktivieren".into())
@@ -814,34 +698,6 @@ async fn update(agent: &Arc<Agent>) -> Result<Option<String>, Step> {
     Ok(None)
 }
 
-/// A model's last benchmark run.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Benchmark {
-    pub model: String,
-    /// Tokens per second while answering, e.g. `38.5 Token/s`; empty when
-    /// the run failed.
-    pub result: String,
-    /// Unix seconds.
-    pub at: u64,
-    /// Chat decode tokens per second; missing from older records.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decode_tps: Option<f64>,
-    /// Tokens per second reading a 4K prompt, if the benchmark said.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt_tps: Option<f64>,
-    /// What it was measured with.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speed_projection: Option<bool>,
-    /// Short commit of the Strata folder.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    /// Why the run in a comparison gave no result.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
 /// The speeds a benchmark printed so far.
 #[derive(Clone, Copy, Debug, Default)]
 struct BenchReading {
@@ -885,7 +741,7 @@ async fn benchmark(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step>
 }
 
 /// One benchmark of the running model `id`.
-async fn measure(agent: &Arc<Agent>, id: &str) -> Result<Benchmark, Step> {
+async fn measure(agent: &Arc<Agent>, id: &str) -> Result<StrataBenchmark, Step> {
     // A Strata that is still loading gets no second start; one that hangs
     // ends first.
     if !agent.strata_healthy().await && !agent.strata_loading() {
@@ -915,10 +771,11 @@ async fn measure(agent: &Arc<Agent>, id: &str) -> Result<Benchmark, Step> {
         .decode
         .ok_or_else(|| "Der Benchmark hat keine Tokens/s gemeldet".to_string())?;
     let model = install.read_model(id);
-    Ok(Benchmark {
+    Ok(StrataBenchmark {
         model: id.to_string(),
         result: format!("{} Token/s", round1(tps)),
         at: unix_now(),
+        at_text: String::new(),
         decode_tps: Some(round1(tps)),
         prompt_tps: reading.prompt.map(round1),
         context: model.context(),
@@ -958,10 +815,11 @@ async fn compare_models(
                 let model = Installation::of(&agent.cfg).read_model(id);
                 keep_benchmark(
                     agent,
-                    Benchmark {
+                    StrataBenchmark {
                         model: id.clone(),
                         result: String::new(),
                         at: unix_now(),
+                        at_text: String::new(),
                         decode_tps: None,
                         prompt_tps: None,
                         context: model.context(),
@@ -994,7 +852,7 @@ async fn compare_models(
 
 /// Keeps a model's record in place of its last one; the newest also goes
 /// to the file older services read.
-fn keep_benchmark(agent: &Agent, mut record: Benchmark) {
+fn keep_benchmark(agent: &Agent, mut record: StrataBenchmark) {
     let dir = agent.cfg.state_dir();
     let mut all = load_benchmarks(agent);
     // A failed run keeps the model's last measurement next to its error, so
@@ -1004,7 +862,7 @@ fn keep_benchmark(agent: &Agent, mut record: Benchmark) {
             .iter()
             .find(|b| b.model.eq_ignore_ascii_case(&record.model) && b.decode_tps.is_some())
     {
-        record = Benchmark {
+        record = StrataBenchmark {
             error: record.error,
             ..last.clone()
         };
@@ -1024,14 +882,14 @@ fn keep_benchmark(agent: &Agent, mut record: Benchmark) {
 }
 
 /// The last successful run, of any model.
-fn load_benchmark(agent: &Agent) -> Option<Benchmark> {
+fn load_benchmark(agent: &Agent) -> Option<StrataBenchmark> {
     let text = std::fs::read_to_string(agent.cfg.state_dir().join(BENCH_FILE)).ok()?;
     serde_json::from_str(&text).ok()
 }
 
 /// Each model's last run; before the first run of this version, the one
 /// run an older service kept.
-fn load_benchmarks(agent: &Agent) -> Vec<Benchmark> {
+fn load_benchmarks(agent: &Agent) -> Vec<StrataBenchmark> {
     match std::fs::read_to_string(agent.cfg.state_dir().join(BENCHES_FILE)) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
         Err(_) => load_benchmark(agent)
@@ -1223,38 +1081,6 @@ struct UpdateState {
     asking: bool,
     available: Option<bool>,
     incoming: Option<Incoming>,
-}
-
-/// What an update would bring: the commits Strata's Git source has and this
-/// folder lacks, for the Proxy's summary.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Incoming {
-    /// Full hash of the upstream commit.
-    pub upstream: String,
-    /// All incoming commits; `commits` holds at most `MAX_COMMITS` of them.
-    pub total: u64,
-    /// Newest first.
-    pub commits: Vec<IncomingCommit>,
-    pub files: Vec<ChangedFile>,
-    /// URL of the upstream remote.
-    pub remote: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IncomingCommit {
-    pub hash: String,
-    /// Commit time, Unix seconds.
-    pub time: u64,
-    pub subject: String,
-    pub body: String,
-}
-
-/// A file the incoming commits change; binary files count 0 lines.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ChangedFile {
-    pub path: String,
-    pub added: u64,
-    pub removed: u64,
 }
 
 /// Most incoming commits the page carries.
@@ -1620,15 +1446,15 @@ fn finish(agent: &Agent, outcome: Outcome) {
         job.eta_secs = None;
         match outcome {
             Outcome::Done(result) => {
-                job.state = JobState::Done;
+                job.state = StrataJobState::Done;
                 job.result = result;
                 job.percent = Some(100);
             }
             Outcome::Failed(error) => {
-                job.state = JobState::Failed;
+                job.state = StrataJobState::Failed;
                 job.error = Some(error);
             }
-            Outcome::Cancelled => job.state = JobState::Cancelled,
+            Outcome::Cancelled => job.state = StrataJobState::Cancelled,
         }
     });
     save_job(agent);
@@ -1656,7 +1482,7 @@ struct Progress {
 }
 
 impl Progress {
-    fn read(&mut self, line: &str, job: &mut Job) {
+    fn read(&mut self, line: &str, job: &mut StrataJob) {
         if let Some(step) = parse_step(line) {
             job.step = Some(step);
             job.percent = None;
@@ -1720,18 +1546,18 @@ fn folder_entry(dir: &Path) -> String {
     entry
 }
 
-fn kind_text(kind: JobKind) -> &'static str {
+fn kind_text(kind: StrataJobKind) -> &'static str {
     match kind {
-        JobKind::Install => "Einrichtung",
-        JobKind::AddModel => "Modell hinzufügen",
-        JobKind::Activate => "Modell aktivieren",
-        JobKind::Delete => "Modell löschen",
-        JobKind::Update => "Update",
-        JobKind::Benchmark => "Benchmark",
-        JobKind::SetKey => "Strata-Key setzen",
-        JobKind::SetSpeedProjection => "Speed-Projection umschalten",
-        JobKind::SetContext => "Kontext ändern",
-        JobKind::CompareModels => "Modelle vergleichen",
+        StrataJobKind::Install => "Einrichtung",
+        StrataJobKind::AddModel => "Modell hinzufügen",
+        StrataJobKind::Activate => "Modell aktivieren",
+        StrataJobKind::Delete => "Modell löschen",
+        StrataJobKind::Update => "Update",
+        StrataJobKind::Benchmark => "Benchmark",
+        StrataJobKind::SetKey => "Strata-Key setzen",
+        StrataJobKind::SetSpeedProjection => "Speed-Projection umschalten",
+        StrataJobKind::SetContext => "Kontext ändern",
+        StrataJobKind::CompareModels => "Modelle vergleichen",
     }
 }
 
@@ -1741,96 +1567,27 @@ fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// What the page shows about Strata on this PC.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct StrataView {
-    pub installed: bool,
-    /// Short commit of the Strata folder.
-    pub version: Option<String>,
-    /// Whether Strata's source has newer commits; `None` until known.
-    pub update_available: Option<bool>,
-    /// What the newer commits bring, while there are some.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub update: Option<Incoming>,
-    pub models: Vec<InstalledModel>,
-    pub families: Vec<FamilyView>,
-    pub catalog: Vec<CatalogEntry>,
-    pub recommended: Option<String>,
-    pub contexts: Vec<u32>,
-    pub default_context: u32,
-    pub ram_gb: f64,
-    pub disk_free_gb: Option<f64>,
-    pub data_dir: String,
-    /// The last successful run, for proxies that know only one.
-    pub benchmark: Option<Benchmark>,
-    /// Each model's last run.
-    pub benchmarks: Vec<Benchmark>,
-    pub job: Option<Job>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FamilyView {
-    pub id: String,
-    pub title: String,
-    /// Setup offers the experimental speed projection.
-    #[serde(default)]
-    pub speed_projection: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InstalledModel {
-    pub id: String,
-    pub family: Option<String>,
-    pub size: Option<String>,
-    pub disk_bytes: u64,
-    pub active: bool,
-    /// Its config loads a control vector, Strata's or another one.
-    pub speed_projection: bool,
-    /// The context it starts with (`--max-context`); `None` if its config
-    /// does not say.
-    pub context: Option<u32>,
-    /// Strata's recovery from repeated reasoning passages, as its config
-    /// sets it: `off`, `stop` or `recover`.
-    pub loop_recovery: String,
-    /// What a request without sampling fields gets; `None` while Strata's
-    /// version cannot be read.
-    pub sampling: Option<ModelSampling>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CatalogEntry {
-    /// Model id, e.g. `coder-IQ1_M`.
-    pub id: String,
-    pub family: String,
-    pub size: String,
-    pub download_gb: f64,
-    pub ram_gb: u32,
-    /// The PC has the RAM for it.
-    pub fits: bool,
-    /// Parts are downloaded already; a start continues there.
-    pub partly_downloaded: bool,
-}
-
-pub fn view(agent: &Agent) -> StrataView {
+/// `GET /strata`.
+pub fn view(agent: &Agent) -> StrataReport {
     let cfg = &agent.cfg;
     let dir = &cfg.strata_dir;
     let ram_gb = agent.platform().ram_bytes() as f64 / (1u64 << 30) as f64;
     let active = active_model(agent);
     let install = Installation::of(cfg);
     let support = install.support();
-    let mut models: Vec<InstalledModel> = install
+    let mut models: Vec<StrataModel> = install
         .models()
         .into_iter()
         .map(|id| {
             let size = catalog::by_id(&id);
             let id = size.map_or(id, |s| s.id());
             let model = install.read_model(&id);
-            InstalledModel {
+            StrataModel {
                 disk_bytes: install.disk_bytes(&id),
                 active: active.as_deref() == Some(id.as_str()),
-                speed_projection: model.speed_projection(),
+                speed_projection: Some(model.speed_projection()),
                 context: model.context(),
-                loop_recovery: model.loop_recovery().into(),
+                loop_recovery: Some(model.loop_recovery().into()),
                 sampling: support.map(|support| model.sampling(support)),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
@@ -1839,15 +1596,14 @@ pub fn view(agent: &Agent) -> StrataView {
         })
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
-    StrataView {
+    let info = StrataInfo {
         installed: install.is_set_up(),
         version: git_commit(dir),
         update_available: agent.updates.available(),
-        update: agent.updates.incoming(),
         models,
         families: catalog::FAMILIES
             .iter()
-            .map(|f| FamilyView {
+            .map(|f| StrataFamily {
                 id: f.id.into(),
                 title: f.title.into(),
                 speed_projection: f.speed_projection,
@@ -1855,7 +1611,7 @@ pub fn view(agent: &Agent) -> StrataView {
             .collect(),
         catalog: catalog::SIZES
             .iter()
-            .map(|s| CatalogEntry {
+            .map(|s| StrataSize {
                 id: s.id(),
                 family: s.family.into(),
                 size: s.size.into(),
@@ -1877,6 +1633,10 @@ pub fn view(agent: &Agent) -> StrataView {
         benchmark: load_benchmark(agent),
         benchmarks: load_benchmarks(agent),
         job: agent.jobs.current(),
+    };
+    StrataReport {
+        info,
+        update: agent.updates.incoming(),
     }
 }
 

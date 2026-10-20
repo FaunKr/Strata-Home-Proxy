@@ -4,6 +4,7 @@
 
 use leptos::prelude::*;
 use leptos_router::components::{A, Outlet};
+use strata_pc_protocol::MAX_SWITCHED_CONTEXT;
 
 use crate::{
     api::{
@@ -841,10 +842,6 @@ fn sampling_text(field: &SamplingField) -> String {
     };
     format!("{} {}{source}", field.name, field.value)
 }
-
-/// The longest context the switch offers: the model's trained length. Past
-/// it setup adds rope scaling, which only setup does.
-const MAX_SWITCHED_CONTEXT: u32 = 262_144;
 
 /// Picks another context for an installed model.
 #[component]

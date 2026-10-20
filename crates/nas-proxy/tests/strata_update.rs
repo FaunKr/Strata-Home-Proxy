@@ -9,26 +9,47 @@ use common::*;
 use serde_json::{Value, json};
 
 /// Two incoming commits on a github.com remote, the installed version 477ac13.
-fn with_update(remote: &str) -> Value {
-    let mut info = strata_info(true);
-    info["update_available"] = json!(true);
-    info["update"] = json!({
-        "upstream": "fedcba9876543210",
-        "total": 2,
-        "commits": [
-            {"hash": "fedcba9876543210", "time": 1760000000u64, "subject": "Faster prefill",
-             "body": "Reads the prompt in bigger chunks.\nRe-run setup afterwards."},
-            {"hash": "aaaabbbbccccdddd", "time": 1759990000u64, "subject": "Fix a crash", "body": ""},
+fn with_update(remote: &str) -> StrataReport {
+    let mut report = strata_info(true);
+    report.info.update_available = Some(true);
+    let commit = |hash: &str, time, subject: &str, body: &str| IncomingCommit {
+        hash: hash.into(),
+        time,
+        subject: subject.into(),
+        body: body.into(),
+    };
+    let file = |path: &str, added, removed| ChangedFile {
+        path: path.into(),
+        added,
+        removed,
+    };
+    report.update = Some(Incoming {
+        upstream: "fedcba9876543210".into(),
+        total: 2,
+        commits: vec![
+            commit(
+                "fedcba9876543210",
+                1_760_000_000,
+                "Faster prefill",
+                "Reads the prompt in bigger chunks.\nRe-run setup afterwards.",
+            ),
+            commit("aaaabbbbccccdddd", 1_759_990_000, "Fix a crash", ""),
         ],
-        "files": [
-            {"path": "serve/server.py", "added": 120, "removed": 30},
-            {"path": "serve/frontend.py", "added": 10, "removed": 2},
-            {"path": "setup.py", "added": 4, "removed": 0},
-            {"path": "docs/logo.png", "added": 0, "removed": 0},
+        files: vec![
+            file("serve/server.py", 120, 30),
+            file("serve/frontend.py", 10, 2),
+            file("setup.py", 4, 0),
+            file("docs/logo.png", 0, 0),
         ],
-        "remote": remote,
+        remote: Some(remote.into()),
     });
-    info
+    report
+}
+
+/// The incoming commits the fake PC service reports.
+fn incoming(s: &Setup, change: impl FnOnce(&mut Incoming)) {
+    let mut report = s.pc.strata_info.lock().unwrap();
+    change(report.as_mut().unwrap().update.as_mut().unwrap());
 }
 
 async fn page(b: &mut Browser) -> Value {
@@ -67,9 +88,9 @@ async fn the_version_tab_lists_the_incoming_commits() {
 #[tokio::test]
 async fn without_a_summary_the_card_says_how_much_changed_and_where() {
     let s = setup(true, |_| {}).await;
-    let mut info = with_update("https://github.com/Niko1221/Strata.git");
-    info["update"]["total"] = json!(230);
-    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut report = with_update("https://github.com/Niko1221/Strata.git");
+    report.update.as_mut().unwrap().total = 230;
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     let v = page(&mut b).await;
     let update = &v["update"];
@@ -116,9 +137,9 @@ async fn only_a_github_remote_gets_links() {
 #[tokio::test]
 async fn an_older_pc_service_shows_just_the_badge() {
     let s = setup(true, |_| {}).await;
-    let mut info = strata_info(true);
-    info["update_available"] = json!(true);
-    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let mut report = strata_info(true);
+    report.info.update_available = Some(true);
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     let v = page(&mut b).await;
     assert_eq!(v["info"]["update_available"], true);
@@ -194,12 +215,10 @@ async fn new_upstream_commits_get_a_new_summary() {
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     settled(&mut b).await;
-    {
-        let mut info = s.pc.strata_info.lock().unwrap();
-        let info = info.as_mut().unwrap();
-        info["update"]["upstream"] = json!("1111222233334444");
-        info["update"]["total"] = json!(3);
-    }
+    incoming(&s, |update| {
+        update.upstream = "1111222233334444".into();
+        update.total = 3;
+    });
     *s.pc.chat_answer.lock().unwrap() = Some("- Three changes now.".into());
     let v = page(&mut b).await;
     assert_eq!(v["update"]["summary"]["state"], "writing", "{v}");
@@ -219,8 +238,10 @@ async fn a_busy_or_unready_strata_is_not_asked() {
     let busy = ready().await;
     *busy.pc.metrics.lock().unwrap() = Some(METRICS_BUSY.into());
     let job = ready().await;
-    *job.pc.strata_job.lock().unwrap() =
-        Some(json!({"id": 1, "kind": "benchmark", "state": "running", "lines": []}));
+    *job.pc.strata_job.lock().unwrap() = Some(StrataJob {
+        id: Some(1),
+        ..common::job(StrataJobKind::Benchmark, StrataJobState::Running)
+    });
     for (what, s) in [("unloaded", unloaded), ("busy", busy), ("job", job)] {
         let mut b = logged_in(&s.url).await;
         page(&mut b).await;
@@ -353,11 +374,11 @@ async fn the_summary_goes_once_the_update_is_installed() {
     let dir = data_dir("installed");
     let (s, mut b) = written(&dir).await;
     {
-        let mut info = s.pc.strata_info.lock().unwrap();
-        let info = info.as_mut().unwrap();
-        info["version"] = json!("fedcba9");
-        info["update_available"] = json!(false);
-        info.as_object_mut().unwrap().remove("update");
+        let mut report = s.pc.strata_info.lock().unwrap();
+        let report = report.as_mut().unwrap();
+        report.info.version = Some("fedcba9".into());
+        report.info.update_available = Some(false);
+        report.update = None;
     }
     let v = page(&mut b).await;
     assert_eq!(v["update"], Value::Null, "{v}");
@@ -371,10 +392,7 @@ async fn the_summary_goes_once_the_update_is_installed() {
 async fn a_summary_of_older_commits_is_not_shown_for_newer_ones() {
     let dir = data_dir("outdated");
     let (s, mut b) = written(&dir).await;
-    {
-        let mut info = s.pc.strata_info.lock().unwrap();
-        info.as_mut().unwrap()["update"]["upstream"] = json!("1111222233334444");
-    }
+    incoming(&s, |update| update.upstream = "1111222233334444".into());
     s.pc.chat_fails.store(true, Ordering::SeqCst);
     page(&mut b).await;
     assert_eq!(

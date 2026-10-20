@@ -6,7 +6,6 @@ mod common;
 use std::{sync::atomic::Ordering, time::Duration};
 
 use common::*;
-use serde_json::json;
 
 const STREAM: &str = "/admin/api/strata-output-stream";
 
@@ -14,9 +13,13 @@ const STREAM: &str = "/admin/api/strata-output-stream";
 async fn output_from_the_pc_reaches_the_page() {
     let s = setup(true, |_| {}).await;
     *s.pc.strata_log.lock().unwrap() = vec![
-        json!({"kind": "started", "at": 1_760_000_000u64}),
-        json!({"kind": "line", "text": "Lade Modell"}),
-        json!({"kind": "notice", "reason": "running"}),
+        StrataOutputMessage::Started { at: 1_760_000_000 },
+        StrataOutputMessage::Line {
+            text: "Lade Modell".into(),
+        },
+        StrataOutputMessage::Notice {
+            reason: StrataOutputNotice::Running,
+        },
     ];
     let b = logged_in(&s.url).await;
     // Nobody looks yet: the proxy leaves the PC service alone.
@@ -39,7 +42,9 @@ async fn output_from_the_pc_reaches_the_page() {
     s.pc.strata_log
         .lock()
         .unwrap()
-        .push(json!({"kind": "replace", "text": "Modell geladen"}));
+        .push(StrataOutputMessage::Replace {
+            text: "Modell geladen".into(),
+        });
     live.until("Ersetzen", |m| {
         m["kind"] == "replace" && m["text"] == "Modell geladen"
     })
@@ -68,7 +73,9 @@ async fn a_sleeping_pc_is_a_notice_and_stays_asleep() {
 #[tokio::test]
 async fn the_page_follows_a_pc_that_wakes_up() {
     let s = setup(false, |_| {}).await;
-    *s.pc.strata_log.lock().unwrap() = vec![json!({"kind": "line", "text": "nach dem Aufwachen"})];
+    *s.pc.strata_log.lock().unwrap() = vec![StrataOutputMessage::Line {
+        text: "nach dem Aufwachen".into(),
+    }];
     let b = logged_in(&s.url).await;
     let mut live = Live::open_at(&b, STREAM).await;
     live.until("Hinweis", |m| m["notice"] == "asleep").await;
@@ -82,7 +89,9 @@ async fn the_page_follows_a_pc_that_wakes_up() {
 async fn gaming_mode_reaches_the_page_as_a_notice() {
     let s = setup(true, |_| {}).await;
     s.pc.gaming.store(true, Ordering::SeqCst);
-    *s.pc.strata_log.lock().unwrap() = vec![json!({"kind": "notice", "reason": "gaming"})];
+    *s.pc.strata_log.lock().unwrap() = vec![StrataOutputMessage::Notice {
+        reason: StrataOutputNotice::Gaming,
+    }];
     let b = logged_in(&s.url).await;
     let mut live = Live::open_at(&b, STREAM).await;
     live.until("Hinweis", |m| m["notice"] == "gaming").await;
@@ -93,7 +102,9 @@ async fn gaming_mode_reaches_the_page_as_a_notice() {
 async fn an_open_page_does_not_keep_the_pc_awake() {
     // Long enough that the page sees the PC awake first, also on a slow runner.
     let s = setup(true, |c| c.idle_timeout = Duration::from_secs(2)).await;
-    *s.pc.strata_log.lock().unwrap() = vec![json!({"kind": "line", "text": "läuft"})];
+    *s.pc.strata_log.lock().unwrap() = vec![StrataOutputMessage::Line {
+        text: "läuft".into(),
+    }];
     let b = logged_in(&s.url).await;
     let mut live = Live::open_at(&b, STREAM).await;
     live.until("Zeile", |m| m["text"] == "läuft").await;

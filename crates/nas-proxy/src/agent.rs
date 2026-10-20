@@ -3,32 +3,15 @@
 use std::time::Duration;
 
 use reqwest::{Client, StatusCode};
-use serde::Deserialize;
-use strata_admin_ui::api::{Hardware, StrataInfo, StrataJob};
+use strata_pc_protocol::{
+    GamingRequest, Incoming, PcStatus, Refused, StrataInfo, StrataJob, StrataJobRequest,
+    StrataReport,
+};
 
-use crate::{config::Config, update_summary::Incoming};
+use crate::config::Config;
 
 const LOG_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const LOG_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub struct PcStatus {
-    pub gaming_mode: bool,
-    #[serde(default)]
-    pub strata_running: bool,
-    /// MAC address of the PC's network card, if the service reports it.
-    #[serde(default)]
-    pub mac: Option<String>,
-    /// A Strata job (setup, download, update, benchmark) runs.
-    #[serde(default)]
-    pub strata_job: bool,
-    /// The service's version; missing from services before the update button.
-    #[serde(default)]
-    pub version: Option<String>,
-    /// The Hardwarewerte; missing from services before them.
-    #[serde(default)]
-    pub hardware: Option<Hardware>,
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SleepAnswer {
@@ -36,17 +19,10 @@ pub enum SleepAnswer {
     Refused(String),
 }
 
-/// A refusal's body: `{"reason": "..."}`.
-#[derive(Debug, Deserialize)]
-struct SleepBody {
-    #[serde(default)]
-    reason: Option<String>,
-}
-
 /// The reason in a refusal, or the status if there is none.
 async fn reason(resp: reqwest::Response) -> String {
     let status = resp.status();
-    resp.json::<SleepBody>()
+    resp.json::<Refused>()
         .await
         .ok()
         .and_then(|b| b.reason)
@@ -123,10 +99,7 @@ impl AgentClient {
         let req = self
             .request(reqwest::Method::POST, "/gaming")
             .ok_or_else(|| anyhow::anyhow!("PC_AGENT_URL is not set"))?;
-        let resp = req
-            .json(&serde_json::json!({ "enabled": enabled }))
-            .send()
-            .await?;
+        let resp = req.json(&GamingRequest { enabled }).send().await?;
         if !resp.status().is_success() {
             anyhow::bail!("Der PC-Dienst hat abgelehnt (HTTP {}).", resp.status());
         }
@@ -157,12 +130,7 @@ impl AgentClient {
         if !resp.status().is_success() {
             return None;
         }
-        let mut body: serde_json::Value = resp.json().await.ok()?;
-        let incoming = body
-            .as_object_mut()?
-            .remove("update")
-            .and_then(|u| serde_json::from_value(u).ok());
-        Some((serde_json::from_value(body).ok()?, incoming))
+        Some(resp.json::<StrataReport>().await.ok()?.into_parts())
     }
 
     /// The running or last Strata job.
@@ -179,12 +147,12 @@ impl AgentClient {
     }
 
     /// Starts a Strata job; `Err` carries the service's reason for refusing.
-    pub async fn start_strata_job(&self, body: &serde_json::Value) -> Result<StrataJob, String> {
+    pub async fn start_strata_job(&self, request: &StrataJobRequest) -> Result<StrataJob, String> {
         let req = self
             .request(reqwest::Method::POST, "/strata/jobs")
             .ok_or_else(|| "PC_AGENT_URL is not set".to_string())?;
         let resp = req
-            .json(body)
+            .json(request)
             .send()
             .await
             .map_err(|_| "The PC service does not answer.".to_string())?;

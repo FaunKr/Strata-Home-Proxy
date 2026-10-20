@@ -23,7 +23,7 @@ async fn token_is_required() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 401);
-    let status: Status = client()
+    let status: PcStatus = client()
         .get(format!("{}/status", s.url))
         .bearer_auth("geheim")
         .send()
@@ -90,7 +90,7 @@ async fn sleep_is_refused_while_strata_works() {
 #[tokio::test]
 async fn gaming_mode_stops_strata_blocks_sleep_and_survives_restart() {
     let s = setup("gaming").await;
-    let status: Status = client()
+    let status: PcStatus = client()
         .post(format!("{}/gaming", s.url))
         .bearer_auth("geheim")
         .json(&json!({"enabled": true}))

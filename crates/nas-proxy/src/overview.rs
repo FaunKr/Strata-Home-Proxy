@@ -16,10 +16,10 @@ use strata_admin_ui::api::{
     EventView, HardwareView, HistoryView, Overview, PcView, PowerView, Setup, SleepView, StrataJob,
     StrataView,
 };
+use strata_pc_protocol::PcStatus;
 use tokio::sync::{Notify, watch};
 
 use crate::{
-    agent::PcStatus,
     clock,
     state::{AppState, Health},
 };

@@ -2,6 +2,8 @@
 
 Strata ist eine eigene Engine ([Niko1221/Strata](https://github.com/Niko1221/Strata)), kein llama-server. Einige Endpunkte tragen llama-server- oder vLLM-Namen, damit fremde Werkzeuge funktionieren. Was sie wirklich liefern, steht nur im Code von Strata.
 
+Im Proxy spricht nur `crates/nas-proxy/src/strata_client.rs` mit Strata: `/health`, die Metriken, die Anfrage für die Zusammenfassung eines Updates und das Weiterleiten. Ein neuer Aufruf gehört dorthin.
+
 Stand: Commit [`477ac13`](https://github.com/Niko1221/Strata/tree/477ac13). Die Zeilennummern beziehen sich darauf.
 
 ## Quellen lesen

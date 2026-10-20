@@ -248,6 +248,12 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(seen["uid"], nobody.pw_uid)
         self.assertEqual(run["tasks"][0]["passed"], 2, run)
 
+    def test_the_notes_stay_out_of_the_result(self):
+        os.environ["FAKE_MODE"] = "notes"
+        os.environ["FAKE_SOLUTION"] = "double.py=def double(n):\n    return n * 2\n"
+        task = self.run_tasks([TASK])["tasks"][0]
+        self.assertEqual(task["files"], {"double.py": "def double(n):\n    return n * 2\n"})
+
     def test_a_task_is_scored_by_its_hidden_tests(self):
         os.environ["FAKE_SOLUTION"] = "double.py=def double(n):\n    return n * 2\n"
         run = self.run_tasks([TASK])
@@ -279,6 +285,11 @@ class RunnerTest(unittest.TestCase):
         finally:
             runner.score = original
         self.assertIn("--pure", seen["args"])
+        # The prompt asks for intermediate state: a stopped run still leaves
+        # something to score, and notes outlive a compaction.
+        prompt = seen["args"][-1].lower()
+        self.assertIn("save", prompt)
+        self.assertIn("notes.md", prompt)
         # A title of its own: otherwise opencode asks the model for one.
         self.assertIn("--title", seen["args"])
         self.assertEqual(seen["args"][seen["args"].index("--model") + 1], "strata/IQ3_XXS")

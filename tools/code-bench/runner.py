@@ -82,9 +82,15 @@ failed = (len(result.failures) + len(result.errors) + len(result.skipped)
 print("%s" + json.dumps({"passed": result.testsRun - failed, "total": result.testsRun}))
 """ % SCORE_MARK
 
+# Asks for intermediate state: what is in the folder when the time runs out
+# is scored, and NOTES.md outlives a compaction of the context.
 PROMPT = (
     "Solve the task in TASK.md in the current folder. "
     "Write the files it asks for into this folder and check them with the example tests. "
+    "Save a first working version of each file early and save it again after each "
+    "improvement: you may be stopped at any time, and what is saved then counts. "
+    "Keep your plan, what is done and what comes next in NOTES.md in this folder, "
+    "update it as you go, and read it again whenever you have lost track. "
     "Work on your own until the task is done."
 )
 

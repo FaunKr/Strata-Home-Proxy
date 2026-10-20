@@ -18,7 +18,7 @@ const expected = {
 // the summary, so the Version tab shows the other two summary states.
 const summaryStates = [
   ['writing', 'hold', ['Strata is writing a summary', 'Show 3 changes']],
-  ['unavailable', 'fail', ["Summary not available: Strata isn't ready", 'Show 3 changes']],
+  ['unavailable', 'fail', ['Summary not available: Strata answers 500', 'Generate summary now', 'Show 3 changes']],
 ];
 const views = [['desk', { width: 1280, height: 900 }, 'light'], ['phone', { width: 390, height: 844 }, 'dark']];
 // The same markers as crates/nas-proxy/tests/ui_language.rs.

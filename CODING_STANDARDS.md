@@ -38,6 +38,11 @@ Questions already decided: `docs/adr/`.
   timeout, except the buttons meant to wake it (`WAKES` in
   `tests/admin.rs`). `no_server_function_wakes_the_pc` checks server functions on its own;
   a route of its own like `overview-stream` needs a test of its own.
+- **Work on the PC that a person asked for counts as use until it ends.**
+  Background work a button starts (a Strata request, a wait for Strata)
+  holds an `ActivityGuard` for its whole length; `touch()` alone covers
+  only the moment of the click. Housekeeping (the automatic update
+  summary) holds none.
 - **Timers in tests with a margin.** If a test must see something before a
   timer expires (idle timeout, settling), the timer fires at least 2 s
   after it; the CI runner is slower than the session. Tight timers only

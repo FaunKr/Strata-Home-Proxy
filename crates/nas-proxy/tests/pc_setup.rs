@@ -42,7 +42,7 @@ async fn missing_program_is_not_found() {
     let s = setup(false, |_| {}).await;
     s.state
         .pc_setup
-        .set_program(std::env::temp_dir().join("gibt-es-nicht/strata-pc-agent.exe"));
+        .set_program(std::env::temp_dir().join("does-not-exist/strata-pc-agent.exe"));
     let resp = reqwest::get(format!("{}/admin/agent/strata-pc-agent.exe", s.url))
         .await
         .unwrap();
@@ -57,8 +57,8 @@ async fn setup_calls_do_not_postpone_sleep() {
         reqwest::get(format!("{}/admin/agent/strata-pc-agent.exe", s.url))
             .await
             .unwrap();
-        script(&s, "?code=FALSCH").await;
-        register(&s, "FALSCH", 8091).await;
+        script(&s, "?code=WRONG").await;
+        register(&s, "WRONG", 8091).await;
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
@@ -113,7 +113,7 @@ async fn command_points_at_the_address_the_page_was_opened_on() {
 #[tokio::test]
 async fn registering_enters_token_and_address_of_the_pc_service() {
     let s = setup(false, |c| {
-        c.strata_api_key = Some("strata-geheim".into());
+        c.strata_api_key = Some("strata-secret".into());
         c.pc_agent_url = None;
     })
     .await;
@@ -125,12 +125,12 @@ async fn registering_enters_token_and_address_of_the_pc_service() {
     let token = body["token"].as_str().unwrap();
     assert!(token.len() >= 32, "{token}");
     assert_eq!(body["nas_url"], s.url);
-    assert_eq!(body["strata_api_key"], "strata-geheim");
+    assert_eq!(body["strata_api_key"], "strata-secret");
 
     let cfg = s.state.cfg();
     assert_eq!(cfg.pc_agent_token.as_deref(), Some(token));
     assert_eq!(cfg.pc_agent_url.as_deref(), Some("http://127.0.0.1:8091"));
-    // Entered like values from the settings page: "Zurücksetzen" drops them.
+    // Entered like values from the settings page: "Reset" drops them.
     s.state.settings.reset("PC_AGENT_TOKEN").unwrap();
     assert_eq!(s.state.cfg().pc_agent_token, None);
     assert!(kinds(&s.state).contains(&strata_nas_proxy::events::EventKind::PcServiceRegistered));
@@ -202,7 +202,7 @@ async fn an_expired_code_is_refused() {
 #[tokio::test]
 async fn a_wrong_code_is_refused() {
     let s = setup(false, |_| {}).await;
-    assert_eq!(register(&s, "FALSCH", 8091).await.status(), 403);
+    assert_eq!(register(&s, "WRONG", 8091).await.status(), 403);
 }
 
 #[tokio::test]
@@ -261,7 +261,7 @@ async fn script_comes_with_nas_address_and_code() {
 #[tokio::test]
 async fn script_without_a_valid_code_only_explains() {
     let s = setup(false, |_| {}).await;
-    for query in ["", "?code=FALSCH"] {
+    for query in ["", "?code=WRONG"] {
         let (status, text) = script(&s, query).await;
         // Windows PowerShell shows no body for errors, so the explanation
         // comes as a script that prints it.

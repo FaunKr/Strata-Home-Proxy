@@ -1,6 +1,5 @@
-//! Der Verlauf, so wie die Seite ihn sieht: der Proxy zeichnet, was er beim
-//! Blick auf den PC bemerkt, und die Geschichte zählt nur, was er wirklich
-//! beobachtet hat.
+//! The history as the page sees it: the proxy records what it notices when
+//! it looks at the PC, and the history counts only what it really observed.
 
 mod common;
 
@@ -13,27 +12,27 @@ use strata_nas_proxy::{
     events::{EventKind, Sample},
 };
 
-/// Die Geschichte, die die Seite für diesen Bereich bekäme.
+/// The history the page would get for this range.
 async fn fetch(b: &mut Browser, range: &str) -> Value {
     let resp = b.call("history", &[("range", range)]).await;
     assert_eq!(resp.status(), 200, "history({range})");
     resp.json().await.unwrap()
 }
 
-/// Dasselbe, nachdem das letzte Ereignis eine Dauer hat.
+/// The same, once the last event has a duration.
 async fn history(b: &mut Browser, range: &str) -> Value {
-    // Die Geschichte zählt in ganzen Sekunden: ohne diese Pause liegt das
-    // letzte Ereignis noch in der Sekunde von "jetzt" und hat keine Dauer.
+    // The history counts in whole seconds: without this pause the last event
+    // still lies in the second of "now" and has no duration.
     tokio::time::sleep(Duration::from_millis(2100)).await;
     fetch(b, range).await
 }
 
-/// Der heutige Tag; die Liste kommt vom ältesten zum neuesten.
+/// Today; the list runs from oldest to newest.
 fn today(view: &Value) -> &Value {
     &view["days"][view["days"].as_array().unwrap().len() - 1]
 }
 
-/// Die Stunden eines Tages: wach, gaming, schlafend, unbekannt.
+/// The hours of a day: awake, gaming, asleep, unknown.
 fn hours(day: &Value) -> (f64, f64, f64, f64) {
     let part = |key: &str| day[key].as_f64().unwrap_or_default();
     (
@@ -48,16 +47,16 @@ fn hours(day: &Value) -> (f64, f64, f64, f64) {
 async fn a_pc_woken_by_hand_counts_as_awake() {
     let s = setup(false, |_| {}).await;
     let mut b = logged_in(&s.url).await;
-    // Der Proxy sieht den schlafenden PC, ohne etwas dazu getan zu haben.
+    // The proxy sees the PC asleep without having done anything to it.
     seen(&s, EventKind::PcSeenAsleep).await;
     tokio::time::sleep(Duration::from_millis(1100)).await;
-    // Jemand weckt den PC am Tisch.
+    // Someone wakes the PC at the desk.
     s.pc.awake.store(true, Ordering::SeqCst);
     seen(&s, EventKind::PcSeenAwake).await;
     let view = history(&mut b, "7d").await;
     let (awake, _, asleep, _) = hours(today(&view));
-    assert!(asleep > 0.0, "die schlafende Zeit fehlt: {view}");
-    assert!(awake > 0.0, "die geweckte Zeit fehlt: {view}");
+    assert!(asleep > 0.0, "the asleep time is missing: {view}");
+    assert!(awake > 0.0, "the woken time is missing: {view}");
 }
 
 #[tokio::test]
@@ -66,13 +65,13 @@ async fn a_pc_put_to_sleep_by_hand_counts_as_sleep() {
     let mut b = logged_in(&s.url).await;
     seen(&s, EventKind::PcSeenAwake).await;
     tokio::time::sleep(Duration::from_millis(1100)).await;
-    // Jemand schickt den PC von Hand schlafen.
+    // Someone sends the PC to sleep by hand.
     s.pc.awake.store(false, Ordering::SeqCst);
     seen(&s, EventKind::PcSeenAsleep).await;
     let view = history(&mut b, "7d").await;
     let (awake, _, asleep, _) = hours(today(&view));
-    assert!(awake > 0.0, "die wache Zeit vorher fehlt: {view}");
-    assert!(asleep > 0.0, "die schlafende Zeit fehlt: {view}");
+    assert!(awake > 0.0, "the awake time before is missing: {view}");
+    assert!(asleep > 0.0, "the asleep time is missing: {view}");
 }
 
 #[tokio::test]
@@ -84,7 +83,7 @@ async fn gaming_mode_counts_as_gaming() {
     seen(&s, EventKind::PcSeenGaming).await;
     let view = history(&mut b, "7d").await;
     let (_, gaming, _, _) = hours(today(&view));
-    assert!(gaming > 0.0, "die Gaming-Zeit fehlt: {view}");
+    assert!(gaming > 0.0, "the gaming time is missing: {view}");
 }
 
 #[tokio::test]
@@ -92,16 +91,16 @@ async fn a_missed_answer_while_strata_answers_makes_no_sleep() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     seen(&s, EventKind::PcSeenAwake).await;
-    // Der PC-Dienst antwortet viele Male nicht, obwohl der PC läuft.
+    // The PC service does not answer many times, though the PC is running.
     s.pc.status_misses.store(200, Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert!(
         !kinds(&s.state).contains(&EventKind::PcSeenAsleep),
-        "ein verpasster Antwortversuch wird zu schlafend"
+        "a missed answer turns into asleep"
     );
     let view = history(&mut b, "7d").await;
     let (_, _, asleep, _) = hours(today(&view));
-    assert_eq!(asleep, 0.0, "die Geschichte erfindet Schlaf");
+    assert_eq!(asleep, 0.0, "the history makes up sleep");
 }
 
 #[tokio::test]
@@ -109,8 +108,8 @@ async fn a_restart_leaves_unknown_time_until_the_next_known_state() {
     let dir = std::env::temp_dir().join(format!("strata-history-restart-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    // Die Ereignisse eines früheren Laufs: der PC schlief, bevor der Proxy
-    // neu started. Wo er aufwachte, hat niemand aufgezeichnet.
+    // The events of an earlier run: the PC was asleep before the proxy
+    // restarted. Nobody recorded when it woke up.
     let ago = clock::unix_now() - 400;
     std::fs::write(
         dir.join("events.jsonl"),
@@ -122,17 +121,20 @@ async fn a_restart_leaves_unknown_time_until_the_next_known_state() {
     seen(&s, EventKind::PcSeenAwake).await;
     let view = history(&mut b, "7d").await;
     let (awake, _, asleep, unknown) = hours(today(&view));
-    assert!(unknown > 0.0, "die Lücke über den Neustart fehlt: {view}");
-    // Der Schlaf vor dem Neustart zählt nicht weiter: der Proxy kann nicht
-    // wissen, wann er endete.
-    assert_eq!(asleep, 0.0, "schlafend über den Neustart hinüber: {view}");
-    assert!(awake > 0.0, "die wache Zeit nach dem Neustart fehlt");
+    assert!(
+        unknown > 0.0,
+        "the gap across the restart is missing: {view}"
+    );
+    // The sleep before the restart no longer counts: the proxy cannot know
+    // when it ended.
+    assert_eq!(asleep, 0.0, "asleep across the restart: {view}");
+    assert!(awake > 0.0, "the awake time after the restart is missing");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[tokio::test]
 async fn a_fresh_install_explains_the_empty_history() {
-    // Der Leerlauf-Prüfer kommt nie dazu: der Verlauf bleibt leer.
+    // The idle check never gets to run: the history stays empty.
     let s = setup(true, |c| c.idle_check = Duration::from_secs(3600)).await;
     let b = logged_in(&s.url).await;
     let html = b.page("/admin/pc/history").await;
@@ -158,8 +160,8 @@ async fn longer_ranges_come_back_in_weeks_and_months() {
     let dir = std::env::temp_dir().join(format!("strata-history-long-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    // Ein früherer Lauf: der PC schlief vor 400 Tagen ein, wachte vor 100
-    // Tagen auf, und der Proxy lief bis vor 10 Tagen.
+    // An earlier run: the PC went to sleep 400 days ago, woke up 100 days
+    // ago, and the proxy ran until 10 days ago.
     let day = 24 * 3600;
     let now = clock::unix_now();
     std::fs::write(
@@ -188,8 +190,8 @@ async fn longer_ranges_come_back_in_weeks_and_months() {
     let year = fetch(&mut b, "12m").await;
     assert_eq!(year["bucket"], "week", "{year}");
     let weeks = year["days"].as_array().unwrap();
-    assert!((53..=54).contains(&weeks.len()), "{} Wochen", weeks.len());
-    // Der Schlaf von vor dem Bereich reicht in ihn hinein.
+    assert!((53..=54).contains(&weeks.len()), "{} weeks", weeks.len());
+    // The sleep from before the range reaches into it.
     assert!(weeks[0]["asleep_h"].as_f64().unwrap() > 0.0, "{year}");
     assert!(
         weeks[weeks.len() - 5]["awake_h"].as_f64().unwrap() > 0.0,
@@ -198,7 +200,7 @@ async fn longer_ranges_come_back_in_weeks_and_months() {
 
     let all = fetch(&mut b, "all").await;
     assert_eq!(all["bucket"], "month", "{all}");
-    // "All" begins on the day of the first Ereignis.
+    // "All" begins on the day of the first event.
     let first_day = jiff::Timestamp::from_second((now - 400 * day) as i64)
         .unwrap()
         .to_zoned(clock::zone())
@@ -206,9 +208,9 @@ async fn longer_ranges_come_back_in_weeks_and_months() {
         .to_string();
     assert_eq!(all["from"], first_day.as_str(), "{all}");
     let months = all["days"].as_array().unwrap();
-    assert!((14..=15).contains(&months.len()), "{} Monate", months.len());
+    assert!((14..=15).contains(&months.len()), "{} months", months.len());
 
-    // Zwei Tage von Hand, auch verkehrt herum.
+    // Two days by hand, even the wrong way round.
     let from = year["days"][1]["date"].as_str().unwrap().to_string();
     let to = year["days"][2]["date"].as_str().unwrap().to_string();
     let picked = fetch(&mut b, &format!("{to}..{from}")).await;
@@ -235,7 +237,7 @@ async fn the_watt_settings_change_the_estimate_at_once() {
     let after = fetch(&mut b, "7d").await;
     assert_eq!(after["power"]["awake_watts"], 750.0);
     assert_eq!(after["power"]["price_ct_per_kwh"], 60.0);
-    // Zehnmal die Watt, doppelt der Preis: grob zwanzigmal die Euro.
+    // Ten times the watts, twice the price: roughly twenty times the euros.
     let eur = |v: &Value| v["totals"]["energy"]["eur"].as_f64().unwrap();
     assert!(eur(&after) > eur(&before) * 15.0, "{before}\n{after}");
 }
@@ -246,7 +248,7 @@ async fn the_plug_makes_the_energy_measured() {
     let mut b = logged_in(&s.url).await;
     *s.pc.plug_watts.lock().unwrap() = 87.4;
     s.state.settings.set("SHELLY_URL", &s.plug).unwrap();
-    // Der Proxy liest die Steckdose selbst ...
+    // The proxy reads the power plug itself ...
     for _ in 0..100 {
         if !s.state.events.samples(0, u64::MAX).await.is_empty() {
             break;
@@ -255,8 +257,8 @@ async fn the_plug_makes_the_energy_measured() {
     }
     let live = s.state.events.samples(0, u64::MAX).await;
     assert!(live.iter().any(|x| x.watts == 87.4), "{live:?}");
-    // ... aber eine gemessene Stunde braucht 30 Minuten davon: der gestrige
-    // Tag bekommt sie so, wie die Schleife sie geschrieben hätte.
+    // ... but a measured hour takes 30 minutes of it: yesterday gets them as
+    // the loop would have written them.
     let today = fetch(&mut b, "1d").await;
     let midnight = today["days"][0]["date"].as_str().unwrap().to_string();
     let yesterday = fetch(&mut b, "2d").await;

@@ -41,7 +41,7 @@ async fn shows_an_awake_pc_and_a_ready_strata() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    let v = live.until("PC wach", |v| v["pc"] == "Awake").await;
+    let v = live.until("PC awake", |v| v["pc"] == "Awake").await;
     assert_eq!(v["strata"], "Ready");
     assert_eq!(v["configured"], true);
     assert_eq!(v["mac_known"], true);
@@ -54,7 +54,7 @@ async fn shows_a_sleeping_pc() {
     let s = setup(false, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    let v = live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    let v = live.until("PC asleep", |v| v["pc"] == "Asleep").await;
     assert_eq!(v["strata"], "Offline");
     assert_eq!(v["sleep"], "Asleep");
 }
@@ -64,7 +64,7 @@ async fn shows_gaming_mode_noticed_at_the_pc() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC wach", |v| v["pc"] == "Awake").await;
+    live.until("PC awake", |v| v["pc"] == "Awake").await;
     s.pc.gaming.store(true, Ordering::SeqCst);
     let v = live.until("Gaming", |v| v["pc"] == "Gaming").await;
     assert_eq!(v["strata"], "Offline");
@@ -76,10 +76,10 @@ async fn shows_the_last_request() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC wach", |v| v["pc"] == "Awake").await;
+    live.until("PC awake", |v| v["pc"] == "Awake").await;
     post_json(&s, "/v1/messages", json!({})).await;
     let v = live
-        .until("letzte Anfrage", |v| v["last_request"].is_string())
+        .until("last request", |v| v["last_request"].is_string())
         .await;
     assert_eq!(v["last_request"].as_str().unwrap().len(), 5, "{v}");
 }
@@ -89,7 +89,7 @@ async fn sends_only_changes() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC wach", |v| v["pc"] == "Awake").await;
+    live.until("PC awake", |v| v["pc"] == "Awake").await;
     // Nothing changes: no second overview, not even when the clock moves on.
     let next = tokio::time::timeout(Duration::from_millis(1500), live.next()).await;
     assert!(next.is_err(), "{:?}", next.ok());
@@ -104,7 +104,7 @@ async fn asks_only_while_a_page_watches() {
     assert_eq!(s.pc.metrics_requests.load(Ordering::SeqCst), 0);
 
     let mut live = Live::open(&b).await;
-    live.until("PC wach", |v| v["pc"] == "Awake").await;
+    live.until("PC awake", |v| v["pc"] == "Awake").await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(
         s.state.overview.rounds() >= 3,
@@ -125,7 +125,7 @@ async fn the_stream_carries_the_last_7_days_summed_once_a_minute() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    let v = live.until("PC wach", |v| v["pc"] == "Awake").await;
+    let v = live.until("PC awake", |v| v["pc"] == "Awake").await;
     let week = &v["week"];
     assert_eq!(week["bucket"], "day", "{week}");
     assert_eq!(week["days"].as_array().unwrap().len(), 7, "{week}");
@@ -144,14 +144,14 @@ async fn watching_neither_wakes_nor_keeps_awake() {
     let s = setup(false, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    live.until("PC asleep", |v| v["pc"] == "Asleep").await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
 
     let s = setup(true, |c| c.idle_timeout = Duration::from_millis(600)).await;
     let b = logged_in(&s.url).await;
     let _live = Live::open(&b).await;
-    eventually("Schlafen-Anfrage", || {
+    eventually("sleep request", || {
         s.pc.sleep_requests.load(Ordering::SeqCst) == 1
     })
     .await;
@@ -177,12 +177,12 @@ async fn shows_what_is_not_set_up() {
 
 #[tokio::test]
 async fn shows_running_and_waiting_requests_from_metrics() {
-    let s = setup(true, |c| c.strata_api_key = Some("geheim".into())).await;
+    let s = setup(true, |c| c.strata_api_key = Some("secret".into())).await;
     *s.pc.metrics.lock().unwrap() = Some(METRICS_BUSY.into());
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
-        .until("bearbeitet", |v| v["strata"]["Busy"].is_object())
+        .until("busy", |v| v["strata"]["Busy"].is_object())
         .await;
     assert_eq!(
         v["strata"]["Busy"],
@@ -192,11 +192,11 @@ async fn shows_running_and_waiting_requests_from_metrics() {
     assert!(countdown(&v).is_some(), "{v}");
     assert_eq!(
         s.pc.metrics_auth.lock().unwrap().as_deref(),
-        Some("Bearer geheim")
+        Some("Bearer secret")
     );
 
     *s.pc.metrics.lock().unwrap() = Some(METRICS_IDLE.into());
-    live.until("bereit", |v| v["strata"] == "Ready").await;
+    live.until("ready", |v| v["strata"] == "Ready").await;
 }
 
 #[tokio::test]
@@ -205,9 +205,9 @@ async fn shows_loading_while_strata_starts() {
     s.pc.starting.store(true, Ordering::SeqCst);
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("lädt", |v| v["strata"] == "Loading").await;
+    live.until("loading", |v| v["strata"] == "Loading").await;
     s.pc.starting.store(false, Ordering::SeqCst);
-    live.until("bereit", |v| v["strata"] == "Ready").await;
+    live.until("ready", |v| v["strata"] == "Ready").await;
 }
 
 #[tokio::test]
@@ -216,7 +216,7 @@ async fn shows_an_unloaded_model() {
     s.pc.unloaded.store(true, Ordering::SeqCst);
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("nicht geladen", |v| v["strata"] == "Unloaded")
+    live.until("model unloaded", |v| v["strata"] == "Unloaded")
         .await;
 }
 
@@ -225,7 +225,7 @@ async fn counts_open_requests_without_metrics() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("bereit", |v| v["strata"] == "Ready").await;
+    live.until("ready", |v| v["strata"] == "Ready").await;
     let client = s.clone();
     let request = tokio::spawn(async move {
         post_json(
@@ -239,15 +239,14 @@ async fn counts_open_requests_without_metrics() {
         .unwrap()
     });
     let v = live
-        .until("bearbeitet", |v| v["strata"]["Busy"].is_object())
+        .until("busy", |v| v["strata"]["Busy"].is_object())
         .await;
     assert_eq!(
         v["strata"]["Busy"],
         json!({"processing": 1, "deferred": null, "tokens_per_sec": null})
     );
     request.await.unwrap();
-    live.until("wieder bereit", |v| v["strata"] == "Ready")
-        .await;
+    live.until("ready again", |v| v["strata"] == "Ready").await;
 }
 
 // --- Countdown (#17) ---
@@ -264,7 +263,7 @@ async fn counts_down_to_sleep_and_follows_the_setting() {
     let resp = save_settings(&mut b, &[("IDLE_TIMEOUT_SECS", "600")]).await;
     assert_eq!(resp.status(), 200);
     let v = live
-        .until("kürzerer Countdown", |v| {
+        .until("shorter countdown", |v| {
             countdown(v).is_some_and(|l| l <= 600)
         })
         .await;
@@ -282,9 +281,9 @@ async fn shows_why_the_pc_refused_to_sleep() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
-        .until("Ablehnung", |v| v["sleep"]["Refused"].is_object())
+        .until("refusal", |v| v["sleep"]["Refused"].is_object())
         .await;
-    assert_eq!(v["sleep"]["Refused"]["reason"], "Benutzer aktiv");
+    assert_eq!(v["sleep"]["Refused"]["reason"], "User active");
     let retry = v["sleep"]["Refused"]["retry_at"].as_u64().unwrap();
     assert!(retry > unix_now() + 50, "{v}");
 }
@@ -296,11 +295,11 @@ async fn lists_the_latest_pc_events_newest_first() {
     let s = setup(false, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    live.until("PC asleep", |v| v["pc"] == "Asleep").await;
     // An API request wakes the PC; the list fills without reloading.
     post_json(&s, "/v1/messages", json!({})).await;
     let v = live
-        .until("Aufgewacht", |v| kind_list(v).contains(&"awake".into()))
+        .until("awake", |v| kind_list(v).contains(&"awake".into()))
         .await;
     let kinds = kind_list(&v);
     assert_eq!(kinds[0], "awake", "{kinds:?}");
@@ -333,10 +332,10 @@ async fn wake_button_wakes_and_idle_counts_from_then() {
     let s = setup(false, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    live.until("PC asleep", |v| v["pc"] == "Asleep").await;
     assert_eq!(b.call("wake", &[]).await.status(), 200);
     let v = live
-        .until("PC wach", |v| v["pc"] == "Awake" && countdown(v).is_some())
+        .until("PC awake", |v| v["pc"] == "Awake" && countdown(v).is_some())
         .await;
     assert!(countdown(&v).unwrap() >= 3590);
     assert!(s.pc.up());
@@ -382,7 +381,7 @@ async fn sleep_button_shows_a_refusal() {
     // A refusal is an answer, with its reason apart for Force sleep.
     assert_eq!(resp.status(), 200);
     let answer: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(answer, json!({"Refused": {"reason": "Benutzer aktiv"}}));
+    assert_eq!(answer, json!({"Refused": {"reason": "User active"}}));
     assert!(s.pc.up());
 }
 
@@ -447,7 +446,7 @@ async fn gaming_on_reports_a_failed_wake() {
         .recent()
         .into_iter()
         .find(|e| format!("{:?}", e.kind) == "WakeRequested")
-        .expect("Wecken angefordert");
+        .expect("wake-up requested");
     assert_eq!(
         requested.detail.as_deref(),
         Some("for gaming mode, from the web UI")
@@ -467,7 +466,7 @@ async fn keep_awake_holds_off_sleep_until_ended() {
     );
     let mut live = Live::open(&b).await;
     let v = live
-        .until("wach gehalten", |v| v["sleep"]["KeptAwake"].is_object())
+        .until("kept awake", |v| v["sleep"]["KeptAwake"].is_object())
         .await;
     assert_eq!(v["sleep"]["KeptAwake"]["until"], v["keep_awake_until"]);
     tokio::time::sleep(Duration::from_millis(2500)).await;
@@ -477,13 +476,13 @@ async fn keep_awake_holds_off_sleep_until_ended() {
         b.call("keep-awake", &[("choice", "off")]).await.status(),
         200
     );
-    eventually("Schlafen-Anfrage", || {
+    eventually("sleep request", || {
         s.pc.sleep_requests.load(Ordering::SeqCst) == 1
     })
     .await;
     let kinds = kind_list(
         &live
-            .until("Ereignis beendet", |v| {
+            .until("event ended", |v| {
                 kind_list(v).contains(&"keep_awake_ended".into())
             })
             .await,
@@ -509,7 +508,7 @@ async fn keep_awake_survives_a_restart() {
     let until = restarted
         .snapshot()
         .keep_awake_until
-        .expect("noch wach gehalten");
+        .expect("still kept awake");
     let left = until
         .duration_since(std::time::SystemTime::now())
         .unwrap()
@@ -557,9 +556,10 @@ async fn shows_a_running_request_as_the_reason_not_to_sleep() {
         .await
         .unwrap()
     });
-    live.until("Anfrage läuft", |v| v["sleep"] == "Busy").await;
+    live.until("request running", |v| v["sleep"] == "Busy")
+        .await;
     request.await.unwrap();
-    live.until("Countdown wieder", |v| countdown(v).is_some())
+    live.until("countdown again", |v| countdown(v).is_some())
         .await;
 }
 
@@ -611,17 +611,16 @@ async fn warns_while_no_api_key_exists() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("Key vorhanden", |v| v["api_key_exists"] == true)
+    live.until("key exists", |v| v["api_key_exists"] == true)
         .await;
     let prefix = &s.key[..12];
     let resp = b
         .call("revoke-api-key", &[("name", "Test"), ("prefix", prefix)])
         .await;
     assert_eq!(resp.status(), 200);
-    live.until("kein Key", |v| v["api_key_exists"] == false)
-        .await;
+    live.until("no key", |v| v["api_key_exists"] == false).await;
     b.call("create-api-key", &[("name", "Laptop")]).await;
-    live.until("wieder ein Key", |v| v["api_key_exists"] == true)
+    live.until("a key again", |v| v["api_key_exists"] == true)
         .await;
 }
 
@@ -632,7 +631,7 @@ async fn stream_tells_whether_data_survives_a_restart() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    let v = live.until("PC wach", |v| v["pc"] == "Awake").await;
+    let v = live.until("PC awake", |v| v["pc"] == "Awake").await;
     assert_eq!(v["persistent"], false);
 
     let dir = std::env::temp_dir().join(format!("strata-overview-{}", std::process::id()));
@@ -640,7 +639,7 @@ async fn stream_tells_whether_data_survives_a_restart() {
     let s = setup(true, |c| c.data_dir = Some(dir.clone())).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    let v = live.until("PC wach", |v| v["pc"] == "Awake").await;
+    let v = live.until("PC awake", |v| v["pc"] == "Awake").await;
     assert_eq!(v["persistent"], true);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -677,11 +676,11 @@ async fn set_up_proxy_shows_no_checklist() {
 #[tokio::test]
 async fn a_missed_pc_service_answer_does_not_restart_the_idle_time() {
     let s = setup(true, |_| {}).await;
-    eventually("PC wach", || s.state.snapshot().pc == PcState::Awake).await;
+    eventually("PC awake", || s.state.snapshot().pc == PcState::Awake).await;
     let before = s.state.snapshot().last_activity_at;
     // Strata still answers; only the PC service misses its answers.
     s.pc.status_misses.store(3, Ordering::SeqCst);
-    eventually("Antworten verpasst", || {
+    eventually("answers missed", || {
         s.pc.status_misses.load(Ordering::SeqCst) == 0
     })
     .await;

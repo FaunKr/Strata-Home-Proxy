@@ -107,7 +107,7 @@ impl Auth {
             match serde_json::from_str::<Stored>(&text) {
                 Ok(s) => Some(s),
                 Err(e) => {
-                    tracing::warn!("{PASSWORD_FILE} nicht lesbar, Standardpasswort gilt: {e}");
+                    tracing::warn!("{PASSWORD_FILE} unreadable, the default password applies: {e}");
                     None
                 }
             }
@@ -192,7 +192,7 @@ impl Auth {
         if let Some(dir) = &self.dir {
             let text = serde_json::to_string(&stored).expect("serializes");
             write_private(dir, PASSWORD_FILE, text.as_bytes()).map_err(|e| {
-                tracing::warn!("Passwort nicht gespeichert: {e}");
+                tracing::warn!("Password not saved: {e}");
                 AuthError::NotSaved
             })?;
         }
@@ -251,7 +251,7 @@ impl Auth {
         if let Some(dir) = &self.dir {
             let text = serde_json::to_string(&inner.revoked).expect("serializes");
             if let Err(e) = write_private(dir, REVOKED_FILE, text.as_bytes()) {
-                tracing::warn!("Abmeldung nicht gespeichert: {e}");
+                tracing::warn!("Logout not saved: {e}");
             }
         }
     }
@@ -321,7 +321,7 @@ pub(crate) fn random_key() -> [u8; 32] {
 fn new_key(dir: &Path) -> [u8; 32] {
     let key = random_key();
     if let Err(e) = write_private(dir, KEY_FILE, &key) {
-        tracing::warn!("Sitzungsschlüssel nicht gespeichert: {e}");
+        tracing::warn!("Session key not saved: {e}");
     }
     key
 }
@@ -370,15 +370,15 @@ mod tests {
         let token = auth.login("admin", IP).unwrap();
         assert_eq!(auth.session_state(Some(&token)), SessionState::MustChange);
         assert_eq!(
-            auth.change_password(&token, "admin", "kurz", IP),
+            auth.change_password(&token, "admin", "short", IP),
             Err(AuthError::WeakPassword)
         );
         let token = auth
-            .change_password(&token, "admin", "ein langes Passwort", IP)
+            .change_password(&token, "admin", "a long password", IP)
             .unwrap();
         assert_eq!(auth.session_state(Some(&token)), SessionState::Ready);
         assert_eq!(auth.login("admin", IP), Err(AuthError::WrongPassword));
-        assert!(auth.login("ein langes Passwort", IP).is_ok());
+        assert!(auth.login("a long password", IP).is_ok());
     }
 
     #[test]
@@ -389,14 +389,17 @@ mod tests {
         let (payload, sig) = token.rsplit_once('.').unwrap();
         let forged = format!("9{payload}.{sig}");
         assert_eq!(auth.session_state(Some(&forged)), SessionState::Anonymous);
-        assert_eq!(auth.session_state(Some("unsinn")), SessionState::Anonymous);
+        assert_eq!(
+            auth.session_state(Some("nonsense")),
+            SessionState::Anonymous
+        );
     }
 
     #[test]
     fn repeated_failures_are_throttled() {
         let auth = Auth::new(None, None);
         for _ in 0..MAX_FAILURES {
-            assert_eq!(auth.login("falsch", IP), Err(AuthError::WrongPassword));
+            assert_eq!(auth.login("wrong", IP), Err(AuthError::WrongPassword));
         }
         assert!(matches!(
             auth.login("admin", IP),

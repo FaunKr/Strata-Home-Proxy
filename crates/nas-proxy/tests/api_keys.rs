@@ -63,13 +63,7 @@ async fn wrong_key_gets_an_openai_error_for_openai_paths() {
 async fn refused_requests_do_not_keep_the_pc_awake() {
     let s = setup(true, |c| c.idle_timeout = Duration::from_millis(400)).await;
     for _ in 0..6 {
-        send(
-            &s.url,
-            "/v1/messages",
-            &[("x-api-key", "falsch")],
-            json!({}),
-        )
-        .await;
+        send(&s.url, "/v1/messages", &[("x-api-key", "wrong")], json!({})).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(s.pc.sleep_requests.load(Ordering::SeqCst) >= 1);
@@ -164,7 +158,7 @@ async fn key_management_needs_a_login() {
     let s = setup(true, |_| {}).await;
     let mut b = Browser::new(&s.url);
     assert_eq!(b.call("api-keys", &[]).await.status(), 401);
-    assert_eq!(create(&mut b, "Fremd").await.status(), 401);
+    assert_eq!(create(&mut b, "Stranger").await.status(), 401);
     let html = b.page("/admin/access").await;
     assert!(html.contains("Sign in"), "{html}");
 }
@@ -187,7 +181,7 @@ async fn keys_survive_a_restart() {
     let url = format!("http://{}", serve(api_router(second)).await);
     let resp = send(&url, "/v1/messages", &[("x-api-key", &key)], json!({})).await;
     assert_eq!(resp.status(), 503);
-    let resp = send(&url, "/v1/messages", &[("x-api-key", "falsch")], json!({})).await;
+    let resp = send(&url, "/v1/messages", &[("x-api-key", "wrong")], json!({})).await;
     assert_eq!(resp.status(), 401);
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -240,7 +234,7 @@ async fn revoking_an_unknown_key_is_an_error() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(
-        revoke(&mut b, "Gibt es nicht", NO_PREFIX).await.status(),
+        revoke(&mut b, "Does not exist", NO_PREFIX).await.status(),
         400
     );
 }
@@ -342,23 +336,23 @@ async fn a_valid_bearer_counts_even_next_to_a_stale_x_api_key() {
 #[tokio::test]
 async fn strata_refusing_the_strata_key_is_told_apart() {
     let s = setup(true, |_| {}).await;
-    *s.pc.strata_key.lock().unwrap() = Some("richtig".into());
-    s.state.settings.set("STRATA_API_KEY", "falsch").unwrap();
+    *s.pc.strata_key.lock().unwrap() = Some("right".into());
+    s.state.settings.set("STRATA_API_KEY", "wrong").unwrap();
     let resp = post_json(&s, "/v1/messages", json!({})).await;
     assert_eq!(resp.status(), 401);
     assert_eq!(
         resp.headers()["x-strata-proxy-status"],
         "strata_unauthorized"
     );
-    s.state.settings.set("STRATA_API_KEY", "richtig").unwrap();
+    s.state.settings.set("STRATA_API_KEY", "right").unwrap();
     assert_eq!(post_json(&s, "/v1/messages", json!({})).await.status(), 200);
 }
 
 #[tokio::test]
 async fn strata_refusing_the_strata_key_after_waking_is_told_apart() {
     let s = setup(false, |_| {}).await;
-    *s.pc.strata_key.lock().unwrap() = Some("richtig".into());
-    s.state.settings.set("STRATA_API_KEY", "falsch").unwrap();
+    *s.pc.strata_key.lock().unwrap() = Some("right".into());
+    s.state.settings.set("STRATA_API_KEY", "wrong").unwrap();
     let resp = post_json(&s, "/v1/messages", json!({"stream": true})).await;
     // The status line went out before Strata answered; the error comes as an event.
     let text = resp.text().await.unwrap();
@@ -368,7 +362,7 @@ async fn strata_refusing_the_strata_key_after_waking_is_told_apart() {
 #[tokio::test]
 async fn strata_asking_for_a_key_the_proxy_lacks_is_told_apart() {
     let s = setup(true, |_| {}).await;
-    *s.pc.strata_key.lock().unwrap() = Some("richtig".into());
+    *s.pc.strata_key.lock().unwrap() = Some("right".into());
     let resp = post_json(&s, "/v1/messages", json!({})).await;
     assert_eq!(resp.status(), 401);
     assert_eq!(

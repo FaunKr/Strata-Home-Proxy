@@ -15,7 +15,7 @@ source scripts/free-space.sh
 npm_root=$(npm root -g 2>/dev/null || true)
 export NODE_PATH="${NODE_PATH:+$NODE_PATH:}/opt/node-tools/node_modules:$npm_root"
 if ! node -e 'require("playwright")' 2>/dev/null; then
-  echo "Playwright fehlt: npm install -g playwright && npx playwright install chromium" >&2
+  echo "Playwright missing: npm install -g playwright && npx playwright install chromium" >&2
   exit 2
 fi
 
@@ -23,7 +23,7 @@ data="$(mktemp -d)"
 trap 'rm -rf "$data"' EXIT
 # A finished code benchmark, as the proxy keeps it.
 cp scripts/ui-check-code-bench.json "$data/code-bench.json"
-# A Verlauf from an earlier run, imported at the start, so the history shows
+# A history from an earlier run, imported at the start, so the history shows
 # bars and energy: asleep for two days, then awake until the proxy stopped.
 now=$(date +%s)
 printf '{"ts":%d,"kind":"pc_seen_asleep"}\n{"ts":%d,"kind":"pc_seen_awake"}\n{"ts":%d,"kind":"proxy_stopped"}\n' \

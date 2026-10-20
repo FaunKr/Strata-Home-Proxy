@@ -1,4 +1,4 @@
-//! `GET /strata-log`: the Strata-Ausgabe as server-sent events, one message
+//! `GET /strata-log`: the Strata output as server-sent events, one message
 //! as JSON per `data:`.
 
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StrataOutputMessage {
-    /// The PC-Dienst started Strata, at this Unix time; the lines before
+    /// The PC service started Strata, at this Unix time; the lines before
     /// stay.
     Started {
         at: u64,
@@ -30,7 +30,7 @@ pub enum StrataOutputNotice {
     Running,
     Gaming,
     NotRunning,
-    /// Strata answers, but the PC-Dienst did not start it, so it cannot read
+    /// Strata answers, but the PC service did not start it, so it cannot read
     /// it.
     NotStartedByAgent,
 }

@@ -1,6 +1,6 @@
 //! Shared state, and the shell around the PC lifecycle: asking the PC service
 //! and Strata, waking, and the idle timer that sends the PC to sleep. What an
-//! answer means for the PC's Zustand is decided in `lifecycle`.
+//! answer means for the PC's state is decided in `lifecycle`.
 
 use std::{
     path::PathBuf,
@@ -176,7 +176,7 @@ impl AppState {
     }
 
     /// Asks the PC service for its status and takes over what it tells
-    /// besides the PC's Zustand: a reported MAC, the PC service's version,
+    /// besides the PC's state: a reported MAC, the PC service's version,
     /// and the end of a Strata job. Every caller wants these noted at once:
     /// a job's end carries the Strata key it handed over.
     pub async fn ask_pc(&self, agent: &AgentClient) -> Option<PcStatus> {
@@ -241,7 +241,7 @@ impl AppState {
             },
         };
         if let Err(e) = written {
-            tracing::warn!("Wach halten nicht gespeichert: {e}");
+            tracing::warn!("Keep awake not saved: {e}");
         }
     }
 
@@ -254,7 +254,7 @@ impl AppState {
 
     /// The lifecycle with the time and durations for a call. Records go to
     /// [`Self::record`] while the guard is held, so two changes land in the
-    /// Verlauf in the order they happened; `record` never takes this lock.
+    /// history in the order they happened; `record` never takes this lock.
     fn lifecycle(&self) -> (MutexGuard<'_, Lifecycle>, Now, Timings) {
         let t = Timings::from(&*self.cfg());
         (self.lifecycle.lock().unwrap(), Now::read(), t)
@@ -406,7 +406,7 @@ impl AppState {
         match wol::send(mac, cfg.wol_addr).await {
             Ok(()) if last_wol.is_none() => self.events.record(EventKind::WakeSent, None),
             Ok(()) => {}
-            Err(e) => tracing::warn!("Weckpaket nicht gesendet: {e}"),
+            Err(e) => tracing::warn!("Wake packet not sent: {e}"),
         }
         *last_wol = Some(Instant::now());
         Ok(())
@@ -440,7 +440,7 @@ impl AppState {
         }
         let before = self.give_up.send_replace(Some(cutoff));
         if before.is_none_or(|b| b < since) {
-            tracing::warn!("Offene Anfragen aufgegeben: Strata zeigt sie nicht mehr");
+            tracing::warn!("Open requests given up: Strata no longer shows them");
         }
     }
 
@@ -469,7 +469,7 @@ impl AppState {
             }
         }
         if let Err(e) = self.request_sleep(&agent).await {
-            tracing::warn!("Schlafen-Anfrage fehlgeschlagen: {e}");
+            tracing::warn!("Sleep request failed: {e}");
         }
     }
 
@@ -557,7 +557,7 @@ impl AppState {
         Ok(())
     }
 
-    /// Notes every `events::BEAT` that the proxy runs, so the Verlauf knows
+    /// Notes every `events::BEAT` that the proxy runs, so the history knows
     /// after a stop since when it saw nothing.
     pub fn spawn_beat_loop(self: &Arc<Self>) {
         let state = Arc::clone(self);
@@ -582,7 +582,7 @@ impl AppState {
         });
     }
 
-    /// Records the Leistung of the Messsteckdose every `PLUG_SAMPLE_SECS`
+    /// Records the power of the power plug every `PLUG_SAMPLE_SECS`
     /// while one is set up. A read that fails stores nothing; a hanging plug
     /// costs this loop one probe timeout and holds up nothing else.
     pub fn spawn_plug_loop(self: &Arc<Self>) {
@@ -605,7 +605,7 @@ impl AppState {
         let ts = clock::unix_now();
         match crate::plug::power(&self.probe(cfg), url).await {
             Some(watts) => self.events.record_sample(Sample { ts, watts }),
-            None => tracing::debug!("Steckdose {url} ohne Messwert"),
+            None => tracing::debug!("Power plug {url} gave no reading"),
         }
     }
 }

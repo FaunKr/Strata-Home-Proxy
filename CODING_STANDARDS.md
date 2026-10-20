@@ -74,6 +74,10 @@ Questions already decided: `docs/adr/`.
   A rolled-back configuration comes back in `cleanup`, even after
   a cancellation, and Strata's last lines stay visible whether
   writing back works or not (`StrataProcess::restart_or_roll_back`).
+- **A check made before a wait is made again after it.** Whatever the PC
+  service checks before waiting on a job, a pause or Strata (an update, gaming
+  mode, a running job, a pending standby) it checks again before it acts, and a
+  test changes that state during the wait (`force_restart`, `go_to_standby`).
 - **Clients for services on the same machine set a short
   `connect_timeout`** (like `STRATA_CONNECT_TIMEOUT` in `pc-agent/src/agent.rs`).
   Windows retries a refused connection to localhost for about 2 s;

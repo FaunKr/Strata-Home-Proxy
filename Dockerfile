@@ -1,21 +1,21 @@
 # syntax=docker/dockerfile:1
-# NAS-Proxy für Strata (x86_64), mit Weboberfläche unter /admin/ und dem
-# PC-Dienst für Windows zum Herunterladen unter /admin/agent/
+# Proxy for Strata (x86_64), with the web UI under /admin/ and the
+# PC service for Windows to download under /admin/agent/
 #
-# Die Abhängigkeiten baut cargo-chef in eigenen Schichten. Solange sich
-# Cargo.toml und Cargo.lock nicht ändern, kommen sie in der CI aus dem Cache
-# und nur die eigenen Crates werden neu übersetzt.
-# Fertiges cargo-leptos statt cargo install, das allein mehrere Minuten übersetzt.
-# Eigene Stufe, weil BuildKit ADD von einer URL bei jedem Bau neu ausführt; das
-# COPY unten bleibt dagegen im Cache, solange sich der Inhalt nicht ändert.
+# cargo-chef builds the dependencies in layers of their own. As long as
+# Cargo.toml and Cargo.lock do not change, CI takes them from the cache
+# and only our own crates are compiled again.
+# A prebuilt cargo-leptos instead of cargo install, which alone compiles for several minutes.
+# A stage of its own, because BuildKit runs ADD from a URL again on every build; the
+# COPY below, by contrast, stays cached as long as the content does not change.
 FROM scratch AS cargo-leptos
 ADD --checksum=sha256:1c9cf0e1e3ffae6c8b58d29281d949dab560cea613b80d361f323f93071df7c8 \
     https://github.com/leptos-rs/cargo-leptos/releases/download/v0.3.11/cargo-leptos-x86_64-unknown-linux-gnu.tar.gz \
     /cargo-leptos.tar.gz
 
 FROM rust:1.97-slim-trixie AS chef
-# mingw linkt den PC-Dienst für Windows; die .exe braucht danach nur
-# Windows-eigene DLLs.
+# mingw links the PC service for Windows; the .exe then needs only
+# DLLs that ship with Windows.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/*
@@ -33,8 +33,8 @@ COPY crates ./crates
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS build
-# Dieselben Variablen, die cargo-leptos beim Bauen setzt; sonst passen die
-# vorgebauten Abhängigkeiten nicht und werden noch einmal übersetzt.
+# The same variables cargo-leptos sets when building; otherwise the
+# prebuilt dependencies do not match and are compiled once more.
 ENV LEPTOS_OUTPUT_NAME=admin-ui \
     LEPTOS_SITE_ROOT=target/site \
     LEPTOS_SITE_PKG_DIR=admin/pkg \
@@ -45,7 +45,7 @@ ENV LEPTOS_OUTPUT_NAME=admin-ui \
     LEPTOS_JS_MINIFY=true \
     LEPTOS_HASH_FILES=false
 COPY --from=planner /src/recipe.json recipe.json
-# Gleiche Argumente wie die beiden cargo-build-Aufrufe von cargo-leptos.
+# The same arguments as the two cargo build calls of cargo-leptos.
 RUN cargo chef cook --recipe-path recipe.json --locked --release \
         -p strata-nas-proxy --bin strata-nas-proxy --no-default-features
 RUN cargo chef cook --recipe-path recipe.json --locked --profile wasm-release \
@@ -55,17 +55,18 @@ RUN cargo chef cook --recipe-path recipe.json --locked --release \
         --target x86_64-pc-windows-gnu -p strata-pc-agent
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-# Der Proxy liefert das Installationsskript des PC-Dienstes aus (include_str!).
+# The proxy serves the PC service's install script (include_str!).
 COPY deploy/windows/install.ps1 ./deploy/windows/
-# Die Aufgaben des Code-Benchmarks schickt der Proxy an dessen Runner (include_str!).
+# The proxy sends the code benchmark's tasks to its runner (include_str!).
 COPY tools/code-bench/tasks ./tools/code-bench/tasks
 RUN cargo leptos build --release --project admin-ui
-# Der Commit kommt in die Version des PC-Dienstes (crates/pc-agent/build.rs);
-# daran erkennt die Übersicht, ob ein Update verfügbar ist.
+# The commit goes into the PC service's version (crates/pc-agent/build.rs);
+# from it the Overview tells whether an update is available.
 ARG STRATA_BUILD_ID=dev
 RUN cargo build --locked --release --target x86_64-pc-windows-gnu -p strata-pc-agent
-# Der NAS liest die Version aus der .exe; fehlt sie, zeigt die Übersicht nie
-# ein Update an. Das soll hier auffallen, nicht erst auf dem PC.
+# The NAS reads the version from the .exe; without it, the Overview never
+# shows an update. That should show up here, not only on the PC.
+
 COPY scripts/check-exe-version.sh ./scripts/
 RUN scripts/check-exe-version.sh \
         target/x86_64-pc-windows-gnu/release/strata-pc-agent.exe "$STRATA_BUILD_ID"

@@ -15,7 +15,7 @@ pub fn unix_now() -> u64 {
     unix(SystemTime::now())
 }
 
-/// The time zone of the NAS: the days of the Verlauf follow it, so the same
+/// The time zone of the NAS: the days of the history follow it, so the same
 /// range reads the same on the NAS and on any page.
 pub fn zone() -> TimeZone {
     TimeZone::system()
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn follows_the_clock_change() {
-        // Summer time ends in the night to 25 October 2026: 11 hours, not 10.
+        // Summer time ends in the night before 25 October 2026: 11 hours, not 10.
         let now = at("2026-10-24T22:00:00+02:00[Europe/Berlin]");
         let target = next_morning(&now);
         assert_eq!(

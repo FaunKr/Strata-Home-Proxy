@@ -1,5 +1,5 @@
-//! The store of the Verlauf: Ereignisse and the Leistung of the Messsteckdose
-//! in SQLite in `DATA_DIR`, in memory without one. An existing `events.jsonl`
+//! The store of the history: events and the power of the power plug in
+//! SQLite in `DATA_DIR`, in memory without one. An existing `events.jsonl`
 //! is imported once.
 
 use std::path::{Path, PathBuf};
@@ -71,9 +71,9 @@ fn only_the_owner_can_read_the_database() {
 fn events_jsonl_is_imported_once() {
     let d = fresh_dir("import");
     let jsonl = "{\"ts\":100,\"kind\":\"wake_sent\"}\n\
-                 kaputte Zeile {\n\
-                 {\"ts\":150,\"kind\":\"zeitreise\"}\n\
-                 {\"ts\":200,\"kind\":\"sleep_accepted\",\"detail\":\"benutzer inaktiv\"}\n";
+                 broken line {\n\
+                 {\"ts\":150,\"kind\":\"time_travel\"}\n\
+                 {\"ts\":200,\"kind\":\"sleep_accepted\",\"detail\":\"user inactive\"}\n";
     std::fs::write(d.join("events.jsonl"), jsonl).unwrap();
     // Unreadable lines and unknown kinds are skipped, the rest imported.
     let expected = vec![EventKind::WakeSent, EventKind::SleepAccepted];
@@ -84,7 +84,7 @@ fn events_jsonl_is_imported_once() {
     // A second start does not import the file again.
     let log = History::new(Some(d.clone()));
     assert_eq!(kinds(&log), expected);
-    assert_eq!(log.recent()[1].detail.as_deref(), Some("benutzer inaktiv"));
+    assert_eq!(log.recent()[1].detail.as_deref(), Some("user inactive"));
     // The file stays as it was, as a backup.
     assert_eq!(
         std::fs::read_to_string(d.join("events.jsonl")).unwrap(),
@@ -148,7 +148,7 @@ async fn a_row_of_an_unknown_kind_hides_no_other_rows() {
         &d,
         "CREATE TABLE events (ts INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT);
          INSERT INTO events VALUES (100, 'wake_sent', NULL);
-         INSERT INTO events VALUES (150, 'zeitreise', NULL);
+         INSERT INTO events VALUES (150, 'time_travel', NULL);
          INSERT INTO events VALUES (200, 'awake', NULL);",
     );
     let log = History::new(Some(d.clone()));
@@ -192,7 +192,7 @@ fn an_unusable_database_falls_back_to_memory() {
     let d = fresh_dir("broken");
     std::fs::write(
         d.join("events.db"),
-        "keine Datenbank, nur Text, lang genug für einen Kopf",
+        "no database, only text, long enough for a header",
     )
     .unwrap();
     let log = History::new(Some(d.clone()));
@@ -297,7 +297,7 @@ async fn samples_survive_a_restart() {
         history.samples(0, u64::MAX).await,
         vec![sample(100, 87.4), sample(160, 1.5)]
     );
-    // A sample is no Ereignis.
+    // A sample is no event.
     assert!(history.recent().is_empty());
     assert!(history.range(0, u64::MAX).await.is_empty());
     drop(history);

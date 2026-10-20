@@ -36,7 +36,7 @@ fn installed(s: &Setup) {
 }
 
 fn modified(s: &Setup, id: &str) -> std::time::SystemTime {
-    strata_ordner(s).modified(id)
+    strata_folder(s).modified(id)
 }
 
 // --- #158 loop recovery ---
@@ -60,7 +60,7 @@ async fn at_start_every_model_config_gets_loop_recovery_and_keeps_the_rest() {
         before,
         "the active model stays the one touched last"
     );
-    let text = strata_ordner(&s).text("iq3_xxs");
+    let text = strata_folder(&s).text("iq3_xxs");
     assert!(text.starts_with("{\n \""), "Strata's indent of one: {text}");
 }
 
@@ -94,13 +94,13 @@ async fn at_start_strata_restarts_after_its_request_and_only_on_a_change() {
 async fn a_config_that_cannot_be_read_is_left_and_the_others_change() {
     let s = setup("configs-broken").await;
     installed(&s);
-    strata_ordner(&s).config_text("qwen36-q8_0", "{ kaputt");
+    strata_folder(&s).config_text("qwen36-q8_0", "{ broken");
     strata::manage_configs_at_start(&s.agent).await.await;
     assert_eq!(
         read_config(&s, "iq3_xxs")["reasoning_loop_recovery"],
         "recover"
     );
-    assert_eq!(strata_ordner(&s).text("qwen36-q8_0"), "{ kaputt");
+    assert_eq!(strata_folder(&s).text("qwen36-q8_0"), "{ broken");
 }
 
 #[tokio::test]
@@ -125,7 +125,7 @@ async fn an_update_sets_loop_recovery_before_strata_starts() {
 async fn a_model_added_gets_loop_recovery() {
     let s = setup("configs-add").await;
     installed(&s);
-    let config = strata_ordner(&s).installation().config_path("swift-iq2_xs");
+    let config = strata_folder(&s).installation().config_path("swift-iq2_xs");
     s.fake.command(
         "START-HERE.bat",
         FakeCommand {
@@ -171,7 +171,7 @@ async fn the_page_shows_each_models_loop_recovery() {
     installed(&s);
     let mut cfg = read_config(&s, "qwen36-q8_0");
     cfg["reasoning_loop_recovery"] = json!("stop");
-    strata_ordner(&s).config("qwen36-q8_0", cfg);
+    strata_folder(&s).config("qwen36-q8_0", cfg);
     let view = get(&s, "/strata").await;
     assert_eq!(model(&view, "IQ3_XXS")["loop_recovery"], "off", "{view}");
     assert_eq!(
@@ -208,7 +208,7 @@ fn strata_knows(s: &Setup, config_block: bool, model_card: bool) {
 fn set_sampling(s: &Setup, id: &str, block: Value) {
     let mut cfg = read_config(s, id);
     cfg["sampling"] = block;
-    strata_ordner(s).config(id, cfg);
+    strata_folder(s).config(id, cfg);
 }
 
 #[tokio::test]
@@ -374,9 +374,9 @@ async fn chat_settings_show_as_overriding_and_stay_untouched() {
     installed(&s);
     strata_knows(&s, true, true);
     let chat = r#"{"temperature": 0.3, "reasoning_effort": "high", "max_tokens": 4096}"#;
-    strata_ordner(&s)
+    strata_folder(&s)
         .chat_settings("iq3_xxs", chat)
-        .chat_settings("qwen36-q8_0", "{ kaputt");
+        .chat_settings("qwen36-q8_0", "{ broken");
     strata::manage_configs_at_start(&s.agent).await.await;
     let view = get(&s, "/strata").await;
     let qwen = &model(&view, "IQ3_XXS")["sampling"];
@@ -402,5 +402,5 @@ async fn chat_settings_show_as_overriding_and_stay_untouched() {
         field(&q36["thinking"], "temperature"),
         (1.0, "model_card".into())
     );
-    assert_eq!(strata_ordner(&s).chat_text("iq3_xxs"), chat);
+    assert_eq!(strata_folder(&s).chat_text("iq3_xxs"), chat);
 }

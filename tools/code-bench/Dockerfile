@@ -1,17 +1,18 @@
 # syntax=docker/dockerfile:1
-# Der Code-Benchmark des Proxys: opencode löst in diesem Container Aufgaben
-# gegen den OpenAI-Endpunkt des Proxys, Python prüft das Ergebnis. Der Agent
-# darf hier Befehle ausführen; der Container hält nichts außer dem Runner.
+# The proxy's code benchmark: in this container opencode solves tasks against
+# the proxy's OpenAI endpoint, Python checks the result. The coding agent may
+# run commands here; the container holds nothing but the runner.
 FROM node:22-bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python-is-python3 ca-certificates iptables \
     && rm -rf /var/lib/apt/lists/*
-# Feste Version: die JSON-Ereignisse von `opencode run` sind kein stabiles Format.
+# A fixed version: the JSON events of `opencode run` are not a stable format.
 ARG OPENCODE_VERSION=1.19.3
 RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" && npm cache clean --force \
     && opencode --version
-# Der Runner läuft als root, um die Firewall des Agenten zu setzen und ihn
-# als eigenen Nutzer zu starten; opencode und die Tests laufen als `agent`.
+# The runner runs as root to set up the coding agent's firewall and to start
+# it as a user of its own; opencode and the tests run as `agent`.
+
 RUN useradd --create-home agent
 COPY runner.py /app/runner.py
 WORKDIR /app

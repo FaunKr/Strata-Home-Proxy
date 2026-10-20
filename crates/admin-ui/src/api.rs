@@ -3,7 +3,7 @@
 
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
-// What the PC-Dienst reports, shown as it comes (docs/adr/0002).
+// What the PC service reports, shown as it comes (docs/adr/0002).
 pub use strata_pc_protocol::{
     Cpu, ForcedRestart, Gpu, Hardware, SamplingField, SamplingSource, SamplingSupport,
     StrataBenchmark, StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
@@ -303,23 +303,23 @@ pub struct Overview {
     pub pc_service: Option<PcServiceView>,
     pub hardware: HardwareView,
     pub power: PowerView,
-    /// The Verlauf of the last 7 days, summed at most once a minute.
+    /// The history of the last 7 days, summed at most once a minute.
     pub week: HistoryView,
 }
 
-/// The Leistung of the Messsteckdose for the overview; independent of the PC's
+/// The power of the power plug for the overview; independent of the PC's
 /// state, since the plug also answers while the PC sleeps.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PowerView {
-    /// No Messsteckdose is set up (`SHELLY_URL`).
+    /// No power plug is set up (`SHELLY_URL`).
     NotConfigured,
-    /// The Messsteckdose did not answer usefully.
+    /// The power plug did not answer usefully.
     Unreachable,
-    /// The current Leistung in watts.
+    /// The current power in watts.
     Watts(f64),
 }
 
-/// The Hardwarewerte for the overview.
+/// The hardware readings for the overview.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum HardwareView {
     /// No values: the PC is not awake, or its service does not answer.
@@ -347,7 +347,7 @@ pub struct PcServiceView {
     pub reported_mac: Option<String>,
 }
 
-/// One message of the Strata-Ausgabe stream (`/admin/api/strata-output-stream`).
+/// One message of the Strata output stream (`/admin/api/strata-output-stream`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OutputMessage {
@@ -365,14 +365,14 @@ pub enum OutputMessage {
     },
 }
 
-/// Why the Strata-Ausgabe stands still, or `Running` when it does not.
+/// Why the Strata output has stopped, or `Running` when it does not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputNotice {
     Running,
     Asleep,
     NoAgent,
-    /// The PC service is too old for the Strata-Ausgabe.
+    /// The PC service is too old for the Strata output.
     TooOld,
     /// The PC service refuses the proxy: token or allowed addresses.
     Refused,
@@ -457,7 +457,7 @@ impl EventKind {
     }
 
     /// Marks the proxy sets for the history on its own; left out of the
-    /// overview, where the Ereignisse that caused them already stand.
+    /// overview, where the events that caused them already show.
     pub fn is_history_mark(self) -> bool {
         matches!(
             self,
@@ -604,6 +604,9 @@ pub struct StrataPage {
     pub info: Option<StrataInfo>,
     /// `info` is from an earlier answer.
     pub stale: bool,
+    /// The local time of that earlier answer, while `info` is from one.
+    #[serde(default)]
+    pub as_of: Option<String>,
     /// What an available update brings; `None` without one, or when the PC
     /// service does not report it.
     #[serde(default)]
@@ -814,7 +817,7 @@ pub struct StrataJobForm {
     pub speed_projection: bool,
 }
 
-// --- Verlauf: the PC's states over a range of days ---
+// --- History: the PC's states over a range of days ---
 
 /// How much time one bar of the history covers; the proxy picks it from the
 /// length of the range.
@@ -829,21 +832,21 @@ pub enum HistoryBucket {
     Month,
 }
 
-/// Where the Verbrauch of a bar comes from.
+/// Where the energy of a bar comes from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EnergySource {
-    /// From the Messsteckdose: every hour with samples for at least half its
+    /// From the power plug: every hour with samples for at least half its
     /// minutes.
     Measured,
-    /// From the watt settings (Stromschätzung).
+    /// From the watt settings (energy estimate).
     #[default]
     Estimated,
     /// Some hours measured, some estimated.
     Mixed,
 }
 
-/// Verbrauch and Ersparnis over a bar or the whole range. € use today's
+/// Energy and savings over a bar or the whole range. € use today's
 /// price for all of it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Energy {
@@ -856,7 +859,7 @@ pub struct Energy {
     pub source: EnergySource,
 }
 
-/// The settings the Stromschätzung and the € used.
+/// The settings the energy estimate and the € use.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PowerSettings {
     pub awake_watts: f64,
@@ -908,7 +911,7 @@ pub struct HistoryView {
 }
 
 /// The history over `range`: `7d` for the last 7 days today included, `12m`
-/// for the last twelve months, `all` back to the first Ereignis, or two days
+/// for the last twelve months, `all` back to the first event, or two days
 /// as `2026-01-01..2026-03-31`, both included.
 #[server(prefix = "/admin/api", endpoint = "history")]
 pub async fn get_history(range: String) -> Result<HistoryView, ServerFnError> {

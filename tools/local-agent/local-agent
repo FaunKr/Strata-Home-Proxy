@@ -48,7 +48,7 @@ compact_overrun=20000
 # 100K, and nothing above 180K is tested (200K is the model's own window).
 min_window=100000
 max_window=180000
-# Seconds between looks at the Proxy during a run, for Gaming-Modus
+# Seconds between looks at the Proxy during a run, for gaming mode
 # (LOCAL_AGENT_PROBE_INTERVAL, mainly for the tests).
 probe_interval=${LOCAL_AGENT_PROBE_INTERVAL:-60}
 # Below 128K, compaction thrashes on read-heavy work (measured at 64K): after a
@@ -265,7 +265,7 @@ preflight() {
   fi
   case $probe_status/$probe_tag in
     200/*) ;;
-    503/gaming) "$on_fail" "Strata is off: the PC is in Gaming-Modus" ;;
+    503/gaming) "$on_fail" "Strata is off: the PC is in gaming mode" ;;
     504/wake_timeout) "$on_fail" "the PC did not wake up in time (tried twice)" ;;
     401/strata_unauthorized)
       "$on_fail" "Strata refused the Proxy's own key" "set the Strata key in the Proxy's web UI (Strata section)"
@@ -275,7 +275,7 @@ preflight() {
       "$on_fail" "the Proxy is not set up: it has no address for Strata" "set Strata's address in the Proxy's web UI (Strata section)"
       ;;
     503/no_mac)
-      "$on_fail" "the Proxy cannot wake the PC: it knows no MAC address" "start the PC once so the PC-Dienst reports its MAC, or set PC_MAC on the Proxy"
+      "$on_fail" "the Proxy cannot wake the PC: it knows no MAC address" "start the PC once so the PC service reports its MAC, or set PC_MAC on the Proxy"
       ;;
     000/*) "$on_fail" "the Proxy is unreachable at $LOCAL_AGENT_URL ($(tail -1 "$run_dir/health.err"))" "check LOCAL_AGENT_URL in $config_file and that this machine reaches the NAS" ;;
     *) "$on_fail" "the Proxy answered HTTP $probe_status${probe_tag:+ ($probe_tag)}" ;;
@@ -392,10 +392,10 @@ fail_mid_run() {
     echo "Last steps:"
     steps <"$run_dir/log.jsonl" | tail -10 | sed 's/^/  /'
   } >"$run_dir/handoff"
-  # A quick look whether the PC went into Gaming-Modus meanwhile.
+  # A quick look whether the PC went into gaming mode meanwhile.
   probe 15
   if [[ $probe_tag == gaming ]]; then
-    fall_back "Strata failed mid-run: the PC switched to Gaming-Modus"
+    fall_back "Strata failed mid-run: the PC switched to gaming mode"
   fi
   fall_back "Strata failed mid-run: $error"
 }
@@ -548,7 +548,7 @@ cmd_run() {
       stop_worker
       break
     fi
-    # Claude Code retries a 503 for a long time; Gaming-Modus ends the run
+    # Claude Code retries a 503 for a long time; gaming mode ends the run
     # sooner.
     if ((SECONDS >= next_probe)); then
       next_probe=$((SECONDS + probe_interval))

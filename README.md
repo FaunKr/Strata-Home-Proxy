@@ -1,246 +1,246 @@
 # Strata Home Proxy
 
-Der Strata-PC zuhause geht in Standby, wenn keine Anfragen kommen, und wacht
-per Wake on LAN auf, sobald eine eintrifft. Im Gaming-Modus passiert beides
-nicht. Hintergrund und Entscheidungen stehen im Handoff im Projekt.
+The Strata PC at home goes to standby when no requests come in, and wakes up
+via Wake on LAN as soon as one arrives. In gaming mode neither happens.
+Background and decisions are in the handoff in the project.
 
-Alle Clients sprechen nur mit dem NAS. Der Proxy dort weckt den PC bei Bedarf
-und bittet ihn nach Leerlauf, schlafen zu gehen.
+All clients talk only to the NAS. The proxy there wakes the PC when needed
+and asks it to go to sleep after the idle timeout.
 
-## Stand
+## Status
 
-| Schritt | Stand |
+| Step | Status |
 | --- | --- |
-| 1. Einmalige Einrichtung | Anleitung: [docs/einrichtung.md](docs/einrichtung.md) |
-| 2. NAS-Proxy | gebaut, gegen nachgebautes Strata getestet |
-| 3. PC-Dienst und Gaming-Schalter | gebaut, gegen nachgebauten PC getestet; Einrichtung per Befehl aus dem Bereich *PC*: [docs/pc-dienst.md](docs/pc-dienst.md) |
-| 4. Weboberfläche | gebaut (englisch, Bereiche Overview, PC, Strata, Access, System), mit Verlauf und Stromschätzung |
-| 5. Abnahme auf echter Hardware | offen |
+| 1. One-time setup | Guide: [docs/setup.md](docs/setup.md) |
+| 2. Proxy | built, tested against simulated Strata |
+| 3. PC service and gaming switch | built, tested against simulated PC; setup via command from the *PC* area: [docs/pc-service.md](docs/pc-service.md) |
+| 4. Web UI | built (English, areas Overview, PC, Strata, Access, System), with history and energy estimate |
+| 5. Acceptance on real hardware | open |
 
-## Was der NAS-Proxy tut
+## What the proxy does
 
-- Leitet alle Pfade an Strata weiter (OpenAI- und Anthropic-Format), Antworten
-  werden live durchgereicht.
-- **API-Keys:** Jeder Client braucht einen eigenen Key aus der Weboberfläche
-  (Bereich *Access*), als `Authorization: Bearer …` oder `x-api-key`. Ohne
-  gültigen Key kommt sofort `401` mit `x-strata-proxy-status: unauthorized`;
-  der PC wird dafür nicht geweckt. Strata bekommt nie den Key des Clients,
-  sondern den Strata-Key (`STRATA_API_KEY`), den nur der Proxy kennt.
-- **PC schläft:** Weckpaket senden (alle 10 s wiederholt), warten bis Strata
-  auf `/health` antwortet, dann weiterleiten. Mehrere gleichzeitige Anfragen
-  teilen sich ein Aufwachen.
-- **Gestreamte Anfragen** bekommen sofort eine Antwort und alle 15 s ein
-  Ping-Ereignis, auch während Strata lange still rechnet (Claude Code bricht
-  nach 300 s ohne Daten ab). Anthropic: `event: ping`, OpenAI: SSE-Kommentar.
-- **Gaming-Modus:** sofort `503` mit Header `x-strata-proxy-status: gaming`.
-  Wacht der PC nicht rechtzeitig auf: `504` mit `wake_timeout`. Daran kann der
-  Skill `local-agent` einen Lauf zurückstellen.
-- **Nicht eingerichtet:** Ohne Strata-Adresse startet der Proxy trotzdem und
-  antwortet mit `503` und `not_configured`; ohne MAC-Adresse scheitert das
-  Wecken mit `503` und `no_mac`.
-- **Leerlauf:** 15 min ohne Anfrage und ohne offene Antwort, dann Schlafen-
-  Anfrage an den PC-Dienst. Lehnt er ab, fragt der Proxy nach 1 min erneut.
-  Zeigen Strata-Metriken 5 min lang keine laufende oder wartende Anfrage,
-  gibt der Proxy die offenen auf (Fehler an den Client), damit eine verlorene
-  Antwort den PC nicht wach hält.
-- **MAC-Adresse:** Der PC-Dienst meldet sie selbst; der Proxy merkt sie sich in
-  `/data/pc-mac` und weckt damit. `PC_MAC` braucht es nur für den allerersten
-  Start, bevor der PC-Dienst je geantwortet hat.
-- **Verlauf:** Weck- und Schlafereignisse und minütliche Werte der
-  Messsteckdose in `/data/events.db` (SQLite). Unter *PC → History* zeigt die
-  Weboberfläche, wie lange der PC wach, im Gaming-Modus, schlafend oder
-  unbeobachtet war, je Tag, Woche oder Monat, mit Stromschätzung; die
-  Übersicht zeigt die letzten 7 Tage. Ein vorhandenes `events.jsonl` wird beim
-  ersten Start einmalig importiert und danach nicht mehr geschrieben; es
-  bleibt als Sicherung erhalten.
+- Forwards all paths to Strata (OpenAI and Anthropic format), responses
+  are streamed through live.
+- **API keys:** Each client needs its own key from the web UI
+  (*Access* area), as `Authorization: Bearer …` or `x-api-key`. Without a
+  valid key it gets `401` with `x-strata-proxy-status: unauthorized` right away;
+  the PC is not woken for it. Strata never gets the client's key, but the
+  Strata key (`STRATA_API_KEY`), which only the proxy knows.
+- **PC asleep:** Send the wake packet (repeated every 10 s), wait until Strata
+  answers on `/health`, then forward. Several simultaneous requests
+  share one wake-up.
+- **Streamed requests** get a response right away and a ping event every
+  15 s, even while Strata computes silently for a long time (Claude Code aborts
+  after 300 s without data). Anthropic: `event: ping`, OpenAI: SSE comment.
+- **Gaming mode:** `503` right away with header `x-strata-proxy-status: gaming`.
+  If the PC does not wake up in time: `504` with `wake_timeout`. From this the
+  skill `local-agent` can postpone a run.
+- **Not set up:** Without a Strata address the proxy still starts and
+  answers with `503` and `not_configured`; without a MAC address waking
+  fails with `503` and `no_mac`.
+- **Idle:** 15 min without a request and without an open response, then a sleep
+  request to the PC service. If it refuses, the proxy asks again after 1 min.
+  If Strata metrics show no running or waiting request for 5 min,
+  the proxy gives up the open ones (error to the client), so that a lost
+  response does not keep the PC awake.
+- **MAC address:** The PC service reports it itself; the proxy remembers it in
+  `/data/pc-mac` and wakes with it. `PC_MAC` is only needed for the very first
+  start, before the PC service has ever answered.
+- **History:** Wake and sleep events and per-minute readings of the
+  power plug in `/data/events.db` (SQLite). Under *PC → History* the
+  web UI shows how long the PC was awake, in gaming mode, asleep or
+  unobserved, per day, week or month, with energy estimate; the
+  Overview shows the last 7 days. An existing `events.jsonl` is imported once
+  on first start and not written afterwards; it
+  is kept as a backup.
 
-## Auf dem NAS starten
+## Starting on the NAS
 
-**TrueNAS SCALE:** [deploy/truenas-app.yaml](deploy/truenas-app.yaml) als eigene App über *Install via YAML*. Anleitung steht oben in der Datei.
+**TrueNAS SCALE:** [deploy/truenas-app.yaml](deploy/truenas-app.yaml) as a custom app via *Install via YAML*. Instructions are at the top of the file.
 
-**Andere NAS mit Docker Compose:**
+**Other NAS with Docker Compose:**
 
-Das Image baut die CI bei jedem Push auf main: `ghcr.io/faunkr/strata-home-proxy:latest`.
+CI builds the image on every push to main: `ghcr.io/faunkr/strata-home-proxy:latest`.
 
-Das Repo ist privat, Dateien daraus lädt `curl` daher nur mit einem
-GitHub-Token (fein granular, *Contents: Read-only* für dieses Repo):
+The repo is private, so `curl` downloads files from it only with a
+GitHub token (fine-grained, *Contents: Read-only* for this repo):
 
 ```sh
 mkdir -p strata-proxy && cd strata-proxy
-read -rs TOKEN           # Token einfügen, Enter
+read -rs TOKEN           # paste token, Enter
 gh_file() { curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" \
   "https://api.github.com/repos/FaunKr/Strata-Home-Proxy/contents/$1"; }
 gh_file deploy/docker-compose.yml >docker-compose.yml
 gh_file deploy/env.example >.env
 unset TOKEN
-nano .env                # Werte eintragen
+nano .env                # fill in values
 docker compose pull
 docker compose up -d
 docker compose logs -f
 ```
 
-Der Container braucht `network_mode: host`, sonst kommt das Weckpaket nicht
-ins Heimnetz. Alle Einstellungen stehen mit Erklärung in
-[deploy/env.example](deploy/env.example) und
+The container needs `network_mode: host`, otherwise the wake packet does not
+reach the home network. All settings are listed with explanations in
+[deploy/env.example](deploy/env.example) and
 [crates/nas-proxy/src/config.rs](crates/nas-proxy/src/config.rs).
 
-Nur ein Weckpaket senden, zum Testen: `docker compose run --rm strata-proxy wake`
+Send just a wake packet, for testing: `docker compose run --rm strata-proxy wake`
 
-Der zweite Dienst `code-bench` (Image `ghcr.io/faunkr/strata-code-bench:latest`)
-ist nur für den Code-Benchmark da; ohne ihn läuft alles andere genauso. Das
-Update-Skript für TrueNAS aktualisiert ihn nicht, dafür einmal
-`docker pull ghcr.io/faunkr/strata-code-bench:latest` und die App neu starten.
+The second service `code-bench` (image `ghcr.io/faunkr/strata-code-bench:latest`)
+is only there for the code benchmark; without it everything else runs the same. The
+update script for TrueNAS does not update it; for that, run
+`docker pull ghcr.io/faunkr/strata-code-bench:latest` once and restart the app.
 
-## Automatische Updates (TrueNAS)
+## Automatic updates (TrueNAS)
 
-[deploy/truenas-auto-update.sh](deploy/truenas-auto-update.sh) holt alle 15
-Minuten das Image. Ist es neu, sichert das Skript `/data`, rollt die App über
-die TrueNAS-Middleware neu aus und wartet, bis `/admin/` antwortet. Klappt das
-nicht innerhalb von 2 Minuten, stellt es die Sicherung wieder her, startet das
-alte Image und merkt sich das neue als fehlerhaft; erst ein neueres Image wird
-wieder versucht. Danach holt es das Image des Code-Benchmarks (Dienst
-`code-bench`) und rollt die App neu aus, wenn es neu ist; ohne Sicherung und
-Zurückrollen, denn der Dienst hat keine Daten und der Proxy läuft ohne ihn.
+[deploy/truenas-auto-update.sh](deploy/truenas-auto-update.sh) pulls the image every 15
+minutes. If it is new, the script backs up `/data`, redeploys the app via
+the TrueNAS middleware and waits until `/admin/` answers. If that does not work
+within 2 minutes, it restores the backup, starts the
+old image and marks the new one as faulty; only a newer image is
+tried again. Then it pulls the image of the code benchmark (service
+`code-bench`) and redeploys the app if it is new; without backup and
+rollback, since the service has no data and the proxy runs without it.
 
-Voraussetzungen: die App heißt `strata-proxy` und ist aus
-[deploy/truenas-app.yaml](deploy/truenas-app.yaml) installiert, mit
-`pull_policy: missing` (sonst holt das Zurückrollen das fehlerhafte Image
-erneut), und root ist bei ghcr.io angemeldet (`sudo docker login ghcr.io`, wie
-oben in der YAML-Datei).
+Prerequisites: the app is called `strata-proxy` and is installed from
+[deploy/truenas-app.yaml](deploy/truenas-app.yaml), with
+`pull_policy: missing` (otherwise the rollback pulls the faulty image
+again), and root is logged in to ghcr.io (`sudo docker login ghcr.io`, as
+at the top of the YAML file).
 
-1. Skript in ein eigenes Verzeichnis auf dem Pool legen, nicht in das
-   Datenverzeichnis der App. Dort landen auch Log und Sicherungen.
-   Das Repo ist privat, daher mit einem GitHub-Token (fein granular,
-   *Contents: Read-only* für dieses Repo):
+1. Put the script in its own directory on the pool, not in the
+   app's data directory. The log and backups also end up there.
+   The repo is private, so with a GitHub token (fine-grained,
+   *Contents: Read-only* for this repo):
    ```sh
    sudo mkdir -p /mnt/POOL/apps/strata-proxy-update
    cd /mnt/POOL/apps/strata-proxy-update
-   read -rs TOKEN   # Token einfügen, Enter
+   read -rs TOKEN   # paste token, Enter
    sudo curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" \
      -o truenas-auto-update.sh \
      https://api.github.com/repos/FaunKr/Strata-Home-Proxy/contents/deploy/truenas-auto-update.sh
    unset TOKEN
    sudo chmod 700 truenas-auto-update.sh
-   sudo ./truenas-auto-update.sh   # einmal von Hand: ohne neues Image passiert nichts
+   sudo ./truenas-auto-update.sh   # once by hand: without a new image nothing happens
    ```
 2. *System → Advanced Settings → Cron Jobs → Add*:
    - Command: `/mnt/POOL/apps/strata-proxy-update/truenas-auto-update.sh`
    - Run As User: `root`
    - Schedule: Custom, `*/15 * * * *`
-   - *Hide Standard Output* an, *Hide Standard Error* aus
-3. Optional: eine Home-Assistant-Webhook-URL in die Datei `auto-update.webhook`
-   neben dem Skript schreiben. Bei einem gescheiterten Update geht dorthin
-   `{"event":"nas_update_failed","data":{"app":"strata-proxy","from":…,"to":…,"rolled_back":true}}`.
+   - *Hide Standard Output* on, *Hide Standard Error* off
+3. Optional: write a Home Assistant webhook URL into the file `auto-update.webhook`
+   next to the script. On a failed update,
+   `{"event":"nas_update_failed","data":{"app":"strata-proxy","from":…,"to":…,"rolled_back":true}}` goes there.
 
-Anderer App-Name, eine andere `LISTEN_ADDR` oder ein anderer Pfad: als Variablen vor den Befehl im Cron Job,
-z. B. `STRATA_PROXY_APP_NAME=proxy STRATA_PROXY_HEALTH_URL=http://127.0.0.1:9000/admin/ /mnt/…/truenas-auto-update.sh`.
-Alle Variablen stehen oben im Skript. Das Datenverzeichnis liest es aus dem
-Container (Mount auf `/data`).
+A different app name, a different `LISTEN_ADDR` or a different path: as variables before the command in the cron job,
+e.g. `STRATA_PROXY_APP_NAME=proxy STRATA_PROXY_HEALTH_URL=http://127.0.0.1:9000/admin/ /mnt/…/truenas-auto-update.sh`.
+All variables are listed at the top of the script. It reads the data directory from the
+container (mount on `/data`).
 
-Neben dem Skript liegen:
+Next to the script are:
 
-- `auto-update.log`: jedes Update und jeder Fehler (ab 200 KB nach
-  `auto-update.log.1`).
-- `backups/data-*.tar.gz`: die letzten 10 Sicherungen von `/data`, mit
-  Passwort-Hash und API-Keys, daher nur für root lesbar.
-- `auto-update.bad-images`: Images, die nicht hochkamen. Eine Zeile löschen,
-  damit das Image noch einmal versucht wird.
-- `failed-data-*`: die Daten so, wie das fehlerhafte Image sie hinterließ.
+- `auto-update.log`: every update and every error (rotated into
+  `auto-update.log.1` at 200 KB).
+- `backups/data-*.tar.gz`: the last 10 backups of `/data`, with
+  password hash and API keys, so readable only by root.
+- `auto-update.bad-images`: images that did not come up. Delete a line
+  so that the image is tried once more.
+- `failed-data-*`: the data as the faulty image left it.
 
-Steht im Log `ROLLBACK FAILED`, von Hand zurück: App unter *Apps* stoppen, den
-Inhalt des Datenverzeichnisses durch die letzte Sicherung ersetzen
+If the log says `ROLLBACK FAILED`, roll back by hand: stop the app under *Apps*, replace the
+contents of the data directory with the latest backup
 (`sudo tar -C /mnt/POOL/apps/strata-proxy --numeric-owner -xzpf backups/data-….tar.gz`),
 `sudo docker tag ghcr.io/faunkr/strata-home-proxy:previous ghcr.io/faunkr/strata-home-proxy:latest`,
-App starten.
+start the app.
 
-## Weboberfläche
+## Web UI
 
-Unter `http://<NAS-IP>:8080/admin/`, also auf demselben Port wie die API.
-Aufrufe dort wecken den PC nicht und halten ihn nicht wach. Die Oberfläche
-ist englisch und in fünf Bereiche gegliedert: *Overview*, *PC*, *Strata*
-(Reiter *Models*, *Output*, *Version & benchmark*, *Connection*), *Access* und
-*System*; oben zeigen zwei Abzeichen live den Zustand von PC und Strata.
+At `http://<NAS-IP>:8080/admin/`, so on the same port as the API.
+Calls there do not wake the PC and do not keep it awake. The web UI
+is in English and split into five areas: *Overview*, *PC*, *Strata*
+(tabs *Models*, *Output*, *Version & benchmark*, *Connection*), *Access* and
+*System*; at the top, two badges show the state of PC and Strata live.
 
-- **Overview:** zeigt live, ob der PC schläft, aufwacht, wach oder im
-  Gaming-Modus ist, ob Strata bereit ist, lädt, Anfragen bearbeitet (mit
-  wartenden Anfragen und Token/s) oder offline ist, die letzte Anfrage, einen
-  Countdown bis zum Schlafen (oder warum nicht geschlafen wird) und die letzten
-  zehn PC-Ereignisse. Solange noch etwas fehlt (Strata-Adresse, MAC,
-  PC-Dienst, API-Key, `DATA_DIR`), steht oben die Checkliste *Finish setup*
-  mit Links in den passenden Bereich. Solange die Weboberfläche offen ist, fragt der Proxy alle
-  5 s den PC-Dienst, `/health` und die Metriken von Strata ab; das
-  weckt den PC nicht und hält ihn nicht wach. Für die Metriken braucht der
-  Proxy den API-Key von Strata (`STRATA_API_KEY`). Welche Endpunkte von
-  Strata der Proxy nutzt: [docs/strata-api.md](docs/strata-api.md).
-- **Knöpfe:** *Wake PC* (die 15 min Leerlauf zählen ab dem Aufwachen),
-  *Sleep now* (lehnt der PC-Dienst ab, steht der Grund da), der Schalter
-  *Gaming mode* (weckt einen schlafenden PC vorher; nach *aus* zählt der
-  Leerlauf neu) und *Keep awake* für 1 h, 4 h, 8 h oder bis morgen 8 Uhr.
-  Wach halten übersteht einen Neustart (`/data/keep-awake.json`). „Morgen
-  8 Uhr“ richtet sich nach der Zeitzone in `TZ` (z. B. `Europe/Berlin`), ohne
-  `TZ` nach UTC. Läuft gerade eine Anfrage, fragt *Gaming mode* vorher in
-  einem Dialog nach. Jeder Knopf landet im Verlauf mit „from the web UI“.
-- **Version des PC-Dienstes:** steht im Bereich *PC*, auch bei schlafendem
-  PC (die zuletzt gemeldete). Enthält das Image eine andere, erscheint
-  *Update to …*; der Knopf geht nur bei wachem PC und weckt ihn nie. Scheitert
-  das Update, steht dort der Grund. Die Overview weist nur auf das Update hin.
-- **Erste Anmeldung:** Passwort `admin`, oder der Wert von `UI_PASSWORD`, falls
-  gesetzt. Danach muss ein eigenes Passwort (mindestens 8 Zeichen) festgelegt
-  werden, vorher geht nichts anderes. Es liegt als Hash in
+- **Overview:** shows live whether the PC is asleep, waking up, awake or in
+  gaming mode, whether Strata is ready, loading, handling requests (with
+  waiting requests and tokens/s) or offline, the last request, a
+  countdown to sleep (or why it will not sleep) and the last
+  ten PC events. As long as something is still missing (Strata address, MAC,
+  PC service, API key, `DATA_DIR`), the checklist *Finish setup* is shown at the top
+  with links to the matching area. As long as the web UI is open, the proxy polls
+  the PC service, `/health` and Strata's metrics every 5 s; this
+  does not wake the PC and does not keep it awake. For the metrics the
+  proxy needs Strata's API key (`STRATA_API_KEY`). Which Strata endpoints
+  the proxy uses: [docs/strata-api.md](docs/strata-api.md).
+- **Buttons:** *Wake PC* (the 15 min idle timeout counts from the wake-up),
+  *Sleep now* (if the PC service refuses, the reason is shown), the switch
+  *Gaming mode* (wakes a sleeping PC first; after *off* the
+  idle timeout restarts) and *Keep awake* for 1 h, 4 h, 8 h or until 8 am tomorrow.
+  Keep awake survives a restart (`/data/keep-awake.json`). "8 am
+  tomorrow" follows the time zone in `TZ` (e.g. `Europe/Berlin`), or UTC
+  without `TZ`. If a request is running, *Gaming mode* asks first in
+  a dialog. Every button ends up in the history with "from the web UI".
+- **PC service version:** shown in the *PC* area, even when the PC is asleep
+  (the last one reported). If the image contains a different one,
+  *Update to …* appears; the button works only when the PC is awake and never wakes it. If
+  the update fails, the reason is shown there. The Overview only points to the update.
+- **First login:** password `admin`, or the value of `UI_PASSWORD`, if
+  set. After that you must set your own password (at least 8 characters);
+  nothing else works before that. It is stored as a hash in
   `/data/admin-password.json`.
-- **Angemeldet bleiben:** 30 Tage, auch über einen Neustart. Ein Passwortwechsel
-  meldet alle anderen Geräte ab.
-- **Passwort vergessen:** `/data/admin-password.json` löschen und den Container
-  neu starten, dann gilt wieder das Standardpasswort.
-- **Einstellungen:** Jeder Wert aus [deploy/env.example](deploy/env.example)
-  außer `DATA_DIR` lässt sich in seinem Bereich ändern (*PC*: Verbindung,
-  Wecken und Schlafen; *Strata → Connection*: Adresse und Key; *System*: der
-  Rest) und gilt nach *Save* des Abschnitts sofort, nur die Adresse des
-  Proxys (`LISTEN_ADDR`) erst nach einem Neustart. Es gilt der Wert von der
-  Seite, sonst die Umgebungsvariable, sonst die Vorgabe; *Reset* verwirft
-  den Wert von der Seite. Bei der MAC hat die vom PC-Dienst gemeldete Vorrang.
-  Gespeichert wird in `/data/settings.json`; ohne `DATA_DIR` warnen *System* und die Checkliste,
-  dass Änderungen beim Neustart verloren gehen. Das Token des PC-Dienstes wird
-  nie angezeigt.
-- **PC-Dienst:** *Create install command* im Bereich *PC* zeigt einen PowerShell-Befehl (mit *Copy*), der den
-  PC-Dienst vom NAS lädt, einrichtet und beim Proxy anmeldet; Token und
-  `PC_AGENT_URL` trägt der Proxy dann selbst ein. Der Code darin gilt 15 min
-  und einmal. Die .exe liegt im Image und ist ohne Anmeldung unter
-  `/admin/agent/strata-pc-agent.exe` abrufbar. Details:
-  [docs/pc-dienst.md](docs/pc-dienst.md).
-- **Benchmark** (*Strata → Version & benchmark*): *Run benchmark* misst das
-  aktive Modell, *Compare models* jedes installierte nacheinander (je etwa
-  10 min, Anfragen warten so lange) und aktiviert danach wieder das vorher
-  aktive. Die Liste zeigt pro Modell Decode- und Prompt-Tokens/s, mit
-  welchem Kontext, welcher Speed-Projection und welcher Strata-Version
-  gemessen wurde, das schnellste zuerst, mit *Make active*.
-- **Code benchmark** (gleicher Reiter): Das aktive Modell löst mit opencode
-  drei Python-Aufgaben im Container `code-bench` neben dem Proxy (in beiden
-  Compose-Dateien; `CODE_BENCH_URL` zeigt darauf). Versteckte Tests bewerten
-  das Ergebnis; gezeigt werden Tests, Zeit, Schritte, Tokens und Tokens/s je
-  Aufgabe, aufklappbar mit Code und Testausgabe. Details:
+- **Staying logged in:** 30 days, also across a restart. Changing the password
+  logs out all other devices.
+- **Forgot password:** delete `/data/admin-password.json` and restart the
+  container, then the default password applies again.
+- **Settings:** Every value from [deploy/env.example](deploy/env.example)
+  except `DATA_DIR` can be changed in its area (*PC*: connection,
+  waking and sleeping; *Strata → Connection*: address and key; *System*: the
+  rest) and applies as soon as the section is saved, only the address of the
+  proxy (`LISTEN_ADDR`) not until a restart. The value from the
+  page applies, otherwise the environment variable, otherwise the default; *Reset* discards
+  the value from the page. For the MAC, the one reported by the PC service takes precedence.
+  It is stored in `/data/settings.json`; without `DATA_DIR`, *System* and the checklist warn
+  that changes are lost on restart. The PC service's token is
+  never shown.
+- **PC service:** *Create install command* in the *PC* area shows a PowerShell command (with *Copy*) that
+  downloads the PC service from the NAS, installs it and registers it with the proxy; the proxy then
+  fills in the token and `PC_AGENT_URL` itself. The code in it is valid once,
+  for 15 min. The .exe is in the image and can be fetched without login at
+  `/admin/agent/strata-pc-agent.exe`. Details:
+  [docs/pc-service.md](docs/pc-service.md).
+- **Benchmark** (*Strata → Version & benchmark*): *Run benchmark* measures the
+  active model, *Compare models* each installed one in turn (about
+  10 min each, requests wait that long) and then activates the previously
+  active one again. The list shows decode and prompt tokens/s per model, with
+  which context, which speed projection and which Strata version
+  it was measured, the fastest first, with *Make active*.
+- **Code benchmark** (same tab): The active model solves
+  three Python tasks with opencode in the container `code-bench` next to the proxy (in both
+  Compose files; `CODE_BENCH_URL` points to it). Hidden tests grade
+  the result; shown are tests, time, steps, tokens and tokens/s per
+  task, expandable with code and test output. Details:
   [tools/code-bench/README.md](tools/code-bench/README.md).
-- **API-Keys** (Bereich *Access*): Einen Key pro Client anlegen. Er wird nur direkt nach dem
-  Anlegen vollständig angezeigt und nur als Hash in `/data/api-keys.json`
-  gespeichert. Die Liste zeigt Anfang, Erstellung und letzte Nutzung; ein
-  widerrufener Key gilt sofort nicht mehr. Solange kein Key existiert, bekommt
-  jeder Client `401`.
-- Nach 5 Fehlversuchen von derselben Adresse ist die Anmeldung 1 min gesperrt.
-  `/admin/` ist überall erreichbar, wo die API erreichbar ist; das Passwort ist
-  der einzige Schutz.
+- **API keys** (*Access* area): Create one key per client. It is shown in full only right after
+  creation and stored only as a hash in `/data/api-keys.json`.
+  The list shows the beginning, creation and last use; a
+  revoked key stops working immediately. As long as no key exists, every
+  client gets `401`.
+- After 5 failed attempts from the same address, login is blocked for 1 min.
+  `/admin/` is reachable wherever the API is reachable; the password is
+  the only protection.
 
-## Entwickeln
+## Development
 
 ```sh
-cargo test         # startet ein nachgebautes Strata, PC-Dienst und WoL-Empfänger
-scripts/check.sh   # alle Checks des CI: fmt, clippy (auch wasm), Tests
+cargo test         # starts a simulated Strata, PC service and WoL receiver
+scripts/check.sh   # all CI checks: fmt, clippy (also wasm), tests
 ```
 
-Die Weboberfläche (Leptos, [crates/admin-ui](crates/admin-ui)) braucht für den
-Browser-Teil `rustup target add wasm32-unknown-unknown` und
-`cargo install cargo-leptos --locked`. Dann baut `cargo leptos build` Proxy und
-Oberfläche, `cargo leptos watch` startet beides und baut bei Änderungen neu.
+The web UI (Leptos, [crates/admin-ui](crates/admin-ui)) needs, for the
+browser part, `rustup target add wasm32-unknown-unknown` and
+`cargo install cargo-leptos --locked`. Then `cargo leptos build` builds the proxy and
+the web UI, `cargo leptos watch` starts both and rebuilds on changes.
 
-## Lizenz
+## License
 
-MIT, siehe [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).

@@ -14,11 +14,19 @@ Download a file raw into the scratchpad and read it with `grep` and `sed`:
 curl -sS -o server.py https://raw.githubusercontent.com/Niko1221/Strata/477ac13/serve/server.py
 ```
 
+To see what changed in Strata since the commit this page is pinned to, clone it without the file contents and read the log of the files the proxy and the PC service depend on (`setup.py` for setup's output, `serve/` for the HTTP API). The GitHub API without a token may refuse the request; a clone works.
+
+```sh
+git clone -q --filter=blob:none https://github.com/Niko1221/Strata.git strata
+git -C strata log --oneline 477ac13..HEAD -- setup.py serve/
+git -C strata grep -n 'GB ({\|=== Step' HEAD -- setup.py   # the lines the PC service reads
+```
+
 `serve/server.py` has over 7000 lines. A web fetch with a summary cuts it off and quotes no handlers. The routes are in `do_GET` from line 5372.
 
 ## API key
 
-If a key is set in Strata, the protected endpoints require `Authorization: Bearer <key>` or `x-api-key: <key>`. If it is missing, they answer with 401 (`_authorized`, line 5362). The proxy uses `STRATA_API_KEY` for this.
+If a key is set in Strata, the protected endpoints require `Authorization: Bearer <key>` or `x-api-key: <key>`. If it is missing, they answer with 401 (`_authorized`, line 5362). The PC service writes a new key into `api_key` of every model configuration before each start of Strata, and the proxy fetches it from the PC service (see [pc-agent-api.md](pc-agent-api.md), `GET /strata/key`).
 
 ## `GET /health`
 
@@ -75,7 +83,7 @@ Sources: `setup.py`, `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_
 - **Sampling without values in the request** (`Service._run`): first the model card's set for the thinking state (`MODEL_CARD_SAMPLING` by `arch` of the configuration, without `arch` `qwen4exp`; since commit a8091f4d, 2026-10-15), on top of that the configuration's `sampling` block (`sampling_defaults_from_config`, since 9e6e5b7a, 2026-09-26; Strata names unknown keys at startup and skips them), on top of that the chat settings from Strata's web app (`strata-<id>.shared-settings.json`). The request's fields always win. Before 9e6e5b7a a request without sampling is greedy. Values at e88ee39d: `qwen4exp` with thinking temperature 1.0, top_p 0.95, top_k 20, without 0.7, 0.8, 20, presence_penalty 1.5; `qwen35moe` with thinking adds presence_penalty 1.5, without the same as `qwen4exp`. `crates/pc-agent/src/sampling.rs` mirrors them.
   - The block has one set for both states and hides the model card. So the PC service writes the thinking set only into a Strata without `MODEL_CARD_SAMPLING` that knows `sampling_defaults_from_config`; otherwise it removes the block (see [pc-agent-api.md](pc-agent-api.md)). It recognises the version by these names in `serve/server.py`.
 - **Loops:** Strata ends an answer that repeats a token `repeat_stop_tokens` times (256) in a row (#606, commit bb162e2e). Thinking that repeats whole passages is only handled with `"reasoning_loop_recovery"` in the model configuration (commit c3473262): `"stop"` ends the answer, `"recover"` (or `true`) continues with the instruction for low effort; without the key, off. The PC service sets `"recover"` (see [pc-agent-api.md](pc-agent-api.md)). Older Strata versions read the configuration with `cfg.get` and skip unknown keys.
-- **Setup output:** steps as `=== Step N: title ===`, downloads as `file: x / y GB (p%)`, errors start with `[X]`.
+- **Setup output:** steps as `=== Step N: title ===`, downloads as `file: x / y GB (p%)`, errors start with `[X]`. Since [`1972af6`](https://github.com/Niko1221/Strata/commit/1972af6), the SHA-256 check of a file of 1 GiB or more prints the same figure as `checking file: x / y GB (p%)` (`verify_sha256` in `setup.py`), after each download and for the engine in step 4; the PC service shows it as the step `N/7: Checking file`.
 - **Where a model's files go:**
   - `strata-<id lowercase>.json` (configuration), `run-<id lowercase>.bat` (start) and `strata-<id lowercase>.log` in the Strata folder
   - `<data>/models/<ID>` (GGUF files, also `.part`) and `<data>/packs/<id lowercase>` (tokenizer)

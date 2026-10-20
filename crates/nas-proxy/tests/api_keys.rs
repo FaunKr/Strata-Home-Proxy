@@ -334,44 +334,6 @@ async fn a_valid_bearer_counts_even_next_to_a_stale_x_api_key() {
 }
 
 #[tokio::test]
-async fn strata_refusing_the_strata_key_is_told_apart() {
-    let s = setup(true, |_| {}).await;
-    *s.pc.strata_key.lock().unwrap() = Some("right".into());
-    s.state.settings.set("STRATA_API_KEY", "wrong").unwrap();
-    let resp = post_json(&s, "/v1/messages", json!({})).await;
-    assert_eq!(resp.status(), 401);
-    assert_eq!(
-        resp.headers()["x-strata-proxy-status"],
-        "strata_unauthorized"
-    );
-    s.state.settings.set("STRATA_API_KEY", "right").unwrap();
-    assert_eq!(post_json(&s, "/v1/messages", json!({})).await.status(), 200);
-}
-
-#[tokio::test]
-async fn strata_refusing_the_strata_key_after_waking_is_told_apart() {
-    let s = setup(false, |_| {}).await;
-    *s.pc.strata_key.lock().unwrap() = Some("right".into());
-    s.state.settings.set("STRATA_API_KEY", "wrong").unwrap();
-    let resp = post_json(&s, "/v1/messages", json!({"stream": true})).await;
-    // The status line went out before Strata answered; the error comes as an event.
-    let text = resp.text().await.unwrap();
-    assert!(text.contains("STRATA_API_KEY"), "{text}");
-}
-
-#[tokio::test]
-async fn strata_asking_for_a_key_the_proxy_lacks_is_told_apart() {
-    let s = setup(true, |_| {}).await;
-    *s.pc.strata_key.lock().unwrap() = Some("right".into());
-    let resp = post_json(&s, "/v1/messages", json!({})).await;
-    assert_eq!(resp.status(), 401);
-    assert_eq!(
-        resp.headers()["x-strata-proxy-status"],
-        "strata_unauthorized"
-    );
-}
-
-#[tokio::test]
 async fn access_page_lists_keys_with_a_revoke_button() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;

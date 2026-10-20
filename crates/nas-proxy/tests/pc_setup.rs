@@ -112,11 +112,7 @@ async fn command_points_at_the_address_the_page_was_opened_on() {
 
 #[tokio::test]
 async fn registering_enters_token_and_address_of_the_pc_service() {
-    let s = setup(false, |c| {
-        c.strata_api_key = Some("strata-secret".into());
-        c.pc_agent_url = None;
-    })
-    .await;
+    let s = setup(false, |c| c.pc_agent_url = None).await;
     let mut b = logged_in(&s.url).await;
     let (_, code) = command(&mut b).await;
     let resp = register(&s, &code, 8091).await;
@@ -125,7 +121,8 @@ async fn registering_enters_token_and_address_of_the_pc_service() {
     let token = body["token"].as_str().unwrap();
     assert!(token.len() >= 32, "{token}");
     assert_eq!(body["nas_url"], s.url);
-    assert_eq!(body["strata_api_key"], "strata-secret");
+    // The PC service makes the Strata key itself.
+    assert_eq!(body.get("strata_api_key"), None);
 
     let cfg = s.state.cfg();
     assert_eq!(cfg.pc_agent_token.as_deref(), Some(token));

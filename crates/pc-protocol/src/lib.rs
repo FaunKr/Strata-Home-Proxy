@@ -24,6 +24,7 @@ pub use job::{StrataJob, StrataJobKind, StrataJobRequest, StrataJobState};
 pub use output::{StrataOutputMessage, StrataOutputNotice};
 pub use status::{
     Answer, Cpu, ForcedRestart, ForcedSleep, GamingRequest, Gpu, Hardware, PcStatus, Refused,
+    StrataKey,
 };
 pub use strata::{
     ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, SamplingField, SamplingSource,

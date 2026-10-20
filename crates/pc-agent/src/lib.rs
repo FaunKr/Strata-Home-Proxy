@@ -13,6 +13,7 @@ pub mod output;
 pub mod platform;
 pub mod sampling;
 pub mod strata;
+mod strata_key;
 pub mod strata_process;
 pub mod update;
 
@@ -59,9 +60,22 @@ const WATCHDOG_EVERY: Duration = Duration::from_secs(5);
 /// it waits this long in all for the port.
 const BIND_ATTEMPTS: u32 = 60;
 const BIND_PAUSE: Duration = Duration::from_millis(500);
+/// The old program ends a second after it started the new one; after this
+/// many attempts (5 s) it hangs, and the new one ends it.
+const BIND_STUCK_AFTER: u32 = 10;
 
 pub async fn run(agent: Arc<Agent>) -> anyhow::Result<()> {
-    let listener = bind(agent.cfg.listen).await?;
+    let listener = bind(agent.cfg.listen, || {
+        if let Some(pid) = platform::replaced_pid() {
+            tracing::warn!(
+                "The program before the update (process {pid}) keeps the port, ending it"
+            );
+            if let Err(e) = platform::end_replaced(pid) {
+                tracing::warn!("Process {pid} could not be ended: {e:#}");
+            }
+        }
+    })
+    .await?;
     // The old program has ended once the port is free; Windows may keep its
     // file a moment longer.
     tokio::spawn(async {
@@ -87,11 +101,22 @@ pub async fn run(agent: Arc<Agent>) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn bind(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+/// Takes the port; while it is taken, tries again, and calls `stuck` once
+/// when the old program should have ended long since.
+async fn bind(
+    addr: std::net::SocketAddr,
+    stuck: impl FnOnce(),
+) -> std::io::Result<tokio::net::TcpListener> {
     let mut attempt = 1;
+    let mut stuck = Some(stuck);
     loop {
         match tokio::net::TcpListener::bind(addr).await {
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && attempt < BIND_ATTEMPTS => {
+                if attempt == BIND_STUCK_AFTER
+                    && let Some(stuck) = stuck.take()
+                {
+                    stuck();
+                }
                 attempt += 1;
                 tokio::time::sleep(BIND_PAUSE).await;
             }
@@ -129,4 +154,33 @@ pub async fn switch_gaming(cfg: &Config, want: Option<bool>) -> anyhow::Result<P
         .error_for_status()?
         .json()
         .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn a_free_port_is_taken_without_ending_anything() {
+        let called = std::cell::Cell::new(false);
+        let listener = bind("127.0.0.1:0".parse().unwrap(), || called.set(true))
+            .await
+            .unwrap();
+        assert!(listener.local_addr().is_ok());
+        assert!(!called.get());
+    }
+
+    #[tokio::test]
+    async fn a_port_the_old_program_keeps_is_taken_once_it_is_ended() {
+        let old = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = old.local_addr().unwrap();
+        let old = Mutex::new(Some(old));
+        let listener = bind(addr, || drop(old.lock().unwrap().take()))
+            .await
+            .unwrap();
+        assert_eq!(listener.local_addr().unwrap(), addr);
+        assert!(old.lock().unwrap().is_none(), "the old program was ended");
+    }
 }

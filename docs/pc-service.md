@@ -41,8 +41,8 @@ then carry on anyway.
    Windows asks once for administrator rights. The script downloads
    `strata-pc-agent.exe` from the NAS to `%LOCALAPPDATA%\StrataHome`, registers the PC
    with the NAS, makes it start at login, opens port 8091 only for
-   the NAS and creates the desktop shortcut **Gaming an-aus**. The NAS fills in the token,
-   `PC_AGENT_URL` and the Strata key itself.
+   the NAS and creates the desktop shortcut **Gaming an-aus**. The NAS fills in the token
+   and `PC_AGENT_URL` itself; the service makes the Strata key at every start of Strata.
 3. The **Strata** area is where you set the start script and Strata programs. Until then
    the service runs, but does not start Strata itself.
 
@@ -63,8 +63,12 @@ the idle timeout.
 The service downloads the .exe from the NAS, stops Strata (a hand-started one
 too), puts the new .exe in the same place (task and shortcut stay valid),
 starts it and exits. The new service starts Strata again right away if it was
-running before. As long as Strata is handling a request or a Strata job is
-running, it refuses; so it does when Strata still answers 10 s after the stop.
+running before. The update goes through even when the page that pressed the
+button closes. Should the old service still hold the port 5 s after the new one
+started, the new one ends it; a new service that cannot start writes why to its
+log instead of a message box. As long as Strata is handling a request or a
+Strata job is running, it refuses; so it does when Strata still answers 10 s
+after the stop.
 If the update fails, the old service keeps running, starts the Strata it
 stopped again, and the **PC** area names the reason. A service set up before the update button existed needs
 the command from above once.
@@ -96,9 +100,9 @@ Strata crashes because of it, the restarted service starts it again.
 ## Managed values
 
 If the service sets up Strata itself (*Strata* area of the web UI),
-it stores the start script, Strata folder and Strata key in
+it stores the start script and Strata folder in
 `strata-managed.json` next to the TOML. These values take precedence over `strata_start`,
-`strata_args`, `strata_processes` and `strata_api_key` from the TOML; the TOML
+`strata_args` and `strata_processes` from the TOML; the TOML
 itself stays unchanged. Without this file the TOML applies as before. Anyone who
 wants to set up by hand again deletes the file and restarts the service.
 

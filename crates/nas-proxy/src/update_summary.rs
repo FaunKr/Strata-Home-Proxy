@@ -22,12 +22,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use strata_admin_ui::{
     api::{StrataUpdate, UpdateCommit, UpdateSummary},
-    labels::NO_AGENT,
+    labels::{NO_AGENT, NO_MAC},
 };
 use strata_pc_protocol::{ChangedFile, Incoming, StrataJobState};
 
 use crate::{
-    clock, events::EventKind, files::write_private, state::AppState, strata::wake, timeouts,
+    clock,
+    events::EventKind,
+    files::write_private,
+    state::{ActivityGuard, AppState, Health, WakeError},
+    strata::wake,
+    timeouts,
 };
 
 /// The summary for the newest upstream commit, in `DATA_DIR`.
@@ -142,6 +147,9 @@ pub fn noted(
         .unwrap()
         .clone()
         .filter(|w| w.upstream == *upstream);
+    let writing = || UpdateSummary::Writing {
+        fallback: fallback.clone(),
+    };
     let unavailable = || UpdateSummary::Unavailable {
         fallback: fallback.clone(),
         reason: summaries.failure(upstream),
@@ -149,32 +157,19 @@ pub fn noted(
     let summary = if let Some(w) = written {
         w.summary()
     } else if summaries.writing.lock().unwrap().as_ref() == Some(upstream) {
-        UpdateSummary::Writing {
-            fallback: fallback.clone(),
-        }
+        writing()
     } else if summaries.recently_failed(upstream) {
         unavailable()
     } else if now.gaming || now.job {
         summaries.fail(upstream, "gaming mode or a Strata job");
         unavailable()
     } else if start(state, now.installed, incoming.clone(), None) {
-        UpdateSummary::Writing {
-            fallback: fallback.clone(),
-        }
+        writing()
     } else {
         unavailable()
     };
-    let blocked = if now.gaming {
-        Some(GAMING)
-    } else if now.job {
-        Some(JOB)
-    } else if now.code_bench {
-        Some(CODE_BENCH)
-    } else {
-        None
-    };
     let mut update = view(now.installed, &incoming, summary);
-    update.blocked = blocked.map(String::from);
+    update.blocked = blocker(now.gaming, now.job, now.code_bench).map(String::from);
     Some(update)
 }
 
@@ -187,37 +182,34 @@ pub async fn generate(state: &Arc<AppState>, by: &str) -> Result<(), String> {
     if !agent.configured() {
         return Err(NO_AGENT.into());
     }
-    if state.code_bench.busy() {
-        return Err(CODE_BENCH.into());
-    }
     if summaries.writing.lock().unwrap().is_some() {
         return Ok(());
     }
-    state
-        .events
-        .record(EventKind::UpdateSummaryRequested, Some(by.to_string()));
-    state.touch();
-    let known = summaries.last.lock().unwrap().clone();
-    let status = match state.ask_pc(&agent).await {
-        Some(status) => status,
-        None => {
-            if let Err(why) = wake(state).await {
-                if let Some((_, incoming)) = known {
-                    summaries.fail(&incoming.upstream, &why);
-                }
-                return Err(why);
-            }
-            state
-                .ask_pc(&agent)
-                .await
-                .ok_or("The PC service does not answer.")?
-        }
+    let requested = || {
+        state
+            .events
+            .record(EventKind::UpdateSummaryRequested, Some(by.to_string()));
+        state.touch();
     };
-    if status.gaming_mode {
-        return Err(GAMING.into());
+    let awake = state.ask_pc(&agent).await;
+    if awake.is_none() {
+        // Recorded first, so the wake shows up with its reason.
+        requested();
+        if let Err(why) = wake(state).await {
+            summaries.fail_last(&why);
+            return Err(why);
+        }
     }
-    if status.strata_job {
-        return Err(JOB.into());
+    let status = state
+        .ask_pc(&agent)
+        .await
+        .ok_or("The PC service does not answer.")?;
+    if let Some(why) = blocker(
+        status.gaming_mode,
+        status.strata_job,
+        state.code_bench.busy(),
+    ) {
+        return Err(why.into());
     }
     let (info, incoming) = agent
         .strata()
@@ -233,27 +225,49 @@ pub async fn generate(state: &Arc<AppState>, by: &str) -> Result<(), String> {
     let incoming = incoming
         .filter(|_| info.update_available == Some(true))
         .ok_or(NO_UPDATE)?;
+    if awake.is_some() {
+        requested();
+    }
     let installed = info.version.as_deref();
     summaries.drop_outdated(installed, info.update_available, Some(&incoming.upstream));
     *summaries.last.lock().unwrap() = Some((installed.map(String::from), incoming.clone()));
-    if summaries
-        .written
-        .lock()
-        .unwrap()
-        .as_ref()
-        .is_some_and(|w| w.upstream == incoming.upstream)
-    {
+    if summaries.written_for(&incoming.upstream) {
         return Ok(());
     }
-    let strata = state.strata().ok_or("No Strata address is set.")?;
-    // Strata loads the model with the request; that takes its own time.
-    let loaded = strata.health().await.is_ok_and(|h| h.loaded);
-    let mut limit = summaries.limit(state);
-    if !loaded {
-        limit += summaries.timing.lock().unwrap().load_allowance;
-    }
-    start(state, installed, incoming, Some(limit));
+    // Strata may still be starting after a wake; it loads the model with
+    // the request, which takes its own time.
+    let loaded = match state.ensure_awake().await {
+        Ok(()) => matches!(state.strata_health().await, Health::Up { loaded: true }),
+        Err(e) => {
+            let why = match e {
+                WakeError::Gaming => GAMING.to_string(),
+                WakeError::NoMac => NO_MAC.to_string(),
+                WakeError::Timeout => "Strata did not start in time.".to_string(),
+            };
+            summaries.fail(&incoming.upstream, &why);
+            return Err(why);
+        }
+    };
+    start(
+        state,
+        installed,
+        incoming,
+        Some(summaries.manual_limit(state, loaded)),
+    );
     Ok(())
+}
+
+/// Why "Generate summary now" cannot start, if it cannot.
+fn blocker(gaming: bool, job: bool, code_bench: bool) -> Option<&'static str> {
+    if gaming {
+        Some(GAMING)
+    } else if job {
+        Some(JOB)
+    } else if code_bench {
+        Some(CODE_BENCH)
+    } else {
+        None
+    }
 }
 
 impl UpdateSummaries {
@@ -298,25 +312,25 @@ impl UpdateSummaries {
                 ))
             }
             // Newer commits than the summary's: it is outdated.
-            (_, Some((installed, incoming))) => Some(view(
-                installed.as_deref(),
-                &incoming,
-                UpdateSummary::Unavailable {
-                    fallback: fallback(&incoming),
-                    reason: self.failure(&incoming.upstream),
-                },
-            ))
-            .map(|mut update| {
+            (_, Some((installed, incoming))) => {
+                let mut update = view(
+                    installed.as_deref(),
+                    &incoming,
+                    UpdateSummary::Unavailable {
+                        fallback: fallback(&incoming),
+                        reason: self.failure(&incoming.upstream),
+                    },
+                );
                 update.wakes_pc = true;
-                update
-            }),
+                Some(update)
+            }
             (Some(w), None) => Some(StrataUpdate {
                 summary: w.summary(),
                 commits: Vec::new(),
                 left_out: 0,
                 compare_url: None,
                 blocked: None,
-                wakes_pc: true,
+                wakes_pc: false,
             }),
             (None, None) => None,
         }
@@ -398,6 +412,32 @@ impl UpdateSummaries {
             .is_some_and(|f| f.upstream == upstream && f.at.elapsed() < retry_after)
     }
 
+    fn written_for(&self, upstream: &str) -> bool {
+        self.written
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|w| w.upstream == upstream)
+    }
+
+    /// The limit for a click: more while the model still has to load.
+    fn manual_limit(&self, state: &AppState, loaded: bool) -> Duration {
+        let limit = self.limit(state);
+        if loaded {
+            limit
+        } else {
+            limit + self.timing.lock().unwrap().load_allowance
+        }
+    }
+
+    /// Records a failure for the commits last reported, if any are known.
+    fn fail_last(&self, why: &str) {
+        let last = self.last.lock().unwrap().clone();
+        if let Some((_, incoming)) = last {
+            self.fail(&incoming.upstream, why);
+        }
+    }
+
     /// Why the last attempt for this upstream commit failed.
     fn failure(&self, upstream: &str) -> Option<String> {
         self.failed
@@ -438,6 +478,8 @@ fn start(
     let installed = installed.map(String::from);
     tokio::spawn(async move {
         let summaries = &state.strata.update;
+        // Asked for by hand, it is use: the PC stays awake until it ends.
+        let _use = limit.map(|_| ActivityGuard::new(&state));
         let asked = match limit {
             Some(limit) => write(&state, &incoming, limit).await,
             None => ask(&state, &incoming).await,

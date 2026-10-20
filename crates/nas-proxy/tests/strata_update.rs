@@ -548,13 +548,18 @@ async fn gaming_mode_or_a_job_refuse_a_click() {
         assert!(resp.text().await.unwrap().contains(text), "{what}");
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         assert_eq!(s.pc.chat_bodies.lock().unwrap().len(), 0, "{what}");
+        assert!(
+            !own_kinds(&s.state).contains(&EventKind::UpdateSummaryRequested),
+            "{what}: a refused click is no use"
+        );
     }
 }
 
 #[tokio::test]
 async fn a_click_while_strata_writes_asks_only_once() {
     let s = ready().await;
-    *s.pc.chat_pause.lock().unwrap() = std::time::Duration::from_millis(500);
+    // Room for the click before Strata answers.
+    *s.pc.chat_pause.lock().unwrap() = std::time::Duration::from_millis(2500);
     let mut b = logged_in(&s.url).await;
     assert_eq!(page(&mut b).await["update"]["summary"]["state"], "writing");
     assert_eq!(generate(&mut b).await.status(), 200);
@@ -574,7 +579,7 @@ async fn an_unloaded_model_gets_extra_time_to_load() {
         s.state
             .strata
             .update
-            .set_load_allowance(std::time::Duration::from_millis(1500));
+            .set_load_allowance(std::time::Duration::from_millis(3000));
         // Neither path asks on its own: the PC reports a job until the click.
         *s.pc.metrics.lock().unwrap() = Some(METRICS_BUSY.into());
         s.pc.unloaded.store(unloaded, Ordering::SeqCst);

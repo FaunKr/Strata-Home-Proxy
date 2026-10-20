@@ -1,12 +1,12 @@
-//! The PC service's version on the overview and the update button. An
-//! update never wakes the PC.
+//! The PC service's version on the overview and the update button. The
+//! last version survives a restart; an update wakes a sleeping PC.
 
 mod common;
 
 use std::{sync::atomic::Ordering, time::Duration};
 
 use common::*;
-use strata_nas_proxy::events::EventKind;
+use strata_nas_proxy::{AppState, Config, api_router, events::EventKind};
 
 const OLD: &str = "0.1.0+alt1234";
 const NEW: &str = "0.1.0+neu5678";
@@ -82,8 +82,9 @@ async fn without_a_program_in_the_image_there_is_no_update() {
 }
 
 #[tokio::test]
-async fn a_sleeping_pc_keeps_its_last_version_and_is_not_woken_for_an_update() {
+async fn a_sleeping_pc_keeps_its_last_version_and_is_woken_for_an_update() {
     let s = outdated("asleep").await;
+    *s.pc.update_to.lock().unwrap() = Some(NEW.into());
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     live.until("Version", |v| v["pc_service"]["version"] == OLD)
@@ -91,14 +92,159 @@ async fn a_sleeping_pc_keeps_its_last_version_and_is_not_woken_for_an_update() {
     s.pc.awake.store(false, Ordering::SeqCst);
     let v = live.until("PC schläft", |v| v["pc"] == "Asleep").await;
     assert_eq!(v["pc_service"]["version"], OLD);
+    assert_eq!(v["pc_service"]["update_available"], true);
+
+    assert_eq!(b.call("pc-service-update", &[]).await.status(), 200);
+    assert!(s.pc.wol_packets.load(Ordering::SeqCst) >= 1);
+    assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 1);
+    live.until("neue Version", |v| v["pc_service"]["version"] == NEW)
+        .await;
+    let kinds = kinds(&s.state);
+    let requested = kinds
+        .iter()
+        .position(|k| *k == EventKind::PcServiceUpdateRequested)
+        .expect("Update im Verlauf");
+    let woken = kinds
+        .iter()
+        .position(|k| *k == EventKind::WakeRequested)
+        .expect("Wecken im Verlauf");
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|k| **k == EventKind::PcServiceUpdateRequested)
+            .count(),
+        1
+    );
+    // The request comes before the wake it caused.
+    assert!(requested < woken, "{kinds:?}");
+}
+
+#[tokio::test]
+async fn a_service_updated_by_hand_while_asleep_is_not_updated_after_the_wake() {
+    let s = outdated("by-hand").await;
+    let mut b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    live.until("Version", |v| v["pc_service"]["version"] == OLD)
+        .await;
+    s.pc.awake.store(false, Ordering::SeqCst);
+    live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    // Set up again with the command, say, while the proxy did not look.
+    *s.pc.version.lock().unwrap() = Some(NEW.into());
+
+    assert_eq!(b.call("pc-service-update", &[]).await.status(), 200);
+    assert!(s.pc.wol_packets.load(Ordering::SeqCst) >= 1);
+    assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
+    let v = live
+        .until("aktuelle Version", |v| v["pc_service"]["version"] == NEW)
+        .await;
+    assert_eq!(v["pc_service"]["update_available"], false);
+    assert_eq!(v["pc_service"]["updating"], false);
+    assert!(v["pc_service"]["update_error"].is_null());
+}
+
+#[tokio::test]
+async fn a_pc_that_does_not_wake_gets_no_update() {
+    let s = setup(true, |c| c.wake_timeout = Duration::from_millis(800)).await;
+    s.state.pc_setup.set_program(program("no-wake", NEW));
+    *s.pc.version.lock().unwrap() = Some(OLD.into());
+    s.pc.ignore_wol.store(true, Ordering::SeqCst);
+    let mut b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    live.until("Version", |v| v["pc_service"]["version"] == OLD)
+        .await;
+    s.pc.awake.store(false, Ordering::SeqCst);
+    live.until("PC schläft", |v| v["pc"] == "Asleep").await;
 
     let resp = b.call("pc-service-update", &[]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("asleep"));
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+    assert!(resp.text().await.unwrap().contains("did not wake"));
+    assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
+    let v = live.until("Stand", |v| v["pc"] == "Asleep").await;
+    assert_eq!(v["pc_service"]["updating"], false);
+}
+
+#[tokio::test]
+async fn without_a_mac_a_sleeping_pc_gets_no_update() {
+    let s = setup(false, |c| c.pc_mac = None).await;
+    s.state.pc_setup.set_program(program("no-mac", NEW));
+    let mut b = logged_in(&s.url).await;
+    let resp = b.call("pc-service-update", &[]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(resp.text().await.unwrap().contains("No MAC address"));
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
     assert!(!kinds(&s.state).contains(&EventKind::PcServiceUpdateRequested));
+}
+
+/// The proxy started again on `dir` with the image carrying `NEW`, the PC
+/// asleep and not asked yet; a browser logged in to it.
+async fn restarted(dir: &std::path::Path, name: &str) -> Browser {
+    let state = AppState::new(Config {
+        data_dir: Some(dir.to_path_buf()),
+        ..Config::default()
+    });
+    state.pc_setup.set_program(program(name, NEW));
+    logged_in_again(&format!("http://{}", serve(api_router(state)).await)).await
+}
+
+/// A fresh data dir for the restart tests.
+fn data_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "strata-proxy-version-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+#[tokio::test]
+async fn the_last_version_survives_a_restart() {
+    let dir = data_dir("restart");
+    let first = setup(true, |c| c.data_dir = Some(dir.clone())).await;
+    first.state.pc_setup.set_program(program("restart", NEW));
+    *first.pc.version.lock().unwrap() = Some(OLD.into());
+    let b = logged_in(&first.url).await;
+    let mut live = Live::open(&b).await;
+    live.until("Version", |v| v["pc_service"]["version"] == OLD)
+        .await;
+    // The saved version follows the reported one.
+    *first.pc.version.lock().unwrap() = Some("0.1.0+mitte".into());
+    live.until("andere Version", |v| {
+        v["pc_service"]["version"] == "0.1.0+mitte"
+    })
+    .await;
+
+    let b = restarted(&dir, "restart").await;
+    let v = Live::open(&b)
+        .await
+        .until("gespeicherte Version", |v| !v["pc_service"].is_null())
+        .await;
+    assert_eq!(v["pc_service"]["version"], "0.1.0+mitte");
+    assert_eq!(v["pc_service"]["update_available"], true);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_service_without_version_stays_outdated_after_a_restart() {
+    let dir = data_dir("no-version");
+    let first = setup(true, |c| c.data_dir = Some(dir.clone())).await;
+    first
+        .state
+        .pc_setup
+        .set_program(program("restart-none", NEW));
+    let b = logged_in(&first.url).await;
+    Live::open(&b)
+        .await
+        .until("gemeldet", |v| !v["pc_service"].is_null())
+        .await;
+
+    let b = restarted(&dir, "restart-none").await;
+    let v = Live::open(&b)
+        .await
+        .until("gespeicherte Version", |v| !v["pc_service"].is_null())
+        .await;
+    assert!(v["pc_service"]["version"].is_null());
+    assert_eq!(v["pc_service"]["update_available"], true);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[tokio::test]

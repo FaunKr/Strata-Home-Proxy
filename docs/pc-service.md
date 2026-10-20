@@ -54,7 +54,12 @@ stays.
 
 **Updating:** The **PC** area shows the PC service version and
 **Update available** as soon as the NAS image contains a different one (after a
-new image). The **Update to …** button works only when the PC is awake and never wakes it.
+new image). The proxy keeps the last reported version in `DATA_DIR`, so both
+show after a restart too, while the PC sleeps. On an awake PC the button reads
+**Update to …**; on a sleeping one **Wake PC and update to …**: it wakes the
+PC until the service answers, then updates. If the service already runs the
+NAS's version after the wake, nothing is updated. The PC sleeps again after
+the idle timeout.
 The service downloads the .exe from the NAS, puts it in the same place (task and
 shortcut stay valid), starts it and exits. As long as Strata is handling a
 request or a Strata job is running, it refuses; Strata may be

@@ -90,17 +90,24 @@ async function forced(page, errors) {
   const force = page.getByRole('button', { name: 'Force sleep' });
   const dialog = page.locator('dialog.confirm');
   let findings = 0;
+  // What a failed step names besides its timeout: console errors and the
+  // server functions it called.
+  const logged = [];
+  page.on('console', m => { if (m.type() === 'error') logged.push(`console: ${m.text().slice(0, 300)}`); });
+  page.on('response', r => { if (r.url().includes('/admin/api/')) logged.push(`${r.status()} ${new URL(r.url()).pathname}`); });
   const step = async (name, shot, run) => {
     errors.length = 0;
+    logged.length = 0;
     let issue = null;
     try {
       await run();
     } catch (e) {
       // The first line says what timed out, the last line of the call log
-      // on what, and the status lines what the page showed instead.
+      // on what, the status lines what the page showed instead.
       const lines = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n');
       const shown = await page.locator('[role=status], [role=alert], dialog[open]').allInnerTexts().catch(() => []);
-      issue = [lines[0], lines.length > 1 ? lines.at(-1).trim() : null, shown.length ? `page shows: ${shown.join(' / ')}` : null]
+      issue = [lines[0], lines.length > 1 ? lines.at(-1).trim() : null, shown.length ? `page shows: ${shown.join(' / ')}` : null,
+        ...errors.map(e => `JS error: ${e}`), ...logged]
         .filter(Boolean).join('\n     ');
     }
     if (!issue && errors.length) issue = `JS error: ${errors[0]}`;

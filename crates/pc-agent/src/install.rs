@@ -134,27 +134,48 @@ impl Installation {
         write_config(&self.config_path(&model.id), &model.fields)
     }
 
-    /// Sets the key in every model config, keeping everything else; if one
-    /// cannot be read or written, none keeps the new key.
+    /// The Strata key in the model configs: the first config's in the order
+    /// of their ids that has one. The service writes the same key into all.
+    pub fn key(&self) -> Option<String> {
+        let mut ids = self.models();
+        ids.sort();
+        ids.iter().find_map(|id| {
+            let (_, fields) = read_config(&self.config_path(id)).ok()??;
+            fields
+                .get("api_key")
+                .and_then(Value::as_str)
+                .filter(|k| !k.is_empty())
+                .map(String::from)
+        })
+    }
+
+    /// Sets the key in every model config, keeping everything else and each
+    /// file's modification time (Strata without its own start script starts
+    /// the config touched last). A config that cannot be read is logged and
+    /// left as it is, as Strata cannot start it either; if one cannot be
+    /// written, none keeps the new key.
     pub fn set_key(&self, key: &str) -> Result<(), String> {
-        // Every config is read first: one that does not parse stops the change
-        // before any has the new key.
         let mut changed = Vec::new();
         for id in self.models() {
             let path = self.config_path(&id);
-            let Some((text, mut fields)) = read_config(&path)? else {
-                continue;
+            let (text, mut fields) = match read_config(&path) {
+                Ok(Some(config)) => config,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!("No new Strata key in it: {e}");
+                    continue;
+                }
             };
             fields.insert("api_key".into(), key.into());
             changed.push((path, text, config_text(&fields)));
         }
         for (i, (path, _, new)) in changed.iter().enumerate() {
-            if let Err(e) = crate::write_replacing(path, new) {
+            if let Err(e) = write_keeping_time(path, new) {
                 // Back to the old key, so all configs agree with the service.
                 for (path, old, _) in &changed[..i] {
-                    let _ = crate::write_replacing(path, old);
+                    let _ = write_keeping_time(path, old);
                 }
-                return Err(format!("{} not written: {e}", path.display()));
+                return Err(e);
             }
         }
         Ok(())
@@ -448,8 +469,13 @@ fn read_config(path: &Path) -> Result<Option<(String, ConfigFields)>, String> {
 }
 
 fn write_config(path: &Path, fields: &ConfigFields) -> Result<(), String> {
+    write_keeping_time(path, &config_text(fields))
+}
+
+/// Replaces the file's text and gives it back its modification time.
+fn write_keeping_time(path: &Path, text: &str) -> Result<(), String> {
     let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-    crate::write_replacing(path, &config_text(fields))
+    crate::write_replacing(path, text)
         .map_err(|e| format!("{} not written: {e}", path.display()))?;
     if let Some(time) = modified {
         let kept = std::fs::File::options()
@@ -909,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_key_goes_into_every_config_or_none() {
+    fn a_new_key_goes_into_every_readable_config() {
         let f = Folders::new("key");
         let s = f.setup();
         s.model("a", config(json!([])))
@@ -922,14 +948,19 @@ mod tests {
                 "new-key-0123456789"
             );
         }
+        assert_eq!(install.key().as_deref(), Some("new-key-0123456789"));
         s.config_text("c", "{ broken");
-        assert!(install.set_key("third-key-0123456789").is_err());
+        install.set_key("third-key-0123456789").unwrap();
         for id in ["a", "b"] {
             assert_eq!(
                 install.model(id).unwrap().fields()["api_key"],
-                "new-key-0123456789"
+                "third-key-0123456789"
             );
         }
+        assert_eq!(
+            std::fs::read_to_string(install.config_path("c")).unwrap(),
+            "{ broken"
+        );
     }
 
     #[test]

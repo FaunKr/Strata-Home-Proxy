@@ -26,7 +26,7 @@ git -C strata grep -n 'GB ({\|=== Step' HEAD -- setup.py   # the lines the PC se
 
 ## API key
 
-If a key is set in Strata, the protected endpoints require `Authorization: Bearer <key>` or `x-api-key: <key>`. If it is missing, they answer with 401 (`_authorized`, line 5362). The proxy uses `STRATA_API_KEY` for this.
+If a key is set in Strata, the protected endpoints require `Authorization: Bearer <key>` or `x-api-key: <key>`. If it is missing, they answer with 401 (`_authorized`, line 5362). The PC service writes a new key into `api_key` of every model configuration before each start of Strata, and the proxy fetches it from the PC service (see [pc-agent-api.md](pc-agent-api.md), `GET /strata/key`).
 
 ## `GET /health`
 

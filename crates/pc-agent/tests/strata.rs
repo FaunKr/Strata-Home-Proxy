@@ -70,7 +70,6 @@ async fn values_outside_the_catalog_are_refused() {
     for body in [
         json!({"kind": "install", "family": "qwen", "size": "XXL", "context": 65536, "api_key": KEY}),
         json!({"kind": "install", "family": "qwen", "size": "IQ3_XXS", "context": 12345, "api_key": KEY}),
-        json!({"kind": "install", "family": "qwen", "size": "IQ3_XXS", "context": 65536, "api_key": "a b"}),
         json!({"kind": "install", "family": "qwen", "size": "IQ3_XXS", "context": 65536, "api_key": KEY, "args": "--evil"}),
     ] {
         let (code, answer) = post(&s, "/strata/jobs", body.clone()).await;
@@ -120,22 +119,26 @@ async fn install_runs_setup_with_the_fixed_values_and_starts_strata() {
             "8080",
             "--data-dir",
             &data,
-            "--api-key",
-            KEY,
             "--experimental-speed-projection",
             "off",
         ]
     );
 
-    // From now on the service starts the new model with the new key.
+    // From now on the service starts the new model, with a key of its own
+    // and not the proxy's.
     let (program, _) = s.fake.started.lock().unwrap().clone().unwrap();
     assert_eq!(program, s.agent.cfg.strata_dir.join("run-iq3_xxs.bat"));
     let stopped = s.fake.stopped.lock().unwrap().clone().unwrap();
     assert_eq!(stopped, ["llama-server.exe"], "the old Strata ends first");
+    let key = read_config(&s, "iq3_xxs")["api_key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(key, KEY);
     get(&s, "/status").await;
     assert_eq!(
         s.fake.health_auth.lock().unwrap().as_deref(),
-        Some(format!("Bearer {KEY}").as_str())
+        Some(format!("Bearer {key}").as_str())
     );
     s.agent.set_gaming(true);
     let stopped = s.fake.stopped.lock().unwrap().clone().unwrap();

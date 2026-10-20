@@ -74,7 +74,9 @@ pub fn spawn(spec: &CommandSpec) -> Result<Running> {
     cmd.args(&spec.args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(std::process::Stdio::piped())
+        // Meant for this program alone, not for what it starts.
+        .env_remove(crate::platform::REPLACES_ENV);
     if let Some(dir) = &spec.dir {
         cmd.current_dir(dir);
     }

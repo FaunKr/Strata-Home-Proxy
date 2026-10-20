@@ -16,7 +16,7 @@ cd "${1:-$(dirname "$0")/..}"
 # Function words that German without umlauts still carries ("nicht lesbar").
 # Only words that are not also English: "die", "an", "mit" (MIT), "hat", "den"
 # and "des" are not here.
-words='nicht|wird|wurde|werden|kein|keine|oder|und|beim|noch|schon|bitte|sind|auch|nur|wenn|dann|eine|einen|ist|auf|von|bei|aber|fuer|ueber|gibt|kann|muss|soll|wir|ich|dass|weil|nach|wie|der|das|dem'
+words='nicht|wird|wurde|werden|kein|keine|oder|und|beim|noch|schon|bitte|sind|auch|nur|wenn|dann|eine|einen|ist|auf|von|bei|aber|fuer|ueber|gibt|kann|muss|soll|wir|ich|dass|weil|nach|wie|der|das|dem|fehlgeschlagen'
 
 excludes=()
 if [[ -f scripts/language-allowlist ]]; then

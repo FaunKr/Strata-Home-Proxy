@@ -248,6 +248,24 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(seen["uid"], nobody.pw_uid)
         self.assertEqual(run["tasks"][0]["passed"], 2, run)
 
+    def test_the_prompt_asks_for_intermediate_state(self):
+        seen = {}
+        original = runner.score
+
+        def keep(folder, hidden):
+            seen.update(json.loads(Path(folder, "fake-args.json").read_text()))
+            return original(folder, hidden)
+
+        runner.score = keep
+        try:
+            self.run_tasks([TASK])
+        finally:
+            runner.score = original
+        prompt = next(a for a in seen["args"] if "TASK.md" in a).lower()
+        self.assertIn("early", prompt)
+        self.assertIn("after each improvement", prompt)
+        self.assertIn("notes.md", prompt)
+
     def test_the_notes_stay_out_of_the_result(self):
         os.environ["FAKE_MODE"] = "notes"
         os.environ["FAKE_SOLUTION"] = "double.py=def double(n):\n    return n * 2\n"
@@ -285,11 +303,6 @@ class RunnerTest(unittest.TestCase):
         finally:
             runner.score = original
         self.assertIn("--pure", seen["args"])
-        # The prompt asks for intermediate state: a stopped run still leaves
-        # something to score, and notes outlive a compaction.
-        prompt = seen["args"][-1].lower()
-        self.assertIn("save", prompt)
-        self.assertIn("notes.md", prompt)
         # A title of its own: otherwise opencode asks the model for one.
         self.assertIn("--title", seen["args"])
         self.assertEqual(seen["args"][seen["args"].index("--model") + 1], "strata/IQ3_XXS")

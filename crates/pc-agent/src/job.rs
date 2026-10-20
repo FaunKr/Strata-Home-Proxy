@@ -200,7 +200,7 @@ impl JobContext {
     }
 
     /// Waits until `ready` holds, showing `step` while it does not; ends on
-    /// cancel and after `limit`.
+    /// cancel and fails after `limit`.
     pub async fn wait_for<F, Fut>(
         &self,
         step: &str,
@@ -212,24 +212,49 @@ impl JobContext {
         Fut: Future<Output = bool>,
     {
         let started = Instant::now();
+        match self
+            .wait_until(step, limit, || {
+                let ready = ready();
+                async { ready.await.then_some(()) }
+            })
+            .await?
+        {
+            Some(()) => Ok(()),
+            None => Err(format!(
+                "{step}: gave up after {} min",
+                started.elapsed().as_secs() / 60
+            )
+            .into()),
+        }
+    }
+
+    /// Waits until `answer` gives a value, showing `step` while it does not;
+    /// ends on cancel, and with `None` after `limit`.
+    pub async fn wait_until<T, F, Fut>(
+        &self,
+        step: &str,
+        limit: Option<Duration>,
+        mut answer: F,
+    ) -> Result<Option<T>, Step>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Option<T>>,
+    {
+        let started = Instant::now();
         let mut shown = false;
         loop {
             if self.cancelled() {
                 return Err(Step::Cancelled);
             }
-            if ready().await {
-                return Ok(());
+            if let Some(value) = answer().await {
+                return Ok(Some(value));
             }
             if !shown {
                 self.step(step);
                 shown = true;
             }
             if limit.is_some_and(|l| started.elapsed() >= l) {
-                return Err(format!(
-                    "{step}: gave up after {} min",
-                    started.elapsed().as_secs() / 60
-                )
-                .into());
+                return Ok(None);
             }
             tokio::time::sleep(POLL).await;
         }

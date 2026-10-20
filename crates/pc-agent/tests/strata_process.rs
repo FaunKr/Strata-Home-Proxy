@@ -235,3 +235,58 @@ async fn strata_counts_as_loading_for_the_load_time_after_a_start() {
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert!(!s.agent.strata().loading(), "load_time_secs = 1 is over");
 }
+
+#[tokio::test]
+async fn a_restart_outside_a_job_leaves_strata_to_a_job_begun_in_its_pause() {
+    let s = setup_with("process-job-in-pause", |c| c.stop_settle_ms = 300).await;
+    let agent = s.agent.clone();
+    let restart = tokio::spawn(async move { agent.strata().restart_unless_job_runs().await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    let _job = testing::job(&s.agent);
+    restart.await.unwrap();
+    assert_eq!(
+        s.fake.starts.load(Ordering::SeqCst),
+        0,
+        "the job starts Strata"
+    );
+
+    s.agent.strata().restart_unless_job_runs().await;
+    assert_eq!(
+        s.fake.stops.load(Ordering::SeqCst),
+        1,
+        "none while a job runs"
+    );
+}
+
+#[tokio::test]
+async fn a_start_during_a_restart_s_pause_is_the_only_one() {
+    let s = setup_with("process-start-in-pause", |c| c.stop_settle_ms = 300).await;
+    let agent = s.agent.clone();
+    let restart = tokio::spawn(async move { agent.strata().restart().await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // As gaming mode switched off now starts Strata.
+    s.agent.strata().start();
+    restart.await.unwrap();
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+
+    s.agent.strata().restart().await;
+    assert_eq!(
+        s.fake.starts.load(Ordering::SeqCst),
+        2,
+        "a later restart starts"
+    );
+}
+
+#[tokio::test]
+async fn in_gaming_mode_a_job_s_restart_says_strata_stays_off() {
+    let s = setup("process-gaming-step").await;
+    let job = testing::job(&s.agent);
+    s.agent.set_gaming(true);
+    s.agent.strata().restart_for(&job).await;
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        get(&s, "/strata/job").await["step"],
+        "Stopping Strata; it starts with the change when gaming mode ends"
+    );
+}

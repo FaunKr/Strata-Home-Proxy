@@ -682,8 +682,7 @@ async fn set_key(job: &JobContext, api_key: String) -> Result<Option<String>, St
     agent
         .set_managed(managed)
         .map_err(|e| Step::Failed(e.to_string()))?;
-    job.step("Restarting Strata");
-    agent.strata().restart().await;
+    agent.strata().restart_for(job).await;
     Ok(None)
 }
 
@@ -791,7 +790,7 @@ pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output =
             return;
         }
         tracing::info!("Konfiguration des aktiven Modells angepasst, Strata startet neu");
-        agent.strata().restart().await;
+        agent.strata().restart_unless_job_runs().await;
     }
 }
 

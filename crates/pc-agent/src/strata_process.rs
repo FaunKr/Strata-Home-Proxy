@@ -6,6 +6,10 @@
 //!
 //! The watchdog decides *when* Strata needs a restart, a job *what* to
 //! change before one; *how* is this module's.
+//!
+//! Restarts may overlap, e.g. the watchdog's with gaming mode switched off
+//! during its pause: a start after a pause is left out when Strata was
+//! started since the last stop, so only one Strata runs.
 
 use std::{
     future::Future,
@@ -15,12 +19,30 @@ use std::{
 
 use crate::{
     agent::Agent,
-    job::{JobContext, KEPT_LINES, POLL, Step},
+    job::{JobContext, KEPT_LINES, Step},
 };
 
-/// When Strata was last started; the agent keeps it for this module.
+/// When Strata was last started and stopped; the agent keeps it for this
+/// module.
 #[derive(Default)]
-pub(crate) struct LastStart(Mutex<Option<Instant>>);
+pub(crate) struct Times(Mutex<Seen>);
+
+#[derive(Default)]
+struct Seen {
+    start: Option<Instant>,
+    stop: Option<Instant>,
+}
+
+impl Seen {
+    /// Strata was started after the last stop.
+    fn started_since_stop(&self) -> bool {
+        match (self.start, self.stop) {
+            (Some(start), Some(stop)) => start > stop,
+            (start, None) => start.is_some(),
+            (None, Some(_)) => false,
+        }
+    }
+}
 
 /// What became of a config change after [`StrataProcess::restart_or_roll_back`].
 #[derive(Debug, PartialEq, Eq)]
@@ -44,13 +66,36 @@ impl<'a> StrataProcess<'a> {
     /// Starts Strata with the managed start script, if one is set, and
     /// follows its output for the Strata-Ausgabe.
     pub fn start(&self) {
+        self.start_if(|_| true);
+    }
+
+    /// Starts Strata unless someone started it since the last stop.
+    fn start_once(&self) {
+        self.start_if(|seen| {
+            let started = seen.started_since_stop();
+            if started {
+                tracing::info!("Strata wurde inzwischen gestartet, kein zweiter Start");
+            }
+            !started
+        });
+    }
+
+    /// Starts Strata if `wanted` holds for what was seen; checked and
+    /// recorded at once, so two starts cannot both pass.
+    fn start_if(&self, wanted: impl FnOnce(&Seen) -> bool) {
         let agent = self.agent;
         let managed = agent.managed();
         let Some((program, args)) = managed.start(&agent.cfg) else {
             tracing::info!("Kein Startskript für Strata eingetragen, Strata bleibt aus");
             return;
         };
-        *agent.last_start.0.lock().unwrap() = Some(Instant::now());
+        {
+            let mut seen = agent.times.0.lock().unwrap();
+            if !wanted(&seen) {
+                return;
+            }
+            seen.start = Some(Instant::now());
+        }
         tracing::info!("Strata wird gestartet");
         let mut run = match agent.platform().start_strata(program, args) {
             Ok(run) => run,
@@ -81,6 +126,7 @@ impl<'a> StrataProcess<'a> {
     /// Ends the programs the managed values name as Strata.
     pub fn stop(&self) {
         let agent = self.agent;
+        agent.times.0.lock().unwrap().stop = Some(Instant::now());
         tracing::info!("Strata wird beendet");
         let managed = agent.managed();
         let processes = managed.processes(&agent.cfg);
@@ -96,10 +142,11 @@ impl<'a> StrataProcess<'a> {
     /// Strata was started within `within`.
     pub fn started_within(&self, within: Duration) -> bool {
         self.agent
-            .last_start
+            .times
             .0
             .lock()
             .unwrap()
+            .start
             .is_some_and(|t| t.elapsed() < within)
     }
 
@@ -109,11 +156,12 @@ impl<'a> StrataProcess<'a> {
     }
 
     /// After a [`stop`](Self::stop): gives the ended Strata time to free its
-    /// port, then starts it unless gaming mode is on.
+    /// port, then starts it unless gaming mode is on or it was started
+    /// meanwhile.
     pub async fn start_again(&self) {
         tokio::time::sleep(self.agent.cfg.stop_settle()).await;
         if !self.agent.gaming() {
-            self.start();
+            self.start_once();
         }
     }
 
@@ -121,6 +169,35 @@ impl<'a> StrataProcess<'a> {
     pub async fn restart(&self) {
         self.stop();
         self.start_again().await;
+    }
+
+    /// A restart outside a job, by the watchdog or the config check at the
+    /// service's start: none while a job runs, and no start after the
+    /// pause if a job began meanwhile, as the job handles Strata then.
+    pub async fn restart_unless_job_runs(&self) {
+        if self.agent.jobs.running() {
+            return;
+        }
+        self.stop();
+        tokio::time::sleep(self.agent.cfg.stop_settle()).await;
+        if self.agent.jobs.running() {
+            tracing::info!("Ein Strata-Vorgang hat begonnen, er startet Strata selbst");
+            return;
+        }
+        if !self.agent.gaming() {
+            self.start_once();
+        }
+    }
+
+    /// Restarts Strata for `job`, with a step that says what happens: in
+    /// gaming mode Strata only stops and starts with the change later.
+    pub async fn restart_for(&self, job: &JobContext) {
+        job.step(if self.agent.gaming() {
+            "Stopping Strata; it starts with the change when gaming mode ends"
+        } else {
+            "Restarting Strata"
+        });
+        self.restart().await;
     }
 
     /// Waits until Strata has no request at work, so a restart cuts none
@@ -138,8 +215,7 @@ impl<'a> StrataProcess<'a> {
     /// Restarts Strata once it has no request at work.
     pub async fn restart_when_idle(&self, job: &JobContext) -> Result<(), Step> {
         self.wait_idle(job).await?;
-        job.step("Restarting Strata");
-        self.restart().await;
+        self.restart_for(job).await;
         Ok(())
     }
 
@@ -194,20 +270,18 @@ impl<'a> StrataProcess<'a> {
     /// not answered within `context_start_secs`.
     async fn came_up(&self, job: &JobContext) -> Result<bool, Step> {
         let agent = self.agent;
-        job.step("Waiting until Strata is ready");
         let limit = Duration::from_secs(agent.cfg.context_start_secs);
-        let started = Instant::now();
-        loop {
-            if job.cancelled() {
-                return Err(Step::Cancelled);
-            }
-            if agent.strata_healthy().await {
-                return Ok(true);
-            }
-            if !agent.output.reading() || started.elapsed() >= limit {
-                return Ok(false);
-            }
-            tokio::time::sleep(POLL).await;
-        }
+        let answer = job
+            .wait_until("Waiting until Strata is ready", Some(limit), || async {
+                if agent.strata_healthy().await {
+                    Some(true)
+                } else if !agent.output.reading() {
+                    Some(false)
+                } else {
+                    None
+                }
+            })
+            .await?;
+        Ok(answer.unwrap_or(false))
     }
 }

@@ -36,7 +36,7 @@ use crate::{
     output::{StrataOutput, StrataOutputMessage, StrataOutputNotice},
     platform::Platform,
     strata::{self, Refusal, StrataJobRequest, UpdateCheck},
-    strata_process::{LastStart, StrataProcess},
+    strata_process::{StrataProcess, Times},
     update::UpdateError,
 };
 
@@ -80,7 +80,7 @@ pub struct Agent {
     macs: Mutex<HashMap<IpAddr, CachedMac>>,
     managed: Mutex<Managed>,
     pub(crate) jobs: Jobs,
-    pub(crate) last_start: LastStart,
+    pub(crate) times: Times,
     pub(crate) updates: UpdateCheck,
     /// An update of this program is under way.
     pub(crate) updating: AtomicBool,
@@ -128,7 +128,7 @@ impl Agent {
             macs: Mutex::new(HashMap::new()),
             managed: Mutex::new(managed),
             jobs,
-            last_start: LastStart::default(),
+            times: Times::default(),
             updates: UpdateCheck::default(),
             updating: AtomicBool::new(false),
             output,
@@ -319,7 +319,7 @@ impl Agent {
         };
         if restart {
             tracing::warn!("Strata antwortet nicht, Neustart");
-            self.strata().restart().await;
+            self.strata().restart_unless_job_runs().await;
             self.watchdog.lock().unwrap().unhealthy_since = None;
         }
     }

@@ -60,7 +60,7 @@ pub async fn update(agent: &Arc<Agent>) -> Result<(), UpdateError> {
             });
         }
         Err(e) => {
-            tracing::warn!("Update fehlgeschlagen: {e:?}");
+            tracing::warn!("Update failed: {e:?}");
             agent.updating.store(false, Ordering::SeqCst);
         }
     }

@@ -45,9 +45,13 @@ async function login(page) {
   await page.waitForSelector('#repeat', { state: 'detached' });
 }
 
+// Console errors of the current area, listed when the area fails.
+const consoleErrors = [];
+
 // Visits one area and prints its line; returns the number of findings.
 async function check(page, errors, name, area, texts, shot) {
   errors.length = 0;
+  consoleErrors.length = 0;
   await page.goto(base + area.split(' ')[0], { waitUntil: 'domcontentloaded' });
   // The overview stream stays open, so the network is never idle; this
   // gives hydration and the first stream update time.
@@ -74,6 +78,8 @@ async function check(page, errors, name, area, texts, shot) {
   if (r.small.length) issues.push(`under 24px: ${r.small.join(', ')}`);
   if (de.length) issues.push(`German: ${de.slice(0, 3).join(' / ')}`);
   if (errors.length) issues.push(`JS error: ${errors[0]}`);
+  // A wasm panic shows as "unreachable"; its message went to the console.
+  if (issues.length) issues.push(...consoleErrors);
   console.log(`${issues.length ? 'FAIL' : 'ok  '} ${name} ${area}${issues.length ? '\n     ' + issues.join('\n     ') : ''}`);
   if (process.env.SHOTS === '1') {
     await page.screenshot({ path: `${process.env.OUT}/${name}${shot}.jpg`, type: 'jpeg', quality: 60, fullPage: true });
@@ -182,6 +188,7 @@ async function forced(page, errors) {
     const page = await ctx.newPage();
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
+    page.on('console', m => { if (m.type() === 'error') consoleErrors.push(`console: ${m.text().slice(0, 600)}`); });
     if (name === 'desk') await login(page);
     else {
       await page.goto(base + '/admin');

@@ -1,42 +1,42 @@
-# CI und Actions-Minuten
+# CI and Actions minutes
 
-Das Repo ist privat; GitHub Free enthält 3.000 Actions-Minuten im Monat. In
-den ersten zwei Tagen gingen davon rund 2.500 weg, deshalb läuft die CI seit
-#151 nur noch, was eine Änderung braucht (Spec #146).
+The repo is private; GitHub Free includes 3,000 Actions minutes a month. In
+the first two days about 2,500 of them were used, so since #151 the CI only
+runs what a change needs (spec #146).
 
-## Was Minuten kostet
+## What costs minutes
 
-- Jeder Job rundet auf eine volle Minute auf; auch `changes` und `ci-ok`
-  kosten je eine.
-- Windows-Runner zählen doppelt. Deshalb läuft der Windows-Job nur von Hand
-  (`windows.yml`), die CI prüft den Windows-Code des PC-Dienstes unter Linux.
-- Der Actions-Cache fasst 10 GB und verdrängt danach die ältesten Einträge.
-  Caches eines Pull Requests sieht nur dieser Pull Request, die von `main`
-  sehen alle. Deshalb schreibt nur `main` Caches (rust-cache `save-if`, Docker
-  `cache-to` nur im Job `publish`).
-- rust-cache hält die Abhängigkeiten; sein Schlüssel enthält Cargo.lock, die
-  Manifeste und die rustc-Version. Auf `main` sieht der Job `test` nur nach,
-  ob der Cache da ist, und läuft nur dann voll, um ihn neu zu füllen.
+- Every job rounds up to a full minute; `changes` and `ci-ok` also cost one
+  each.
+- Windows runners count double. So the Windows job only runs by hand
+  (`windows.yml`); the CI checks the PC service's Windows code under Linux.
+- The Actions cache holds 10 GB and then evicts the oldest entries.
+  A pull request's caches are visible only to that pull request, those of `main`
+  to all. So only `main` writes caches (rust-cache `save-if`, Docker
+  `cache-to` only in the `publish` job).
+- rust-cache holds the dependencies; its key includes Cargo.lock, the
+  manifests and the rustc version. On `main` the `test` job only checks
+  whether the cache is there, and only runs in full to refill it.
 
-## Was ein Lauf braucht
+## What a run needs
 
-Welche Jobs ein Pull Request startet, entscheidet `scripts/ci-select.sh` nach
-den geänderten Pfaden; `scripts/ci-select.test.sh` prüft die Zuordnung gegen
-das Repo. Richtwerte nach #151:
+Which jobs a pull request starts is decided by `scripts/ci-select.sh` from
+the changed paths; `scripts/ci-select.test.sh` checks the mapping against
+the repo. Reference values after #151:
 
-| Lauf | Jobs | Minuten |
+| Run | Jobs | Minutes |
 |---|---|---|
-| PR mit Code-Änderung | changes, test, ci-ok | ca. 6–10 |
-| PR, der Workflow, Cargo.lock oder scripts/ ändert | alles außer Windows | ca. 18 |
-| Push auf `main` | changes, test (nur Nachsehen), publish, ci-ok | ca. 5–10 |
+| PR with a code change | changes, test, ci-ok | approx. 6–10 |
+| PR that changes a workflow, Cargo.lock or scripts/ | everything except Windows | approx. 18 |
+| Push to `main` | changes, test (check only), publish, ci-ok | approx. 5–10 |
 
-Der Job `publish` läuft nie zweimal gleichzeitig und endet nach 30 Minuten.
-Ein neuerer Push auf `main` wartet, bis der laufende fertig ist; so setzt kein
-älterer Commit `:latest` zurück.
+The `publish` job never runs twice at the same time and ends after 30 minutes.
+A newer push to `main` waits until the running one is finished; that way no
+older commit resets `:latest`.
 
-## Wohin die Minuten gehen
+## Where the minutes go
 
-Die schnellste Quelle ist der Nutzungsbericht unter *Settings → Billing →
-Usage* (Export als CSV): Minuten je Repo, Workflow und Runner-Betriebssystem.
-Aus den Läufen selbst lässt es sich nur über die Job-Zeiten jedes einzelnen
-Laufs rekonstruieren, ein Aufruf pro Lauf.
+The fastest source is the usage report under *Settings → Billing →
+Usage* (export as CSV): minutes per repo, workflow and runner OS.
+From the runs themselves it can only be reconstructed via the job times of each
+run, one call per run.

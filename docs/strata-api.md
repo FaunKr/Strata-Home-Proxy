@@ -1,88 +1,88 @@
-# Was der Proxy von Strata nutzt
+# What the proxy uses from Strata
 
-Strata ist eine eigene Engine ([Niko1221/Strata](https://github.com/Niko1221/Strata)), kein llama-server. Einige Endpunkte tragen llama-server- oder vLLM-Namen, damit fremde Werkzeuge funktionieren. Was sie wirklich liefern, steht nur im Code von Strata.
+Strata is its own engine ([Niko1221/Strata](https://github.com/Niko1221/Strata)), not llama-server. Some endpoints carry llama-server or vLLM names so that third-party tools work. What they really return is only in Strata's code.
 
-Im Proxy spricht nur `crates/nas-proxy/src/strata_client.rs` mit Strata: `/health`, die Metriken, die Anfrage für die Zusammenfassung eines Updates und das Weiterleiten. Ein neuer Aufruf gehört dorthin.
+In the proxy, only `crates/nas-proxy/src/strata_client.rs` talks to Strata: `/health`, the metrics, the request for an update's summary and the forwarding. A new call belongs there.
 
-Stand: Commit [`477ac13`](https://github.com/Niko1221/Strata/tree/477ac13). Die Zeilennummern beziehen sich darauf.
+As of: commit [`477ac13`](https://github.com/Niko1221/Strata/tree/477ac13). The line numbers refer to it.
 
-## Quellen lesen
+## Reading the sources
 
-Lade eine Datei roh in das Scratchpad und lies sie mit `grep` und `sed`:
+Download a file raw into the scratchpad and read it with `grep` and `sed`:
 
 ```sh
 curl -sS -o server.py https://raw.githubusercontent.com/Niko1221/Strata/477ac13/serve/server.py
 ```
 
-`serve/server.py` hat über 7000 Zeilen. Ein Webabruf mit Zusammenfassung schneidet sie ab und zitiert keine Handler. Die Routen stehen in `do_GET` ab Zeile 5372.
+`serve/server.py` has over 7000 lines. A web fetch with a summary cuts it off and quotes no handlers. The routes are in `do_GET` from line 5372.
 
-## API-Key
+## API key
 
-Ist in Strata ein Key gesetzt, verlangen die geschützten Endpunkte `Authorization: Bearer <key>` oder `x-api-key: <key>`. Fehlt er, antworten sie mit 401 (`_authorized`, Zeile 5362). Der Proxy nimmt dafür `STRATA_API_KEY`.
+If a key is set in Strata, the protected endpoints require `Authorization: Bearer <key>` or `x-api-key: <key>`. If it is missing, they answer with 401 (`_authorized`, line 5362). The proxy uses `STRATA_API_KEY` for this.
 
 ## `GET /health`
 
-Immer 200 und ohne Key (Zeile 5460):
+Always 200 and without a key (line 5460):
 
 ```json
 {"status": "ok", "max_context": 32768, "model": "…", "images": false, "api_key": true,
  "image_generation": false, "loaded": true, "service": "strata"}
 ```
 
-`loaded` ist false, solange das Modell nicht im Speicher ist. Strata lädt es mit der nächsten Anfrage. Antwortet `/health` gar nicht, läuft Strata nicht oder startet noch.
+`loaded` is false as long as the model is not in memory. Strata loads it with the next request. If `/health` does not answer at all, Strata is not running or is still starting.
 
-## Zusammenfassung eines Updates: `POST /v1/chat/completions`
+## Summary of an update: `POST /v1/chat/completions`
 
-Für die Zusammenfassung eines Strata-Updates auf dem Reiter *Version & benchmark* fragt der Proxy Strata selbst, mit seinem Key und ohne Streaming. `reasoning_effort` nimmt Strata pro Anfrage (`none`, `low`, `medium` oder `high`); der Proxy setzt `medium`. Die Antwort steht in `choices[0].message.content`, das Denken nicht darin. Gefragt wird nur, wenn `/health` `loaded: true` meldet und die Metriken keine laufende oder wartende Anfrage zeigen; `max_context` aus `/health` begrenzt die Länge der Anfrage.
+For the summary of a Strata update on the *Version & benchmark* tab, the proxy asks Strata itself, with its key and without streaming. Strata takes `reasoning_effort` per request (`none`, `low`, `medium` or `high`); the proxy sets `medium`. The answer is in `choices[0].message.content`, the thinking is not in it. It only asks when `/health` reports `loaded: true` and the metrics show no running or waiting request; `max_context` from `/health` limits the length of the request.
 
-## Metriken: `GET /metrics?format=prometheus`
+## Metrics: `GET /metrics?format=prometheus`
 
-Diesen Endpunkt nutzt die Übersicht. Er braucht den Key (Zeile 5416) und liefert Prometheus-Text mit vLLM-Namen und `strata:`-Namen (`serve/prometheus.py`, `render`). Jede Zeile trägt das Label `model_name`:
+The Overview uses this endpoint. It needs the key (line 5416) and returns Prometheus text with vLLM names and `strata:` names (`serve/prometheus.py`, `render`). Every line carries the label `model_name`:
 
-| Name | Bedeutung |
+| Name | Meaning |
 |---|---|
-| `vllm:num_requests_running` | Anfragen, die gerade lesen oder erzeugen |
-| `vllm:num_requests_waiting` | wartende Anfragen |
-| `strata:live_tok_s` | erzeugte Tokens/s der letzten Sekunden, 0 ohne Erzeugung |
-| `strata:live_state{state="…"}` | 1 für `unloaded`, `idle`, `reading` oder `generating` |
+| `vllm:num_requests_running` | requests currently reading or generating |
+| `vllm:num_requests_waiting` | waiting requests |
+| `strata:live_tok_s` | generated tokens/s of the last few seconds, 0 without generation |
+| `strata:live_state{state="…"}` | 1 for `unloaded`, `idle`, `reading` or `generating` |
 
-Ohne `format=prometheus` (und ohne `Accept: text/plain`) liefert `/metrics` JSON für den Monitor-Tab. Die Felder dort sind dieselben, z. B. `live.tok_s`.
+Without `format=prometheus` (and without `Accept: text/plain`), `/metrics` returns JSON for the monitor tab. The fields there are the same, e.g. `live.tok_s`.
 
-Die Tests lesen echte Ausgaben von `render` aus `crates/nas-proxy/tests/fixtures/strata-metrics-*.prom`. Ändert sich Strata, erzeuge sie neu aus dem neuen `serve/prometheus.py` und passe den Commit oben an.
+The tests read real output of `render` from `crates/nas-proxy/tests/fixtures/strata-metrics-*.prom`. If Strata changes, regenerate them from the new `serve/prometheus.py` and update the commit above.
 
-## `GET /metrics/prometheus`: nicht für die Übersicht
+## `GET /metrics/prometheus`: not for the Overview
 
-Dieser Endpunkt liefert llama-server-Namen (`llamacpp:*`, `Service.prometheus`, Zeile 3792), braucht den Key und eignet sich nicht für die Übersicht. Zwei Gründe:
-- `llamacpp:predicted_tokens_seconds` zählt nur fertige Anfragen und steht während einer laufenden Anfrage auf 0.
-- Jeder Abruf setzt das Zeitfenster dieser Werte zurück, auch für andere Abfrager wie Grafana.
+This endpoint returns llama-server names (`llamacpp:*`, `Service.prometheus`, line 3792), needs the key and is not suitable for the Overview. Two reasons:
+- `llamacpp:predicted_tokens_seconds` counts only finished requests and stays at 0 during a running request.
+- Every fetch resets the time window of these values, also for other readers such as Grafana.
 
-## Weitere Endpunkte
+## Other endpoints
 
-- **`/slots`:** im Stil von llama-server, mit dem Zustand jedes Platzes.
-- **`/status` und `/v1/status`:** was der Server gerade tut.
+- **`/slots`:** in the style of llama-server, with the state of each slot.
+- **`/status` and `/v1/status`:** what the server is doing right now.
 
-Der Proxy nutzt beide nicht. Der PC-Dienst fragt `/slots` ab (siehe [pc-agent-api.md](pc-agent-api.md)).
+The proxy uses neither. The PC service polls `/slots` (see [pc-agent-api.md](pc-agent-api.md)).
 
-## Setup und Dateien (für die Strata-Vorgänge des PC-Dienstes)
+## Setup and files (for the PC service's Strata jobs)
 
-Quellen: `setup.py`, `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_bench.py`.
+Sources: `setup.py`, `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_bench.py`.
 
-- **Modell-ID** = Präfix der Familie + Größe: `qwen` ohne Präfix (`IQ3_XXS`), sonst `swift-`, `coder-`, `unsloth-`, `qwen36-`. Die Tabellen dazu spiegelt `crates/pc-agent/src/catalog.rs`.
-- **Setup ohne Fragen:** `START-HERE.bat` startet `.venv\Scripts\python.exe setup.py %*`. Welche Argumente der Dienst übergibt, steht in `strata.rs` (`setup`). `--setup` braucht es, sobald ein Modell installiert ist.
-- **Experimentelle Speed-Projection:** `--experimental-speed-projection on|off`, nur für `qwen` und `coder`. Trotz des Namens keine Beschleunigung: ein Steuervektor, der laut Stratas `docs/DETAILS.md` die Ablehnungsrichtung des Modells entfernt. Ohne das Argument übernimmt Setup den Wert einer früheren Installation, der Dienst übergibt es deshalb immer. Clients schalten sie pro Anfrage mit `"experimental_speed_projection": false` ab.
-  - Setup schreibt dafür diese Flags in `args` der Modell-Konfiguration (`setup.py`, Zeile 7011): `--control-vector-scaled <Strata>\data\experimental-speed-projection\Qwen3.8-Flash-Next-experimental-speed-projection.gguf:1.0 --control-vector-layer-range 4 44 --cvec-mode project --cvec-dir per-layer`. Ein späteres Setup liest sie zurück (`choices_from_config`), die Kalibrierung hängt nicht davon ab.
-  - Für installierte Modelle schreibt der PC-Dienst diese Flags selbst (`set_speed_projection`). Ändert Strata sie, passe `strata.rs` (`write_speed_projection`) an.
-- **Sampling ohne Angaben in der Anfrage** (`Service._run`): zuerst der Satz der Modellkarte für den Denk-Zustand (`MODEL_CARD_SAMPLING` nach `arch` der Konfiguration, ohne `arch` `qwen4exp`; seit Commit a8091f4d, 2026-10-15), darüber der Block `sampling` der Konfiguration (`sampling_defaults_from_config`, seit 9e6e5b7a, 2026-09-26; unbekannte Schlüssel nennt Strata beim Start und übergeht sie), darüber die Chat-Einstellungen aus Stratas Web-App (`strata-<id>.shared-settings.json`). Die Felder der Anfrage gewinnen immer. Vor 9e6e5b7a ist eine Anfrage ohne Sampling greedy. Werte bei e88ee39d: `qwen4exp` mit Denken temperature 1.0, top_p 0.95, top_k 20, ohne 0.7, 0.8, 20, presence_penalty 1.5; `qwen35moe` mit Denken dazu presence_penalty 1.5, ohne wie `qwen4exp`. `crates/pc-agent/src/sampling.rs` spiegelt sie.
-  - Der Block hat einen Satz für beide Zustände und verdeckt die Modellkarte. Der PC-Dienst schreibt deshalb nur in ein Strata ohne `MODEL_CARD_SAMPLING`, das `sampling_defaults_from_config` kennt, den Denk-Satz; sonst nimmt er den Block heraus (siehe [pc-agent-api.md](pc-agent-api.md)). Er erkennt die Version an diesen Namen in `serve/server.py`.
-- **Schleifen:** Strata beendet eine Antwort, die ein Token `repeat_stop_tokens`-mal (256) hintereinander wiederholt (#606, Commit bb162e2e). Denken, das ganze Passagen wiederholt, behandelt es erst mit `"reasoning_loop_recovery"` in der Modell-Konfiguration (Commit c3473262): `"stop"` beendet die Antwort, `"recover"` (oder `true`) macht mit der Anweisung für wenig Aufwand weiter; ohne den Schlüssel aus. Der PC-Dienst setzt `"recover"` (siehe [pc-agent-api.md](pc-agent-api.md)). Ältere Strata lesen die Konfiguration mit `cfg.get` und übergehen unbekannte Schlüssel.
-- **Ausgabe von Setup:** Schritte als `=== Step N: Titel ===`, Downloads als `datei: x / y GB (p%)`, Fehler beginnen mit `[X]`.
-- **Ablage eines Modells:**
-  - `strata-<id klein>.json` (Konfiguration), `run-<id klein>.bat` (Start) und `strata-<id klein>.log` im Strata-Ordner
-  - `<data>/models/<ID>` (GGUF-Dateien, auch `.part`) und `<data>/packs/<id klein>` (Tokenizer)
-  - `<data>/mtp` teilen sich alle Modelle.
-- **Modell-Konfiguration:** ein `strata-*.json` mit `exe` und einem Array `args` (so erkennt `find_configs` in `strata_bench.py` sie). `strata-*.shared-settings.json` ist keine. Strata schreibt sie mit `json.dumps(cfg, indent=1)`. Der Key steht in `api_key`.
-- **Kontext:** Setup schreibt `--context` als `--max-context <Tokens>` in `args` und liest ihn so zurück (`choices_from_config`). Über 262144 (der trainierten Länge) kommen `--rope-scaling yarn --rope-scale <Kontext / 262144>` dazu. Aus dem Kontext leitet Setup auch KV-Streaming (`--kv-resident`), parallele Slots und den Schlüssel der Kalibrierung ab; der Kontextwechsel des PC-Dienstes lässt diese, wie sie sind.
-- **Aktives Modell:** `run-<id>.bat` startet `serve/server.py`, das `strata.exe` startet und neu startet, wenn es stirbt; beenden also über den Ordner. Ohne eigenes Startskript startet `START-HERE.bat` die Konfiguration, die zuletzt benutzt wurde (die jüngste Änderungszeit, denn ein Start fasst sie an).
-- **Empfehlung von Setup:** ab 60 GB RAM `IQ3_XXS`, ab 44 GB `Q2_0`, ab 28 GB `coder-IQ1_M`. Kontext 64K bei 14–20 GB VRAM; der Skill `local-agent` braucht mehr (siehe `tools/local-agent/README.md`).
-- **Update** wie `UPDATE.bat`: `git pull --ff-only`, dann `START-HERE.bat --update` bei beendetem Strata (die Engine wird sonst nicht ersetzt). Modelldateien bleiben.
-- **Benchmark:** `BENCH.bat --config <strata-<id>.json>` nutzt ein laufendes Strata, sonst startet es selbst eines. Ergebnis ist die Zeile `  chat decode tok/s   38.50   (37.10 - 39.20, n=3)` der Tabelle am Ende. Danach folgen weitere Zeilen.
+- **Model ID** = family prefix + size: `qwen` without a prefix (`IQ3_XXS`), otherwise `swift-`, `coder-`, `unsloth-`, `qwen36-`. `crates/pc-agent/src/catalog.rs` mirrors the tables for this.
+- **Setup without questions:** `START-HERE.bat` runs `.venv\Scripts\python.exe setup.py %*`. Which arguments the service passes is in `strata.rs` (`setup`). `--setup` is needed as soon as a model is installed.
+- **Experimental speed projection:** `--experimental-speed-projection on|off`, only for `qwen` and `coder`. Despite the name, no speed-up: a control vector that, according to Strata's `docs/DETAILS.md`, removes the model's refusal direction. Without the argument, setup takes over the value of an earlier installation, so the service always passes it. Clients turn it off per request with `"experimental_speed_projection": false`.
+  - For this, setup writes these flags into `args` of the model configuration (`setup.py`, line 7011): `--control-vector-scaled <Strata>\data\experimental-speed-projection\Qwen3.8-Flash-Next-experimental-speed-projection.gguf:1.0 --control-vector-layer-range 4 44 --cvec-mode project --cvec-dir per-layer`. A later setup reads them back (`choices_from_config`); calibration does not depend on them.
+  - For installed models, the PC service writes these flags itself (`set_speed_projection`). If Strata changes them, update `strata.rs` (`write_speed_projection`).
+- **Sampling without values in the request** (`Service._run`): first the model card's set for the thinking state (`MODEL_CARD_SAMPLING` by `arch` of the configuration, without `arch` `qwen4exp`; since commit a8091f4d, 2026-10-15), on top of that the configuration's `sampling` block (`sampling_defaults_from_config`, since 9e6e5b7a, 2026-09-26; Strata names unknown keys at startup and skips them), on top of that the chat settings from Strata's web app (`strata-<id>.shared-settings.json`). The request's fields always win. Before 9e6e5b7a a request without sampling is greedy. Values at e88ee39d: `qwen4exp` with thinking temperature 1.0, top_p 0.95, top_k 20, without 0.7, 0.8, 20, presence_penalty 1.5; `qwen35moe` with thinking adds presence_penalty 1.5, without the same as `qwen4exp`. `crates/pc-agent/src/sampling.rs` mirrors them.
+  - The block has one set for both states and hides the model card. So the PC service writes the thinking set only into a Strata without `MODEL_CARD_SAMPLING` that knows `sampling_defaults_from_config`; otherwise it removes the block (see [pc-agent-api.md](pc-agent-api.md)). It recognizes the version by these names in `serve/server.py`.
+- **Loops:** Strata ends an answer that repeats a token `repeat_stop_tokens` times (256) in a row (#606, commit bb162e2e). Thinking that repeats whole passages is only handled with `"reasoning_loop_recovery"` in the model configuration (commit c3473262): `"stop"` ends the answer, `"recover"` (or `true`) continues with the instruction for low effort; without the key, off. The PC service sets `"recover"` (see [pc-agent-api.md](pc-agent-api.md)). Older Strata versions read the configuration with `cfg.get` and skip unknown keys.
+- **Setup output:** steps as `=== Step N: title ===`, downloads as `file: x / y GB (p%)`, errors start with `[X]`.
+- **Where a model's files go:**
+  - `strata-<id lowercase>.json` (configuration), `run-<id lowercase>.bat` (start) and `strata-<id lowercase>.log` in the Strata folder
+  - `<data>/models/<ID>` (GGUF files, also `.part`) and `<data>/packs/<id lowercase>` (tokenizer)
+  - `<data>/mtp` is shared by all models.
+- **Model configuration:** a `strata-*.json` with `exe` and an array `args` (that is how `find_configs` in `strata_bench.py` recognizes them). `strata-*.shared-settings.json` is not one. Strata writes them with `json.dumps(cfg, indent=1)`. The key is in `api_key`.
+- **Context:** setup writes `--context` as `--max-context <tokens>` into `args` and reads it back that way (`choices_from_config`). Above 262144 (the trained length), `--rope-scaling yarn --rope-scale <context / 262144>` is added. From the context, setup also derives KV streaming (`--kv-resident`), parallel slots and the calibration key; the PC service's context switch leaves these as they are.
+- **Active model:** `run-<id>.bat` starts `serve/server.py`, which starts `strata.exe` and restarts it when it dies; so stop it via the folder. Without its own start script, `START-HERE.bat` starts the configuration that was used last (the most recent modification time, because a start touches it).
+- **Setup's recommendation:** from 60 GB RAM `IQ3_XXS`, from 44 GB `Q2_0`, from 28 GB `coder-IQ1_M`. Context 64K with 14–20 GB VRAM; the skill `local-agent` needs more (see `tools/local-agent/README.md`).
+- **Update** like `UPDATE.bat`: `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped (otherwise the engine is not replaced). Model files stay.
+- **Benchmark:** `BENCH.bat --config <strata-<id>.json>` uses a running Strata, otherwise it starts one itself. The result is the line `  chat decode tok/s   38.50   (37.10 - 39.20, n=3)` of the table at the end. More lines follow after it.

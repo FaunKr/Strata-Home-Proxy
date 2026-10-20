@@ -28,6 +28,7 @@ use axum::{
 use serde::Deserialize;
 use strata_pc_protocol::{
     Answer, ForcedRestart, ForcedSleep, GamingRequest, PcStatus, Refused, StrataJobKind,
+    StrataKey as KeyAnswer,
 };
 use tokio::sync::broadcast;
 
@@ -38,6 +39,7 @@ use crate::{
     output::{StrataOutput, StrataOutputMessage, StrataOutputNotice},
     platform::Platform,
     strata::{self, Refusal, StrataJobRequest, UpdateCheck},
+    strata_key::StrataKey,
     strata_process::{StrataProcess, Times},
     update::UpdateError,
 };
@@ -90,6 +92,8 @@ pub struct Agent {
     /// no second standby.
     standby_pending: AtomicBool,
     pub(crate) output: Arc<StrataOutput>,
+    /// A new one comes with every start of Strata.
+    pub(crate) strata_key: StrataKey,
 }
 
 struct Watchdog {
@@ -118,6 +122,11 @@ impl Agent {
         if managed.start(&cfg).is_none() {
             tracing::info!("No start script set for Strata, the service does not start Strata");
         }
+        if cfg.strata_api_key.is_some() {
+            tracing::warn!(
+                "strata_api_key in the configuration is ignored: the service makes a new Strata key at every start of Strata"
+            );
+        }
         let jobs = Jobs::load(&cfg.state_dir());
         let output = Arc::new(StrataOutput::new(cfg.state_dir()));
         Arc::new(Self {
@@ -136,6 +145,7 @@ impl Agent {
             updating: AtomicBool::new(false),
             standby_pending: AtomicBool::new(false),
             output,
+            strata_key: StrataKey::new(),
         })
     }
 
@@ -165,7 +175,7 @@ impl Agent {
 
     fn strata_get(&self, path: &str) -> reqwest::RequestBuilder {
         let req = self.http.get(format!("{}{path}", self.cfg.strata_url));
-        match self.managed().api_key(&self.cfg) {
+        match self.strata_key.key(&self.cfg) {
             Some(key) => req.bearer_auth(key),
             None => req,
         }
@@ -197,6 +207,7 @@ impl Agent {
             strata_job: self.jobs.running(),
             version: Some(crate::version().to_string()),
             hardware: Some(self.platform.hardware()),
+            strata_key_generation: Some(self.strata_key.generation()),
         }
     }
 
@@ -537,6 +548,14 @@ async fn strata_view(State(agent): State<Arc<Agent>>) -> Json<strata::StrataRepo
     Json(view)
 }
 
+/// The Strata key, for the proxy; `404` while no model config holds one.
+async fn strata_key(State(agent): State<Arc<Agent>>) -> Result<Json<KeyAnswer>, StatusCode> {
+    let key = tokio::task::spawn_blocking(move || agent.strata_key.current(&agent.cfg))
+        .await
+        .expect("key task");
+    key.map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
 async fn strata_job(State(agent): State<Arc<Agent>>) -> Json<Option<strata::StrataJob>> {
     Json(agent.jobs.current())
 }
@@ -670,6 +689,7 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .route("/strata/job/cancel", post(cancel_job))
         .route("/update", post(update))
         .route("/strata-log", get(strata_log))
+        .route("/strata/key", get(strata_key))
         .layer(middleware::from_fn_with_state(agent.clone(), guard))
         .with_state(agent)
 }

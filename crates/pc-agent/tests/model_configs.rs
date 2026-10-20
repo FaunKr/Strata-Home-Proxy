@@ -30,7 +30,6 @@ fn installed(s: &Setup) {
             strata_start: Some(setup.installation().run_script("iq3_xxs")),
             strata_args: vec![],
             strata_processes: Some(vec![format!("{}/", cfg.strata_dir.display())]),
-            strata_api_key: Some("key-0123456789abcdef".into()),
         })
         .unwrap();
 }
@@ -53,7 +52,12 @@ async fn at_start_every_model_config_gets_loop_recovery_and_keeps_the_rest() {
         assert_eq!(cfg["reasoning_loop_recovery"], "recover", "{id}: {cfg}");
         assert_eq!(cfg["args"], json!(["--native", "a.gguf"]), "{id}");
         assert_eq!(cfg["port"], 8080, "{id}");
-        assert_eq!(cfg["api_key"], "key-0123456789abcdef", "{id}");
+        // The restart that follows brings a new key, the same in every config.
+        assert_eq!(
+            cfg["api_key"],
+            read_config(&s, "iq3_xxs")["api_key"],
+            "{id}"
+        );
     }
     assert_eq!(
         modified(&s, "iq3_xxs"),

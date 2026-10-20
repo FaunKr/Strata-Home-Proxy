@@ -55,13 +55,10 @@ pub struct StrataClient {
 
 impl StrataClient {
     /// `None` without a Strata address.
-    pub fn new(cfg: &Config, probe: Client, upstream: Client) -> Option<Self> {
+    pub fn new(cfg: &Config, key: Option<&str>, probe: Client, upstream: Client) -> Option<Self> {
         Some(Self {
             base: cfg.strata_url.clone()?,
-            auth: cfg
-                .strata_api_key
-                .as_deref()
-                .and_then(|key| HeaderValue::from_str(&format!("Bearer {key}")).ok()),
+            auth: key.and_then(|key| HeaderValue::from_str(&format!("Bearer {key}")).ok()),
             probe,
             upstream,
         })

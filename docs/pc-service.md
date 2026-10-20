@@ -41,8 +41,8 @@ then carry on anyway.
    Windows asks once for administrator rights. The script downloads
    `strata-pc-agent.exe` from the NAS to `%LOCALAPPDATA%\StrataHome`, registers the PC
    with the NAS, makes it start at login, opens port 8091 only for
-   the NAS and creates the desktop shortcut **Gaming an-aus**. The NAS fills in the token,
-   `PC_AGENT_URL` and the Strata key itself.
+   the NAS and creates the desktop shortcut **Gaming an-aus**. The NAS fills in the token
+   and `PC_AGENT_URL` itself; the service makes the Strata key at every start of Strata.
 3. The **Strata** area is where you set the start script and Strata programs. Until then
    the service runs, but does not start Strata itself.
 
@@ -96,9 +96,9 @@ Strata crashes because of it, the restarted service starts it again.
 ## Managed values
 
 If the service sets up Strata itself (*Strata* area of the web UI),
-it stores the start script, Strata folder and Strata key in
+it stores the start script and Strata folder in
 `strata-managed.json` next to the TOML. These values take precedence over `strata_start`,
-`strata_args`, `strata_processes` and `strata_api_key` from the TOML; the TOML
+`strata_args` and `strata_processes` from the TOML; the TOML
 itself stays unchanged. Without this file the TOML applies as before. Anyone who
 wants to set up by hand again deletes the file and restarts the service.
 

@@ -6,7 +6,7 @@ use reqwest::{Client, StatusCode};
 use serde::de::DeserializeOwned;
 use strata_pc_protocol::{
     ForcedRestart, ForcedSleep, GamingRequest, Incoming, PcStatus, Refused, StrataInfo, StrataJob,
-    StrataJobRequest, StrataReport,
+    StrataJobRequest, StrataKey, StrataReport,
 };
 
 use crate::config::Config;
@@ -176,6 +176,20 @@ impl AgentClient {
             return None;
         }
         Some(resp.json::<StrataReport>().await.ok()?.into_parts())
+    }
+
+    /// The Strata key; `None` while the service knows none, or does not
+    /// answer.
+    pub async fn strata_key(&self) -> Option<StrataKey> {
+        let resp = self
+            .request(reqwest::Method::GET, "/strata/key")?
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.json().await.ok()
     }
 
     /// The running or last Strata job.

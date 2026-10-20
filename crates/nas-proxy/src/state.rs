@@ -78,8 +78,10 @@ pub struct AppState {
     pub events: History,
     /// Live state for the overview page.
     pub overview: Monitor,
-    /// Strata jobs on the PC and the Strata key.
+    /// Strata jobs on the PC.
     pub strata: crate::strata::StrataState,
+    /// The key Strata takes, from the PC service.
+    pub strata_key: crate::strata_key::StrataKey,
     /// Setting up the PC service from the NAS.
     pub pc_setup: crate::pc_setup::PcSetup,
     /// The code benchmark in the container code-bench.
@@ -139,6 +141,7 @@ impl AppState {
             upstream,
             overview: Monitor::default(),
             strata: crate::strata::StrataState::new(cfg.data_dir.clone()),
+            strata_key: Default::default(),
             pc_setup: crate::pc_setup::PcSetup::new(cfg.data_dir.clone()),
             code_bench: crate::code_bench::CodeBench::new(cfg.data_dir.clone()),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
@@ -177,8 +180,8 @@ impl AppState {
 
     /// Asks the PC service for its status and takes over what it tells
     /// besides the PC's state: a reported MAC, the PC service's version,
-    /// and the end of a Strata job. Every caller wants these noted at once:
-    /// a job's end carries the Strata key it handed over.
+    /// the end of a Strata job and a new Strata key. Every caller wants
+    /// these noted at once: the next call to Strata needs the new key.
     pub async fn ask_pc(&self, agent: &AgentClient) -> Option<PcStatus> {
         let status = agent.status().await?;
         if let Some(mac) = status.mac.as_deref().and_then(|m| parse_mac(m).ok())
@@ -191,6 +194,7 @@ impl AppState {
             self.events
                 .record(EventKind::PcServiceUpdated, status.version.clone());
         }
+        crate::strata_key::note_status(self, agent, &status).await;
         crate::strata::note_status(self, agent, &status).await;
         Some(status)
     }
@@ -199,7 +203,12 @@ impl AppState {
     /// an address.
     pub fn strata(&self) -> Option<StrataClient> {
         let cfg = self.cfg();
-        StrataClient::new(&cfg, self.probe(&cfg), self.upstream.clone())
+        StrataClient::new(
+            &cfg,
+            self.strata_key.key().as_deref(),
+            self.probe(&cfg),
+            self.upstream.clone(),
+        )
     }
 
     /// Client for the PC service with the current address and token.

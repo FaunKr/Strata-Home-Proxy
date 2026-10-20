@@ -92,6 +92,9 @@ pub struct Fake {
     pub exits: AtomicUsize,
     /// What reading the hardware gives.
     pub hardware: Mutex<Hardware>,
+    /// A started Strata prints the key of this config where its lines say
+    /// `{key}`, as it reads the config at its start.
+    pub key_config: Mutex<Option<PathBuf>>,
 }
 
 impl Fake {
@@ -211,6 +214,15 @@ impl Platform for FakePlatform {
             anyhow::bail!("{} not found", program.display());
         }
         *self.0.started.lock().unwrap() = Some((program.to_path_buf(), args.to_vec()));
+        if let Some(path) = self.0.key_config.lock().unwrap().clone() {
+            let config: Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+            let key = config["api_key"].as_str().unwrap_or_default();
+            if let Some(command) = self.0.commands.lock().unwrap().get_mut(&file_name(program)) {
+                for line in &mut command.lines {
+                    *line = line.replace("{key}", key);
+                }
+            }
+        }
         self.0.starts.fetch_add(1, Ordering::SeqCst);
         if !self.0.strata_stays_down.load(Ordering::SeqCst) {
             self.0.strata_up.store(true, Ordering::SeqCst);

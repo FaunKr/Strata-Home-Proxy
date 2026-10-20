@@ -277,14 +277,19 @@ async fn a_strata_that_ended_is_a_notice() {
 
 #[tokio::test]
 async fn the_strata_key_never_shows() {
-    let s = setup_with("output-key", |c| {
-        c.strata_api_key = Some("sk-secret-123".into())
-    })
-    .await;
-    strata_prints(&s, &["set STRATA_API_KEY=sk-secret-123"]);
+    let s = setup("output-key").await;
+    strata_folder(&s).config(
+        "iq3_xxs",
+        serde_json::json!({"exe": "strata.exe", "args": [], "api_key": "old-key-0123456789"}),
+    );
+    let config = s.agent.cfg.strata_dir.join("strata-iq3_xxs.json");
+    *s.fake.key_config.lock().unwrap() = Some(config.clone());
+    strata_prints(&s, &["set STRATA_API_KEY={key}"]);
     let mut log = Log::open(&s).await;
     restart(&s).await;
     log.until(|m| m["text"] == "set STRATA_API_KEY=***").await;
+    let key: Value = serde_json::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
+    let key = key["api_key"].as_str().unwrap();
     let file = std::fs::read_to_string(s.dir.join("strata.log")).unwrap();
-    assert!(!file.contains("sk-secret-123"), "{file}");
+    assert!(!file.contains(key), "{file}");
 }

@@ -425,7 +425,8 @@ pub enum EventKind {
     StrataJobDone,
     StrataJobFailed,
     StrataJobCancelled,
-    /// The proxy made a new Strata key and Strata took it over.
+    /// The PC service started Strata with a new key and the proxy took it
+    /// over.
     StrataKeyChanged,
     /// A PC signed up with a one-time code (detail: the PC service's address).
     PcServiceRegistered,
@@ -611,6 +612,10 @@ pub struct StrataPage {
     /// service does not report it.
     #[serde(default)]
     pub update: Option<StrataUpdate>,
+    /// The PC service reports no Strata key: it is older than the key per
+    /// start of Strata.
+    #[serde(default)]
+    pub key_unreported: bool,
 }
 
 /// What a Strata update brings since the installed version.
@@ -661,8 +666,7 @@ pub async fn get_strata() -> Result<StrataPage, ServerFnError> {
     Ok(backend()?.strata().await)
 }
 
-/// Starts a job on the PC, waking it first if it sleeps. The proxy adds the
-/// Strata key where the job needs one; it never reaches the page.
+/// Starts a job on the PC, waking it first if it sleeps.
 #[server(prefix = "/admin/api", endpoint = "strata-job")]
 pub async fn start_strata_job(
     kind: StrataJobKind,

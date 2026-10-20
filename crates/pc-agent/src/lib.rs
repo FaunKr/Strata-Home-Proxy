@@ -13,6 +13,7 @@ pub mod output;
 pub mod platform;
 pub mod sampling;
 pub mod strata;
+mod strata_key;
 pub mod strata_process;
 pub mod update;
 

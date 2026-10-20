@@ -1,105 +1,111 @@
 # Strata Home Proxy
 
-Ein Proxy auf dem NAS, der Anfragen an Strata auf dem PC weiterleitet, den PC dafür weckt und ihn nach einer Leerlaufzeit schlafen schickt.
+A proxy on the NAS that forwards requests to Strata on the PC, wakes the PC for them and sends it to sleep after an idle timeout.
 
-Die _Avoid_-Listen gelten für Doku, Issues, Code-Bezeichner und deutsche Texte. Die englische Weboberfläche darf Produkte beim Namen nennen, wo der Nutzer das Gerät daran erkennt (z. B. „Shelly plug“).
+The glossary terms are the words the web UI shows. The _Avoid_ lists apply to docs, issues, code identifiers and every text. The web UI may name a product where the user recognises the device by it (e.g. "Shelly plug").
 
-## Beteiligte
+## Parties
 
 **Strata**:
-Die eigene LLM-Engine auf dem PC (Niko1221/Strata) mit einer OpenAI- und Anthropic-kompatiblen API. Kein llama-server, auch wenn manche Endpunkte dessen Namen tragen.
-_Avoid_: llama-server, llama.cpp, Modellserver
+The own LLM engine on the PC (Niko1221/Strata) with an OpenAI- and Anthropic-compatible API. Not llama-server, even though some endpoints carry its names.
+_Avoid_: llama-server, llama.cpp, model server
 
-**Strata-Ordner**:
-Der Ordner auf dem PC, in den Setup Strata einrichtet (`strata_dir`): Modell-Konfigurationen `strata-<id>.json` mit ihren Chat-Einstellungen, Startskripten und Logs. Die Modelldateien selbst liegen im Strata-Datenordner (`strata_data_dir`). Wie Setup die Dateien eines Modells benennt, weiß im PC-Dienst nur `install::Installation`.
-_Avoid_: Strata-Verzeichnis, Installationsordner
+**Strata folder**:
+The folder on the PC that setup installs Strata into (`strata_dir`): model configs `strata-<id>.json` with their chat settings, start scripts and logs. The model files themselves live in the Strata data folder (`strata_data_dir`). In the PC service, only `install::Installation` knows how setup names a model's files.
+_Avoid_: Strata directory, install folder, Strata-Ordner
 
-**PC-Dienst**:
-Das kleine Programm auf dem PC, das dem Proxy Zustand, Gaming-Modus und Benutzeraktivität meldet und auf Anfrage den Standby auslöst.
-_Avoid_: Agent, PC-Agent (nur im Code und in Dateinamen)
+**PC service**:
+The small program on the PC that reports state, gaming mode and user activity to the proxy and triggers standby on request. In code and file names it is `pc-agent`.
+_Avoid_: agent, PC agent (except `pc-agent` in code and file names), PC-Dienst
 
 **Proxy**:
-Der Dienst auf dem NAS, über den alle Anfragen an Strata laufen.
-_Avoid_: NAS-Proxy (nur im Code), Gateway
+The service on the NAS that all requests to Strata go through. In code and file names it is `nas-proxy`.
+_Avoid_: NAS proxy (except `nas-proxy` in code and file names), gateway
 
-**Weboberfläche**:
-Die Seiten des Proxys unter `/admin`, gegliedert in die Bereiche Overview (Übersicht), PC, Strata, Access und System, dazu die Anmeldung. Die Oberfläche ist englisch; die Fachbegriffe hier bleiben deutsch.
-_Avoid_: Admin-UI, Dashboard
+**Web UI**:
+The proxy's pages under `/admin`, split into the areas Overview, PC, Strata, Access and System, plus the login.
+_Avoid_: admin UI, dashboard, Weboberfläche
 
-**Einrichtungsbefehl**:
-Der PowerShell-Einzeiler aus dem Bereich *PC* der Weboberfläche, der den PC-Dienst vom NAS lädt, einrichtet und beim Proxy anmeldet.
-_Avoid_: Installer, Setup-Link
+**Setup command**:
+The PowerShell one-liner from the web UI's *PC* area that downloads the PC service from the NAS, installs it and registers it with the proxy.
+_Avoid_: installer, setup link, Einrichtungsbefehl
 
-**Einmalcode**:
-Der Code im Einrichtungsbefehl. Gilt kurz und nur für eine Anmeldung; ein neuer Einrichtungsbefehl macht den alten ungültig.
-_Avoid_: Pairing-Code, Token (das ist das gemeinsame Geheimnis von Proxy und PC-Dienst)
+**One-time code**:
+The code in the setup command. Valid briefly and for one registration only; a new setup command invalidates the old one.
+_Avoid_: pairing code, token (that is the shared secret of proxy and PC service), Einmalcode
 
-**Übersicht**:
-Die Startseite der Weboberfläche mit dem Live-Zustand von PC und Strata und den Knöpfen.
-_Avoid_: Status-Seite, Home
+**Overview**:
+The web UI's start page with the live state of PC and Strata and the buttons.
+_Avoid_: status page, home, Übersicht
 
-## Zustand des PCs
+## State of the PC
 
-**Aufwachen**:
-Der PC kommt nach einem Weckpaket hoch, bis Strata (oder für den Gaming-Modus der PC-Dienst) antwortet.
-_Avoid_: Booten, Starten
+**Wake-up**:
+The PC comes up after a wake packet, until Strata (or, for gaming mode, the PC service) answers.
+_Avoid_: boot, start, Aufwachen
 
-**Leerlaufzeit**:
-Die Zeit ohne Anfrage über den Proxy, nach der der Proxy den PC schlafen schicken will. Sie beginnt neu bei jeder Anfrage, beim Aufwachen und nach dem Gaming-Modus.
-_Avoid_: Idle-Timeout, Standby-Zeit
+**Idle timeout**:
+The time without a request through the proxy after which the proxy wants to send the PC to sleep. It restarts with every request, on wake-up and after gaming mode.
+_Avoid_: standby time, Leerlaufzeit
 
-**Schlafen-Anfrage**:
-Die Bitte des Proxys an den PC-Dienst, den Standby auszulösen. Der PC-Dienst kann sie mit einem Grund ablehnen.
-_Avoid_: Shutdown, Sleep-Befehl
+**Sleep request**:
+The proxy's request to the PC service to trigger standby. The PC service can refuse it with a reason.
+_Avoid_: shutdown, sleep command, Schlafen-Anfrage
 
-**Nachlauf**:
-Die kurze Zeit nach einer angenommenen Schlafen-Anfrage, in der der PC noch antworten kann und trotzdem als schlafend gilt.
-_Avoid_: Settling (nur im Code)
+**Settling**:
+The short time after an accepted sleep request during which the PC may still answer and yet counts as asleep.
+_Avoid_: Nachlauf
 
-**Hardwarewerte**:
-Was der PC-Dienst über Last, Temperatur, Speicher und Lüfter von Grafikkarte und CPU meldet; die Übersicht zeigt sie.
-_Avoid_: Stats, Telemetrie
+**Hardware readings**:
+What the PC service reports about load, temperature, memory and fans of the graphics card and CPU; the Overview shows them.
+_Avoid_: stats, telemetry, Hardwarewerte
 
-**Messsteckdose**:
-Die Shelly-Steckdose, an der der PC hängt. Der Proxy fragt sie nur, wenn sie eingerichtet ist (`SHELLY_URL`): für die Übersicht und einmal pro Minute für den Verlauf (`PLUG_SAMPLE_SECS`). Auf Wecken und Schlafen hat sie keinen Einfluss.
-_Avoid_: Shelly, Smart Plug (nur im Code)
+**Power plug**:
+The Shelly plug the PC is plugged into. The proxy asks it only when it is set up (`SHELLY_URL`): for the Overview and once a minute for the history (`PLUG_SAMPLE_SECS`). It has no influence on waking and sleeping.
+_Avoid_: Shelly, smart plug, Messsteckdose
 
-**Leistung**:
-Was die Messsteckdose als aktuelle Leistungsaufnahme des PCs meldet, in Watt; die Übersicht zeigt sie im Bereich Hardware als *Power*, auch während der PC schläft.
-_Avoid_: Stromverbrauch, Energie
+**Power**:
+What the power plug reports as the PC's current power draw, in watts; the Overview shows it in the Hardware area as *Power*, also while the PC sleeps.
+_Avoid_: power consumption, energy, Leistung
 
-**Verbrauch**:
-Die Energie, die der PC über einen Zeitraum des Verlaufs gebraucht hat, in kWh und € zum heutigen Preis. Gemessen, wo die Messsteckdose für mindestens die Hälfte einer Stunde Werte hat, sonst aus der Stromschätzung; die Weboberfläche nennt ihn *Energy* und sagt „measured“, „estimated“ oder „mixed“.
-_Avoid_: Stromverbrauch
+**Energy**:
+The energy the PC used over a period of the history, in kWh and € at today's price. Measured where the power plug has readings for at least half of an hour, otherwise from the energy estimate; the web UI says "measured", "estimated" or "mixed".
+_Avoid_: power consumption, Verbrauch
 
-**Stromschätzung**:
-Der Verbrauch aus den Einstellungen statt aus Messwerten: wache Stunden (auch im Gaming-Modus) × `POWER_AWAKE_WATTS`, schlafende × `POWER_ASLEEP_WATTS`. Unbekannte Zeit zählt nicht.
+**Energy estimate**:
+Energy from the settings instead of readings: awake hours (gaming mode included) × `POWER_AWAKE_WATTS`, asleep hours × `POWER_ASLEEP_WATTS`. Unknown time does not count.
+_Avoid_: Stromschätzung
 
-**Ersparnis**:
-Was der Schlaf gegenüber einem rund um die Uhr wachen PC spart: schlafende Stunden × (`POWER_AWAKE_WATTS` − `POWER_ASLEEP_WATTS`), in kWh und €; immer aus den Einstellungen, auch wenn gemessen wird. Die Weboberfläche nennt sie *Saved*.
+**Savings**:
+What sleep saves compared with a PC awake around the clock: asleep hours × (`POWER_AWAKE_WATTS` − `POWER_ASLEEP_WATTS`), in kWh and €; always from the settings, even when readings exist. The web UI calls it *Saved*.
+_Avoid_: Ersparnis
 
-**Gaming-Modus**:
-Ein Zustand des PCs, in dem Strata beendet ist, Anfragen abgewiesen werden und der Proxy den PC nicht schlafen schickt.
-_Avoid_: Spielemodus
+**Gaming mode**:
+A state of the PC in which Strata is stopped, requests are refused and the proxy does not send the PC to sleep.
+_Avoid_: game mode, Gaming-Modus
 
-**Wach halten**:
-Ein Zeitraum, in dem der Proxy den PC nicht schlafen schickt, gewählt auf der Übersicht.
-_Avoid_: Keep-Alive
+**Keep awake**:
+A period, chosen on the Overview, during which the proxy does not send the PC to sleep.
+_Avoid_: keep-alive, Wach halten
 
-## Zustand von Strata
+## State of Strata
 
-**Modell nicht geladen**:
-Strata antwortet, hält das Modell aber nicht im Speicher und lädt es mit der nächsten Anfrage.
-_Avoid_: Entladen, Unloaded (nur im Code)
+**Model unloaded**:
+Strata answers but does not hold the model in memory and loads it with the next request.
+_Avoid_: Modell nicht geladen
 
-**Lädt**:
-Strata läuft laut PC-Dienst, antwortet aber noch nicht.
-_Avoid_: Startet
+**Loading**:
+Strata runs according to the PC service but does not answer yet.
+_Avoid_: starting, Lädt
 
-**Ereignis**:
-Ein Eintrag im Verlauf des Proxys über PC, Wecken, Schlafen oder die Weboberfläche.
-_Avoid_: Log-Eintrag
+**Event**:
+An entry in the proxy's history about the PC, waking, sleeping or the web UI.
+_Avoid_: log entry, Ereignis
 
-**Strata-Ausgabe**:
-Was ein vom PC-Dienst gestartetes Strata auf seine Konsole schreibt; der PC-Dienst merkt sich die letzten 500 Zeilen, die Weboberfläche zeigt sie live im Bereich Strata (Reiter *Output*). Kein Ereignis.
-_Avoid_: Strata-Log, Log-Eintrag (nur `strata-log` und `strata.log` im Code und in Dateinamen)
+**History**:
+What the proxy keeps of events and power plug readings over time; the web UI shows it as bars per day, week or month.
+_Avoid_: log, Verlauf
+
+**Strata output**:
+What a Strata started by the PC service writes to its console; the PC service keeps the last 500 lines, the web UI shows them live in the Strata area (tab *Output*). Not an event.
+_Avoid_: Strata log, log entry (except `strata-log` and `strata.log` in code and file names), Strata-Ausgabe

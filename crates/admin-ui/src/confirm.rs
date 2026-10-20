@@ -3,6 +3,8 @@
 //! [`Confirm::ask`] and its action runs only on the confirming button.
 //! "Cancel", Escape and closing the dialog do nothing.
 
+use std::sync::Arc;
+
 use leptos::{html::Dialog, prelude::*};
 
 /// What the dialog asks.
@@ -16,10 +18,15 @@ pub struct Question {
     pub danger: bool,
 }
 
+/// The action behind the confirming button. A plain `Arc`, not a
+/// `Callback`: a `Callback` belongs to the view that asked, and a view that
+/// renders again while the dialog is open (the live overview) drops it.
+type Then = Arc<dyn Fn() + Send + Sync>;
+
 /// Asks through the frame's dialog.
 #[derive(Clone, Copy)]
 pub struct Confirm {
-    open: RwSignal<Option<(Question, Callback<()>)>>,
+    open: RwSignal<Option<(Question, Then)>>,
 }
 
 impl Confirm {
@@ -34,8 +41,7 @@ impl Confirm {
 
     /// Shows `question`; `then` runs only when it is confirmed.
     pub fn ask(&self, question: Question, then: impl Fn() + Send + Sync + 'static) {
-        self.open
-            .set(Some((question, Callback::new(move |()| then()))));
+        self.open.set(Some((question, Arc::new(then))));
     }
 }
 
@@ -57,7 +63,7 @@ pub fn ConfirmDialog(confirm: Confirm) -> impl IntoView {
     let on_confirm = move |_| {
         if let Some((_, then)) = confirm.open.get_untracked() {
             confirm.open.set(None);
-            then.run(());
+            then();
         }
     };
     view! {

@@ -139,7 +139,7 @@ impl AppState {
             upstream,
             overview: Monitor::default(),
             strata: crate::strata::StrataState::new(cfg.data_dir.clone()),
-            pc_setup: crate::pc_setup::PcSetup::default(),
+            pc_setup: crate::pc_setup::PcSetup::new(cfg.data_dir.clone()),
             code_bench: crate::code_bench::CodeBench::new(cfg.data_dir.clone()),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),

@@ -60,12 +60,13 @@ show after a restart too, while the PC sleeps. On an awake PC the button reads
 PC until the service answers, then updates. If the service already runs the
 NAS's version after the wake, nothing is updated. The PC sleeps again after
 the idle timeout.
-The service downloads the .exe from the NAS, puts it in the same place (task and
-shortcut stay valid), starts it and exits. As long as Strata is handling a
-request or a Strata job is running, it refuses; Strata may be
-stopped along with the service when it restarts and then starts again. If
-the update fails, the old service keeps running and the **PC** area names the
-reason. A service set up before the update button existed needs
+The service downloads the .exe from the NAS, stops Strata (a hand-started one
+too), puts the new .exe in the same place (task and shortcut stay valid),
+starts it and exits. The new service starts Strata again right away if it was
+running before. As long as Strata is handling a request or a Strata job is
+running, it refuses; so it does when Strata still answers 10 s after the stop.
+If the update fails, the old service keeps running, starts the Strata it
+stopped again, and the **PC** area names the reason. A service set up before the update button existed needs
 the command from above once.
 
 **Removing:** After *Create install command*, the area also shows the command for this

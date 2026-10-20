@@ -776,10 +776,20 @@ fn active_changed(agent: &Agent, changed: &[String]) -> bool {
 /// to what the service keeps in it. Gives what is left to do: a running
 /// Strata whose active model's config changed starts again with it, once it
 /// has no request at work; a job that runs by then restarts it anyway.
+/// After an update that stopped Strata, it starts Strata once, with the
+/// configs as they are now.
 pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output = ()> + use<> {
+    let after_update = crate::update::take_start_after_update(agent);
     let changed = manage(agent).await;
     let agent = Arc::clone(agent);
     async move {
+        if after_update {
+            if agent.may_start_strata_itself() {
+                tracing::info!("Strata starts after the update");
+                agent.strata().start();
+            }
+            return;
+        }
         if !active_changed(&agent, &changed) || !agent.strata_healthy().await {
             return;
         }

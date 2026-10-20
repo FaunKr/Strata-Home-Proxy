@@ -26,7 +26,9 @@ use axum::{
     serve::IncomingStream,
 };
 use serde::Deserialize;
-use strata_pc_protocol::{Answer, GamingRequest, PcStatus, Refused};
+use strata_pc_protocol::{
+    Answer, ForcedRestart, ForcedSleep, GamingRequest, PcStatus, Refused, StrataJobKind,
+};
 use tokio::sync::broadcast;
 
 use crate::{
@@ -84,6 +86,9 @@ pub struct Agent {
     pub(crate) updates: UpdateCheck,
     /// An update of this program is under way.
     pub(crate) updating: AtomicBool,
+    /// A sleep request was taken and standby follows; a second one adds
+    /// no second standby.
+    standby_pending: AtomicBool,
     pub(crate) output: Arc<StrataOutput>,
 }
 
@@ -131,6 +136,7 @@ impl Agent {
             times: Times::default(),
             updates: UpdateCheck::default(),
             updating: AtomicBool::new(false),
+            standby_pending: AtomicBool::new(false),
             output,
         })
     }
@@ -186,7 +192,8 @@ impl Agent {
     pub async fn status(&self) -> PcStatus {
         PcStatus {
             gaming_mode: self.gaming(),
-            strata_running: self.strata_healthy().await,
+            // A Strata started moments ago runs, though it may not answer yet.
+            strata_running: self.strata_healthy().await || self.strata().loading(),
             user_idle_secs: self.platform.user_idle().as_secs(),
             mac: None,
             strata_job: self.jobs.running(),
@@ -233,9 +240,7 @@ impl Agent {
         if self.jobs.running() {
             return Err("A Strata job is running".into());
         }
-        if self.updating.load(Ordering::SeqCst) {
-            return Err("The PC service is updating".into());
-        }
+        self.refuse_while_updating()?;
         let idle = self.platform.user_idle();
         if idle < self.cfg.user_idle() {
             return Err(format!(
@@ -247,6 +252,85 @@ impl Agent {
             return Err("Strata is processing a request".into());
         }
         Ok(())
+    }
+
+    /// Refuses while this program updates itself.
+    fn refuse_while_updating(&self) -> Result<(), String> {
+        if self.updating.load(Ordering::SeqCst) {
+            return Err("The PC service is updating".into());
+        }
+        Ok(())
+    }
+
+    /// A forced sleep: only an update of this program refuses it. Notes
+    /// what it overrides and cancels a running job; standby follows as
+    /// after an accepted `/sleep`, and gaming mode stays as it is.
+    pub async fn force_sleep(&self) -> Result<ForcedSleep, String> {
+        self.refuse_while_updating()?;
+        let forced = ForcedSleep {
+            user_active: self.platform.user_idle() < self.cfg.user_idle(),
+            strata_busy: self.strata_busy().await,
+            gaming_mode: self.gaming(),
+            cancelled_job: self.cancel_job(),
+        };
+        Ok(forced)
+    }
+
+    /// A forced Strata restart: cancels a running job and waits for its
+    /// end, kills Strata (also one started by hand) and starts the managed
+    /// one again where the service starts Strata at all. Refused in gaming
+    /// mode and during an update, also one that begins while it waits.
+    pub async fn force_restart(&self) -> Result<ForcedRestart, String> {
+        if self.gaming() {
+            return Err("Gaming mode is on".into());
+        }
+        self.refuse_while_updating()?;
+        let cancelled_job = self.cancel_job();
+        // A cancelled job rolls back and may restart Strata itself; the
+        // kill comes after, so Strata always starts fresh.
+        self.wait_for_cancelled_job().await;
+        self.refuse_while_updating()?;
+        tracing::warn!("Strata wird zwangsweise neu gestartet");
+        let process = self.strata();
+        process.stop();
+        // The update restarts this service, which starts Strata then.
+        let started = process
+            .start_after_stop(|| {
+                self.refuse_while_updating().map_err(|_| {
+                    "The PC service began an update; Strata starts with the updated service"
+                        .to_string()
+                })
+            })
+            .await?;
+        // Counted afresh; the load time after the start applies as usual.
+        self.watchdog.lock().unwrap().unhealthy_since = None;
+        Ok(ForcedRestart {
+            cancelled_job,
+            started,
+        })
+    }
+
+    /// Waits until the job cancelled by a forced sleep or restart has
+    /// ended, at most `cancel_wait_secs`; a job stuck beyond that is left
+    /// running.
+    async fn wait_for_cancelled_job(&self) {
+        let limit = Instant::now() + self.cfg.cancel_wait();
+        while self.jobs.running() {
+            if Instant::now() >= limit {
+                tracing::warn!(
+                    "Der abgebrochene Strata-Vorgang endet nicht, es geht ohne ihn weiter"
+                );
+                return;
+            }
+            tokio::time::sleep(crate::job::POLL).await;
+        }
+    }
+
+    /// Cancels the running job, if one runs, and gives its kind; downloaded
+    /// parts stay, so the same job continues later.
+    fn cancel_job(&self) -> Option<StrataJobKind> {
+        let kind = self.jobs.current().map(|j| j.kind);
+        self.jobs.cancel().then_some(kind).flatten()
     }
 
     /// What the Strata-Ausgabe has to say besides its lines.
@@ -382,9 +466,47 @@ async fn sleep(State(agent): State<Arc<Agent>>) -> Response {
         return (StatusCode::CONFLICT, Json(Answer::refused(reason))).into_response();
     }
     tracing::info!("Schlafen angenommen");
-    let agent = Arc::clone(&agent);
+    go_to_standby(&agent);
+    Json(Answer::accepted()).into_response()
+}
+
+async fn force_sleep(State(agent): State<Arc<Agent>>) -> Response {
+    match agent.force_sleep().await {
+        Ok(forced) => {
+            tracing::warn!(?forced, "Forced sleep");
+            go_to_standby(&agent);
+            Json(forced).into_response()
+        }
+        Err(reason) => (StatusCode::CONFLICT, Json(Refused::new(reason))).into_response(),
+    }
+}
+
+async fn force_restart(State(agent): State<Arc<Agent>>) -> Response {
+    match agent.force_restart().await {
+        Ok(forced) => Json(forced).into_response(),
+        Err(reason) => (StatusCode::CONFLICT, Json(Refused::new(reason))).into_response(),
+    }
+}
+
+/// Standby after an accepted or forced sleep request: after a moment, so
+/// the answer reaches the NAS first. A job cancelled by a forced sleep ends
+/// before, or is left behind after `cancel_wait_secs`. One standby at a
+/// time: a request while one is pending only joins it. An update begun in
+/// the meantime calls it off.
+fn go_to_standby(agent: &Arc<Agent>) {
+    if agent.standby_pending.swap(true, Ordering::SeqCst) {
+        tracing::info!("Standby folgt schon");
+        return;
+    }
+    let agent = Arc::clone(agent);
     tokio::spawn(async move {
         tokio::time::sleep(SUSPEND_DELAY).await;
+        agent.wait_for_cancelled_job().await;
+        if agent.updating.load(Ordering::SeqCst) {
+            tracing::warn!("Kein Standby: der PC-Dienst wird aktualisiert");
+            agent.standby_pending.store(false, Ordering::SeqCst);
+            return;
+        }
         agent.before_standby();
         let platform_agent = Arc::clone(&agent);
         let result = tokio::task::spawn_blocking(move || platform_agent.platform.suspend()).await;
@@ -393,8 +515,8 @@ async fn sleep(State(agent): State<Arc<Agent>>) -> Response {
         }
         // Also after a failed standby, so a stopped Strata comes back.
         agent.resumed();
+        agent.standby_pending.store(false, Ordering::SeqCst);
     });
-    Json(Answer::accepted()).into_response()
 }
 
 async fn gaming(State(agent): State<Arc<Agent>>, Json(req): Json<GamingRequest>) -> Json<PcStatus> {
@@ -534,6 +656,8 @@ pub fn router(agent: Arc<Agent>) -> Router {
     Router::new()
         .route("/status", get(status))
         .route("/sleep", post(sleep))
+        .route("/sleep/force", post(force_sleep))
+        .route("/strata/kill", post(force_restart))
         .route("/gaming", post(gaming))
         .route("/strata", get(strata_view))
         .route("/strata/jobs", post(start_job))

@@ -64,6 +64,11 @@ pub struct Config {
     /// frees its port first.
     #[serde(default = "default_stop_settle")]
     pub stop_settle_ms: u64,
+    /// How long a forced sleep or forced Strata restart waits for the job
+    /// it cancelled to end; after that it goes ahead anyway. The NAS waits
+    /// longer for the answer (`force_timeout` there).
+    #[serde(default = "default_cancel_wait")]
+    pub cancel_wait_secs: u64,
     /// Folder for the gaming flag and the log; next to the program by default.
     #[serde(default)]
     pub state_dir: Option<PathBuf>,
@@ -111,6 +116,9 @@ fn default_context_start() -> u64 {
 fn default_stop_settle() -> u64 {
     2000
 }
+fn default_cancel_wait() -> u64 {
+    60
+}
 fn default_strata_repo() -> String {
     "https://github.com/Niko1221/Strata.git".into()
 }
@@ -144,6 +152,10 @@ impl Config {
 
     pub fn stop_settle(&self) -> Duration {
         Duration::from_millis(self.stop_settle_ms)
+    }
+
+    pub fn cancel_wait(&self) -> Duration {
+        Duration::from_secs(self.cancel_wait_secs)
     }
 
     pub fn user_idle(&self) -> Duration {

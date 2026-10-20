@@ -5,9 +5,9 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 // What the PC-Dienst reports, shown as it comes (docs/adr/0002).
 pub use strata_pc_protocol::{
-    Cpu, Gpu, Hardware, SamplingField, SamplingSource, SamplingSupport, StrataBenchmark,
-    StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
-    StrataSampling, StrataSize,
+    Cpu, ForcedRestart, Gpu, Hardware, SamplingField, SamplingSource, SamplingSupport,
+    StrataBenchmark, StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
+    StrataModel, StrataSampling, StrataSize,
 };
 
 #[cfg(feature = "ssr")]
@@ -433,6 +433,12 @@ pub enum EventKind {
     PcServiceUpdateRequested,
     PcServiceUpdated,
     PcServiceUpdateFailed,
+    /// A forced sleep the PC service took; detail: who, what it overrode
+    /// and the job it cancelled. `SleepAccepted` follows.
+    ForcedSleep,
+    /// A forced Strata restart; detail: who, the job it cancelled and
+    /// whether Strata started again.
+    ForcedStrataRestart,
     /// "Generate summary now" on the Version tab (detail: who).
     UpdateSummaryRequested,
 }
@@ -543,10 +549,27 @@ pub async fn wake() -> Result<(), ServerFnError> {
     backend()?.wake().map_err(bad_request)
 }
 
+/// What the PC service answered to Sleep now; mirrors the proxy's
+/// `agent::SleepAnswer`. A refusal is an answer, not an error, so the
+/// Overview can offer Force sleep under its reason.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SleepAnswer {
+    Accepted,
+    Refused { reason: String },
+}
+
 #[server(prefix = "/admin/api", endpoint = "sleep-now")]
-pub async fn sleep_now() -> Result<(), ServerFnError> {
+pub async fn sleep_now() -> Result<SleepAnswer, ServerFnError> {
     require_login(false).await?;
     backend()?.sleep_now().await.map_err(bad_request)
+}
+
+/// A forced sleep, after a refused one or in gaming mode: only an update
+/// of the PC service refuses it. Never wakes the PC.
+#[server(prefix = "/admin/api", endpoint = "force-sleep")]
+pub async fn force_sleep() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?.force_sleep().await.map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "gaming")]
@@ -656,6 +679,14 @@ pub async fn start_strata_job(
         speed_projection: speed_projection.unwrap_or(false),
     };
     backend()?.start_strata_job(form).await.map_err(bad_request)
+}
+
+/// A forced Strata restart: the PC service cancels a running job, kills
+/// Strata and starts it again where it can. Never wakes the PC.
+#[server(prefix = "/admin/api", endpoint = "strata-force-restart")]
+pub async fn force_restart_strata() -> Result<ForcedRestart, ServerFnError> {
+    require_login(false).await?;
+    backend()?.force_restart_strata().await.map_err(bad_request)
 }
 
 /// Has Strata write the update summary now, waking the PC first if it

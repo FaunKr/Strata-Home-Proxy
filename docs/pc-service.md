@@ -12,6 +12,24 @@ log in. It
   on `/health` for 60 s (e.g. after standby). After every start
   it waits 4 min for the model to load.
 
+Two web UI buttons go past these rules; neither wakes the PC:
+
+- **Force sleep** appears on the Overview under a refused sleep request
+  (*Sleep now*) and in gaming mode. After a confirmation the PC sleeps anyway,
+  even if someone just used the mouse or keyboard, Strata is processing a
+  request or gaming mode is on (it stays on). A running Strata job is
+  cancelled first; downloaded parts are kept. Only a PC service update
+  refuses.
+- **Force restart Strata** sits in the Strata area while the PC is awake and
+  gaming mode is off, also when Strata is loading or not answering. After a
+  confirmation the PC service cancels a running Strata job, kills Strata hard
+  (a hand-started one too) and starts its own Strata again right away, without
+  waiting for the watchdog. Without a start script or with
+  `auto_start = false`, Strata stays stopped.
+
+Both wait at most `cancel_wait_secs` (60 s) for the cancelled job to end and
+then carry on anyway.
+
 ## Installing
 
 1. In the NAS web UI, open the **PC** area and

@@ -49,6 +49,30 @@ fn a_refusal_reads_from_any_refusing_answer() {
 }
 
 #[test]
+fn forced_sleep_and_restart_answers() {
+    let slept: ForcedSleep = same("sleep-force.json");
+    assert!(slept.user_active && slept.strata_busy && !slept.gaming_mode);
+    assert_eq!(slept.cancelled_job, Some(StrataJobKind::AddModel));
+    assert_eq!(
+        same::<Refused>("sleep-force-refused.json"),
+        Refused::new("The PC service is updating")
+    );
+    let restarted: ForcedRestart = same("strata-kill.json");
+    assert_eq!(restarted.cancelled_job, Some(StrataJobKind::Activate));
+    assert!(restarted.started);
+    same::<Refused>("strata-kill-refused.json");
+    // Without a cancelled job the field stays out.
+    let calm = ForcedRestart {
+        cancelled_job: None,
+        started: false,
+    };
+    assert_eq!(
+        serde_json::to_value(&calm).unwrap(),
+        json!({"started": false})
+    );
+}
+
+#[test]
 fn gaming_request() {
     assert!(same::<GamingRequest>("gaming-request.json").enabled);
 }

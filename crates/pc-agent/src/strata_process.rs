@@ -42,6 +42,11 @@ impl Seen {
             (None, Some(_)) => false,
         }
     }
+
+    /// Strata was started within `within` and not stopped since.
+    fn loading(&self, within: Duration) -> bool {
+        self.started_since_stop() && self.start.is_some_and(|t| t.elapsed() < within)
+    }
 }
 
 /// What became of a config change after [`StrataProcess::restart_or_roll_back`].
@@ -69,39 +74,51 @@ impl<'a> StrataProcess<'a> {
         self.start_if(|_| true);
     }
 
-    /// Starts Strata unless someone started it since the last stop.
-    fn start_once(&self) {
-        self.start_if(|seen| {
+    /// Starts Strata unless the service started it since the last stop.
+    /// True when Strata runs from a start since the last stop, this one or
+    /// the other; false without a start script or when the start failed.
+    fn start_once(&self) -> bool {
+        let mut other = false;
+        let started = self.start_if(|seen| {
             let started = seen.started_since_stop();
             if started {
                 tracing::info!("Strata wurde inzwischen gestartet, kein zweiter Start");
             }
+            other = started;
             !started
         });
+        started || other
     }
 
     /// Starts Strata if `wanted` holds for what was seen; checked and
-    /// recorded at once, so two starts cannot both pass.
-    fn start_if(&self, wanted: impl FnOnce(&Seen) -> bool) {
+    /// recorded at once, so two starts cannot both pass. True when this
+    /// call started Strata.
+    fn start_if(&self, wanted: impl FnOnce(&Seen) -> bool) -> bool {
         let agent = self.agent;
         let managed = agent.managed();
         let Some((program, args)) = managed.start(&agent.cfg) else {
             tracing::info!("Kein Startskript für Strata eingetragen, Strata bleibt aus");
-            return;
+            return false;
         };
-        {
+        let (before, now) = {
             let mut seen = agent.times.0.lock().unwrap();
             if !wanted(&seen) {
-                return;
+                return false;
             }
-            seen.start = Some(Instant::now());
-        }
+            let now = Instant::now();
+            (seen.start.replace(now), now)
+        };
         tracing::info!("Strata wird gestartet");
         let mut run = match agent.platform().start_strata(program, args) {
             Ok(run) => run,
             Err(e) => {
                 tracing::error!("Strata-Start fehlgeschlagen: {e}");
-                return;
+                // No Strata loads; the start before counts again.
+                let mut seen = agent.times.0.lock().unwrap();
+                if seen.start == Some(now) {
+                    seen.start = before;
+                }
+                return false;
             }
         };
         let output = Arc::clone(&agent.output);
@@ -121,6 +138,7 @@ impl<'a> StrataProcess<'a> {
             }
             output.ended(run_id);
         });
+        true
     }
 
     /// Ends the programs the managed values name as Strata.
@@ -150,9 +168,11 @@ impl<'a> StrataProcess<'a> {
             .is_some_and(|t| t.elapsed() < within)
     }
 
-    /// Strata was started so recently that it may still be loading.
+    /// Strata was started so recently that it may still be loading, and
+    /// not stopped since.
     pub fn loading(&self) -> bool {
-        self.started_within(Duration::from_secs(self.agent.cfg.load_time_secs))
+        let within = Duration::from_secs(self.agent.cfg.load_time_secs);
+        self.agent.times.0.lock().unwrap().loading(within)
     }
 
     /// After a [`stop`](Self::stop): gives the ended Strata time to free its
@@ -163,6 +183,27 @@ impl<'a> StrataProcess<'a> {
         if !self.agent.gaming() {
             self.start_once();
         }
+    }
+
+    /// The pause after a [`stop`](Self::stop) outside a job, then a start
+    /// unless gaming mode is on, auto-start is off or a job began meanwhile
+    /// (it handles Strata then). `check` comes after the pause; its error
+    /// leaves Strata stopped. `Ok(true)` when Strata runs from a start
+    /// since the stop.
+    pub async fn start_after_stop<E>(
+        &self,
+        check: impl FnOnce() -> Result<(), E>,
+    ) -> Result<bool, E> {
+        tokio::time::sleep(self.agent.cfg.stop_settle()).await;
+        check()?;
+        if self.agent.jobs.running() {
+            tracing::info!("Ein Strata-Vorgang hat begonnen, er startet Strata selbst");
+            return Ok(false);
+        }
+        if self.agent.gaming() || !self.agent.cfg.auto_start {
+            return Ok(false);
+        }
+        Ok(self.start_once())
     }
 
     /// Stops Strata and starts it again unless gaming mode is on.

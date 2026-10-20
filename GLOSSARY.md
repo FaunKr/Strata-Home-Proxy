@@ -52,6 +52,10 @@ _Avoid_: standby time, Leerlaufzeit
 The proxy's request to the PC service to trigger standby. The PC service can refuse it with a reason.
 _Avoid_: shutdown, sleep command, Schlafen-Anfrage
 
+**Forced sleep**:
+A sleep request from the web UI's *Force sleep* button that the PC service refuses only during an update. It overrides user activity, a request in Strata and gaming mode (which stays on), and cancels a running Strata job first; downloaded parts are kept. The proxy treats it like an accepted sleep request.
+_Avoid_: hard sleep
+
 **Settling**:
 The short time after an accepted sleep request during which the PC may still answer and yet counts as asleep.
 _Avoid_: Nachlauf
@@ -97,6 +101,10 @@ _Avoid_: entladen, Modell nicht geladen
 **Loading**:
 The PC service reports Strata as running, but it does not answer yet.
 _Avoid_: starting, Lädt
+
+**Forced Strata restart**:
+*Force restart Strata* in the web UI: the PC service cancels a running Strata job, kills Strata hard (a hand-started one too) and starts its own Strata again when it has a start script and auto-start is on. Refused in gaming mode and during a PC service update.
+_Avoid_: Strata kill, hard restart
 
 **Event**:
 An entry in the proxy's history about the PC, waking, sleeping or the web UI.

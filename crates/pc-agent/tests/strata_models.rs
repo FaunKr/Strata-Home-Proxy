@@ -1520,6 +1520,14 @@ async fn the_protocol_samples_show_every_field_the_service_sends() {
         ("status.json", get(&s, "/status").await),
         ("strata.json", view_once_checked(&s).await),
         ("strata-job.json", job),
+        (
+            "strata-kill.json",
+            post(&s, "/strata/kill", json!({})).await.1,
+        ),
+        (
+            "sleep-force.json",
+            post(&s, "/sleep/force", json!({})).await.1,
+        ),
     ];
     let mut missing = Vec::new();
     for (name, answer) in &answers {

@@ -64,7 +64,7 @@ async fn admin_does_not_wake_the_pc() {
 }
 
 /// Server functions meant to wake the PC; their own tests cover them.
-const WAKES: &[&str] = &["wake", "strata-job"];
+const WAKES: &[&str] = &["wake", "strata-job", "strata-update-summary"];
 
 #[tokio::test]
 async fn no_server_function_wakes_the_pc() {

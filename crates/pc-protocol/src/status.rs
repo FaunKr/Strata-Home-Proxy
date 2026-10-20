@@ -1,12 +1,17 @@
-//! `GET /status`, `POST /gaming`, `POST /sleep`, `POST /update` and the
-//! body of every refusal.
+//! `GET /status`, `POST /gaming`, `POST /sleep`, `POST /sleep/force`,
+//! `POST /strata/kill`, `POST /update` and the body of every refusal.
 
 use serde::{Deserialize, Serialize};
+
+use crate::StrataJobKind;
 
 /// `GET /status`, and the answer to `POST /gaming`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PcStatus {
     pub gaming_mode: bool,
+    /// Strata answers `/health`, or the PC-Dienst started it within its
+    /// load time and has not stopped it since: a Strata that loads its
+    /// model counts as running before it answers.
     #[serde(default)]
     pub strata_running: bool,
     /// Seconds since the last keyboard or mouse input.
@@ -85,6 +90,33 @@ impl Answer {
             reason: Some(reason.into()),
         }
     }
+}
+
+/// The answer to `POST /sleep/force`: what the forced sleep overrode.
+/// Standby follows as after an accepted `POST /sleep`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForcedSleep {
+    /// Someone used mouse or keyboard within the PC-Dienst's limit.
+    pub user_active: bool,
+    /// Strata was processing a request.
+    pub strata_busy: bool,
+    /// Gaming mode is on; it stays on after the PC wakes.
+    pub gaming_mode: bool,
+    /// The kind of the Strata job it cancelled first; downloaded parts stay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancelled_job: Option<StrataJobKind>,
+}
+
+/// The answer to `POST /strata/kill`, the forced Strata restart.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForcedRestart {
+    /// The kind of the Strata job it cancelled before the kill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancelled_job: Option<StrataJobKind>,
+    /// Strata was started again since the kill. False without a start
+    /// script, with `auto_start` off, after a failed start, or when a job
+    /// begun meanwhile handles Strata.
+    pub started: bool,
 }
 
 /// The body of a refusal (400, 409, 500); a refused [`Answer`] reads as one

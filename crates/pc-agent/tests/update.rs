@@ -211,3 +211,96 @@ async fn no_job_starts_and_no_sleep_while_an_update_loads() {
     assert_eq!(code, 409, "{body}");
     assert_eq!(update.await.unwrap(), 202);
 }
+
+#[tokio::test]
+async fn neither_forced_sleep_nor_forced_restart_while_an_update_loads() {
+    let addr = slower_nas().await;
+    let s = setup_with("update-force", |c| {
+        c.nas_url = Some(format!("http://{addr}"))
+    })
+    .await;
+    let update = start_update(&s);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    for path in ["/sleep/force", "/strata/kill"] {
+        let (code, body) = post(&s, path, serde_json::json!({})).await;
+        assert_eq!(code, 409, "{path}: {body}");
+        assert_eq!(body["reason"], "The PC service is updating", "{path}");
+    }
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+    assert_eq!(update.await.unwrap(), 202);
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 0);
+}
+
+/// A fake NAS that takes 3 s for the program, well longer than the checks.
+async fn slower_nas() -> SocketAddr {
+    async fn slower() -> impl IntoResponse {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        PROGRAM.to_vec()
+    }
+    serve(Router::new().route("/admin/agent/strata-pc-agent.exe", routing::get(slower))).await
+}
+
+/// Starts an update in the background; its HTTP status.
+fn start_update(s: &Setup) -> tokio::task::JoinHandle<u16> {
+    let url = s.url.clone();
+    tokio::spawn(async move {
+        client()
+            .post(format!("{url}/update"))
+            .bearer_auth("geheim")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    })
+}
+
+#[tokio::test]
+async fn a_forced_restart_starts_no_strata_once_an_update_began_during_its_pause() {
+    let addr = slower_nas().await;
+    let s = setup_with("update-force-restart-pause", |c| {
+        c.nas_url = Some(format!("http://{addr}"));
+        c.stop_settle_ms = 1500;
+    })
+    .await;
+    let url = s.url.clone();
+    let kill = tokio::spawn(async move {
+        let resp = client()
+            .post(format!("{url}/strata/kill"))
+            .bearer_auth("geheim")
+            .send()
+            .await
+            .unwrap();
+        (
+            resp.status().as_u16(),
+            resp.json::<serde_json::Value>().await.unwrap(),
+        )
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let update = start_update(&s);
+    let (code, body) = kill.await.unwrap();
+    assert_eq!(code, 409, "{body}");
+    assert!(
+        body["reason"].as_str().unwrap().contains("update"),
+        "{body}"
+    );
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(update.await.unwrap(), 202);
+}
+
+#[tokio::test]
+async fn no_standby_once_an_update_began_after_the_sleep_was_accepted() {
+    let addr = slower_nas().await;
+    let s = setup_with("update-after-sleep", |c| {
+        c.nas_url = Some(format!("http://{addr}"))
+    })
+    .await;
+    let (code, body) = post(&s, "/sleep", serde_json::json!({})).await;
+    assert_eq!(code, 200, "{body}");
+    let update = start_update(&s);
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 0);
+    assert_eq!(update.await.unwrap(), 202);
+}

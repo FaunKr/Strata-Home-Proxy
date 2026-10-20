@@ -211,6 +211,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             update_available: info.update_available,
             gaming: status.gaming_mode,
             job,
+            code_bench: state.code_bench.busy(),
         },
         incoming,
     );
@@ -279,7 +280,7 @@ pub async fn cancel(state: &AppState) -> Result<(), String> {
 }
 
 /// Wakes the PC until its service answers, like gaming mode does.
-async fn wake(state: &AppState) -> Result<(), String> {
+pub(crate) async fn wake(state: &AppState) -> Result<(), String> {
     let cfg = state.cfg();
     if cfg.strata_url.is_none() {
         return Err(NOT_CONFIGURED.into());

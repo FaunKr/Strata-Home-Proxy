@@ -31,6 +31,11 @@ always requires the token. It accepts requests only from `allowed_clients`
 
 Response: `PcStatus`.
 
+`strata_running` is `true` when Strata answers `/health`, or when the
+service started it less than `load_time_secs` ago and has not stopped it
+since. A Strata still loading its model (e.g. after a forced restart) thus
+already counts as running; the Overview shows it as loading.
+
 `strata_job` is `true` while a Strata job is running (see below).
 
 `version` is the crate version plus the build's commit (`STRATA_BUILD_ID`
@@ -79,6 +84,57 @@ The response (`Answer`) comes first, standby follows 2 s later.
 - `200`, accepted: standby is triggered.
 - `409`, refused with a reason, e.g. "User active". The proxy asks again
   after `SLEEP_RETRY_SECS`.
+
+## `POST /sleep/force` (for the web UI)
+
+The forced sleep behind *Force sleep* on the Overview, with no request body.
+The service skips every check of `/sleep` except the update: user activity, a
+request in Strata and gaming mode don't stop it. It cancels a running Strata
+job first, as gaming mode does; downloaded parts are kept. Standby follows 2 s
+after the answer, once the cancelled job has ended (at most
+`cancel_wait_secs`, then anyway), on the same path as after an accepted
+`/sleep` (`fresh_strata_after_standby` included). Gaming mode stays as it is,
+its saved switch too.
+
+- `200` (`ForcedSleep`): what it overrode (`user_active`, `strata_busy`,
+  `gaming_mode`), and in `cancelled_job` the kind of the cancelled job; the
+  field is missing without one.
+- `409` (`Refused` with reason): only during an update of the service.
+
+For `/sleep` and `/sleep/force`: while a standby is already pending, the
+service accepts another sleep request without starting a second standby, so a
+double click doesn't put the PC back to sleep right after it wakes. If an
+update begins before the standby, the standby is skipped.
+
+The proxy sends it only when it considers the PC neither asleep nor waking,
+and never wakes the PC for it. An accepted one counts like an accepted
+`/sleep` (settling, then asleep). A service without this endpoint answers 404;
+the web UI then asks for a PC service update.
+
+## `POST /strata/kill` (for the web UI)
+
+The forced restart of Strata behind *Force restart Strata* in the Strata area,
+with no request body. The service cancels a running Strata job and waits for it
+to end, at most `cancel_wait_secs` (a cancelled `activate` or `set_context`
+may restart Strata itself while rolling back; the kill comes after that). Then
+it ends Strata as gaming mode does, with `taskkill /F /T` by the configured
+programs and folders; that also hits a Strata started by hand. With a start
+script and `auto_start` it starts Strata again after the usual pause, unless a
+Strata job has begun meanwhile (that job then takes care of Strata); otherwise
+Strata stays stopped. The watchdog counts afresh and leaves the new Strata
+alone while it loads, and `/status` reports it as running meanwhile
+(`strata_running`), so the web UI shows it as loading.
+
+- `200` (`ForcedRestart`): `cancelled_job` as above; `started`, whether Strata
+  was started again since the kill. `false` without a start script, with
+  `auto_start = false`, after a failed start, or when a new job takes over
+  Strata.
+- `409` (`Refused` with reason): gaming mode on, or the service is updating. If
+  the update only begins during the wait or the pause after the kill, the
+  service refuses too and doesn't start Strata; the updated service does.
+
+The proxy sends it only when it considers the PC neither asleep nor waking, and
+never wakes the PC for it. A service without this endpoint answers 404.
 
 ## `POST /update` (for the web UI)
 

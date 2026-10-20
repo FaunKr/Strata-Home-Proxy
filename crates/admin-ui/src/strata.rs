@@ -9,14 +9,15 @@ use strata_pc_protocol::MAX_SWITCHED_CONTEXT;
 use crate::{
     api::{
         CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
-        SamplingField, SamplingSource, SamplingSupport, StartCodeBench, StartStrataJob,
-        StrataBenchmark, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
-        StrataPage, StrataSampling, StrataSize, StrataUpdate, UpdateSummary, error_text,
-        get_code_bench, get_strata,
+        ForceRestartStrata, ForcedRestart, GenerateUpdateSummary, PcView, SamplingField,
+        SamplingSource, SamplingSupport, StartCodeBench, StartStrataJob, StrataBenchmark,
+        StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel, StrataPage,
+        StrataSampling, StrataSize, StrataUpdate, UpdateSummary, error_text, get_code_bench,
+        get_strata,
     },
     confirm::{Confirm, Question},
-    labels::{STRATA_CONNECTION, STRATA_TIMEOUTS, strata_job_label},
-    overview::Live,
+    labels::{STRATA_CONNECTION, STRATA_TIMEOUTS, strata_badge, strata_job_label},
+    overview::{Live, strata_sentence},
     settings::SettingsSections,
 };
 
@@ -27,6 +28,7 @@ const SPEED_PROJECTION_TEXT: &str = "Experimental, and despite the name not fast
 struct Actions {
     start: ServerAction<StartStrataJob>,
     cancel: ServerAction<CancelStrataJob>,
+    summarize: ServerAction<GenerateUpdateSummary>,
 }
 
 impl Actions {
@@ -117,7 +119,10 @@ pub fn StrataArea() -> impl IntoView {
     let actions = Actions {
         start: ServerAction::new(),
         cancel: ServerAction::new(),
+        summarize: ServerAction::new(),
     };
+    // Counts up every few seconds while Strata writes the update summary.
+    let tick = RwSignal::new(0u32);
     // Asked for again when a job ends, so the tabs show the result.
     let job_ended = RwSignal::new(0u32);
     let running = Memo::new(move |_| {
@@ -136,11 +141,36 @@ pub fn StrataArea() -> impl IntoView {
             (
                 actions.start.version().get(),
                 actions.cancel.version().get(),
+                actions.summarize.version().get(),
                 job_ended.get(),
+                tick.get(),
             )
         },
         |_| get_strata(),
     );
+    #[cfg(feature = "hydrate")]
+    {
+        let writing = Memo::new(move |_| {
+            page.get().and_then(|p| p.ok()).is_some_and(|p| {
+                p.update
+                    .is_some_and(|u| matches!(u.summary, UpdateSummary::Writing { .. }))
+            })
+        });
+        let ticker = set_interval_with_handle(
+            move || {
+                if writing.get_untracked() {
+                    tick.update(|n| *n += 1);
+                }
+            },
+            SUMMARY_POLL,
+        )
+        .ok();
+        on_cleanup(move || {
+            if let Some(t) = ticker {
+                t.clear();
+            }
+        });
+    }
     let area = Area {
         page,
         actions,
@@ -186,8 +216,10 @@ pub fn StrataArea() -> impl IntoView {
                 "Connection"
             </A>
         </nav>
+        <StrataState live />
         {action_error(actions.start.value())}
         {action_error(actions.cancel.value())}
+        {action_error(actions.summarize.value())}
         <Transition>
             {move || Suspend::new(async move {
                 page.await
@@ -229,6 +261,98 @@ pub fn StrataArea() -> impl IntoView {
         </Transition>
         <Outlet />
     }
+}
+
+/// Strata's state, live, with Force restart Strata while the PC is awake
+/// and gaming mode is off, whatever state Strata is in.
+#[component]
+fn StrataState(live: Live) -> impl IntoView {
+    let restart = ServerAction::<ForceRestartStrata>::new();
+    let confirm = expect_context::<Confirm>();
+    let ask = move |_| {
+        confirm.ask(
+            Question {
+                title: "Force a Strata restart?".into(),
+                text: "Strata is killed hard and started again: open requests fail, and a running Strata job is cancelled.".into(),
+                confirm: "Restart Strata",
+                danger: true,
+            },
+            move || {
+                restart.dispatch(ForceRestartStrata {});
+            },
+        );
+    };
+    move || {
+        let (badge, class, sentence, awake) = live.overview.with(|o| {
+            o.as_ref().map(|o| {
+                let (badge, class) = strata_badge(o);
+                (
+                    badge,
+                    class,
+                    strata_sentence(&o.strata),
+                    o.pc == PcView::Awake,
+                )
+            })
+        })?;
+        let agent = live
+            .overview
+            .with(|o| o.as_ref().is_some_and(|o| o.setup.agent_configured));
+        Some(view! {
+            <section class="card strata-state" aria-label="Strata's state">
+                <div class="strata-state-row">
+                    <span class=format!("badge {class}")>{badge}</span>
+                    <span class="muted">{sentence}</span>
+                    {awake
+                        .then(|| {
+                            view! {
+                                <button
+                                    type="button"
+                                    class="secondary"
+                                    disabled=move || !agent || restart.pending().get()
+                                    on:click=ask
+                                >
+                                    "Force restart Strata"
+                                </button>
+                            }
+                        })}
+                </div>
+                {move || {
+                    restart
+                        .pending()
+                        .get()
+                        .then(|| view! { <p class="hint" role="status">"Restarting Strata …"</p> })
+                }}
+                {move || {
+                    restart
+                        .value()
+                        .get()
+                        .map(|r| match r {
+                            Ok(forced) => {
+                                view! { <p class="hint" role="status">{restart_text(&forced)}</p> }
+                                    .into_any()
+                            }
+                            Err(e) => {
+                                view! { <p class="error" role="alert">{error_text(&e)}</p> }
+                                    .into_any()
+                            }
+                        })
+                }}
+            </section>
+        })
+    }
+}
+
+/// The result line of a forced Strata restart.
+fn restart_text(forced: &ForcedRestart) -> String {
+    let mut text = if forced.started {
+        "Strata was killed and starts again; it loads the model now.".to_string()
+    } else {
+        "Strata was killed and stays stopped: nothing to start (no start script set up, or auto-start is off), the start failed (see the Strata output), or a Strata job took over.".to_string()
+    };
+    if let Some(kind) = forced.cancelled_job {
+        text.push_str(&format!(" Cancelled job: {}.", strata_job_label(kind)));
+    }
+    text
 }
 
 /// A tab's content once Strata's state has arrived.
@@ -283,7 +407,7 @@ pub fn VersionTab() -> impl IntoView {
                         view! {
                             <section class="card">
                                 <h2>"Update"</h2>
-                                <Changes update />
+                                <Changes update actions blocked />
                             </section>
                         }
                     })
@@ -966,7 +1090,7 @@ fn Version(
             </dl>
             {update
                 .filter(|_| info.update_available == Some(true))
-                .map(|update| view! { <Changes update /> })}
+                .map(|update| view! { <Changes update actions blocked /> })}
             <div class="actions">
                 <button
                     type="button"
@@ -1377,22 +1501,56 @@ fn Benchmarks(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl
     }
 }
 
+/// How often the Strata page asks again while the update summary is written.
+#[cfg(feature = "hydrate")]
+const SUMMARY_POLL: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// What an update brings: the summary, then the commits it is based on.
 #[component]
-fn Changes(update: StrataUpdate) -> impl IntoView {
-    let (lines, note, by_strata) = match update.summary {
+fn Changes(update: StrataUpdate, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+    let (lines, note, by_strata, can_generate) = match update.summary {
         UpdateSummary::Written { lines, model } => {
-            (lines, format!("Summary by Strata ({model})"), true)
+            (lines, format!("Summary by Strata ({model})"), true, false)
         }
-        UpdateSummary::Writing { fallback } => {
-            (fallback, "Strata is writing a summary…".to_string(), false)
-        }
-        UpdateSummary::Unavailable { fallback } => (
+        UpdateSummary::Writing { fallback } => (
             fallback,
-            "Summary not available: Strata isn't ready".to_string(),
+            "Strata is writing a summary…".to_string(),
+            false,
             false,
         ),
+        UpdateSummary::Unavailable { fallback, reason } => (
+            fallback,
+            format!(
+                "Summary not available: {}",
+                reason.as_deref().unwrap_or("Strata isn't ready")
+            ),
+            false,
+            true,
+        ),
     };
+    let generate = can_generate.then(|| {
+        let summarize = actions.summarize;
+        let why_not = update.blocked.clone();
+        let refused = why_not.is_some();
+        let hint = (update.wakes_pc && !refused)
+            .then(|| view! { <span class="muted small">"Wakes the PC"</span> });
+        view! {
+            <div class="actions">
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || refused || blocked.get() || summarize.pending().get()
+                    on:click=move |_| {
+                        summarize.dispatch(GenerateUpdateSummary {});
+                    }
+                >
+                    "Generate summary now"
+                </button>
+                {hint}
+            </div>
+            {why_not.map(|w| view! { <p class="muted small">{w}</p> })}
+        }
+    });
     let count = update.commits.len() as u64 + update.left_out;
     let more = (update.left_out > 0).then(|| format!("and {} more", update.left_out));
     view! {
@@ -1408,6 +1566,7 @@ fn Changes(update: StrataUpdate) -> impl IntoView {
                 lines.into_iter().map(|l| view! { <p>{l}</p> }).collect_view().into_any()
             }}
             <p class="muted small">{note}</p>
+            {generate}
             {(!update.commits.is_empty())
                 .then(|| {
                     view! {

@@ -82,6 +82,14 @@ pub struct FakePc {
     /// Hardwarewerte the PC service reports in `/status`; none, like a service
     /// from before them, if unset.
     pub hardware: Mutex<Option<Hardware>>,
+    /// Calls of `POST /sleep/force`, answered or not.
+    pub force_sleeps: AtomicUsize,
+    /// Calls of `POST /strata/kill`, answered or not.
+    pub strata_kills: AtomicUsize,
+    /// An old PC service without the forced sleep and restart (404).
+    pub no_force: AtomicBool,
+    /// How long `POST /strata/kill` takes before it answers.
+    pub kill_delay: Mutex<Duration>,
     pub update_requests: AtomicUsize,
     /// The PC service refuses updates with this reason (409).
     pub refuse_update: Mutex<Option<String>>,
@@ -388,6 +396,62 @@ pub async fn agent_sleep(State(pc): State<Pc>) -> Response {
     Json(Answer::accepted()).into_response()
 }
 
+/// Cancels the running job, as a forced sleep or restart does; its kind.
+fn cancel_for_force(pc: &FakePc) -> Option<StrataJobKind> {
+    if !pc.job_running() {
+        return None;
+    }
+    pc.update_job(|j| j.state = StrataJobState::Cancelled);
+    pc.strata_job.lock().unwrap().as_ref().map(|j| j.kind)
+}
+
+/// `POST /sleep/force`: sleeps whatever holds it; a refused sleep counts
+/// as user activity.
+pub async fn agent_force_sleep(State(pc): State<Pc>) -> Response {
+    pc.force_sleeps.fetch_add(1, Ordering::SeqCst);
+    if !pc.up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if pc.no_force.load(Ordering::SeqCst) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let forced = ForcedSleep {
+        user_active: pc.refuse_sleep.load(Ordering::SeqCst),
+        strata_busy: false,
+        gaming_mode: pc.gaming.load(Ordering::SeqCst),
+        cancelled_job: cancel_for_force(&pc),
+    };
+    pc.awake.store(false, Ordering::SeqCst);
+    Json(forced).into_response()
+}
+
+/// `POST /strata/kill`: refused while gaming, else Strata starts again and
+/// loads.
+pub async fn agent_strata_kill(State(pc): State<Pc>) -> Response {
+    pc.strata_kills.fetch_add(1, Ordering::SeqCst);
+    let delay = *pc.kill_delay.lock().unwrap();
+    tokio::time::sleep(delay).await;
+    if !pc.up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if pc.no_force.load(Ordering::SeqCst) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if pc.gaming.load(Ordering::SeqCst) {
+        return (
+            StatusCode::CONFLICT,
+            Json(Refused::new("Gaming mode is on")),
+        )
+            .into_response();
+    }
+    let forced = ForcedRestart {
+        cancelled_job: cancel_for_force(&pc),
+        started: true,
+    };
+    pc.starting.store(true, Ordering::SeqCst);
+    Json(forced).into_response()
+}
+
 /// A Strata the PC service reports: installed with one model, or not.
 pub fn strata_info(installed: bool) -> StrataReport {
     let info = StrataInfo {
@@ -649,6 +713,8 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         Router::new()
             .route("/status", get(agent_status))
             .route("/sleep", post(agent_sleep))
+            .route("/sleep/force", post(agent_force_sleep))
+            .route("/strata/kill", post(agent_strata_kill))
             .route("/gaming", post(agent_gaming))
             .route("/strata", get(agent_strata))
             .route("/strata/jobs", post(agent_start_job))
@@ -689,6 +755,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         sleep_retry: Duration::from_millis(300),
         sleep_settle: Duration::from_millis(200),
         probe_timeout: Duration::from_millis(500),
+        force_timeout: Duration::from_secs(10),
         max_body_bytes: 1 << 20,
         power_awake_watts: 75.0,
         power_asleep_watts: 3.0,

@@ -694,6 +694,25 @@ pub async fn serve_strata(pc: Pc) -> SocketAddr {
     .await
 }
 
+/// An empty `DATA_DIR` of its own for one test. A second `setup` over it
+/// fails (its API key exists already); restart with `restarted`.
+pub fn data_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("strata-test-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+/// The proxy of `s` started again with the same config and `DATA_DIR`, in
+/// front of the same simulated PC; `serve_proxy` puts it on the net.
+pub fn restarted(s: &Setup) -> Arc<AppState> {
+    AppState::new((*s.state.cfg()).clone())
+}
+
+/// The base URL of a proxy around `state`.
+pub async fn serve_proxy(state: Arc<AppState>) -> String {
+    format!("http://{}", serve(api_router(state)).await)
+}
+
 #[derive(Clone)]
 pub struct Setup {
     pub pc: Pc,

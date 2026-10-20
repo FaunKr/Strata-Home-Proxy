@@ -565,13 +565,12 @@ async fn shows_a_running_request_as_the_reason_not_to_sleep() {
 
 #[tokio::test]
 async fn lists_events_from_before_a_restart() {
-    let dir = std::env::temp_dir().join(format!("strata-events-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = data_dir("events");
     let data = dir.clone();
     let s = setup(true, move |c| c.data_dir = Some(data)).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("sleep-now", &[]).await.status(), 200);
-    let restarted = AppState::new((*s.state.cfg()).clone());
+    let restarted = restarted(&s);
     let kinds: Vec<_> = restarted
         .events
         .latest_pc(10)

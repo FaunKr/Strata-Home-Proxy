@@ -300,12 +300,6 @@ async fn the_summary_is_housekeeping_not_use() {
 
 // --- #144 kept on the NAS ---
 
-fn data_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("strata-update-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
-}
-
 /// A proxy with a `DATA_DIR` whose summary Strata has written.
 async fn written(dir: &std::path::Path) -> (Setup, Browser) {
     let data = dir.to_path_buf();
@@ -320,10 +314,6 @@ async fn written(dir: &std::path::Path) -> (Setup, Browser) {
         "written"
     );
     (s, b)
-}
-
-fn restarted(s: &Setup) -> std::sync::Arc<strata_nas_proxy::AppState> {
-    strata_nas_proxy::AppState::new((*s.state.cfg()).clone())
 }
 
 #[tokio::test]

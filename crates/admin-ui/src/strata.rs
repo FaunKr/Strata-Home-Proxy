@@ -561,7 +561,13 @@ fn ModelChoice(
         .recommended
         .clone()
         .filter(|r| sizes.iter().any(|s| &s.id == r))
-        .or_else(|| sizes.iter().find(|s| s.fits).map(|s| s.id.clone()))
+        // Never Gyro, as setup never pre-selects it.
+        .or_else(|| {
+            sizes
+                .iter()
+                .find(|s| s.fits && !s.memory_with_vram)
+                .map(|s| s.id.clone())
+        })
         .unwrap_or_else(|| sizes[0].id.clone());
     let choice = RwSignal::new(first);
     let context = RwSignal::new(info.default_context);
@@ -588,8 +594,14 @@ fn ModelChoice(
     let options = sizes
         .iter()
         .map(|s| {
+            // Gyro's memory is RAM and VRAM together.
+            let memory = if s.memory_with_vram {
+                "RAM + VRAM"
+            } else {
+                "RAM"
+            };
             let mut text = format!(
-                "{} {} · {} download · needs {} GB RAM",
+                "{} {} · {} download · needs {} GB {memory}",
                 family_title(&s.family),
                 s.size,
                 gb(s.download_gb),
@@ -599,7 +611,7 @@ fn ModelChoice(
                 text.push_str(" (recommended)");
             }
             if !s.fits {
-                text.push_str(" (not enough RAM)");
+                text.push_str(&format!(" (not enough {memory})"));
             }
             if s.partly_downloaded {
                 text.push_str(" (partly downloaded)");
@@ -628,7 +640,10 @@ fn ModelChoice(
             }
         })
         .collect_view();
-    let room = format!("The PC has {} RAM.", gb(info.ram_gb));
+    let room = match info.vram_gb {
+        Some(vram) => format!("The PC has {} RAM and {} VRAM.", gb(info.ram_gb), gb(vram)),
+        None => format!("The PC has {} RAM.", gb(info.ram_gb)),
+    };
     let disk = info
         .disk_free_gb
         .map(|free| format!(" Free on the drive of {}: {}.", info.data_dir, gb(free)));

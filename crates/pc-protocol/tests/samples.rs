@@ -186,7 +186,8 @@ fn an_older_strata_answer_still_parses() {
         "installed": true,
         "models": [{"id": "IQ3_XXS", "disk_bytes": 1, "active": true}],
         "families": [{"id": "qwen", "title": "Qwen"}],
-        "catalog": [],
+        "catalog": [{"id": "IQ3_XXS", "family": "qwen", "size": "IQ3_XXS", "download_gb": 75.8,
+            "ram_gb": 60, "fits": true, "partly_downloaded": false}],
         "contexts": [65536],
         "default_context": 65536,
         "ram_gb": 64.0,
@@ -204,6 +205,8 @@ fn an_older_strata_answer_still_parses() {
     assert!(!info.families[0].speed_projection);
     assert!(info.benchmarks.is_empty());
     assert_eq!(info.benchmark.unwrap().decode_tps, None);
+    assert!(!info.catalog[0].memory_with_vram);
+    assert_eq!(info.vram_gb, None);
 }
 
 #[test]

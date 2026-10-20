@@ -233,7 +233,8 @@ started download resumes next time.
 ### `GET /strata`
 
 Response: `StrataReport`, that is `StrataInfo` and `update` next to it. What
-is installed, Strata's catalog with a recommendation for the PC's RAM,
+is installed, Strata's catalog with a recommendation for the PC's RAM and
+VRAM (setup's memory tiers, see [strata-api.md](strata-api.md)),
 free space, last benchmark and the running or last job.
 Never contains the Strata key. Along the way it asks Git at most once per
 hour whether there is a newer Strata version (`update_available`).
@@ -245,9 +246,17 @@ missing. `commits` are newest first, at most 200 (`total` counts all).
 lines. The proxy keeps all of this on the NAS; the web UI only gets
 short hash, subject and date.
 
+In the catalog, `memory_with_vram` says that `ram_gb` is RAM and VRAM
+together (Gyro), and `fits` then counts the biggest card's VRAM too, against
+setup's own figure (27.6 GB for Gyro-S). The recommended size always fits,
+because setup's low-RAM mode starts it. `vram_gb` is that card's VRAM, missing
+without a card. An older PC service leaves these fields out.
+
 Each installed model says with `speed_projection` whether its configuration
 loads a control vector (`--control-vector-scaled`, Strata's or a custom one).
-An older PC service leaves the field out.
+An older PC service leaves the field out. This and `context` are read from
+what Strata starts with: `args` with `user_args` over it, as Strata's
+`engine_args` does.
 
 `context` is the value of `--max-context` in its configuration (tokens),
 `null` if the flag is missing or its value is not a number. An older
@@ -323,19 +332,26 @@ there is one. The job's output shows `***` instead of the key.
 other families, `true` is a `400`. The proxy sends the field only when it is
 checked (see "Older PC services").
 
-`set_speed_projection` only changes `args` in `strata-<id>.json`. `on: true`
+`set_speed_projection` only changes `args` in `strata-<id>.json`, and
+`args_written` the same way if the configuration has it, so that Strata does
+not take the change for one set by hand; the four flags and `--control-vector`
+(a vector of the user's own, which Strata keeps with them) leave `user_args`,
+which Strata puts over `args` (an empty `user_args` goes). A configuration
+without these keys gets none. `on: true`
 removes setup's flags and appends them again, with Strata's vector from the
 Strata folder (see [strata-api.md](strata-api.md)); if the vector is missing,
 the job fails and the configuration stays. `on: false` removes the
 four flags with their values, including a custom vector. Families other
-than Qwen and Coder are a `400`, a model from the catalog that is
+than Qwen and Coder (also Gyro) are a `400`, a model from the catalog that is
 not installed is a `409`, as with `activate`. The configuration's modification
 time stays, because without its own start script Strata starts the
 most recently modified one.
 
 `set_context` only sets the value of `--max-context` in `args` (if the flag
 is missing, it appends it) and removes `--rope-scaling` and `--rope-scale` with
-their values. It only takes contexts from the catalog up to 262144, the
+their values; `args_written` and `user_args` as with `set_speed_projection`,
+with `--max-context`, `--rope-scaling` and `--rope-scale`. It only takes
+contexts from the catalog up to 262144, the
 trained length
 (`MAX_SWITCHED_CONTEXT`): above that the model needs rope scaling, which only
 setup sets up (`400`). What setup derived from the old context
@@ -345,7 +361,8 @@ stays. A model from the catalog that is not installed is a
 
 For the active model, the job waits after the restart until Strata answers on
 `/health`. If Strata exits before that or does not answer within
-`context_start_secs` (default 600), it writes the old `args` back,
+`context_start_secs` (default 600), it writes the old `args`,
+`args_written` and `user_args` back,
 restarts Strata with them and fails; the last lines of the
 Strata output are then in the job's `lines`. If the wait is
 cancelled, the old `args` are restored as well. In gaming mode Strata

@@ -125,9 +125,10 @@ impl StrataClient {
         })
     }
 
-    /// Passes a client's request on with Strata's key in place of any other
-    /// authorization; `headers` are already cleared of the client's own
-    /// credentials. The answer comes back untouched, for streaming.
+    /// Passes a client's request on with Strata's key. Clearing the client's
+    /// credentials is the forwarding code's job; an `authorization` left in
+    /// `headers` is dropped all the same, as it would replace the key. The
+    /// answer comes back untouched, for streaming.
     pub async fn forward(
         &self,
         method: Method,
@@ -236,5 +237,25 @@ mod tests {
         assert_eq!(parse_health(br#"{"status": "ok"}"#), unknown);
         assert_eq!(parse_health(b"OK"), unknown);
         assert_eq!(parse_health(b""), unknown);
+    }
+
+    #[test]
+    fn health_with_some_fields_keeps_those() {
+        assert_eq!(
+            parse_health(br#"{"loaded": false}"#),
+            StrataHealth {
+                loaded: false,
+                model: None,
+                max_context: None,
+            }
+        );
+        assert_eq!(
+            parse_health(br#"{"model": "IQ3_XXS"}"#),
+            StrataHealth {
+                loaded: true,
+                model: Some("IQ3_XXS".into()),
+                max_context: None,
+            }
+        );
     }
 }

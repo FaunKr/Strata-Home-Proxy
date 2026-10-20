@@ -98,9 +98,7 @@ fn copy_headers(from: &HeaderMap, drop_length: bool) -> HeaderMap {
 const CLIENT_CREDENTIALS: [&str; 2] = ["authorization", "x-api-key"];
 
 /// The request headers for Strata: the client's, minus hop-by-hop headers and
-/// its credentials, plus the Strata key if one is set.
-/// The client's headers for Strata, without its own credentials; the
-/// Strata client adds the Proxy's key.
+/// its credentials. The Strata client adds the Proxy's key.
 fn upstream_headers(from: &HeaderMap) -> HeaderMap {
     let mut out = copy_headers(from, true);
     for name in CLIENT_CREDENTIALS {

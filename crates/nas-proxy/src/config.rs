@@ -12,10 +12,6 @@ pub struct Config {
     /// Base URL of Strata on the PC, e.g. `http://192.168.1.50:8080` (`STRATA_URL`).
     /// Without it the proxy is not set up yet and answers API requests with 503.
     pub strata_url: Option<String>,
-    /// Strata's API key (`STRATA_API_KEY`). The proxy sends it with every call
-    /// to Strata, forwarded or its own; clients never see it and use their own
-    /// keys instead.
-    pub strata_api_key: Option<String>,
     /// MAC address of the PC's network card (`PC_MAC`). Without it the PC
     /// cannot be woken.
     pub pc_mac: Option<[u8; 6]>,
@@ -118,10 +114,6 @@ const fn optional(key: &'static str) -> Field {
 /// Every setting except `DATA_DIR`, in the order the settings page shows them.
 pub const FIELDS: &[Field] = &[
     optional("STRATA_URL"),
-    Field {
-        secret: true,
-        ..optional("STRATA_API_KEY")
-    },
     optional("PC_MAC"),
     field("WOL_ADDR"),
     optional("PC_AGENT_URL"),
@@ -162,7 +154,6 @@ impl Default for Config {
         Self {
             listen_addr: "0.0.0.0:8080".parse().unwrap(),
             strata_url: None,
-            strata_api_key: None,
             pc_mac: None,
             wol_addr: "255.255.255.255:9".parse().unwrap(),
             pc_agent_url: None,
@@ -203,6 +194,11 @@ impl Config {
         }
         cfg.data_dir = env_value("DATA_DIR").map(PathBuf::from);
         cfg.ui_password = env_value("UI_PASSWORD");
+        if env_value(crate::settings::STRATA_API_KEY).is_some() {
+            tracing::warn!(
+                "STRATA_API_KEY is ignored: the proxy fetches the Strata key from the PC service"
+            );
+        }
         Ok(cfg)
     }
 
@@ -227,7 +223,6 @@ impl Config {
         match key {
             "LISTEN_ADDR" => self.listen_addr = address(raw)?,
             "STRATA_URL" => self.strata_url = text.map(|u| url(&u)).transpose()?,
-            "STRATA_API_KEY" => self.strata_api_key = text.map(|k| header_safe(&k)).transpose()?,
             "PC_MAC" => self.pc_mac = text.map(|m| parse_mac(&m)).transpose()?,
             "WOL_ADDR" => self.wol_addr = address(raw)?,
             "PC_AGENT_URL" => self.pc_agent_url = text.map(|u| url(&u)).transpose()?,
@@ -266,7 +261,6 @@ impl Config {
         match key {
             "LISTEN_ADDR" => Some(self.listen_addr.to_string()),
             "STRATA_URL" => self.strata_url.clone(),
-            "STRATA_API_KEY" => self.strata_api_key.clone(),
             "PC_MAC" => self.pc_mac.map(format_mac),
             "WOL_ADDR" => Some(self.wol_addr.to_string()),
             "PC_AGENT_URL" => self.pc_agent_url.clone(),
@@ -355,14 +349,6 @@ fn decimal(raw: &str, unit: &str) -> Result<f64> {
     Ok(n)
 }
 
-/// A key that can go into an HTTP header as is.
-fn header_safe(raw: &str) -> Result<String> {
-    if reqwest::header::HeaderValue::from_str(&format!("Bearer {raw}")).is_err() {
-        bail!("contains characters no HTTP header allows");
-    }
-    Ok(raw.to_string())
-}
-
 fn url(raw: &str) -> Result<String> {
     if !(raw.starts_with("http://") || raw.starts_with("https://")) {
         bail!("must start with http:// or https://");
@@ -418,7 +404,6 @@ mod tests {
         cfg.apply("PC_MAC", "aa-bb-cc-01-02-03").unwrap();
         cfg.apply("PC_AGENT_URL", "http://pc:8091").unwrap();
         cfg.apply("PC_AGENT_TOKEN", "secret").unwrap();
-        cfg.apply("STRATA_API_KEY", "also-secret").unwrap();
         cfg.apply("SHELLY_URL", "192.168.1.228").unwrap();
         cfg.apply("CODE_BENCH_URL", "http://127.0.0.1:8096")
             .unwrap();
@@ -446,7 +431,6 @@ mod tests {
         assert!(cfg.apply("STRATA_URL", "pc:8080").is_err());
         assert!(cfg.apply("WOL_ADDR", "255.255.255.255").is_err());
         assert!(cfg.apply("DATA_DIR", "/data").is_err());
-        assert!(cfg.apply("STRATA_API_KEY", "a\u{7f}b").is_err());
         assert!(cfg.apply("UPDATE_SUMMARY_TIMEOUT_SECS", "9").is_err());
         assert!(cfg.apply("CODE_BENCH_TASK_TIMEOUT_SECS", "1.5").is_err());
         cfg.apply("CODE_BENCH_TASK_TIMEOUT_SECS", "").unwrap();

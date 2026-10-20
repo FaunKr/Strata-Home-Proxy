@@ -18,6 +18,9 @@ use crate::{
 };
 
 const SETTINGS_FILE: &str = "settings.json";
+/// A setting of older proxies: the Strata key now comes from the PC service.
+/// A saved one is deleted at start, so no stale secret stays on the NAS.
+pub(crate) const STRATA_API_KEY: &str = "STRATA_API_KEY";
 const REPORTED_MAC_FILE: &str = "pc-mac";
 
 /// Where a value comes from.
@@ -69,6 +72,7 @@ impl Settings {
         let dir = base.data_dir.clone();
         let mut saved = BTreeMap::new();
         let mut reported_mac = None;
+        let mut dropped = false;
         if let Some(dir) = &dir {
             let stored: Stored = read_file(&dir.join(SETTINGS_FILE))
                 .and_then(|text| match serde_json::from_str(&text) {
@@ -80,6 +84,10 @@ impl Settings {
                 })
                 .unwrap_or_default();
             for (key, raw) in stored.values {
+                if key == STRATA_API_KEY {
+                    dropped = true;
+                    continue;
+                }
                 if let Err(e) = Config::default().apply(&key, &raw) {
                     tracing::warn!("Saved setting {key} ignored: {e}");
                     continue;
@@ -90,15 +98,25 @@ impl Settings {
                 read_file(&dir.join(REPORTED_MAC_FILE)).and_then(|text| parse_mac(&text).ok());
         }
         let current = Arc::new(resolve(&base, &saved, reported_mac));
-        Self {
+        let settings = Self {
             base,
             env_keys: env_keys.iter().copied().collect(),
             inner: RwLock::new(Inner {
-                saved,
+                saved: saved.clone(),
                 reported_mac,
                 current,
             }),
+        };
+        if dropped {
+            let mut inner = settings.inner.write().unwrap();
+            match settings.commit(&mut inner, saved) {
+                Ok(()) => tracing::info!(
+                    "Saved {STRATA_API_KEY} deleted: the PC service makes the Strata key"
+                ),
+                Err(e) => tracing::warn!("Saved {STRATA_API_KEY} not deleted: {e}"),
+            }
         }
+        settings
     }
 
     /// The configuration in effect right now.

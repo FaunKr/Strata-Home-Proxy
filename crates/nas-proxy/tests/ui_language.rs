@@ -1,7 +1,6 @@
 //! The web UI is English. Its texts come from the admin-ui crate and from the
-//! proxy's `admin.rs`, which answers the UI's server functions. The whole
-//! repo is English; this test guards the UI texts, so only those files are
-//! checked.
+//! proxy's `admin.rs`, which answers the UI's server functions. This test
+//! guards only those UI texts, so only those files are checked.
 
 use std::path::{Path, PathBuf};
 

@@ -18,7 +18,7 @@ fn entry<'a>(view: &'a Value, key: &str) -> &'a Value {
         .unwrap()
         .iter()
         .find(|e| e["key"] == key)
-        .unwrap_or_else(|| panic!("{key} fehlt"))
+        .unwrap_or_else(|| panic!("{key} is missing"))
 }
 
 #[tokio::test]

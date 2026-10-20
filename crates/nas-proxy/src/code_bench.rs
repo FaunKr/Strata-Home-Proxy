@@ -394,7 +394,7 @@ fn revoke_key(state: &AppState) {
     if let Some(key) = ours
         && let Err(e) = state.api_keys.revoke(&key.name, &key.prefix)
     {
-        tracing::error!("Key of the code benchmark not revoked: {e}");
+        tracing::error!("Code benchmark key not revoked: {e}");
         return;
     }
     state.code_bench.set_key(None);

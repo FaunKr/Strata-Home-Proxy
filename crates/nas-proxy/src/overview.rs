@@ -296,7 +296,7 @@ pub fn setup(state: &AppState) -> Setup {
     }
 }
 
-/// Values only while the PC counts as awake: none from before the sleep request,
+/// Values only while the PC counts as awake: none from before it went to sleep,
 /// also not during settling, when the PC may still answer.
 fn hardware_view(pc: PcView, status: Option<&PcStatus>) -> HardwareView {
     match (pc, status) {

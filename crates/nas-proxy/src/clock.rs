@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn follows_the_clock_change() {
-        // Summer time ends in the night to 25 October 2026: 11 hours, not 10.
+        // Summer time ends in the night before 25 October 2026: 11 hours, not 10.
         let now = at("2026-10-24T22:00:00+02:00[Europe/Berlin]");
         let target = next_morning(&now);
         assert_eq!(

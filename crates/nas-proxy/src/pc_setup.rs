@@ -437,7 +437,7 @@ async fn register(
         .set("PC_AGENT_TOKEN", &token)
         .and_then(|()| state.settings.set("PC_AGENT_URL", &url));
     if let Err(e) = entered {
-        tracing::error!("PC service not entered: {e}");
+        tracing::error!("PC service not saved in the settings: {e}");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": format!("Not saved: {e}")})),

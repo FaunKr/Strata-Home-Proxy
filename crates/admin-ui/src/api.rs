@@ -365,7 +365,7 @@ pub enum OutputMessage {
     },
 }
 
-/// Why the Strata output stands still, or `Running` when it does not.
+/// Why the Strata output has stopped, or `Running` when it does not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputNotice {
@@ -449,7 +449,7 @@ impl EventKind {
     }
 
     /// Marks the proxy sets for the history on its own; left out of the
-    /// overview, where the Ereignisse that caused them already stand.
+    /// overview, where the events that caused them already show.
     pub fn is_history_mark(self) -> bool {
         matches!(
             self,

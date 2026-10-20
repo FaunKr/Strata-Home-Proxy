@@ -118,7 +118,7 @@ impl History {
             [to_sql(clock::unix_now())],
         );
         if let Err(e) = written {
-            tracing::warn!("beat not written: {e}");
+            tracing::warn!("alive mark not written: {e}");
         }
     }
 

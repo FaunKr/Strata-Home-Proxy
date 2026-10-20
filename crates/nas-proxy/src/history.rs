@@ -30,7 +30,7 @@ const WEEK_BARS_UP_TO: usize = 366;
 /// The earliest day a picked range shows.
 const EARLIEST: Date = jiff::civil::date(2000, 1, 1);
 
-/// The events that say something about how the PC stood.
+/// The events that say something about the PC's state.
 const STATE_KINDS: &[EventKind] = &[
     EventKind::Awake,
     EventKind::PcSeenAwake,
@@ -109,7 +109,7 @@ fn days(from: i64, to: i64, tz: &TimeZone) -> Vec<Date> {
 }
 
 /// The spans of each state between `from` and `to`. The events before the
-/// range count too: how the PC stood when it begins is in the last event
+/// range count too: the PC's state when it begins is in the last event
 /// before it.
 fn periods(events: &[Event], from: i64, to: i64) -> Vec<Period> {
     let mut order: Vec<&Event> = events.iter().collect();
@@ -364,7 +364,7 @@ pub fn bucket_hours(
 /// A range, as the page asks for it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Range {
-    /// The last this many days, today included.
+    /// The last N days, today included.
     Days(u32),
     /// The last twelve months, today included.
     Year,
@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn a_state_over_a_clock_change_is_counted_once() {
-        // In the night to 25 October 2026 the clocks go back; awake time
+        // In the night before 25 October 2026 the clocks go back; awake time
         // from noon Saturday to noon Monday is 12 + 25 + 12 hours.
         let awake = ev(
             EventKind::PcSeenAwake,

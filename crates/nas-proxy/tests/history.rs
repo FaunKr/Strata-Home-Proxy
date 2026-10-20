@@ -125,7 +125,7 @@ async fn a_restart_leaves_unknown_time_until_the_next_known_state() {
         unknown > 0.0,
         "the gap across the restart is missing: {view}"
     );
-    // The sleep before the restart does not count on: the proxy cannot know
+    // The sleep before the restart no longer counts: the proxy cannot know
     // when it ended.
     assert_eq!(asleep, 0.0, "asleep across the restart: {view}");
     assert!(awake > 0.0, "the awake time after the restart is missing");

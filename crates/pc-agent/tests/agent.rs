@@ -415,3 +415,36 @@ async fn the_watchdog_leaves_a_forced_restart_alone_while_it_loads() {
     assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn a_second_sleep_while_standby_is_pending_brings_no_second_standby() {
+    let s = setup("force-sleep-twice").await;
+    // A double click, a second tab, and the idle check, all within the delay.
+    for path in ["/sleep/force", "/sleep/force", "/sleep"] {
+        let (code, body) = post(&s, path, json!({})).await;
+        assert_eq!(code, 200, "{path}: {body}");
+    }
+    tokio::time::sleep(Duration::from_millis(3000)).await;
+    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_stopped_strata_does_not_count_as_running_within_its_load_time() {
+    let s = setup_with("force-restart-stopped", |c| c.load_time_secs = 30).await;
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    let (code, _) = post(&s, "/strata/kill", json!({})).await;
+    assert_eq!(code, 200);
+    assert_eq!(status_json(&s).await["strata_running"], true);
+    s.agent.strata().stop();
+    assert_eq!(status_json(&s).await["strata_running"], false);
+}
+
+#[tokio::test]
+async fn forced_restart_reports_a_failed_start_as_not_started() {
+    let s = setup("force-restart-start-fails").await;
+    s.fake.start_fails.store(true, Ordering::SeqCst);
+    let (code, body) = post(&s, "/strata/kill", json!({})).await;
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(body, json!({"started": false}));
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+}

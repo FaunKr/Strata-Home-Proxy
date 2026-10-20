@@ -507,3 +507,71 @@ async fn forced_restart_kills_strata_once_the_cancelled_job_has_ended() {
     assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
 }
+
+/// An install whose setup runs on even when cancelled, like a stuck process.
+async fn stuck_install(s: &Setup) {
+    installable(s);
+    s.fake.command(
+        "START-HERE.bat",
+        FakeCommand {
+            hang: true,
+            ignores_cancel: true,
+            ..FakeCommand::default()
+        },
+    );
+    post(s, "/strata/jobs", install()).await;
+    job_until(s, "Setup läuft", |_| {
+        !s.fake.runs_of("START-HERE.bat").is_empty()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn forced_restart_kills_strata_after_the_wait_limit_when_a_job_does_not_end() {
+    let s = setup_with("strata-force-restart-stuck", |c| c.cancel_wait_secs = 1).await;
+    stuck_install(&s).await;
+    let (code, body) = post(&s, "/strata/kill", json!({})).await;
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    // The job still runs; it handles Strata, so no start against it.
+    assert_eq!(body, json!({"cancelled_job": "install", "started": false}));
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn forced_sleep_sleeps_after_the_wait_limit_when_a_job_does_not_end() {
+    let s = setup_with("strata-force-sleep-stuck", |c| c.cancel_wait_secs = 1).await;
+    stuck_install(&s).await;
+    let (code, body) = post(&s, "/sleep/force", json!({})).await;
+    assert_eq!(code, 200, "{body}");
+    tokio::time::sleep(std::time::Duration::from_millis(4500)).await;
+    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn forced_restart_starts_no_strata_against_a_job_begun_during_its_pause() {
+    let s = setup_with("strata-force-restart-job", |c| c.stop_settle_ms = 2000).await;
+    installable(&s);
+    s.fake.command(
+        "START-HERE.bat",
+        FakeCommand {
+            hang: true,
+            ..FakeCommand::default()
+        },
+    );
+    let url = s.url.clone();
+    let kill = tokio::spawn(async move {
+        let resp = client()
+            .post(format!("{url}/strata/kill"))
+            .bearer_auth("geheim")
+            .send()
+            .await
+            .unwrap();
+        resp.json::<Value>().await.unwrap()
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let (code, _) = post(&s, "/strata/jobs", install()).await;
+    assert_eq!(code, 202);
+    assert_eq!(kill.await.unwrap(), json!({"started": false}));
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+}

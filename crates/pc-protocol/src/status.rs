@@ -9,6 +9,9 @@ use crate::StrataJobKind;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PcStatus {
     pub gaming_mode: bool,
+    /// Strata answers `/health`, or the PC-Dienst started it within its
+    /// load time and has not stopped it since: a Strata that loads its
+    /// model counts as running before it answers.
     #[serde(default)]
     pub strata_running: bool,
     /// Seconds since the last keyboard or mouse input.
@@ -110,8 +113,9 @@ pub struct ForcedRestart {
     /// The kind of the Strata job it cancelled before the kill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancelled_job: Option<StrataJobKind>,
-    /// The PC-Dienst started Strata again; false without a start script or
-    /// with `auto_start` off, so Strata stays stopped.
+    /// Strata was started again since the kill. False without a start
+    /// script, with `auto_start` off, after a failed start, or when a job
+    /// begun meanwhile handles Strata.
     pub started: bool,
 }
 

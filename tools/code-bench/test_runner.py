@@ -287,6 +287,9 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(provider["baseURL"], f"http://{runner.RELAY_ADDR}/v1")
         self.assertEqual(provider["apiKey"], "shp_k")
         self.assertEqual(seen["config"]["permission"]["webfetch"], "deny")
+        # No temperature: Strata's model-card sampling applies, not greedy.
+        self.assertIs(seen["config"]["provider"]["strata"]["models"]["IQ3_XXS"]["temperature"], False)
+        self.assertNotIn("agent", seen["config"])
 
     def test_code_that_does_not_import_scores_nothing(self):
         run = self.run_tasks([TASK])

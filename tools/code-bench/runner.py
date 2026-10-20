@@ -154,12 +154,12 @@ def config(model, api_key):
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Strata",
                 "options": {"baseURL": f"http://{RELAY_ADDR}/v1", "apiKey": api_key},
-                "models": {
-                    model: {"name": model, "temperature": True, "options": {"temperature": 0}}
-                },
+                # No sampling of opencode's own: Strata then takes the model
+                # card's set. A request's temperature 0 wins over it and is
+                # greedy, which sends Qwen models into loops.
+                "models": {model: {"name": model, "temperature": False}},
             }
         },
-        "agent": {"build": {"temperature": 0}},
         "permission": {"edit": "allow", "bash": "allow", "webfetch": "deny"},
         "share": "disabled",
         "autoupdate": False,

@@ -11,6 +11,9 @@ neben dem Proxy ein zweiter Container, `code-bench`:
 - opencode spricht über das Relay mit dem OpenAI-Endpunkt des Proxys (`PROXY_URL`), mit einem
   Key, den der Proxy für den Lauf anlegt und danach widerruft. So weckt der
   Lauf den PC wie jeder Client.
+- opencode schickt kein Sampling mit; Strata nimmt den Satz der Modellkarte.
+  Mit `temperature: 0` wäre jede Antwort greedy, und Qwen-Modelle geraten
+  damit in Schleifen.
 - Die Aufgaben in `tasks/` baut der Proxy ein und schickt sie mit dem Lauf;
   die versteckten Tests liegen erst nach opencode im Ordner.
 - Der Agent darf lesen, schreiben und `bash` ausführen, `webfetch` nicht.

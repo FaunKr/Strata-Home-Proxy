@@ -9,14 +9,14 @@ use strata_pc_protocol::MAX_SWITCHED_CONTEXT;
 use crate::{
     api::{
         CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
-        SamplingField, SamplingSource, SamplingSupport, StartCodeBench, StartStrataJob,
-        StrataBenchmark, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
-        StrataPage, StrataSampling, StrataSize, StrataUpdate, UpdateSummary, error_text,
-        get_code_bench, get_strata,
+        ForceRestartStrata, ForcedRestart, PcView, SamplingField, SamplingSource, SamplingSupport,
+        StartCodeBench, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob, StrataJobKind,
+        StrataJobState, StrataModel, StrataPage, StrataSampling, StrataSize, StrataUpdate,
+        UpdateSummary, error_text, get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
-    labels::{STRATA_CONNECTION, strata_job_label},
-    overview::Live,
+    labels::{STRATA_CONNECTION, strata_badge, strata_job_label},
+    overview::{Live, strata_sentence},
     settings::SettingsSections,
 };
 
@@ -186,6 +186,7 @@ pub fn StrataArea() -> impl IntoView {
                 "Connection"
             </A>
         </nav>
+        <StrataState live />
         {action_error(actions.start.value())}
         {action_error(actions.cancel.value())}
         <Transition>
@@ -229,6 +230,98 @@ pub fn StrataArea() -> impl IntoView {
         </Transition>
         <Outlet />
     }
+}
+
+/// Strata's state, live, with Force restart Strata while the PC is awake
+/// and gaming mode is off, whatever state Strata is in.
+#[component]
+fn StrataState(live: Live) -> impl IntoView {
+    let restart = ServerAction::<ForceRestartStrata>::new();
+    let confirm = expect_context::<Confirm>();
+    let ask = move |_| {
+        confirm.ask(
+            Question {
+                title: "Force a Strata restart?".into(),
+                text: "Strata is killed hard and started again: open requests fail, and a running Strata job is cancelled.".into(),
+                confirm: "Restart Strata",
+                danger: true,
+            },
+            move || {
+                restart.dispatch(ForceRestartStrata {});
+            },
+        );
+    };
+    move || {
+        let (badge, class, sentence, awake) = live.overview.with(|o| {
+            o.as_ref().map(|o| {
+                let (badge, class) = strata_badge(o);
+                (
+                    badge,
+                    class,
+                    strata_sentence(&o.strata),
+                    o.pc == PcView::Awake,
+                )
+            })
+        })?;
+        let agent = live
+            .overview
+            .with(|o| o.as_ref().is_some_and(|o| o.setup.agent_configured));
+        Some(view! {
+            <section class="card strata-state" aria-label="Strata's state">
+                <div class="strata-state-row">
+                    <span class=format!("badge {class}")>{badge}</span>
+                    <span class="muted">{sentence}</span>
+                    {awake
+                        .then(|| {
+                            view! {
+                                <button
+                                    type="button"
+                                    class="secondary"
+                                    disabled=move || !agent || restart.pending().get()
+                                    on:click=ask
+                                >
+                                    "Force restart Strata"
+                                </button>
+                            }
+                        })}
+                </div>
+                {move || {
+                    restart
+                        .pending()
+                        .get()
+                        .then(|| view! { <p class="hint" role="status">"Restarting Strata …"</p> })
+                }}
+                {move || {
+                    restart
+                        .value()
+                        .get()
+                        .map(|r| match r {
+                            Ok(forced) => {
+                                view! { <p class="hint" role="status">{restart_text(&forced)}</p> }
+                                    .into_any()
+                            }
+                            Err(e) => {
+                                view! { <p class="error" role="alert">{error_text(&e)}</p> }
+                                    .into_any()
+                            }
+                        })
+                }}
+            </section>
+        })
+    }
+}
+
+/// The result line of a forced Strata restart.
+fn restart_text(forced: &ForcedRestart) -> String {
+    let mut text = if forced.started {
+        "Strata was killed and starts again; it loads the model now.".to_string()
+    } else {
+        "Strata was killed. Strata stays stopped: nothing to start (no start script set up, or auto-start is off).".to_string()
+    };
+    if let Some(kind) = forced.cancelled_job {
+        text.push_str(&format!(" Cancelled job: {}.", strata_job_label(kind)));
+    }
+    text
 }
 
 /// A tab's content once Strata's state has arrived.

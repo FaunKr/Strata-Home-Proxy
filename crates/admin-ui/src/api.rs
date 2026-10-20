@@ -5,9 +5,9 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 // What the PC-Dienst reports, shown as it comes (docs/adr/0002).
 pub use strata_pc_protocol::{
-    Cpu, Gpu, Hardware, SamplingField, SamplingSource, SamplingSupport, StrataBenchmark,
-    StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
-    StrataSampling, StrataSize,
+    Cpu, ForcedRestart, Gpu, Hardware, SamplingField, SamplingSource, SamplingSupport,
+    StrataBenchmark, StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
+    StrataModel, StrataSampling, StrataSize,
 };
 
 #[cfg(feature = "ssr")]
@@ -423,6 +423,12 @@ pub enum EventKind {
     PcServiceUpdateRequested,
     PcServiceUpdated,
     PcServiceUpdateFailed,
+    /// A forced sleep the PC service took; detail: who, what it overrode
+    /// and the job it cancelled. `SleepAccepted` follows.
+    ForcedSleep,
+    /// A forced Strata restart; detail: who, the job it cancelled and
+    /// whether Strata started again.
+    ForcedStrataRestart,
 }
 
 impl EventKind {
@@ -537,6 +543,14 @@ pub async fn sleep_now() -> Result<(), ServerFnError> {
     backend()?.sleep_now().await.map_err(bad_request)
 }
 
+/// A forced sleep, after a refused one or in gaming mode: only an update
+/// of the PC service refuses it. Never wakes the PC.
+#[server(prefix = "/admin/api", endpoint = "force-sleep")]
+pub async fn force_sleep() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?.force_sleep().await.map_err(bad_request)
+}
+
 #[server(prefix = "/admin/api", endpoint = "gaming")]
 pub async fn set_gaming(enabled: bool) -> Result<(), ServerFnError> {
     require_login(false).await?;
@@ -640,6 +654,14 @@ pub async fn start_strata_job(
         speed_projection: speed_projection.unwrap_or(false),
     };
     backend()?.start_strata_job(form).await.map_err(bad_request)
+}
+
+/// A forced Strata restart: the PC service cancels a running job, kills
+/// Strata and starts it again where it can. Never wakes the PC.
+#[server(prefix = "/admin/api", endpoint = "strata-force-restart")]
+pub async fn force_restart_strata() -> Result<ForcedRestart, ServerFnError> {
+    require_login(false).await?;
+    backend()?.force_restart_strata().await.map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "strata-cancel")]

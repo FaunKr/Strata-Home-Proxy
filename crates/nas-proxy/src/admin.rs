@@ -8,12 +8,13 @@ use std::{
 
 use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
+    api::ForcedRestart,
     api::{
         ApiKeyInfo, ApiKeysView, CodeBenchPage, CreatedKey, HistoryView, KeepAwakeChoice,
         OutputMessage, Overview, PcSetupCommand, Session, SettingEntry, SettingValue, SettingsView,
         Setup, Source, StrataJobForm, StrataPage,
     },
-    labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED},
+    labels::{NO_AGENT, NO_ANSWER, NO_MAC, NOT_CONFIGURED, SLEEP_REFUSED},
     server::{Backend, SharedBackend},
 };
 
@@ -181,11 +182,21 @@ impl Backend for UiBackend {
             state.overview.refresh_now();
             match answer {
                 Ok(SleepAnswer::Accepted) => Ok(()),
-                Ok(SleepAnswer::Refused(reason)) => Err(format!("Refused: {reason}")),
-                Err(_) => Err("The PC service does not answer.".to_string()),
+                Ok(SleepAnswer::Refused(reason)) => Err(format!("{SLEEP_REFUSED}{reason}")),
+                Err(_) => Err(NO_ANSWER.to_string()),
             }
         }
         .boxed()
+    }
+
+    fn force_sleep(&self) -> BoxFuture<'static, Result<(), String>> {
+        let state = Arc::clone(&self.0);
+        async move { crate::forced::sleep(&state, BY_UI).await }.boxed()
+    }
+
+    fn force_restart_strata(&self) -> BoxFuture<'static, Result<ForcedRestart, String>> {
+        let state = Arc::clone(&self.0);
+        async move { crate::forced::restart_strata(&state, BY_UI).await }.boxed()
     }
 
     fn set_gaming(&self, enabled: bool) -> BoxFuture<'static, Result<(), String>> {

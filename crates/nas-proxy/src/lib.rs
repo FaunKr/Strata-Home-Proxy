@@ -9,6 +9,7 @@ pub mod code_bench;
 pub mod config;
 pub mod events;
 pub mod files;
+pub mod forced;
 pub mod history;
 pub mod lifecycle;
 pub mod overview;

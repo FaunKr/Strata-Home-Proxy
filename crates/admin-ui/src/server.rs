@@ -26,9 +26,9 @@ use leptos_axum::{
 
 use crate::{
     api::{
-        ApiKeysView, CodeBenchPage, CreatedKey, HistoryView, KeepAwakeChoice, OutputMessage,
-        Overview, PcSetupCommand, Session, SettingValue, SettingsView, Setup, StrataJobForm,
-        StrataPage,
+        ApiKeysView, CodeBenchPage, CreatedKey, ForcedRestart, HistoryView, KeepAwakeChoice,
+        OutputMessage, Overview, PcSetupCommand, Session, SettingValue, SettingsView, Setup,
+        StrataJobForm, StrataPage,
     },
     app::{App, shell},
 };
@@ -69,6 +69,11 @@ pub trait Backend: Send + Sync + 'static {
     fn wake(&self) -> Result<(), String>;
     /// Asks the PC service to sleep; its reason if it refuses.
     fn sleep_now(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// Asks the awake PC's service for a forced sleep; never wakes the PC.
+    fn force_sleep(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// Asks the awake PC's service for a forced Strata restart; never wakes
+    /// the PC.
+    fn force_restart_strata(&self) -> BoxFuture<'static, Result<ForcedRestart, String>>;
     /// Switches gaming mode, waking the PC first if needed.
     fn set_gaming(&self, enabled: bool) -> BoxFuture<'static, Result<(), String>>;
     fn keep_awake(&self, choice: KeepAwakeChoice) -> Result<(), String>;

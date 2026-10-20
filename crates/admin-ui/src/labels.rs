@@ -6,6 +6,12 @@ use crate::api::{EventKind, Overview, PcView, StrataJobKind, StrataView};
 pub const NOT_CONFIGURED: &str = "The Strata address is missing, the proxy is not set up.";
 pub const NO_MAC: &str = "No MAC address is known, so the PC cannot be woken.";
 pub const NO_AGENT: &str = "No PC service is set up (PC_AGENT_URL).";
+/// What a refused Sleep now says before the PC service's reason; the
+/// overview offers Force sleep under it.
+pub const SLEEP_REFUSED: &str = "Refused: ";
+pub const NO_ANSWER: &str = "The PC service does not answer.";
+pub const TOO_OLD_TO_FORCE: &str =
+    "The PC service is too old for this, update it in the PC section.";
 
 pub struct Label {
     pub title: &'static str,
@@ -232,6 +238,8 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::PcServiceUpdateRequested => "PC service update requested",
         EventKind::PcServiceUpdated => "PC service updated",
         EventKind::PcServiceUpdateFailed => "PC service update failed",
+        EventKind::ForcedSleep => "Forced sleep",
+        EventKind::ForcedStrataRestart => "Forced Strata restart",
     }
 }
 
@@ -248,7 +256,9 @@ pub fn event_class(kind: EventKind) -> &'static str {
         | EventKind::WakeSent
         | EventKind::WakeRequested
         | EventKind::KeepAwakeSet
-        | EventKind::StrataJobCancelled => "is-warn",
+        | EventKind::StrataJobCancelled
+        | EventKind::ForcedSleep
+        | EventKind::ForcedStrataRestart => "is-warn",
         EventKind::SleepAccepted
         | EventKind::SleepRequested
         | EventKind::PcSeenAsleep

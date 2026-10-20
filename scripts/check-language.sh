@@ -19,11 +19,12 @@ if [[ -f scripts/language-allowlist ]]; then
   done <scripts/language-allowlist
 fi
 
-# -I skips binary files, -F matches the characters as plain text. git grep
-# exits 1 without a match; anything above is an error, not a clean repo.
 # German log lines like "Update fehlgeschlagen" carry no umlaut; these words
 # are common in German messages and do not occur in English ones.
 words='nicht|wird|kein|keine|schon|startet|gestartet|beendet|gespeichert|lesbar|fehlgeschlagen|eingesetzt|aktualisiert'
+# -I skips binary files, -F matches the characters as plain text, -w -i the
+# words whole and in any case. git grep exits 1 without a match; anything
+# above is an error, not a clean repo.
 found=""
 for pattern in "-F -e ä -e ö -e ü -e ß -e Ä -e Ö -e Ü" "-w -i -E -e ($words)"; do
   status=0

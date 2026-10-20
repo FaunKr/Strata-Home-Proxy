@@ -33,29 +33,40 @@ pub struct Suggestion {
 
 /// The suggestion for a setting of this module, `None` for every other key.
 pub fn suggestion(state: &AppState, key: &str) -> Option<Suggestion> {
-    let info = state.strata.last_info();
-    let speeds = Speeds::slowest(info.as_ref());
-    match key {
-        "UPDATE_SUMMARY_TIMEOUT_SECS" => Some(speeds.update_summary()),
-        "CODE_BENCH_TASK_TIMEOUT_SECS" => Some(speeds.code_bench_task()),
-        _ => None,
-    }
+    let estimate = match key {
+        "UPDATE_SUMMARY_TIMEOUT_SECS" => Speeds::update_summary,
+        "CODE_BENCH_TASK_TIMEOUT_SECS" => Speeds::code_bench_task,
+        _ => return None,
+    };
+    Some(suggested(state, estimate))
 }
 
 /// The limit for the update summary's Strata request.
 pub fn update_summary(state: &AppState) -> Duration {
-    state.cfg().update_summary_timeout.unwrap_or_else(|| {
-        let info = state.strata.last_info();
-        Duration::from_secs(Speeds::slowest(info.as_ref()).update_summary().secs)
-    })
+    limit(
+        state,
+        state.cfg().update_summary_timeout,
+        Speeds::update_summary,
+    )
 }
 
 /// The limit for each task of a code benchmark run.
 pub fn code_bench_task(state: &AppState) -> Duration {
-    state.cfg().code_bench_task_timeout.unwrap_or_else(|| {
-        let info = state.strata.last_info();
-        Duration::from_secs(Speeds::slowest(info.as_ref()).code_bench_task().secs)
-    })
+    limit(
+        state,
+        state.cfg().code_bench_task_timeout,
+        Speeds::code_bench_task,
+    )
+}
+
+/// The saved or environment value, else the suggestion.
+fn limit(state: &AppState, set: Option<Duration>, estimate: fn(&Speeds) -> Suggestion) -> Duration {
+    set.unwrap_or_else(|| Duration::from_secs(suggested(state, estimate).secs))
+}
+
+fn suggested(state: &AppState, estimate: fn(&Speeds) -> Suggestion) -> Suggestion {
+    let info = state.strata.last_info();
+    estimate(&Speeds::slowest(info.as_ref()))
 }
 
 /// The speeds a suggestion is worked out from.
@@ -100,7 +111,8 @@ impl Speeds {
     }
 
     /// Reading half the context, as the summary's prompt is trimmed to,
-    /// and writing the answer.
+    /// and writing the answer. Deliberately on the slowest model, not the
+    /// active one, so the limit fits whichever model is made active.
     fn update_summary(&self) -> Suggestion {
         let read = f64::from(self.context) / 2.0 / self.prompt_tps;
         let write = SUMMARY_ANSWER_TOKENS / self.decode_tps;

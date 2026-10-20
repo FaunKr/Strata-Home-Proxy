@@ -511,6 +511,7 @@ pub fn strata_info(installed: bool) -> StrataReport {
         contexts: vec![32768, 65536],
         default_context: 65536,
         ram_gb: 64.0,
+        vram_gb: None,
         disk_free_gb: Some(500.0),
         data_dir: "C:\\Strata-data".into(),
         benchmark: None,

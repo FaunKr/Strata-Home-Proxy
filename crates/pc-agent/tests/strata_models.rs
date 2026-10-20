@@ -1627,12 +1627,14 @@ async fn switching_off_takes_the_projection_out_of_what_strata_keeps_as_set_by_h
     let s = setup("models-esp-user-off").await;
     installed(&s);
     // A setup run after the service switched it on: setup wrote it into
-    // args and moved it into user_args, next to an option of Faun's own.
+    // args and moved it into user_args, next to an option of the user's own.
     let mut args = vec![json!("--native"), json!("b.gguf")];
     args.extend(projection(&s));
     args.extend([json!("--threads"), json!("8")]);
     let mut user = projection(&s);
     user.extend([json!("--threads"), json!("8")]);
+    // A vector of the user's own, which Strata keeps there too.
+    user.extend([json!("--control-vector"), json!("D:/own/vector.gguf")]);
     config_with_user_args(&s, "coder-iq1_m", json!(args), json!(args), json!(user));
     let done = job(
         &s,

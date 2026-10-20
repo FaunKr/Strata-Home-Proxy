@@ -26,6 +26,8 @@ pub struct Size {
     pub ram_gb: u32,
     /// `ram_gb` counts RAM and VRAM together (setup's `mem_total`: Gyro).
     pub with_vram: bool,
+    /// Setup's own figure for such a size, which `ram_gb` rounds up.
+    need_gb: f64,
 }
 
 pub const FAMILIES: &[Family] = &[
@@ -74,14 +76,16 @@ const fn size(family: &'static str, size: &'static str, download_gb: f64, ram_gb
         download_gb,
         ram_gb,
         with_vram: false,
+        need_gb: 0.0,
     }
 }
 
-/// A size whose memory is RAM and VRAM together; setup's 27.6 GB rounded up.
-const fn with_vram(family: &'static str, size: &'static str, download_gb: f64, gb: u32) -> Size {
+/// A size whose memory is RAM and VRAM together, with setup's figure.
+const fn with_vram(family: &'static str, size: &'static str, download_gb: f64, gb: f64) -> Size {
     Size {
         with_vram: true,
-        ..self::size(family, size, download_gb, gb)
+        need_gb: gb,
+        ..self::size(family, size, download_gb, gb.ceil() as u32)
     }
 }
 
@@ -102,8 +106,8 @@ pub const SIZES: &[Size] = &[
     size("qwen36", "UD-Q4_K_XL", 22.9, 32),
     size("qwen36", "UD-Q6_K_XL", 32.6, 44),
     size("qwen36", "Q8_0", 37.8, 52),
-    with_vram("gyro", "Gyro-S", 58.5, 28),
-    with_vram("gyro", "Gyro-M", 92.0, 35),
+    with_vram("gyro", "Gyro-S", 58.5, 27.6),
+    with_vram("gyro", "Gyro-M", 92.0, 35.0),
 ];
 
 /// Setup's `MEMORY_TIERS`: the size for RAM + VRAM from each floor, 2 GB
@@ -144,14 +148,15 @@ impl Size {
     }
 
     /// Whether a PC with this RAM and VRAM (GiB, as setup counts) has the
-    /// memory for it.
+    /// memory for it: setup's own check for RAM + VRAM, else RAM alone. The
+    /// size `recommend` picks fits too, as setup's low-RAM mode starts it.
     pub fn fits(&self, ram_gb: f64, vram_gb: f64) -> bool {
-        let have = if self.with_vram {
-            ram_gb + vram_gb
+        if self.with_vram {
+            ram_gb + vram_gb >= self.need_gb
         } else {
-            ram_gb
-        };
-        f64::from(self.ram_gb) <= have + 0.5
+            f64::from(self.ram_gb) <= ram_gb + 0.5
+                || recommend(ram_gb, vram_gb).is_some_and(|r| r.id() == self.id())
+        }
     }
 }
 

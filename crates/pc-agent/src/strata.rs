@@ -1129,6 +1129,7 @@ pub fn view(agent: &Agent) -> StrataReport {
         contexts: catalog::CONTEXTS.to_vec(),
         default_context: catalog::DEFAULT_CONTEXT,
         ram_gb,
+        vram_gb: (vram_gb > 0.0).then_some(vram_gb),
         disk_free_gb: agent
             .platform()
             .disk_free(&cfg.strata_data_dir)

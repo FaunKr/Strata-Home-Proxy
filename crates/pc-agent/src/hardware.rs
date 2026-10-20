@@ -176,8 +176,10 @@ mod windows {
             .reduce(f32::max)
     }
 
+    /// Read once: a card's VRAM does not change while the service runs.
     pub fn vram_bytes() -> u64 {
-        biggest_adapter().map_or(0, |a| a.vram_total)
+        static VRAM: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        *VRAM.get_or_init(|| biggest_adapter().map_or(0, |a| a.vram_total))
     }
 
     struct Adapter {

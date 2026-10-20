@@ -160,6 +160,7 @@
   ],
   "default_context": 65536,
   "ram_gb": 64.0,
+  "vram_gb": 16.0,
   "disk_free_gb": 500.0,
   "data_dir": "C:\\Strata-data",
   "benchmark": {

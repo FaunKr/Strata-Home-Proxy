@@ -45,6 +45,10 @@ pub struct StrataInfo {
     pub contexts: Vec<u32>,
     pub default_context: u32,
     pub ram_gb: f64,
+    /// Dedicated VRAM of the biggest card, which Gyro's fit and the
+    /// recommendation count; `None` without a card or from older services.
+    #[serde(default)]
+    pub vram_gb: Option<f64>,
     #[serde(default)]
     pub disk_free_gb: Option<f64>,
     pub data_dir: String,

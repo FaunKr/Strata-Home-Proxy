@@ -464,7 +464,9 @@ impl Model {
             ));
         }
         let vector = format!("{}:1.0", self.vector.display());
-        let mut owned = vec![PROJECTION_VECTOR_FLAG];
+        // Strata keeps a vector of the user's own (`--control-vector`) with
+        // these in user_args; switching replaces any vector, as in args.
+        let mut owned = vec![PROJECTION_VECTOR_FLAG, "--control-vector"];
         owned.extend(PROJECTION_FLAGS.iter().map(|(flag, _)| *flag));
         self.change_args(&owned, |args| {
             without_speed_projection(args);

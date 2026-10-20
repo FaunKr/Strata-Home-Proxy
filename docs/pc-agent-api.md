@@ -243,8 +243,10 @@ lines. The proxy keeps all of this on the NAS; the web UI only gets
 short hash, subject and date.
 
 In the catalog, `memory_with_vram` says that `ram_gb` is RAM and VRAM
-together (Gyro), and `fits` then counts the biggest card's VRAM too. An
-older PC service leaves the field out.
+together (Gyro), and `fits` then counts the biggest card's VRAM too, against
+setup's own figure (27.6 GB for Gyro-S). The recommended size always fits,
+because setup's low-RAM mode starts it. `vram_gb` is that card's VRAM, missing
+without a card. An older PC service leaves these fields out.
 
 Each installed model says with `speed_projection` whether its configuration
 loads a control vector (`--control-vector-scaled`, Strata's or a custom one).
@@ -328,7 +330,8 @@ checked (see "Older PC services").
 
 `set_speed_projection` only changes `args` in `strata-<id>.json`, and
 `args_written` the same way if the configuration has it, so that Strata does
-not take the change for one set by hand; the four flags leave `user_args`,
+not take the change for one set by hand; the four flags and `--control-vector`
+(a vector of the user's own, which Strata keeps with them) leave `user_args`,
 which Strata puts over `args` (an empty `user_args` goes). A configuration
 without these keys gets none. `on: true`
 removes setup's flags and appends them again, with Strata's vector from the

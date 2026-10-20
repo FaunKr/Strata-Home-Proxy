@@ -398,7 +398,39 @@ async fn the_recommendation_follows_setups_memory_tiers() {
             view["recommended"], expected,
             "{ram} GB RAM + {vram} GB VRAM"
         );
+        if let Some(id) = expected.as_str() {
+            // Setup's low-RAM mode starts it where RAM alone is short.
+            assert_eq!(
+                catalog_entry(&view, id)["fits"],
+                true,
+                "{ram} + {vram}: {id}"
+            );
+        }
     }
+}
+
+#[tokio::test]
+async fn the_page_says_the_vram_it_counts() {
+    let s = setup("strata-vram").await;
+    pc_with(&s, 32.0, 16.0);
+    assert_eq!(get(&s, "/strata").await["vram_gb"], 16.0);
+    pc_with(&s, 32.0, 0.0);
+    assert_eq!(get(&s, "/strata").await["vram_gb"], Value::Null);
+}
+
+#[tokio::test]
+async fn gyro_fits_from_setups_own_figure() {
+    let s = setup("strata-gyro-edge").await;
+    pc_with(&s, 16.0, 11.5);
+    let view = get(&s, "/strata").await;
+    assert_eq!(
+        catalog_entry(&view, "gyro-Gyro-S")["fits"],
+        false,
+        "27.5 GB"
+    );
+    pc_with(&s, 16.0, 11.7);
+    let view = get(&s, "/strata").await;
+    assert_eq!(catalog_entry(&view, "gyro-Gyro-S")["fits"], true, "27.7 GB");
 }
 
 #[tokio::test]

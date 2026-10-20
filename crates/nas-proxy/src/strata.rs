@@ -112,7 +112,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             update: None,
         };
     }
-    let Some(status) = state.pc_status(&agent).await else {
+    let Some(status) = state.ask_pc(&agent).await else {
         let info = last();
         return StrataPage {
             problem: Some(ASLEEP.into()),
@@ -169,7 +169,7 @@ pub async fn start_job(state: &AppState, form: StrataJobForm) -> Result<(), Stri
     if state.code_bench.busy() {
         return Err("A code benchmark is running. Strata jobs wait until it ends.".into());
     }
-    if state.pc_status(&agent).await.is_none() {
+    if state.ask_pc(&agent).await.is_none() {
         wake(state).await?;
     }
     let key = matches!(form.kind, StrataJobKind::Install | StrataJobKind::SetKey)

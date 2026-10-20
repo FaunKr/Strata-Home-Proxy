@@ -19,6 +19,7 @@ use strata_admin_ui::api::{
 use crate::{
     clock,
     events::{Event, HourSamples},
+    lifecycle::{self, PcState},
     state::AppState,
 };
 
@@ -61,14 +62,15 @@ struct Period {
 }
 
 /// Was ein Ereignis über den Zustand ab dann sagt; `None` bei einem, der
-/// dazu nichts sagt.
+/// dazu nichts sagt. Die Zuordnung steht neben den Übergängen, die die
+/// Ereignisse schreiben.
 fn state_after(kind: EventKind) -> Option<State> {
-    match kind {
-        EventKind::Awake | EventKind::PcSeenAwake | EventKind::GamingOff => Some(State::Awake),
-        EventKind::SleepAccepted | EventKind::PcSeenAsleep => Some(State::Asleep),
-        EventKind::PcSeenGaming | EventKind::GamingOn => Some(State::Gaming),
-        _ => None,
-    }
+    lifecycle::state_after(kind).map(|pc| match pc {
+        PcState::Awake => State::Awake,
+        PcState::Gaming => State::Gaming,
+        PcState::Asleep => State::Asleep,
+        PcState::Waking | PcState::Unknown => State::Unknown,
+    })
 }
 
 /// Der Tag, dem diese Zeit in `tz` gehört.

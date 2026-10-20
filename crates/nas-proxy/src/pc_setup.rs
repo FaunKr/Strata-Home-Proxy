@@ -263,7 +263,7 @@ pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
     let Some(available) = state.pc_setup.program_version() else {
         return Err("This image carries no PC service to update.".into());
     };
-    if state.pc_status(&agent).await.is_none() {
+    if state.ask_pc(&agent).await.is_none() {
         return Err("The PC is asleep; an update needs the PC awake.".into());
     }
     state.pc_setup.begin_update(&available)?;

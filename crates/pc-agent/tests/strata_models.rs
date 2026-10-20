@@ -9,7 +9,7 @@ use common::*;
 use serde_json::{Value, json};
 use strata_pc_agent::{install::testing::SetupLeaves, managed::Managed, strata};
 
-const OLD_KEY: &str = "alter-key-0123456789";
+const OLD_KEY: &str = "old-key-0123456789";
 const NEW_KEY: &str = "neuer-key-0123456789abcdef";
 
 fn lines(lines: &[&str]) -> Vec<String> {
@@ -164,7 +164,7 @@ async fn activating_waits_for_a_running_request_and_switches_the_start_script() 
     )
     .await;
     assert_eq!(code, 202, "{answer}");
-    job_until(&s, "Warten auf die Anfrage", |j| {
+    job_until(&s, "waiting for the request", |j| {
         j["step"].as_str().is_some_and(|t| t.contains("request"))
     })
     .await;
@@ -242,7 +242,7 @@ async fn deleting_removes_exactly_that_models_files() {
         strata.join("run-coder-iq1_m.bat"),
         strata.join("strata-coder-iq1_m.log"),
     ] {
-        assert!(!gone.exists(), "{} ist noch da", gone.display());
+        assert!(!gone.exists(), "{} is still there", gone.display());
     }
     for kept in [
         data.join("models").join("IQ3_XXS").join("a.gguf"),
@@ -799,7 +799,7 @@ async fn the_benchmark_result_is_found_before_much_more_output() {
 async fn a_damaged_model_config_stops_the_key_change() {
     let s = setup("models-key-damaged").await;
     installed(&s);
-    strata_ordner(&s).config_text("coder-iq1_m", "{\"exe\": \"x\",");
+    strata_folder(&s).config_text("coder-iq1_m", "{\"exe\": \"x\",");
     let done = job(&s, json!({"kind": "set_key", "api_key": NEW_KEY})).await;
     assert_eq!(done["state"], "failed", "{done}");
     assert_eq!(s.agent.managed().strata_api_key.as_deref(), Some(OLD_KEY));
@@ -815,7 +815,7 @@ async fn with_strata_started_by_start_here_the_model_used_last_is_active() {
     installed(&s);
     s.agent.set_managed(Managed::default()).unwrap();
     std::thread::sleep(Duration::from_millis(20));
-    strata_ordner(&s).config("iq3_xxs", config_json("a.gguf"));
+    strata_folder(&s).config("iq3_xxs", config_json("a.gguf"));
     let (code, answer) = post(
         &s,
         "/strata/jobs",
@@ -910,7 +910,7 @@ const ESP_FLAGS: [&str; 7] = [
 
 /// A model config with these engine args.
 fn config_with_args(s: &Setup, id: &str, args: Value) {
-    strata_ordner(s).config(
+    strata_folder(s).config(
         id,
         json!({"exe": "C:/Strata/engine/strata.exe", "args": args, "port": 8080, "api_key": OLD_KEY}),
     );
@@ -925,7 +925,7 @@ async fn the_page_shows_whether_a_model_has_the_speed_projection() {
         json!("b.gguf"),
         json!("--control-vector-scaled"),
     ];
-    args.push(json!("D:/eigen/vektor.gguf:1.0"));
+    args.push(json!("D:/own/vector.gguf:1.0"));
     args.extend(ESP_FLAGS.map(|f| json!(f)));
     config_with_args(&s, "coder-iq1_m", json!(args));
     let view = get(&s, "/strata").await;
@@ -939,7 +939,7 @@ async fn the_page_shows_whether_a_model_has_the_speed_projection() {
 
 /// Strata's own vector, where setup expects it; its path as setup writes it.
 fn vector(s: &Setup) -> String {
-    let strata = strata_ordner(s);
+    let strata = strata_folder(s);
     strata.speed_projection_vector();
     format!("{}:1.0", strata.vector().display())
 }
@@ -978,7 +978,7 @@ async fn switching_the_speed_projection_off_removes_it_whatever_its_values() {
         "--native",
         "b.gguf",
         "--control-vector-scaled",
-        "D:/eigen/vektor.gguf:0.5",
+        "D:/own/vector.gguf:0.5",
         "--cvec-mode",
         "add",
         "--threads",
@@ -1028,7 +1028,7 @@ async fn switching_on_twice_keeps_one_set_of_flags() {
 async fn switching_the_speed_projection_is_refused_where_it_does_not_fit() {
     let s = setup("models-esp-refused").await;
     installed(&s);
-    strata_ordner(&s).config("swift-iq2_xs", config_json("c.gguf"));
+    strata_folder(&s).config("swift-iq2_xs", config_json("c.gguf"));
     for (body, status) in [
         (
             json!({"kind": "set_speed_projection", "model": "swift-IQ2_XS", "on": true}),
@@ -1043,7 +1043,7 @@ async fn switching_the_speed_projection_is_refused_where_it_does_not_fit() {
             409,
         ),
         (
-            json!({"kind": "set_speed_projection", "model": "nichts", "on": true}),
+            json!({"kind": "set_speed_projection", "model": "nothing", "on": true}),
             400,
         ),
     ] {
@@ -1067,7 +1067,7 @@ async fn switching_the_speed_projection_is_refused_where_it_does_not_fit() {
 async fn without_strata_s_vector_switching_on_fails_and_changes_nothing() {
     let s = setup("models-esp-no-vector").await;
     installed(&s);
-    let before = strata_ordner(&s).text("coder-iq1_m");
+    let before = strata_folder(&s).text("coder-iq1_m");
     let done = job(
         &s,
         json!({"kind": "set_speed_projection", "model": "coder-IQ1_M", "on": true}),
@@ -1081,7 +1081,7 @@ async fn without_strata_s_vector_switching_on_fails_and_changes_nothing() {
             .contains("experimental-speed-projection"),
         "{done}"
     );
-    let after = strata_ordner(&s).text("coder-iq1_m");
+    let after = strata_folder(&s).text("coder-iq1_m");
     assert_eq!(before, after);
 }
 
@@ -1094,7 +1094,7 @@ async fn switching_the_active_model_restarts_strata_after_the_running_request() 
     let body = json!({"kind": "set_speed_projection", "model": "IQ3_XXS", "on": true});
     let (code, answer) = post(&s, "/strata/jobs", body).await;
     assert_eq!(code, 202, "{answer}");
-    job_until(&s, "Warten auf die Anfrage", |j| {
+    job_until(&s, "waiting for the request", |j| {
         j["step"].as_str().is_some_and(|t| t.contains("request"))
     })
     .await;
@@ -1137,7 +1137,7 @@ async fn switching_a_model_keeps_the_model_start_here_starts() {
     s.agent.set_managed(Managed::default()).unwrap();
     vector(&s);
     std::thread::sleep(Duration::from_millis(20));
-    strata_ordner(&s).config("iq3_xxs", config_json("a.gguf"));
+    strata_folder(&s).config("iq3_xxs", config_json("a.gguf"));
     std::thread::sleep(Duration::from_millis(20));
     let done = job(
         &s,
@@ -1200,7 +1200,7 @@ async fn switching_the_context_rewrites_only_max_context() {
             "int8"
         ]),
     );
-    let path = strata_ordner(&s).installation().config_path("coder-iq1_m");
+    let path = strata_folder(&s).installation().config_path("coder-iq1_m");
     let old = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
     std::fs::File::options()
         .write(true)
@@ -1275,7 +1275,7 @@ async fn switching_down_from_past_256k_removes_the_rope_scaling() {
 async fn switching_the_context_is_refused_outside_what_it_takes() {
     let s = setup("models-context-refused").await;
     installed(&s);
-    let before = strata_ordner(&s).text("coder-iq1_m");
+    let before = strata_folder(&s).text("coder-iq1_m");
     for (body, status) in [
         (
             json!({"kind": "set_context", "model": "coder-IQ1_M", "context": 393216}),
@@ -1294,14 +1294,14 @@ async fn switching_the_context_is_refused_outside_what_it_takes() {
             409,
         ),
         (
-            json!({"kind": "set_context", "model": "nichts", "context": 65536}),
+            json!({"kind": "set_context", "model": "nothing", "context": 65536}),
             400,
         ),
     ] {
         let (code, answer) = post(&s, "/strata/jobs", body.clone()).await;
         assert_eq!(code, status, "{body}: {answer}");
     }
-    let after = strata_ordner(&s).text("coder-iq1_m");
+    let after = strata_folder(&s).text("coder-iq1_m");
     assert_eq!(before, after);
 }
 
@@ -1328,7 +1328,7 @@ async fn switching_the_active_models_context_restarts_strata_after_the_running_r
     let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 131072});
     let (code, answer) = post(&s, "/strata/jobs", body).await;
     assert_eq!(code, 202, "{answer}");
-    job_until(&s, "Warten auf die Anfrage", |j| {
+    job_until(&s, "waiting for the request", |j| {
         j["step"].as_str().is_some_and(|t| t.contains("request"))
     })
     .await;
@@ -1390,21 +1390,21 @@ async fn finished_slowly(s: &Setup) -> Value {
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    panic!("Ende des Vorgangs nicht erreicht");
+    panic!("end of the job not reached");
 }
 
 #[tokio::test]
 async fn a_context_strata_never_answers_with_goes_back() {
     // The limit well behind the fake Strata's first line.
     let s = setup_with("models-context-no-answer", |c| c.context_start_secs = 3).await;
-    let before = active_at_512k(&s, &["lade Modell"], true);
+    let before = active_at_512k(&s, &["loading model"], true);
     s.fake.strata_stays_down.store(true, Ordering::SeqCst);
     let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144});
     assert_eq!(post(&s, "/strata/jobs", body).await.0, 202);
     let done = finished_slowly(&s).await;
     assert_eq!(done["state"], "failed", "{done}");
     assert!(
-        done["lines"].to_string().contains("lade Modell"),
+        done["lines"].to_string().contains("loading model"),
         "Strata's output: {done}"
     );
     assert_eq!(args_of(&s, "iq3_xxs"), before, "the old args");
@@ -1436,7 +1436,7 @@ async fn a_context_strata_answers_with_after_a_while_stays() {
     s.fake.strata_stays_down.store(true, Ordering::SeqCst);
     let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144});
     assert_eq!(post(&s, "/strata/jobs", body).await.0, 202);
-    job_until(&s, "Warten auf Strata", |j| {
+    job_until(&s, "waiting for Strata", |j| {
         j["step"].as_str().is_some_and(|t| t.contains("ready"))
     })
     .await;
@@ -1457,7 +1457,7 @@ async fn cancelling_the_wait_for_the_new_context_brings_the_old_one_back() {
     s.fake.strata_stays_down.store(true, Ordering::SeqCst);
     let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144});
     assert_eq!(post(&s, "/strata/jobs", body).await.0, 202);
-    job_until(&s, "Warten auf Strata", |j| {
+    job_until(&s, "waiting for Strata", |j| {
         j["step"].as_str().is_some_and(|t| t.contains("ready"))
     })
     .await;

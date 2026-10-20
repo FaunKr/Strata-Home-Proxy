@@ -41,7 +41,7 @@ async fn shows_every_value_with_its_origin() {
     let _ = std::fs::remove_dir_all(&dir);
     let mut base = Config::default();
     base.apply("STRATA_URL", "http://pc:8080").unwrap();
-    base.apply("PC_AGENT_TOKEN", "streng-geheim").unwrap();
+    base.apply("PC_AGENT_TOKEN", "very-secret").unwrap();
     base.data_dir = Some(dir.clone());
     let state = AppState::with_settings(Settings::new(base, &["STRATA_URL", "PC_AGENT_TOKEN"]));
     state.settings.set("IDLE_TIMEOUT_SECS", "600").unwrap();
@@ -64,7 +64,7 @@ async fn shows_every_value_with_its_origin() {
     assert_eq!(entry(&view, "PRICE_CT_PER_KWH")["value"], "30");
     assert_eq!(entry(&view, "PRICE_CT_PER_KWH")["source"], "Default");
     assert_eq!(entry(&view, "PC_AGENT_TOKEN")["value"], "set");
-    assert!(!view.to_string().contains("streng-geheim"));
+    assert!(!view.to_string().contains("very-secret"));
 
     let html = b.page("/admin/strata/connection").await;
     assert!(html.contains("Strata address"), "{html}");
@@ -78,7 +78,7 @@ async fn shows_every_value_with_its_origin() {
     assert!(html.contains(&dir.display().to_string()), "{html}");
     let html = b.page("/admin/pc").await;
     assert!(html.contains("Saved here"), "{html}");
-    assert!(!html.contains("streng-geheim"));
+    assert!(!html.contains("very-secret"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -225,9 +225,7 @@ async fn an_empty_secret_stays_as_it_is() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(
-        save(&mut b, "PC_AGENT_TOKEN", "streng-geheim")
-            .await
-            .status(),
+        save(&mut b, "PC_AGENT_TOKEN", "very-secret").await.status(),
         200
     );
     let resp = save_settings(
@@ -237,15 +235,12 @@ async fn an_empty_secret_stays_as_it_is() {
     .await;
     assert_eq!(resp.status(), 200);
     let cfg = s.state.cfg();
-    assert_eq!(cfg.pc_agent_token.as_deref(), Some("streng-geheim"));
+    assert_eq!(cfg.pc_agent_token.as_deref(), Some("very-secret"));
     assert_eq!(cfg.idle_timeout.as_secs(), 5);
 
     // Only a reset removes it.
     b.call("reset-setting", &[("key", "PC_AGENT_TOKEN")]).await;
-    assert_ne!(
-        s.state.cfg().pc_agent_token.as_deref(),
-        Some("streng-geheim")
-    );
+    assert_ne!(s.state.cfg().pc_agent_token.as_deref(), Some("very-secret"));
 }
 
 #[tokio::test]
@@ -364,9 +359,7 @@ async fn changes_are_logged_without_secrets() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(
-        save(&mut b, "PC_AGENT_TOKEN", "streng-geheim")
-            .await
-            .status(),
+        save(&mut b, "PC_AGENT_TOKEN", "very-secret").await.status(),
         200
     );
     b.call("reset-setting", &[("key", "PC_AGENT_TOKEN")]).await;
@@ -382,7 +375,7 @@ async fn changes_are_logged_without_secrets() {
             .all(|e| e.detail.as_deref() == Some("PC_AGENT_TOKEN"))
     );
     let all = serde_json::to_string(&events).unwrap();
-    assert!(!all.contains("streng-geheim"));
+    assert!(!all.contains("very-secret"));
 }
 
 #[tokio::test]

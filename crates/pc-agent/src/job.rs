@@ -402,7 +402,7 @@ impl JobContext {
         });
         self.save();
         if let Some(job) = self.agent.jobs.current() {
-            tracing::info!(kind = ?job.kind, state = ?job.state, error = ?job.error, "Strata-Vorgang beendet");
+            tracing::info!(kind = ?job.kind, state = ?job.state, error = ?job.error, "Strata job finished");
         }
     }
 
@@ -412,7 +412,7 @@ impl JobContext {
         };
         let text = serde_json::to_string_pretty(&job).expect("job serializes");
         if let Err(e) = crate::write_replacing(&self.agent.cfg.state_dir().join(JOB_FILE), &text) {
-            tracing::warn!("{JOB_FILE} nicht gespeichert: {e}");
+            tracing::warn!("{JOB_FILE} not saved: {e}");
         }
     }
 }

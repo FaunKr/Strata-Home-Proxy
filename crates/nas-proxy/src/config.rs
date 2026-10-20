@@ -481,7 +481,8 @@ mod tests {
             "POWER_ASLEEP_WATTS",
             "PRICE_CT_PER_KWH",
         ] {
-            for raw in ["-3", "dreißig", "", "NaN", "inf", "32,5"] {
+            // "drei\u{df}ig" is the German number word for 30.
+            for raw in ["-3", "drei\u{df}ig", "", "NaN", "inf", "32,5"] {
                 assert!(cfg.apply(key, raw).is_err(), "{key}={raw:?}");
             }
         }

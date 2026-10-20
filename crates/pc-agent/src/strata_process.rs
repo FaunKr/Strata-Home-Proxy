@@ -64,7 +64,7 @@ impl<'a> StrataProcess<'a> {
     }
 
     /// Starts Strata with the managed start script, if one is set, and
-    /// follows its output for the Strata-Ausgabe.
+    /// follows its output for the Strata output.
     pub fn start(&self) {
         self.start_if(|_| true);
     }
@@ -74,7 +74,7 @@ impl<'a> StrataProcess<'a> {
         self.start_if(|seen| {
             let started = seen.started_since_stop();
             if started {
-                tracing::info!("Strata wurde inzwischen gestartet, kein zweiter Start");
+                tracing::info!("Strata was started in the meantime, no second start");
             }
             !started
         });
@@ -86,7 +86,7 @@ impl<'a> StrataProcess<'a> {
         let agent = self.agent;
         let managed = agent.managed();
         let Some((program, args)) = managed.start(&agent.cfg) else {
-            tracing::info!("Kein Startskript für Strata eingetragen, Strata bleibt aus");
+            tracing::info!("No start script set for Strata, Strata stays off");
             return;
         };
         {
@@ -96,11 +96,11 @@ impl<'a> StrataProcess<'a> {
             }
             seen.start = Some(Instant::now());
         }
-        tracing::info!("Strata wird gestartet");
+        tracing::info!("Starting Strata");
         let mut run = match agent.platform().start_strata(program, args) {
             Ok(run) => run,
             Err(e) => {
-                tracing::error!("Strata-Start fehlgeschlagen: {e}");
+                tracing::error!("Starting Strata failed: {e}");
                 return;
             }
         };
@@ -127,15 +127,15 @@ impl<'a> StrataProcess<'a> {
     pub fn stop(&self) {
         let agent = self.agent;
         agent.times.0.lock().unwrap().stop = Some(Instant::now());
-        tracing::info!("Strata wird beendet");
+        tracing::info!("Stopping Strata");
         let managed = agent.managed();
         let processes = managed.processes(&agent.cfg);
         if processes.is_empty() {
-            tracing::info!("Keine Strata-Programme eingetragen, nichts zu beenden");
+            tracing::info!("No Strata programs set, nothing to stop");
             return;
         }
         if let Err(e) = agent.platform().stop_strata(processes) {
-            tracing::error!("Strata-Ende fehlgeschlagen: {e}");
+            tracing::error!("Stopping Strata failed: {e}");
         }
     }
 
@@ -181,7 +181,7 @@ impl<'a> StrataProcess<'a> {
         self.stop();
         tokio::time::sleep(self.agent.cfg.stop_settle()).await;
         if self.agent.jobs.running() {
-            tracing::info!("Ein Strata-Vorgang hat begonnen, er startet Strata selbst");
+            tracing::info!("A Strata job has begun, it starts Strata itself");
             return;
         }
         if !self.agent.gaming() {

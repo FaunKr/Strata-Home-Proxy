@@ -17,7 +17,7 @@ expect() {
   shift
   local got
   got=$(select_for "$@")
-  [[ $got == "$want " ]] || fail "$* -> $got, erwartet $want"
+  [[ $got == "$want " ]] || fail "$* -> $got, expected $want"
 }
 # Passes when the selection for one changed path has value among key's words.
 # An empty package list with test=true means everything, so it passes too.
@@ -27,7 +27,7 @@ expect_selects() {
   got=$(sed -n "s/^$key=//p" <<<"$out")
   [[ " $got " == *" $value "* ]] && return
   [[ $key == packages && -z $got && $out == *test=true* ]] && return
-  fail "$path -> $key=$got, erwartet $value"
+  fail "$path -> $key=$got, expected $value"
 }
 package_of() { sed -n 's/^name *= *"\(.*\)"/\1/p' "$1/Cargo.toml" | head -1; }
 
@@ -51,7 +51,7 @@ expect "test=true packages= image=false bench=true ui=false" tools/code-bench/ru
 expect "test=true packages= image=false bench=true ui=false" tools/code-bench/Dockerfile
 expect "test=true packages= image=false bench=false ui=false" tools/code-bench/test_runner.py
 expect "test=true packages=strata-nas-proxy image=false bench=false ui=false" tools/code-bench/tasks/roman/TASK.md
-[[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$all " ]] || fail "--all -> nicht alles"
+[[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$all " ]] || fail "--all -> not everything"
 
 # Every crate selects itself.
 for dir in crates/*/; do
@@ -82,7 +82,7 @@ done < <(grep -roE --include='*.rs' 'include_(str|bytes)!\(\s*"[^"]+"' crates |
 expect_checked() {
   local path=$1 key=$2 out
   out=$(printf '%s\n' "$path" | scripts/ci-select.sh)
-  [[ $out == *"$key=true"* || $out == *test=true* ]] || fail "$path -> weder $key noch test"
+  [[ $out == *"$key=true"* || $out == *test=true* ]] || fail "$path -> neither $key nor test"
 }
 dockerfile_sources() {
   local words word sources src
@@ -124,13 +124,13 @@ while IFS= read -r mention; do
   file=${mention%%:*}
   name=$(sed -E 's/.*`([^`]+)`.*/\1/' <<<"$mention")
   case $mention in
-    *orkflow*) [[ -e .github/workflows/$name ]] || fail "$file nennt den Workflow $name, den es nicht gibt" ;;
-    *) [[ $jobs == *" $name "* ]] || fail "$file nennt den CI-Job $name, den es nicht gibt" ;;
+    *orkflow*) [[ -e .github/workflows/$name ]] || fail "$file names the workflow $name, which does not exist" ;;
+    *) [[ $jobs == *" $name "* ]] || fail "$file names the CI job $name, which does not exist" ;;
   esac
 done < <(git ls-files -z | xargs -0 grep -oIE '(CI[- ][Jj]ob|[Jj]ob|[Ww]orkflow) `[A-Za-z0-9_.-]+`' 2>/dev/null || true)
 
 if ((failures)); then
-  echo "ci-select: $failures Fehler; die Zuordnung steht in scripts/ci-select.sh" >&2
+  echo "ci-select: $failures failures; the mapping is in scripts/ci-select.sh" >&2
   exit 1
 fi
 echo "ci-select: ok"

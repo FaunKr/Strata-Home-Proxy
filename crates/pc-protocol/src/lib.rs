@@ -1,19 +1,19 @@
-//! The PC-Dienst's HTTP API (see `docs/pc-agent-api.md`): what each endpoint
-//! takes and answers. The PC-Dienst writes these types, the Proxy reads them,
-//! and the Weboberfläche shows Strata, jobs and Hardwarewerte with them.
+//! The PC service's HTTP API (see `docs/pc-agent-api.md`): what each endpoint
+//! takes and answers. The PC service writes these types, the proxy reads them,
+//! and the web UI shows Strata, jobs and hardware readings with them.
 //!
-//! The PC-Dienst updates itself from the NAS, so an older one often answers
-//! a newer Proxy. Hence:
+//! The PC service updates itself from the NAS, so an older one often answers
+//! a newer proxy. Hence:
 //!
 //! - Fields are only ever added, never renamed or removed.
 //! - A response field added after the first version has a default, so an
-//!   older PC-Dienst's answer still parses.
-//! - An optional request field stays out when unset: the PC-Dienst refuses
+//!   older PC service's answer still parses.
+//! - An optional request field stays out when unset: the PC service refuses
 //!   request fields it does not know. Job kinds without fields (`update`,
 //!   `benchmark`, `compare_models`) ignore extra ones.
 //!
-//! `tests/samples` holds an answer of today's PC-Dienst per endpoint; a
-//! PC-Dienst test checks that they show every field it sends.
+//! `tests/samples` holds an answer of today's PC service per endpoint; a
+//! PC service test checks that they show every field it sends.
 
 mod job;
 mod output;

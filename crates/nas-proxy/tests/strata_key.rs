@@ -14,12 +14,12 @@ async fn strata_gets_the_strata_key_instead_of_the_clients() {
     let s = setup(true, |_| {}).await;
     s.state
         .settings
-        .set("STRATA_API_KEY", "strata-geheim")
+        .set("STRATA_API_KEY", "strata-secret")
         .unwrap();
     let resp = post_json(&s, "/v1/messages", json!({})).await;
     assert_eq!(resp.status(), 200);
     let seen = s.pc.api_auth.lock().unwrap().clone().unwrap();
-    assert_eq!(seen.authorization, bearer("strata-geheim"));
+    assert_eq!(seen.authorization, bearer("strata-secret"));
     assert_eq!(seen.x_api_key, None);
 }
 
@@ -28,11 +28,11 @@ async fn health_checks_carry_the_strata_key() {
     let s = setup(false, |_| {}).await;
     s.state
         .settings
-        .set("STRATA_API_KEY", "strata-geheim")
+        .set("STRATA_API_KEY", "strata-secret")
         .unwrap();
     post_json(&s, "/v1/chat/completions", json!({})).await;
     let seen = s.pc.health_auth.lock().unwrap().clone().unwrap();
-    assert_eq!(seen.authorization, bearer("strata-geheim"));
+    assert_eq!(seen.authorization, bearer("strata-secret"));
 }
 
 #[tokio::test]
@@ -48,10 +48,10 @@ async fn without_strata_key_no_key_reaches_strata() {
 async fn strata_key_is_shown_only_as_set() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
-    let resp = save_settings(&mut b, &[("STRATA_API_KEY", "strata-geheim")]).await;
+    let resp = save_settings(&mut b, &[("STRATA_API_KEY", "strata-secret")]).await;
     assert_eq!(resp.status(), 200);
     let text = b.call("settings", &[]).await.text().await.unwrap();
-    assert!(!text.contains("strata-geheim"), "{text}");
+    assert!(!text.contains("strata-secret"), "{text}");
     let view: serde_json::Value = serde_json::from_str(&text).unwrap();
     let entry = view["entries"]
         .as_array()
@@ -69,7 +69,7 @@ async fn every_call_of_the_strata_client_carries_the_strata_key() {
     let s = setup(true, |_| {}).await;
     s.state
         .settings
-        .set("STRATA_API_KEY", "strata-geheim")
+        .set("STRATA_API_KEY", "strata-secret")
         .unwrap();
     *s.pc.metrics.lock().unwrap() = Some(METRICS_IDLE.into());
     let strata = s.state.strata().unwrap();
@@ -82,12 +82,12 @@ async fn every_call_of_the_strata_client_carries_the_strata_key() {
             .clone()
             .unwrap()
             .authorization,
-        bearer("strata-geheim")
+        bearer("strata-secret")
     );
     strata.metrics().await.unwrap();
     assert_eq!(
         s.pc.metrics_auth.lock().unwrap().clone(),
-        bearer("strata-geheim")
+        bearer("strata-secret")
     );
     strata
         .chat(&json!({"messages": []}), std::time::Duration::from_secs(5))
@@ -95,7 +95,7 @@ async fn every_call_of_the_strata_client_carries_the_strata_key() {
         .unwrap();
     assert_eq!(
         s.pc.api_auth.lock().unwrap().take().unwrap().authorization,
-        bearer("strata-geheim")
+        bearer("strata-secret")
     );
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("authorization", "Bearer client".parse().unwrap());
@@ -112,7 +112,7 @@ async fn every_call_of_the_strata_client_carries_the_strata_key() {
     assert_eq!(resp.status(), 200);
     assert_eq!(
         s.pc.api_auth.lock().unwrap().take().unwrap().authorization,
-        bearer("strata-geheim")
+        bearer("strata-secret")
     );
 }
 

@@ -71,9 +71,9 @@ fn only_the_owner_can_read_the_database() {
 fn events_jsonl_is_imported_once() {
     let d = fresh_dir("import");
     let jsonl = "{\"ts\":100,\"kind\":\"wake_sent\"}\n\
-                 kaputte Zeile {\n\
-                 {\"ts\":150,\"kind\":\"zeitreise\"}\n\
-                 {\"ts\":200,\"kind\":\"sleep_accepted\",\"detail\":\"benutzer inaktiv\"}\n";
+                 broken line {\n\
+                 {\"ts\":150,\"kind\":\"time_travel\"}\n\
+                 {\"ts\":200,\"kind\":\"sleep_accepted\",\"detail\":\"user inactive\"}\n";
     std::fs::write(d.join("events.jsonl"), jsonl).unwrap();
     // Unreadable lines and unknown kinds are skipped, the rest imported.
     let expected = vec![EventKind::WakeSent, EventKind::SleepAccepted];
@@ -84,7 +84,7 @@ fn events_jsonl_is_imported_once() {
     // A second start does not import the file again.
     let log = History::new(Some(d.clone()));
     assert_eq!(kinds(&log), expected);
-    assert_eq!(log.recent()[1].detail.as_deref(), Some("benutzer inaktiv"));
+    assert_eq!(log.recent()[1].detail.as_deref(), Some("user inactive"));
     // The file stays as it was, as a backup.
     assert_eq!(
         std::fs::read_to_string(d.join("events.jsonl")).unwrap(),
@@ -148,7 +148,7 @@ async fn a_row_of_an_unknown_kind_hides_no_other_rows() {
         &d,
         "CREATE TABLE events (ts INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT);
          INSERT INTO events VALUES (100, 'wake_sent', NULL);
-         INSERT INTO events VALUES (150, 'zeitreise', NULL);
+         INSERT INTO events VALUES (150, 'time_travel', NULL);
          INSERT INTO events VALUES (200, 'awake', NULL);",
     );
     let log = History::new(Some(d.clone()));

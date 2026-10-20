@@ -82,7 +82,7 @@ pub struct StrataJob {
     pub ended: Option<u64>,
 }
 
-/// `POST /strata/jobs`. The PC-Dienst refuses fields it does not know, so an
+/// `POST /strata/jobs`. The PC service refuses fields it does not know, so an
 /// optional field stays out when unset.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -101,7 +101,7 @@ pub enum StrataJobRequest {
         family: String,
         size: String,
         context: u32,
-        /// The key the Proxy uses; without it the PC-Dienst's own.
+        /// The key the proxy uses; without it the PC service's own.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         api_key: Option<String>,
         #[serde(default, skip_serializing_if = "is_false")]

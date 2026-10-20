@@ -1,61 +1,58 @@
-# Code-Benchmark
+# Code benchmark
 
-Der Knopf **Run code benchmark** unter Strata → Version & Benchmark lässt das
-aktive Modell drei feste Programmieraufgaben lösen. Dafür läuft auf dem NAS
-neben dem Proxy ein zweiter Container, `code-bench`:
+The **Run code benchmark** button under Strata → Version & benchmark has the
+active model solve three fixed programming tasks. For this a second container,
+`code-bench`, runs on the NAS next to the proxy:
 
-- `runner.py` nimmt vom Proxy einen Lauf an (`POST /runs`), lässt für jede
-  Aufgabe `opencode run` in einem frischen Ordner arbeiten und prüft danach
-  mit den versteckten Tests, was übrig ist. Der Proxy fragt `GET /runs/current`
-  ab, bis der Lauf endet.
-- opencode spricht über das Relay mit dem OpenAI-Endpunkt des Proxys (`PROXY_URL`), mit einem
-  Key, den der Proxy für den Lauf anlegt und danach widerruft. So weckt der
-  Lauf den PC wie jeder Client.
-- opencode schickt kein Sampling mit; Strata nimmt den Satz der Modellkarte.
-  Mit `temperature: 0` wäre jede Antwort greedy, und Qwen-Modelle geraten
-  damit in Schleifen.
-- Die Aufgaben in `tasks/` baut der Proxy ein und schickt sie mit dem Lauf;
-  die versteckten Tests liegen erst nach opencode im Ordner.
-- Der Agent darf lesen, schreiben und `bash` ausführen, `webfetch` nicht.
-  opencode und die versteckten Tests laufen als Nutzer `agent` in diesem
-  Container, nicht auf dem NAS. Der Runner (root) setzt beim Start eine
-  Firewall nur für `agent`: erlaubt sind ein Relay im Runner (`RELAY_ADDR`,
-  127.0.0.1:8097), das nur `/v1` an den Proxy (`PROXY_URL`) weitergibt, nicht
-  dessen Weboberfläche, dazu Dockers DNS und das Internet; gesperrt sind der
-  Proxy direkt, Loopback (die API des Runners), private,
-  Link-Local- und CGNAT-Netze, also NAS und Heimnetz, und IPv6. Dafür braucht
-  der Container `NET_ADMIN`; ohne verweigert der Runner Läufe und die Karte
-  nennt den Grund.
-- Vor jedem Lauf und bei jeder Abfrage von `/health` prüft der Runner, ob
-  unter `PROXY_URL` wirklich der Proxy antwortet (dessen Anmeldeseite, die den
-  PC nie weckt). Antwortet dort ein anderer Dienst oder keiner, verweigert er
-  Läufe und die Karte nennt Adresse und Antwort.
+- `runner.py` accepts a run from the proxy (`POST /runs`), lets `opencode run`
+  work on each task in a fresh folder and afterwards checks what is left with
+  the hidden tests. The proxy polls `GET /runs/current` until the run ends.
+- opencode talks through the relay to the proxy's OpenAI endpoint (`PROXY_URL`), with a
+  key the proxy creates for the run and revokes afterwards. So the run wakes
+  the PC like any client.
+- opencode sends no sampling settings; Strata takes the set from the model card.
+  With `temperature: 0` every answer would be greedy, and Qwen models get
+  stuck in loops with that.
+- The proxy embeds the tasks in `tasks/` and sends them with the run; the
+  hidden tests are put into the folder only after opencode.
+- The coding agent may read, write and run `bash`, but not `webfetch`.
+  opencode and the hidden tests run as user `agent` in this container, not on
+  the NAS. At start the runner (root) sets up a firewall for `agent` only:
+  allowed are a relay in the runner (`RELAY_ADDR`, 127.0.0.1:8097) that
+  forwards only `/v1` to the proxy (`PROXY_URL`), not its web UI, plus
+  Docker's DNS and the internet; blocked are the proxy directly, loopback (the
+  runner's API), private, link-local and CGNAT networks, i.e. the NAS and the
+  home network, and IPv6. For this the container needs `NET_ADMIN`; without it
+  the runner refuses runs and the card names the reason.
+- Before each run and on each request to `/health` the runner checks that it
+  really is the proxy that answers under `PROXY_URL` (its login page, which
+  never wakes the PC). If another service answers there, or none, it refuses
+  runs and the card names the address and the answer.
 
-Gemessen wird pro Aufgabe: Gesamtzeit, Schritte des Modells, Ein- und
-Ausgabe-Tokens, Ausgabe-Tokens pro Sekunde (über die Zeit der Schritte) und
-bestandene Tests. Nach der Grenze je Aufgabe wird opencode beendet; was es
-geschrieben hat, wird trotzdem geprüft. Die Grenze schickt der Proxy beim
-Start (`timeout_secs`): `CODE_BENCH_TASK_TIMEOUT_SECS` unter Strata →
-Timeouts, sonst ein Vorschlag aus dem langsamsten installierten Modell in
-„Compare models“.
+Measured per task: total time, steps of the model, input and output tokens,
+output tokens per second (over the time of the steps) and passed tests. After
+the limit per task opencode is stopped; what it has written is checked all
+the same. The proxy sends the limit at the start (`timeout_secs`):
+`CODE_BENCH_TASK_TIMEOUT_SECS` under Strata → Timeouts, otherwise a suggestion
+from the slowest installed model in "Compare models".
 
-Tests: `python3 tools/code-bench/test_runner.py` (mit einem nachgebildeten
-opencode; `scripts/check.sh` führt sie aus).
+Tests: `python3 tools/code-bench/test_runner.py` (with a faked opencode;
+`scripts/check.sh` runs them).
 
-## Bedrohungsmodell
+## Threat model
 
-Was opencode, die Befehle des Modells und der Code in den Aufgabenordnern
-tun, ist fremder Code. Er erreicht nicht:
+What opencode, the model's commands and the code in the task folders do is
+untrusted code. It does not reach:
 
-| Was | Geschützt durch |
+| What | Protected by |
 | --- | --- |
-| die API des Runners (Läufe abbrechen oder starten) | Nutzer `agent`, Firewall sperrt Loopback außer dem Relay und Port 53 von Dockers DNS (127.0.0.11) |
-| NAS, Heimnetz, Weboberfläche des Proxys | Firewall sperrt private, Link-Local- und CGNAT-Netze und IPv6; das Relay gibt nur `/v1/*` weiter |
-| andere Keys als den des Laufs | der Proxy legt pro Lauf einen Key an und widerruft nur diesen |
-| Dateien des Runners und anderer Aufgaben | Nutzer `agent` besitzt nur den eigenen Aufgabenordner |
-| die Wertung | versteckte Tests erst nach opencode, `python -I`, eigene Prozessgruppe; Schreiben ohne Symlinks zu folgen (`O_NOFOLLOW`); Marke nur aus stdout |
-| Prozesse über das Ende der Aufgabe hinaus | opencodes Prozessgruppe endet mit opencode, die der Tests nach der Wertung |
+| the runner's API (cancelling or starting runs) | user `agent`, the firewall blocks loopback except the relay and port 53 of Docker's DNS (127.0.0.11) |
+| the NAS, the home network, the proxy's web UI | the firewall blocks private, link-local and CGNAT networks and IPv6; the relay forwards only `/v1/*` |
+| keys other than the run's | the proxy creates one key per run and revokes only that one |
+| files of the runner and of other tasks | user `agent` owns only its own task folder |
+| the scoring | hidden tests only after opencode, `python -I`, a process group of their own; writing without following symlinks (`O_NOFOLLOW`); marker only from stdout |
+| processes outliving the task | opencode's process group ends with opencode, the tests' after scoring |
 
-Bekannte Lücke: Der geprüfte Code läuft im Prozess des Testlaufs und kann
-beim Beenden selbst eine Marke ausgeben. Das lässt sich in diesem Prozess
-nicht verhindern; die Wertung ist ein Maß, keine Prüfung gegen Betrug.
+Known gap: the code under test runs in the test run's process and can print a
+marker itself on exit. That cannot be prevented in this process; the score is
+a measure, not a check against cheating.

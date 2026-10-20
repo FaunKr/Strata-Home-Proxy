@@ -6,7 +6,7 @@ use std::{path::PathBuf, sync::Mutex};
 use anyhow::{Context, Result, bail};
 use strata_pc_agent::{Agent, Config, platform};
 
-const USAGE: &str = "strata-pc-agent [--config DATEI] [run | gaming an|aus|umschalten]";
+const USAGE: &str = "strata-pc-agent [--config FILE] [run | gaming on|off|toggle]";
 
 #[tokio::main]
 async fn main() {
@@ -15,9 +15,9 @@ async fn main() {
     if let Err(e) = real_main(args).await {
         // Without a console, a message box is the only way to be seen.
         if gaming_cmd {
-            platform::notify("Gaming-Modus", &format!("Fehler: {e:#}"));
+            platform::notify("Gaming mode", &format!("Error: {e:#}"));
         } else {
-            platform::notify("Strata PC-Dienst", &format!("{e:#}"));
+            platform::notify("Strata PC service", &format!("{e:#}"));
         }
         std::process::exit(1);
     }
@@ -29,7 +29,7 @@ async fn real_main(args: Vec<String>) -> Result<()> {
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         if arg == "--config" {
-            config_path = Some(it.next().context("--config braucht eine Datei")?.into());
+            config_path = Some(it.next().context("--config needs a file")?.into());
         } else {
             rest.push(arg);
         }
@@ -46,7 +46,7 @@ async fn real_main(args: Vec<String>) -> Result<()> {
                 .create(true)
                 .append(true)
                 .open(cfg.state_dir().join("strata-pc-agent.log"))
-                .context("Logdatei nicht anlegbar")?;
+                .context("Log file cannot be created")?;
             tracing_subscriber::fmt()
                 .with_ansi(false)
                 .with_writer(Mutex::new(log))
@@ -54,21 +54,22 @@ async fn real_main(args: Vec<String>) -> Result<()> {
             strata_pc_agent::run(Agent::new(cfg, Box::new(platform::System))).await
         }
         ["gaming", mode] => {
+            // The German words stay for desktop shortcuts of older installs.
             let want = match *mode {
-                "an" | "on" => Some(true),
-                "aus" | "off" => Some(false),
-                "umschalten" | "toggle" => None,
-                other => bail!("Unbekannt: {other:?}. {USAGE}"),
+                "on" | "an" => Some(true),
+                "off" | "aus" => Some(false),
+                "toggle" | "umschalten" => None,
+                other => bail!("Unknown: {other:?}. {USAGE}"),
             };
             let status = strata_pc_agent::switch_gaming(&cfg, want)
                 .await
-                .context("PC-Dienst nicht erreichbar. Läuft er?")?;
+                .context("PC service not reachable. Is it running?")?;
             let text = if status.gaming_mode {
-                "Gaming-Modus ist AN.\nStrata ist beendet, der PC schläft nicht automatisch ein."
+                "Gaming mode is ON.\nStrata is stopped, the PC does not go to sleep on its own."
             } else {
-                "Gaming-Modus ist AUS.\nStrata startet, automatisches Schlafen ist wieder erlaubt."
+                "Gaming mode is OFF.\nStrata starts, the PC may go to sleep on its own again."
             };
-            platform::notify("Gaming-Modus", text);
+            platform::notify("Gaming mode", text);
             Ok(())
         }
         _ => bail!("{USAGE}"),

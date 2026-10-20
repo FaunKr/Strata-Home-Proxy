@@ -4,11 +4,11 @@
 # plays back a scripted run chosen by FAKE_CLAUDE_MODE:
 #   success      edits a file and finishes with a summary (default)
 #   crash        edits a file, then fails with an API error
-#   crash-gaming like crash, but first switches the fake Proxy to Gaming-Modus
+#   crash-gaming like crash, but first switches the fake Proxy to gaming mode
 #   no-compact   grows its context past the compaction point without compacting,
 #                then fails on Strata's 400
 #   hang         never finishes (for the time limit)
-#   hang-gaming  switches the fake Proxy to Gaming-Modus, then never finishes
+#   hang-gaming  switches the fake Proxy to gaming mode, then never finishes
 #   slow         like success after FAKE_CLAUDE_SLEEP seconds
 #   check        one Bash tool call that echoes the marker it was asked for
 #   no-tool      answers without calling a tool
@@ -55,7 +55,7 @@ case ${FAKE_CLAUDE_MODE:-success} in
     if [[ $FAKE_CLAUDE_MODE == crash-gaming ]]; then
       echo '{"health": [{"status": 503, "tag": "gaming"}]}' >"$FAKE_PROXY_SCENARIO"
     fi
-    result "API Error: 503 Strata ist nicht verfügbar" true
+    result "API Error: 503 Strata is not available: gaming mode is on." true
     echo "fake-claude: API error" >&2
     echo "$start $(now) ${input%%$'\n'*}" >>"$rec/spans"
     exit 1

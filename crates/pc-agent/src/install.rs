@@ -1,4 +1,4 @@
-//! The Strata-Ordner as setup leaves it: model configs (`strata-<id>.json`),
+//! The Strata folder as setup leaves it: model configs (`strata-<id>.json`),
 //! their Chat settings, start scripts and logs, and each model's files in the
 //! Strata data folder. Everything here knows file names, letter case, the
 //! config format Strata writes and the engine flags the service changes;
@@ -22,7 +22,7 @@ const PROJECTION_FLAGS: [(&str, &[&str]); 3] = [
     ("--cvec-mode", &["project"]),
     ("--cvec-dir", &["per-layer"]),
 ];
-/// Strata's vector, in the Strata-Ordner.
+/// Strata's vector, in the Strata folder.
 const PROJECTION_VECTOR: [&str; 3] = [
     "data",
     "experimental-speed-projection",
@@ -38,7 +38,7 @@ const SAMPLING_KEY: &str = "sampling";
 
 type ConfigFields = serde_json::Map<String, Value>;
 
-/// The Strata-Ordner and the data folder its models live in.
+/// The Strata folder and the data folder its models live in.
 #[derive(Clone, Debug)]
 pub struct Installation {
     dir: PathBuf,
@@ -527,7 +527,7 @@ fn dir_size(dir: &Path) -> u64 {
         .sum()
 }
 
-/// A Strata-Ordner as setup leaves it, for tests.
+/// A Strata folder as setup leaves it, for tests.
 pub mod testing {
     use std::path::{Path, PathBuf};
 
@@ -535,7 +535,7 @@ pub mod testing {
 
     use super::{ConfigFields, Installation, config_text};
 
-    /// Writes setup's files into a Strata-Ordner and its data folder.
+    /// Writes setup's files into a Strata folder and its data folder.
     pub struct SetupLeaves {
         install: Installation,
     }
@@ -654,7 +654,7 @@ mod tests {
 
     use super::{testing::SetupLeaves, *};
 
-    /// A throwaway Strata-Ordner and data folder.
+    /// A throwaway Strata folder and data folder.
     struct Folders(PathBuf);
 
     impl Folders {
@@ -754,7 +754,7 @@ mod tests {
         let f = Folders::new("nomodel");
         let s = f.setup();
         s.config_text("notes", r#"{"what": "not a model"}"#)
-            .config_text("broken", "{ kaputt");
+            .config_text("broken", "{ broken");
         let install = s.installation();
         let err = install.model("notes").unwrap_err();
         assert!(err.contains("is not a model config"), "{err}");
@@ -773,7 +773,7 @@ mod tests {
         s.model("a", config(json!([])))
             .chat_settings("a", r#"{"temperature": 0.3}"#)
             .model("b", config(json!([])))
-            .chat_settings("b", "{ kaputt");
+            .chat_settings("b", "{ broken");
         let temperature = |id: &str| {
             let sampling = s
                 .installation()
@@ -922,7 +922,7 @@ mod tests {
                 "new-key-0123456789"
             );
         }
-        s.config_text("c", "{ kaputt");
+        s.config_text("c", "{ broken");
         assert!(install.set_key("third-key-0123456789").is_err());
         for id in ["a", "b"] {
             assert_eq!(
@@ -942,7 +942,7 @@ mod tests {
                 json!({"exe": "s", "args": [], "arch": "qwen35moe",
                 "reasoning_loop_recovery": "recover", "sampling": {"temperature": 0.2}}),
             )
-            .config_text("broken", "{ kaputt");
+            .config_text("broken", "{ broken");
         let install = s.installation();
 
         // Strata's version unknown: the hand-set block stays.
@@ -953,7 +953,7 @@ mod tests {
             install.model("b").unwrap().fields()["sampling"],
             json!({"temperature": 0.2})
         );
-        assert_eq!(s.text("broken"), "{ kaputt");
+        assert_eq!(s.text("broken"), "{ broken");
 
         strata_knows(&s, "def sampling_defaults_from_config(cfg):\n");
         let mut changed = install.manage();

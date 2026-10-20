@@ -1,7 +1,7 @@
-//! The wire format against stored answers of the PC-Dienst: each sample in
-//! `samples/` is what today's PC-Dienst sends or takes. A type that stops
-//! parsing one, or writes it back differently, breaks the Proxy or an older
-//! PC-Dienst.
+//! The wire format against stored answers of the PC service: each sample in
+//! `samples/` is what today's PC service sends or takes. A type that stops
+//! parsing one, or writes it back differently, breaks the proxy or an older
+//! PC service.
 
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -32,7 +32,7 @@ fn status() {
 fn sleep_and_update_answers() {
     assert!(same::<Answer>("sleep-accepted.json").accepted);
     let refused: Answer = same("sleep-refused.json");
-    assert_eq!(refused, Answer::refused("Benutzer aktiv"));
+    assert_eq!(refused, Answer::refused("User active"));
     assert!(same::<Answer>("update-accepted.json").accepted);
     assert_eq!(
         same::<Refused>("update-refused.json"),
@@ -44,7 +44,7 @@ fn sleep_and_update_answers() {
 fn a_refusal_reads_from_any_refusing_answer() {
     // The Proxy reads every refusal the same way, a sleep refusal included.
     let refused: Refused = serde_json::from_value(sample("sleep-refused.json")).unwrap();
-    assert_eq!(refused.reason.as_deref(), Some("Benutzer aktiv"));
+    assert_eq!(refused.reason.as_deref(), Some("User active"));
     same::<Refused>("strata-jobs-refused.json");
 }
 
@@ -95,7 +95,7 @@ fn every_job_kind_has_a_request() {
 
 #[test]
 fn optional_request_fields_stay_out_when_unset() {
-    // An older PC-Dienst refuses fields it does not know.
+    // An older PC service refuses fields it does not know.
     let install = StrataJobRequest::Install {
         family: "swift".into(),
         size: "IQ3_XXS".into(),
@@ -137,7 +137,7 @@ fn strata_output() {
     );
 }
 
-// --- An older PC-Dienst: fields added since are missing ---
+// --- An older PC service: fields added since are missing ---
 
 #[test]
 fn an_older_status_still_parses() {

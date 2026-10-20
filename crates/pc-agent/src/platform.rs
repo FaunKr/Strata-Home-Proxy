@@ -47,7 +47,7 @@ pub trait Platform: Send + Sync + 'static {
     fn replace_program(&self, downloaded: &Path) -> Result<()>;
     /// Ends this process, so the new program gets the port.
     fn exit(&self);
-    /// The Hardwarewerte; returns at once, `/status` asks every few seconds.
+    /// The hardware readings; returns at once, `/status` asks every few seconds.
     fn hardware(&self) -> Hardware {
         Hardware::default()
     }
@@ -89,7 +89,7 @@ mod imp {
         // SAFETY: plain flags, no pointers.
         if !unsafe { SetSuspendState(false, false, false) } {
             bail!(
-                "SetSuspendState fehlgeschlagen: {}",
+                "SetSuspendState failed: {}",
                 std::io::Error::last_os_error()
             );
         }
@@ -166,7 +166,7 @@ mod imp {
     }
 
     pub fn suspend() -> Result<()> {
-        bail!("Standby gibt es nur unter Windows")
+        bail!("Standby exists only on Windows")
     }
 
     pub fn stop(processes: &[String]) -> Result<()> {
@@ -242,12 +242,12 @@ pub fn remove_replaced_program() -> bool {
 }
 
 fn replace_program(downloaded: &Path) -> Result<()> {
-    let program = std::env::current_exe().context("Pfad des laufenden Programms unbekannt")?;
+    let program = std::env::current_exe().context("Path of the running program unknown")?;
     let old = replaced_path(&program);
     let _ = std::fs::remove_file(&old);
     // Windows lets a running program be renamed, not overwritten.
     std::fs::rename(&program, &old)
-        .with_context(|| format!("{} nicht umbenennbar", program.display()))?;
+        .with_context(|| format!("{} cannot be renamed", program.display()))?;
     let undo = |e: anyhow::Error| {
         let _ = std::fs::remove_file(&program);
         let _ = std::fs::rename(&old, &program);
@@ -255,7 +255,7 @@ fn replace_program(downloaded: &Path) -> Result<()> {
     };
     std::fs::rename(downloaded, &program)
         .or_else(|_| std::fs::copy(downloaded, &program).map(drop))
-        .with_context(|| format!("{} nicht anlegbar", program.display()))
+        .with_context(|| format!("{} cannot be created", program.display()))
         .map_err(undo)?;
     let mut cmd = Command::new(&program);
     cmd.args(std::env::args_os().skip(1));
@@ -263,7 +263,7 @@ fn replace_program(downloaded: &Path) -> Result<()> {
         cmd.current_dir(dir);
     }
     cmd.spawn()
-        .context("Neues Programm startet nicht")
+        .context("New program does not start")
         .map_err(undo)?;
     let _ = std::fs::remove_file(downloaded);
     Ok(())
@@ -279,7 +279,7 @@ fn strata_command(program: &Path, args: &[String]) -> Result<CommandSpec> {
         && !dir.is_dir()
     {
         bail!(
-            "Ordner {} aus strata_start gibt es nicht, Pfad in strata-pc-agent.toml prüfen",
+            "Folder {} from strata_start does not exist; check the path in strata-pc-agent.toml",
             dir.display()
         );
     }

@@ -11,7 +11,7 @@ use std::{
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing};
 use common::*;
 
-const PROGRAM: &[u8] = b"MZ neues Programm";
+const PROGRAM: &[u8] = b"MZ new program";
 
 /// What the fake NAS answers for the program: status and body.
 type Served = Arc<Mutex<(StatusCode, Vec<u8>)>>;
@@ -119,10 +119,7 @@ async fn something_other_than_a_windows_program_is_refused() {
     let (code, body) = post(&s, "/update", serde_json::json!({})).await;
     assert_eq!(code, 500);
     assert!(
-        body["reason"]
-            .as_str()
-            .unwrap()
-            .contains("Windows-Programm"),
+        body["reason"].as_str().unwrap().contains("Windows program"),
         "{body}"
     );
     unchanged(&s);
@@ -131,14 +128,11 @@ async fn something_other_than_a_windows_program_is_refused() {
 #[tokio::test]
 async fn failing_to_put_the_program_in_place_keeps_the_service_running() {
     let s = with_nas("update-locked", StatusCode::OK, PROGRAM).await;
-    *s.fake.replace_fails.lock().unwrap() = Some("Zugriff verweigert".into());
+    *s.fake.replace_fails.lock().unwrap() = Some("Access denied".into());
     let (code, body) = post(&s, "/update", serde_json::json!({})).await;
     assert_eq!(code, 500);
     assert!(
-        body["reason"]
-            .as_str()
-            .unwrap()
-            .contains("Zugriff verweigert"),
+        body["reason"].as_str().unwrap().contains("Access denied"),
         "{body}"
     );
     tokio::time::sleep(strata_pc_agent::update::EXIT_DELAY).await;
@@ -167,7 +161,7 @@ async fn without_the_nas_address_there_is_no_update() {
     let (code, body) = post(&s, "/update", serde_json::json!({})).await;
     assert_eq!(code, 409);
     assert!(
-        body["reason"].as_str().unwrap().contains("neu einrichten"),
+        body["reason"].as_str().unwrap().contains("install command"),
         "{body}"
     );
     unchanged(&s);
@@ -193,7 +187,7 @@ async fn no_job_starts_and_no_sleep_while_an_update_loads() {
     let update = tokio::spawn(async move {
         client()
             .post(format!("{url}/update"))
-            .bearer_auth("geheim")
+            .bearer_auth("secret")
             .send()
             .await
             .unwrap()

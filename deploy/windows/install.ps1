@@ -1,11 +1,11 @@
-# Installiert, aktualisiert oder entfernt den Strata PC-Dienst für den angemeldeten Benutzer.
+# Installs, updates or removes the Strata PC service for the signed-in user.
 #
-# Vom NAS (Seite "PC-Dienst" der Weboberfläche), in einer PowerShell:
+# From the NAS (PC area of the web UI), in a PowerShell:
 #   irm http://<NAS>:<Port>/admin/agent/install.ps1?code=<Code> | iex
 #   irm http://<NAS>:<Port>/admin/agent/install.ps1?uninstall | iex
-# Der NAS setzt NasUrl, Code und Uninstall unten ein.
+# The NAS fills in NasUrl, Code and Uninstall below.
 #
-# Ohne NAS, im Ordner mit einer selbst gebauten strata-pc-agent.exe:
+# Without the NAS, in the folder with a self-built strata-pc-agent.exe:
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -NasIp 192.168.1.10
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
 param(
@@ -18,9 +18,11 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+# Name of the scheduled task and firewall rule; existing installs have it.
 $TaskName = "Strata PC-Dienst"
 $exe = Join-Path $Target "strata-pc-agent.exe"
 $config = Join-Path $Target "strata-pc-agent.toml"
+# Existing installs have this shortcut name.
 $shortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "Gaming an-aus.lnk"
 
 function Test-Admin {
@@ -28,11 +30,11 @@ function Test-Admin {
     $id.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# Firewall-Regel und Aufgabenplanung brauchen Administratorrechte. Ohne sie
-# startet sich das Skript nach einer UAC-Abfrage neu; der Code gilt dann noch,
-# weil erst die Anmeldung beim NAS ihn verbraucht.
+# The firewall rule and the scheduled task need administrator rights. Without
+# them the script restarts itself after a UAC prompt; the code is still valid
+# then, because only the registration with the NAS uses it up.
 if (-not (Test-Admin)) {
-    Write-Host "Administratorrechte noetig, Windows fragt gleich nach."
+    Write-Host "Administrator rights needed, Windows will ask in a moment."
     if ($NasUrl) {
         $query = if ($Uninstall) { "uninstall" } else { "code=$Code" }
         $command = "irm '$NasUrl/admin/agent/install.ps1?$query' | iex"
@@ -50,7 +52,7 @@ if (-not (Test-Admin)) {
 function Stop-Agent {
     Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Stop-ScheduledTask
     Stop-Process -Name strata-pc-agent -ErrorAction SilentlyContinue
-    # Windows gibt die .exe erst kurz nach dem Beenden frei.
+    # Windows releases the .exe only shortly after it ends.
     Start-Sleep -Seconds 1
 }
 
@@ -60,35 +62,35 @@ if ($Uninstall) {
     Get-NetFirewallRule -DisplayName $TaskName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     Remove-Item $shortcut -ErrorAction SilentlyContinue
     Remove-Item $Target -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "PC-Dienst entfernt. Auf dem NAS unter Einstellungen PC_AGENT_URL und PC_AGENT_TOKEN zuruecksetzen."
+    Write-Host "PC service removed. On the NAS, reset PC_AGENT_URL and PC_AGENT_TOKEN in the settings."
     return
 }
 
 if (-not $NasUrl -and -not $NasIp) {
-    throw "Ohne NAS bitte -NasIp angeben, z. B. -NasIp 192.168.1.10"
+    throw "Without the NAS, please give -NasIp, e.g. -NasIp 192.168.1.10"
 }
 
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
 $update = Test-Path $config
 
 if ($NasUrl) {
-    # Vor der Anmeldung, damit ein Fehler hier den Code nicht verbraucht.
+    # Before the registration, so an error here does not use up the code.
     $nasUri = [Uri]$NasUrl
     $nasHost = $nasUri.Host.Trim("[]")
     $NasIp = [System.Net.Dns]::GetHostAddresses($nasHost) |
         Where-Object AddressFamily -eq "InterNetwork" |
         Select-Object -First 1 -ExpandProperty IPAddressToString
     if (-not $NasIp) {
-        throw "Keine IPv4-Adresse fuer $nasHost gefunden. Die Weboberflaeche ueber die IP des NAS oeffnen und einen neuen Befehl erzeugen."
+        throw "No IPv4 address found for $nasHost. Open the web UI through the NAS's IP and create a new install command."
     }
-    # Ueber die IPv4 des NAS, damit er den PC unter der Adresse sieht, ueber
-    # die er ihn spaeter anspricht (Firewall und allowed_clients gelten fuer IPv4).
+    # Through the NAS's IPv4, so it sees the PC from the address it later uses
+    # to reach it (the firewall and allowed_clients apply to IPv4).
     $NasBase = "http://${NasIp}:$($nasUri.Port)"
 }
 
 if ($NasUrl) {
-    # Erst laden, dann den laufenden Dienst beenden: scheitert der Download,
-    # laeuft der alte weiter. Ein abgebrochener Download verbraucht auch den Code nicht.
+    # Download first, then stop the running service: if the download fails, the
+    # old one keeps running. A broken-off download does not use up the code either.
     $download = "$exe.neu"
     Invoke-WebRequest -UseBasicParsing "$NasBase/admin/agent/strata-pc-agent.exe" -OutFile $download
     Stop-Agent
@@ -100,24 +102,23 @@ if ($NasUrl) {
 }
 
 if ($NasUrl) {
-    # Auch bei einem schon eingerichteten PC: so laesst er sich mit einem neuen
-    # Befehl neu anmelden, z. B. nachdem auf dem NAS Token oder Adresse
-    # zurueckgesetzt wurden.
+    # Also on a PC already set up: so a new install command registers it again,
+    # e.g. after the token or address was reset on the NAS.
     $body = @{ code = $Code; port = $Port } | ConvertTo-Json
     try {
         $reg = Invoke-RestMethod -Method Post "$NasBase/admin/agent/register" -ContentType "application/json" -Body $body
     } catch {
-        throw "Anmeldung beim NAS fehlgeschlagen. Der Code gilt nur einmal und kurz: im Bereich PC der Weboberflaeche einen neuen Befehl erzeugen. ($_)"
+        throw "Registration with the NAS failed. The one-time code is valid only once and only briefly: create a new install command in the PC area of the web UI. ($_)"
     }
-    # Was die Anmeldung festlegt, wird ersetzt; alles andere in einer
-    # vorhandenen Konfiguration bleibt.
+    # What the registration sets is replaced; everything else in an existing
+    # config stays.
     $own = "^\s*(listen|token|allowed_clients|nas_url|strata_api_key)\s*="
     if ($update) {
         $lines = @(Get-Content $config | Where-Object { $_ -notmatch $own })
     } else {
         $lines = @(
-            "# Konfiguration des PC-Dienstes, angelegt bei der Einrichtung vom NAS."
-            "# Startskript und Strata-Programme setzt die Seite Strata der Weboberflaeche."
+            "# PC service config, written by the install command from the NAS."
+            "# The start script and Strata programs are set in the Strata area of the web UI."
             "strata_url = `"http://127.0.0.1:8080`""
             "fresh_strata_after_standby = true"
         )
@@ -127,34 +128,34 @@ if ($NasUrl) {
     $lines += "allowed_clients = [`"$NasIp`"]"
     $lines += "nas_url = `"$NasBase`""
     if ($reg.strata_api_key) {
-        # TOML-Zeichenkette: \ und " escapen.
+        # TOML string: escape \ and ".
         $key = $reg.strata_api_key -replace '\\', '\\' -replace '"', '\"'
         $lines += "strata_api_key = `"$key`""
     }
-    # Ohne BOM, sonst liest der Dienst die erste Zeile nicht.
+    # Without a BOM, otherwise the service does not read the first line.
     [IO.File]::WriteAllLines($config, $lines)
-    Write-Host "Beim NAS angemeldet, Konfiguration: $config"
+    Write-Host "Registered with the NAS, config: $config"
 } elseif ($update) {
-    # Nur die NAS-Adresse kann sich geaendert haben.
+    # Only the NAS address can have changed.
     $lines = Get-Content $config | ForEach-Object {
         if ($_ -match "^\s*allowed_clients\s*=") { "allowed_clients = [`"$NasIp`"]" } else { $_ }
     }
     [IO.File]::WriteAllLines($config, [string[]]$lines)
-    Write-Host "PC-Dienst aktualisiert, Konfiguration bleibt bis auf die NAS-Adresse: $config"
+    Write-Host "PC service updated, the config stays except for the NAS address: $config"
 } else {
     $token = -join ((48..57) + (97..122) | Get-Random -Count 40 | ForEach-Object { [char]$_ })
     (Get-Content "$here\strata-pc-agent.example.toml" -Raw) `
-        -replace 'hier-ein-langes-zufaelliges-geheimnis', $token `
+        -replace 'put-a-long-random-secret-here', $token `
         -replace '192\.168\.1\.10', $NasIp |
         Set-Content -Encoding UTF8 $config
-    Write-Host "Konfiguration angelegt: $config"
-    Write-Host "Token fuer das NAS (PC_AGENT_TOKEN): $token"
-    Write-Host "Bitte strata_start und strata_processes in der Konfiguration pruefen."
+    Write-Host "Config created: $config"
+    Write-Host "Token for the NAS (PC_AGENT_TOKEN): $token"
+    Write-Host "Please check strata_start and strata_processes in the config."
 }
 
-# Aufgabe, Firewall-Regel und Verknüpfung bei jedem Lauf neu, damit eine neue
-# NAS-Adresse oder ein neuer Port dort ankommt.
-# Start bei Anmeldung, im Kontext des Benutzers (für Benutzeraktivität und Strata-Fenster).
+# Task, firewall rule and shortcut anew on every run, so a new NAS address or
+# a new port arrives there.
+# Start at sign-in, in the user's context (for user activity and the Strata window).
 $action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory $Target
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
@@ -162,19 +163,19 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
     -Settings $settings -Force | Out-Null
 
-# Port nur für das NAS (und lokal für die Verknüpfung) öffnen.
+# Open the port only for the NAS (and locally for the shortcut).
 Get-NetFirewallRule -DisplayName $TaskName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 New-NetFirewallRule -DisplayName $TaskName -Direction Inbound -Protocol TCP `
     -LocalPort $Port -RemoteAddress $NasIp -Action Allow | Out-Null
 
-# Desktop-Verknüpfung "Gaming an/aus".
+# Desktop shortcut that switches gaming mode on and off.
 $shell = New-Object -ComObject WScript.Shell
 $link = $shell.CreateShortcut($shortcut)
 $link.TargetPath = $exe
-$link.Arguments = "gaming umschalten"
+$link.Arguments = "gaming toggle"
 $link.WorkingDirectory = $Target
 $link.IconLocation = "$env:SystemRoot\System32\imageres.dll,-1023"
 $link.Save()
 
 Start-ScheduledTask -TaskName $TaskName
-Write-Host "Fertig. Log: $(Join-Path $Target 'strata-pc-agent.log')"
+Write-Host "Done. Log: $(Join-Path $Target 'strata-pc-agent.log')"

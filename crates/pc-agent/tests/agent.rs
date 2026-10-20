@@ -18,14 +18,14 @@ async fn token_is_required() {
     assert_eq!(resp.status(), 401);
     let resp = client()
         .get(format!("{}/status", s.url))
-        .bearer_auth("falsch")
+        .bearer_auth("wrong")
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 401);
     let status: PcStatus = client()
         .get(format!("{}/status", s.url))
-        .bearer_auth("geheim")
+        .bearer_auth("secret")
         .send()
         .await
         .unwrap()
@@ -75,7 +75,7 @@ async fn sleep_is_refused_while_someone_works() {
     *s.fake.idle.lock().unwrap() = Duration::from_secs(30);
     let (code, body) = sleep_answer(&s).await;
     assert_eq!(code, 409);
-    assert!(body["reason"].as_str().unwrap().contains("arbeitet"));
+    assert!(body["reason"].as_str().unwrap().contains("using the PC"));
 }
 
 #[tokio::test]
@@ -92,7 +92,7 @@ async fn gaming_mode_stops_strata_blocks_sleep_and_survives_restart() {
     let s = setup("gaming").await;
     let status: PcStatus = client()
         .post(format!("{}/gaming", s.url))
-        .bearer_auth("geheim")
+        .bearer_auth("secret")
         .json(&json!({"enabled": true}))
         .send()
         .await
@@ -157,7 +157,7 @@ async fn healthy_strata_is_left_alone() {
 async fn status_json(s: &Setup) -> Value {
     client()
         .get(format!("{}/status", s.url))
-        .bearer_auth("geheim")
+        .bearer_auth("secret")
         .send()
         .await
         .unwrap()
@@ -201,7 +201,7 @@ async fn managed_values_come_before_the_configuration() {
         });
         let dir = cfg.state_dir.clone().unwrap();
         std::fs::write(dir.join("strata-managed.json"), managed.to_string()).unwrap();
-        cfg.strata_args = vec!["--aus-der-toml".into()];
+        cfg.strata_args = vec!["--from-the-toml".into()];
     })
     .await;
     s.agent.set_gaming(true);

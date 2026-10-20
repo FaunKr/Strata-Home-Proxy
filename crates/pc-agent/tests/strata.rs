@@ -220,7 +220,7 @@ async fn a_second_job_is_refused_while_one_runs() {
         },
     );
     assert_eq!(post(&s, "/strata/jobs", install()).await.0, 202);
-    job_until(&s, "Setup läuft", |_| {
+    job_until(&s, "setup running", |_| {
         !s.fake.runs_of("START-HERE.bat").is_empty()
     })
     .await;
@@ -247,7 +247,7 @@ async fn a_running_job_keeps_the_pc_awake_and_the_watchdog_away() {
         },
     );
     post(&s, "/strata/jobs", install()).await;
-    job_until(&s, "Setup läuft", |_| {
+    job_until(&s, "setup running", |_| {
         !s.fake.runs_of("START-HERE.bat").is_empty()
     })
     .await;
@@ -370,7 +370,7 @@ async fn progress_comes_from_setups_output() {
         },
     );
     post(&s, "/strata/jobs", install()).await;
-    let job = job_until(&s, "Downloadstand", |j| j["percent"] == 12).await;
+    let job = job_until(&s, "download progress", |j| j["percent"] == 12).await;
     assert_eq!(job["step"], "4/7: Downloading the model");
     assert_eq!(job["done_bytes"], 10_000_000_000u64);
     assert_eq!(job["total_bytes"], 80_000_000_000u64);
@@ -388,7 +388,7 @@ async fn cancel_ends_the_running_command() {
         },
     );
     post(&s, "/strata/jobs", install()).await;
-    job_until(&s, "Setup läuft", |_| {
+    job_until(&s, "setup running", |_| {
         !s.fake.runs_of("START-HERE.bat").is_empty()
     })
     .await;
@@ -412,7 +412,7 @@ async fn a_job_running_at_a_restart_is_interrupted() {
         },
     );
     post(&s, "/strata/jobs", install()).await;
-    job_until(&s, "Setup läuft", |_| {
+    job_until(&s, "setup running", |_| {
         !s.fake.runs_of("START-HERE.bat").is_empty()
     })
     .await;
@@ -422,7 +422,7 @@ async fn a_job_running_at_a_restart_is_interrupted() {
     let addr = serve(router(again)).await;
     let job: Value = client()
         .get(format!("http://{addr}/strata/job"))
-        .bearer_auth("geheim")
+        .bearer_auth("secret")
         .send()
         .await
         .unwrap()
@@ -445,7 +445,7 @@ async fn gaming_on_cancels_a_running_job() {
         },
     );
     post(&s, "/strata/jobs", install()).await;
-    job_until(&s, "Setup läuft", |_| {
+    job_until(&s, "setup running", |_| {
         !s.fake.runs_of("START-HERE.bat").is_empty()
     })
     .await;

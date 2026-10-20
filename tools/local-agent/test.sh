@@ -38,8 +38,8 @@ fail() {
   echo "FAIL $current: $*" | tee -a "$tmp/failures" >&2
 }
 # Asserts that a file or string contains a line, or a substring.
-has_line() { grep -qxF -- "$2" "$1" || fail "$1 hat keine Zeile '$2'"; }
-lacks_line() { ! grep -qxF -- "$2" "$1" || fail "$1 hat die Zeile '$2'"; }
+has_line() { grep -qxF -- "$2" "$1" || fail "$1 has no line '$2'"; }
+lacks_line() { ! grep -qxF -- "$2" "$1" || fail "$1 has the line '$2'"; }
 # A process counts as alive unless it is gone or a zombie (which a container's
 # init may never reap).
 alive() {
@@ -47,7 +47,7 @@ alive() {
   stat=$(ps -o stat= -p "$1" 2>/dev/null || true)
   [[ -n $stat && $stat != Z* ]]
 }
-contains() { [[ $1 == *"$2"* ]] || fail "'$2' fehlt in: $1"; }
+contains() { [[ $1 == *"$2"* ]] || fail "'$2' missing in: $1"; }
 
 write_config() {
   mkdir -p "$(dirname "$config")"
@@ -97,23 +97,23 @@ test_happy_path() {
   [[ $code == 0 ]] || fail "exit $code: $out"
   local id
   id=$(run_id)
-  [[ -n $id ]] || fail "keine Lauf-ID in: $out"
+  [[ -n $id ]] || fail "no run id in: $out"
   # The worker ran in a worktree outside the repo, on a new branch.
   local cwd
   cwd=$(cat "$FAKE_CLAUDE_RECORD/cwd")
-  [[ $cwd == "$XDG_STATE_HOME/local-agent/"* ]] || fail "Worker lief in $cwd"
-  [[ $(git -C "$cwd" branch --show-current) == "local-agent/$id" ]] || fail "falscher Branch in $cwd"
+  [[ $cwd == "$XDG_STATE_HOME/local-agent/"* ]] || fail "worker ran in $cwd"
+  [[ $(git -C "$cwd" branch --show-current) == "local-agent/$id" ]] || fail "wrong branch in $cwd"
   has_line "$FAKE_CLAUDE_RECORD/stdin" "Add a line to README"
   # The edit is committed on the branch; the checkout is untouched.
-  git diff --quiet main "local-agent/$id" && fail "Branch ohne Änderung"
-  [[ $(cat README) == hello ]] || fail "Checkout geändert"
-  [[ -z $(git status --porcelain) ]] || fail "Checkout nicht sauber"
+  git diff --quiet main "local-agent/$id" && fail "branch without a change"
+  [[ $(cat README) == hello ]] || fail "checkout changed"
+  [[ -z $(git status --porcelain) ]] || fail "checkout not clean"
   # How the worker was set up.
   local env=$FAKE_CLAUDE_RECORD/env
   has_line "$env" "ANTHROPIC_BASE_URL=$url"
   has_line "$env" "ANTHROPIC_AUTH_TOKEN=client-key"
   has_line "$env" "ANTHROPIC_API_KEY=<unset>"
-  grep -qx 'ANTHROPIC_MODEL=claude-.*' "$env" || fail "kein Claude-Modellname"
+  grep -qx 'ANTHROPIC_MODEL=claude-.*' "$env" || fail "no Claude model name"
   has_line "$env" "CLAUDE_CODE_DISABLE_1M_CONTEXT=1"
   has_line "$env" "CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192"
   # At 256K the window is capped at 180K, without a percentage override.
@@ -156,12 +156,12 @@ test_config_required() {
   la run "task"
   [[ $code == 2 ]] || fail "exit $code"
   contains "$out" "$config"
-  [[ -e $FAKE_CLAUDE_RECORD/args ]] && fail "Worker gestartet"
+  [[ -e $FAKE_CLAUDE_RECORD/args ]] && fail "worker started"
   # A config others can read is refused.
   write_config
   chmod 644 "$config"
   la run "task"
-  [[ $code == 2 ]] || fail "exit $code bei lesbarer Datei"
+  [[ $code == 2 ]] || fail "exit $code for a readable file"
   contains "$out" "chmod 600"
 }
 
@@ -170,17 +170,17 @@ test_install() {
   code=0
   out=$(PREFIX=$tmp/inst "$here/install.sh" 2>&1) || code=$?
   [[ $code == 0 ]] || fail "install exit $code: $out"
-  [[ -x $tmp/inst/local-agent ]] || fail "local-agent nicht installiert"
+  [[ -x $tmp/inst/local-agent ]] || fail "local-agent not installed"
   # A config template, readable only by the user, that run still refuses.
-  [[ -f $config ]] || fail "keine Vorlage für $config"
+  [[ -f $config ]] || fail "no template for $config"
   # shellcheck disable=SC2012
-  [[ $(ls -l "$config" | cut -c5-10) == ------ ]] || fail "Vorlage für andere lesbar"
+  [[ $(ls -l "$config" | cut -c5-10) == ------ ]] || fail "template readable by others"
   contains "$out" "$config"
-  "$tmp/inst/local-agent" run task >/dev/null 2>&1 && fail "run mit leerer Vorlage"
+  "$tmp/inst/local-agent" run task >/dev/null 2>&1 && fail "run with an empty template"
   # A second install keeps the existing config.
   write_config
   PREFIX=$tmp/inst "$here/install.sh" >/dev/null 2>&1
-  grep -q client-key "$config" || fail "Konfiguration überschrieben"
+  grep -q client-key "$config" || fail "config overwritten"
 }
 
 test_worker_permissions() {
@@ -217,25 +217,25 @@ test_read_only() {
   export FAKE_CLAUDE_MODE=no-tool
   la run --read-only "Explain README"
   [[ $code == 0 ]] || fail "exit $code: $out"
-  [[ $(cat "$FAKE_CLAUDE_RECORD/cwd") == "$repo" ]] || fail "Worker nicht im Repo"
-  [[ $(git branch --format='%(refname:short)') == main ]] || fail "Branch angelegt"
-  [[ -z $(git worktree list | sed 1d) ]] || fail "Worktree angelegt"
+  [[ $(cat "$FAKE_CLAUDE_RECORD/cwd") == "$repo" ]] || fail "worker not in the repo"
+  [[ $(git branch --format='%(refname:short)') == main ]] || fail "branch created"
+  [[ -z $(git worktree list | sed 1d) ]] || fail "worktree created"
   lacks_line <(option_values --allowedTools) "Edit"
   has_line <(option_values --disallowedTools) "Edit"
   has_line <(option_values --disallowedTools) "Write"
   has_line <(option_values --disallowedTools) "Bash(git commit:*)"
   la result "$(run_id)"
   contains "$out" "I would rather not."
-  [[ $out != *"## Changes"* ]] || fail "Änderungen bei --read-only"
+  [[ $out != *"## Changes"* ]] || fail "changes with --read-only"
 }
 
 # Runs a task that must fall back before the worker starts; $1 is the
 # expected reason, $2 a piece of the hint.
 expect_fallback() {
   la run "task"
-  [[ $code == 3 ]] || fail "exit $code statt 3: $out"
-  [[ ! -e $FAKE_CLAUDE_RECORD/args ]] || fail "Worker gestartet"
-  [[ $(git branch --format='%(refname:short)') == main ]] || fail "Branch angelegt"
+  [[ $code == 3 ]] || fail "exit $code instead of 3: $out"
+  [[ ! -e $FAKE_CLAUDE_RECORD/args ]] || fail "worker started"
+  [[ $(git branch --format='%(refname:short)') == main ]] || fail "branch created"
   la result "$(run_id)"
   contains "$out" "fallback"
   contains "$out" "$1"
@@ -244,19 +244,19 @@ expect_fallback() {
 
 test_fallback_gaming() {
   health '{"status": 503, "tag": "gaming"}'
-  expect_fallback "Gaming-Modus" "fall back"
-  [[ $(wc -l <"$FAKE_PROXY_SCENARIO.requests") == 1 ]] || fail "Gaming-Modus wiederholt"
+  expect_fallback "gaming mode" "fall back"
+  [[ $(wc -l <"$FAKE_PROXY_SCENARIO.requests") == 1 ]] || fail "gaming mode retried"
 }
 
 test_fallback_wake_timeout_retries_once() {
   health '{"status": 504, "tag": "wake_timeout"}' '{"status": 200, "max_context": 262144}'
   la run "task"
-  [[ $code == 0 ]] || fail "exit $code nach erfolgreicher Wiederholung: $out"
+  [[ $code == 0 ]] || fail "exit $code after a successful retry: $out"
   health '{"status": 504, "tag": "wake_timeout"}'
   rm -r "$FAKE_PROXY_SCENARIO.requests" "$FAKE_CLAUDE_RECORD"
   new_repo -2
   expect_fallback "did not wake" "fall back"
-  [[ $(wc -l <"$FAKE_PROXY_SCENARIO.requests") == 2 ]] || fail "nicht genau einmal wiederholt"
+  [[ $(wc -l <"$FAKE_PROXY_SCENARIO.requests") == 2 ]] || fail "not retried exactly once"
 }
 
 test_fallback_setup_errors() {
@@ -267,7 +267,7 @@ test_fallback_setup_errors() {
   health '{"status": 503, "tag": "not_configured"}'
   expect_fallback "not set up" "Strata"
   health '{"status": 503, "tag": "no_mac"}'
-  expect_fallback "MAC" "PC-Dienst"
+  expect_fallback "MAC" "PC service"
   health '{"status": 200, "max_context": 32768}'
   expect_fallback "32768" "128K"
   health '{"status": 200, "max_context": 127999}'
@@ -282,11 +282,11 @@ test_fallback_proxy_unreachable() {
 test_fallback_mid_run_keeps_work() {
   export FAKE_CLAUDE_MODE=crash
   la run "task"
-  [[ $code == 3 ]] || fail "exit $code statt 3: $out"
+  [[ $code == 3 ]] || fail "exit $code instead of 3: $out"
   local id
   id=$(run_id)
-  git show "local-agent/$id:README" | grep -qx "half done" || fail "Arbeit des Workers fehlt auf dem Branch"
-  [[ -d $(cat "$FAKE_CLAUDE_RECORD/cwd") ]] || fail "Worktree entfernt"
+  git show "local-agent/$id:README" | grep -qx "half done" || fail "the worker's work is missing on the branch"
+  [[ -d $(cat "$FAKE_CLAUDE_RECORD/cwd") ]] || fail "worktree removed"
   la result "$id"
   contains "$out" "fallback"
   contains "$out" "mid-run"
@@ -299,11 +299,11 @@ test_fallback_mid_run_keeps_work() {
 test_warns_without_compaction() {
   export FAKE_CLAUDE_MODE=no-compact
   la run --watch "task"
-  [[ $code == 3 ]] || fail "exit $code statt 3: $out"
+  [[ $code == 3 ]] || fail "exit $code instead of 3: $out"
   local progress
   progress=$(sed -n 's/^local-agent: progress in //p' <<<"$out")
   [[ $(grep -c '^warning: context past the compaction point' "$progress") == 1 ]] ||
-    fail "keine einzelne Warnung in: $(cat "$progress")"
+    fail "not a single warning in: $(cat "$progress")"
   la status "$(run_id)"
   contains "$out" "context: 190K now (peak 190K, compacts near 159K), compactions: 0"
   contains "$out" "warning: context past the compaction point"
@@ -316,27 +316,27 @@ test_warns_without_compaction() {
 test_fallback_mid_run_gaming() {
   export FAKE_CLAUDE_MODE=crash-gaming
   la run "task"
-  [[ $code == 3 ]] || fail "exit $code statt 3: $out"
+  [[ $code == 3 ]] || fail "exit $code instead of 3: $out"
   la result "$(run_id)"
   contains "$out" "mid-run"
-  contains "$out" "Gaming-Modus"
+  contains "$out" "the PC switched to gaming mode"
 }
 
 test_time_limit() {
   export FAKE_CLAUDE_MODE=hang
   local started=$SECONDS
   la run --timeout 2s "task"
-  [[ $code == 4 ]] || fail "exit $code statt 4: $out"
-  ((SECONDS - started < 15)) || fail "Zeitlimit nicht eingehalten"
+  [[ $code == 4 ]] || fail "exit $code instead of 4: $out"
+  ((SECONDS - started < 15)) || fail "time limit not kept"
   sleep 0.5
   local pid
   for pid in "$(cat "$FAKE_CLAUDE_RECORD/pid")" "$(cat "$FAKE_CLAUDE_RECORD/child")"; do
-    ! alive "$pid" || fail "Prozess $pid läuft noch"
+    ! alive "$pid" || fail "process $pid still running"
   done
   local id
   id=$(run_id)
-  git rev-parse -q --verify "local-agent/$id" >/dev/null || fail "Branch entfernt"
-  [[ -d $(cat "$FAKE_CLAUDE_RECORD/cwd") ]] || fail "Worktree entfernt"
+  git rev-parse -q --verify "local-agent/$id" >/dev/null || fail "branch removed"
+  [[ -d $(cat "$FAKE_CLAUDE_RECORD/cwd") ]] || fail "worktree removed"
   la result "$id"
   contains "$out" "timeout"
   contains "$out" "Bash sleep 1000"
@@ -358,7 +358,7 @@ second line" >"$tmp/run.out" 2>&1 &
   done
   contains "$out" "running"
   contains "$out" "First line of the task"
-  wait "$runner" || fail "Lauf scheiterte: $(cat "$tmp/run.out")"
+  wait "$runner" || fail "run failed: $(cat "$tmp/run.out")"
   # Done; without a run id it shows the latest run of this repo.
   la status
   [[ $code == 0 ]] || fail "status exit $code"
@@ -366,13 +366,13 @@ second line" >"$tmp/run.out" 2>&1 &
   contains "$out" "Edit README"
   contains "$out" "context compacted"
   contains "$out" "context: 20K now (peak 50K, compacts near 159K), compactions: 1"
-  [[ $out != *warning:* ]] || fail "Warnung trotz Kompaktierung: $out"
+  [[ $out != *warning:* ]] || fail "warning despite compaction: $out"
   # Fallen back.
   health '{"status": 503, "tag": "gaming"}'
   la run "task"
   la status "$(run_id)"
   contains "$out" "fallback"
-  contains "$out" "Gaming-Modus"
+  contains "$out" "the PC is in gaming mode"
 }
 
 test_watch() {
@@ -380,14 +380,14 @@ test_watch() {
   [[ $code == 0 ]] || fail "exit $code: $out"
   local progress
   progress=$(sed -n 's/^local-agent: progress in //p' <<<"$out")
-  [[ -f $progress ]] || fail "keine Fortschrittsdatei in: $out"
+  [[ -f $progress ]] || fail "no progress file in: $out"
   has_line "$progress" "started"
   has_line "$progress" "Edit README"
   has_line "$progress" "finished"
-  [[ $(grep -c '^warning:' "$progress") == 0 ]] || fail "Warnung trotz Kompaktierung"
+  [[ $(grep -c '^warning:' "$progress") == 0 ]] || fail "warning despite compaction"
   # Without --watch the run says only when it starts and ends.
   la run "task"
-  [[ $(wc -l <<<"$out") == 2 ]] || fail "Ausgabe ohne --watch: $out"
+  [[ $(wc -l <<<"$out") == 2 ]] || fail "output without --watch: $out"
 }
 
 test_one_run_at_a_time() {
@@ -400,12 +400,12 @@ test_one_run_at_a_time() {
   done
   la status
   contains "$out" "queued"
-  for task in 0 1 2; do wait "${pids[$task]}" || fail "Lauf $task scheiterte"; done
+  for task in 0 1 2; do wait "${pids[$task]}" || fail "run $task failed"; done
   # The workers ran one after another, in the order the runs started.
   [[ $(sort -n "$FAKE_CLAUDE_RECORD/spans" | awk '{print $3}' | tr -d '\n') == ABC ]] ||
-    fail "Reihenfolge: $(cat "$FAKE_CLAUDE_RECORD/spans")"
+    fail "order: $(cat "$FAKE_CLAUDE_RECORD/spans")"
   sort -n "$FAKE_CLAUDE_RECORD/spans" | awk 'NR > 1 && $1 < end { bad = 1 } { end = $2 } END { exit bad }' ||
-    fail "Worker liefen gleichzeitig: $(cat "$FAKE_CLAUDE_RECORD/spans")"
+    fail "workers ran at the same time: $(cat "$FAKE_CLAUDE_RECORD/spans")"
 }
 
 test_stale_queue_entry() {
@@ -415,7 +415,7 @@ test_stale_queue_entry() {
   local started=$SECONDS
   la run "task"
   [[ $code == 0 ]] || fail "exit $code: $out"
-  ((SECONDS - started < 10)) || fail "toter Eintrag hielt den Lauf auf"
+  ((SECONDS - started < 10)) || fail "a dead entry held up the run"
 }
 
 test_discard() {
@@ -425,13 +425,13 @@ test_discard() {
   worktree=$(cat "$FAKE_CLAUDE_RECORD/cwd")
   la discard "$id"
   [[ $code == 0 ]] || fail "discard exit $code: $out"
-  [[ ! -e $worktree ]] || fail "Worktree bleibt"
-  ! git rev-parse -q --verify "local-agent/$id" >/dev/null || fail "Branch bleibt"
-  [[ $(cat README) == hello && -z $(git status --porcelain) ]] || fail "Checkout geändert"
+  [[ ! -e $worktree ]] || fail "worktree stays"
+  ! git rev-parse -q --verify "local-agent/$id" >/dev/null || fail "branch stays"
+  [[ $(cat README) == hello && -z $(git status --porcelain) ]] || fail "checkout changed"
   la status "$id"
   contains "$out" "discarded"
   la discard nosuchrun
-  [[ $code == 2 ]] || fail "unbekannter Lauf: exit $code"
+  [[ $code == 2 ]] || fail "unknown run: exit $code"
   contains "$out" "nosuchrun"
 }
 
@@ -449,13 +449,13 @@ test_prune() {
   la prune
   [[ $code == 0 ]] || fail "prune exit $code: $out"
   # Old and merged: run folder, worktree and branch go.
-  [[ ! -e $runs/$merged ]] || fail "alter Lauf bleibt"
-  ! git rev-parse -q --verify "local-agent/$merged" >/dev/null || fail "gemergter Branch bleibt"
-  ! git worktree list | grep -qF "$merged" || fail "gemergter Worktree bleibt"
+  [[ ! -e $runs/$merged ]] || fail "old run stays"
+  ! git rev-parse -q --verify "local-agent/$merged" >/dev/null || fail "merged branch stays"
+  ! git worktree list | grep -qF "$merged" || fail "merged worktree stays"
   # Old but unmerged: everything stays, so discard still works.
-  [[ -d $runs/$unmerged ]] || fail "ungemergter Lauf entfernt"
-  git worktree list | grep -qF "$unmerged" || fail "ungemergter Worktree entfernt"
-  [[ -d $runs/$new ]] || fail "neuer Lauf entfernt"
+  [[ -d $runs/$unmerged ]] || fail "unmerged run removed"
+  git worktree list | grep -qF "$unmerged" || fail "unmerged worktree removed"
+  [[ -d $runs/$new ]] || fail "new run removed"
 }
 
 test_check() {
@@ -470,7 +470,7 @@ test_check() {
   # Each failure names its fix.
   export FAKE_CLAUDE_MODE=no-tool
   la check
-  [[ $code == 2 ]] || fail "ohne Tool-Aufruf: exit $code"
+  [[ $code == 2 ]] || fail "without a tool call: exit $code"
   contains "$out" "FAIL tool call"
   health '{"status": 200, "max_context": 32768}'
   la check
@@ -481,11 +481,11 @@ test_check() {
   contains "$out" "Access"
   sed -i.bak "s|^LOCAL_AGENT_URL=.*|LOCAL_AGENT_URL=http://127.0.0.1:9|" "$config"
   la check
-  [[ $code == 2 ]] || fail "unerreichbar: exit $code"
+  [[ $code == 2 ]] || fail "unreachable: exit $code"
   contains "$out" "LOCAL_AGENT_URL"
   rm "$config"
   la check
-  [[ $code == 2 ]] || fail "ohne Konfiguration: exit $code"
+  [[ $code == 2 ]] || fail "without config: exit $code"
   contains "$out" "$config"
 }
 
@@ -502,7 +502,7 @@ test_interrupted_run() {
   sleep 0.5
   local pid
   for pid in "$(cat "$FAKE_CLAUDE_RECORD/pid")" "$(cat "$FAKE_CLAUDE_RECORD/child")"; do
-    ! alive "$pid" || fail "Prozess $pid läuft nach Abbruch weiter"
+    ! alive "$pid" || fail "process $pid still running after cancelling"
   done
   la status
   contains "$out" "stopped"
@@ -513,18 +513,18 @@ test_interrupted_run() {
   la status "$id"
   contains "$out" "stopped"
   la discard "$id"
-  [[ $code == 0 ]] || fail "discard eines toten Laufs: exit $code: $out"
+  [[ $code == 0 ]] || fail "discard of a dead run: exit $code: $out"
 }
 
 test_fallback_gaming_during_run() {
   export FAKE_CLAUDE_MODE=hang-gaming LOCAL_AGENT_PROBE_INTERVAL=1
   local started=$SECONDS
   la run "task"
-  [[ $code == 3 ]] || fail "exit $code statt 3: $out"
-  ((SECONDS - started < 15)) || fail "Gaming-Modus zu spät bemerkt"
-  ! alive "$(cat "$FAKE_CLAUDE_RECORD/child")" || fail "Worker läuft weiter"
+  [[ $code == 3 ]] || fail "exit $code instead of 3: $out"
+  ((SECONDS - started < 15)) || fail "gaming mode noticed too late"
+  ! alive "$(cat "$FAKE_CLAUDE_RECORD/child")" || fail "worker still running"
   la result "$(run_id)"
-  contains "$out" "Gaming-Modus"
+  contains "$out" "switched to gaming mode"
   contains "$out" "## Log summary"
 }
 
@@ -535,7 +535,7 @@ test_prune_keeps_runs_without_commits() {
   local worktree
   worktree=$(cat "$FAKE_CLAUDE_RECORD/cwd")
   la prune
-  [[ -d $worktree ]] || fail "Worktree ohne Commits entfernt"
+  [[ -d $worktree ]] || fail "worktree without commits removed"
 }
 
 tests=("$@")
@@ -552,11 +552,11 @@ for current in "${tests[@]}"; do
   )
   rc=$?
   set -e
-  ((rc == 0)) || fail "abgebrochen (exit $rc)"
+  ((rc == 0)) || fail "aborted (exit $rc)"
 done
 cd "$here"
 if [[ -s $tmp/failures ]]; then
-  echo "local-agent: $(wc -l <"$tmp/failures") Fehler" >&2
+  echo "local-agent: $(wc -l <"$tmp/failures") failures" >&2
   exit 1
 fi
-echo "local-agent: ok (${#tests[@]} Tests)"
+echo "local-agent: ok (${#tests[@]} tests)"

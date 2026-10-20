@@ -13,7 +13,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
-Without `gh` (cloud sessions), use the GitHub MCP tools: `issue_write` creates and edits issues, labels included, and its `parent_issue_number` makes a sub-issue. Native dependencies are out of reach there, so write blockers as a `## Blocked by` section listing `#<n>`.
+Without `gh` (cloud sessions), use the GitHub MCP tools: `issue_write` creates and edits issues, labels included, and its `parent_issue_number` makes a sub-issue. Native dependencies are out of reach there, so write blockers as a `## Blocked by` section listing `#<n>`. To see whether a parent is done, read it with `issue_read` `get` and look at `sub_issues_summary` (`total`, `completed`); `get_sub_issues` returns every child's full body plus the repository object, so call it only when you need the children's text.
 
 ## Pull requests as a triage surface
 

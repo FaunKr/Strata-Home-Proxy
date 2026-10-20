@@ -90,6 +90,16 @@ pub struct SettingEntry {
     pub restart: bool,
     pub secret: bool,
     pub optional: bool,
+    /// What an empty field uses, for limits the proxy suggests itself.
+    pub suggestion: Option<SettingSuggestion>,
+}
+
+/// A value the proxy works out itself while none is set.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingSuggestion {
+    pub secs: u64,
+    /// What it comes from, e.g. "slowest model IQ3_XXS at 12 tok/s".
+    pub from: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -97,12 +97,18 @@ impl StrataState {
     pub fn job_running(&self) -> bool {
         self.job_running.load(Ordering::SeqCst)
     }
+
+    /// What the PC service reported last; `None` since the Proxy started
+    /// until it answers.
+    pub fn last_info(&self) -> Option<StrataInfo> {
+        self.last.lock().unwrap().clone()
+    }
 }
 
 /// The Strata page; asks the PC service but never wakes the PC.
 pub async fn page(state: &Arc<AppState>) -> StrataPage {
     let agent = state.agent();
-    let last = || state.strata.last.lock().unwrap().clone();
+    let last = || state.strata.last_info();
     if !agent.configured() {
         return StrataPage {
             problem: Some(NO_AGENT.into()),

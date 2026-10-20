@@ -51,7 +51,7 @@ async fn shows_every_value_with_its_origin() {
     let view = settings(&mut b).await;
     assert_eq!(view["persistent"], true);
     assert_eq!(view["configured"], true);
-    assert_eq!(view["entries"].as_array().unwrap().len(), 23);
+    assert_eq!(view["entries"].as_array().unwrap().len(), 25);
     assert!(!view.to_string().contains("DATA_DIR"));
     assert_eq!(entry(&view, "STRATA_URL")["source"], "Env");
     assert_eq!(entry(&view, "STRATA_URL")["value"], "http://pc:8080");
@@ -118,7 +118,12 @@ async fn each_area_shows_its_own_settings() {
         ),
         (
             "/admin/strata/connection",
-            &["STRATA_URL", "STRATA_API_KEY"][..],
+            &[
+                "STRATA_URL",
+                "STRATA_API_KEY",
+                "UPDATE_SUMMARY_TIMEOUT_SECS",
+                "CODE_BENCH_TASK_TIMEOUT_SECS",
+            ][..],
         ),
         (
             "/admin/system",
@@ -137,7 +142,7 @@ async fn each_area_shows_its_own_settings() {
         .iter()
         .flat_map(|(_, keys)| keys.iter().copied())
         .collect();
-    assert_eq!(all.len(), 22);
+    assert_eq!(all.len(), 24);
     for (path, keys) in areas {
         let html = b.page(path).await;
         for key in &all {
@@ -388,4 +393,142 @@ async fn saved_values_survive_a_restart() {
     let second = AppState::new(base);
     assert_eq!(second.cfg().wake_timeout.as_secs(), 99);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn timeouts_suggest_assumed_speeds_without_benchmarks() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let view = settings(&mut b).await;
+    for (key, secs) in [
+        ("UPDATE_SUMMARY_TIMEOUT_SECS", 180),
+        ("CODE_BENCH_TASK_TIMEOUT_SECS", 3360),
+    ] {
+        let e = entry(&view, key);
+        assert_eq!(e["optional"], true, "{e}");
+        assert!(e["value"].is_null(), "{e}");
+        assert_eq!(e["suggestion"]["secs"], secs, "{e}");
+        let from = e["suggestion"]["from"].as_str().unwrap();
+        assert!(from.contains("assumed 30 tok/s"), "{from}");
+        assert!(from.contains("Compare models"), "{from}");
+    }
+    let html = b.page("/admin/strata/connection").await;
+    assert!(html.contains("Timeouts"), "{html}");
+    for key in [
+        "UPDATE_SUMMARY_TIMEOUT_SECS",
+        "CODE_BENCH_TASK_TIMEOUT_SECS",
+    ] {
+        assert!(html.contains(&format!("id=\"setting-{key}\"")), "{html}");
+    }
+    assert!(html.contains("placeholder=\"3360\""), "{html}");
+}
+
+/// Speeds of three installed models and one deleted since; one installed
+/// model's benchmark has no decode speed, and the slowest lacks its
+/// prompt speed.
+fn with_benchmarks(s: &Setup) {
+    let mut report = strata_info(true);
+    report
+        .info
+        .models
+        .push(model("coder-IQ1_M", Some("coder"), 1, false));
+    report
+        .info
+        .models
+        .push(model("qwen-Q2", Some("qwen"), 1, false));
+    let bench = |id: &str, decode: Option<f64>, prompt: Option<f64>, context: u32| {
+        let mut b = benchmark(id, "");
+        b.decode_tps = decode;
+        b.prompt_tps = prompt;
+        b.context = Some(context);
+        b
+    };
+    report.info.benchmarks = vec![
+        bench("IQ3_XXS", Some(40.0), Some(400.0), 32768),
+        bench("coder-IQ1_M", Some(12.0), None, 16384),
+        bench("qwen-Q2", None, Some(100.0), 65536),
+        bench("deleted-Q1", Some(5.0), Some(50.0), 65536),
+    ];
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+}
+
+#[tokio::test]
+async fn timeouts_follow_the_slowest_installed_model() {
+    let s = setup(true, |_| {}).await;
+    with_benchmarks(&s);
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("strata", &[]).await.status(), 200);
+    let view = settings(&mut b).await;
+    // (16384 / 2 / 300 + 2000 / 12) × 2 = 388 s; 50 000 / 12 × 2 = 8333 s.
+    for (key, secs) in [
+        ("UPDATE_SUMMARY_TIMEOUT_SECS", 420),
+        ("CODE_BENCH_TASK_TIMEOUT_SECS", 8340),
+    ] {
+        let suggestion = &entry(&view, key)["suggestion"];
+        assert_eq!(suggestion["secs"], secs, "{key}: {suggestion}");
+        assert_eq!(
+            suggestion["from"], "slowest model coder-IQ1_M at 12 tok/s",
+            "{key}"
+        );
+    }
+    let html = b.page("/admin/strata/connection").await;
+    assert!(html.contains("placeholder=\"420\""), "{html}");
+    assert!(
+        html.contains("slowest model coder-IQ1_M at 12 tok/s"),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn a_saved_timeout_overrides_the_suggestion_until_reset() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(
+        save(&mut b, "UPDATE_SUMMARY_TIMEOUT_SECS", "45")
+            .await
+            .status(),
+        200
+    );
+    let view = settings(&mut b).await;
+    let e = entry(&view, "UPDATE_SUMMARY_TIMEOUT_SECS");
+    assert_eq!(e["source"], "Saved");
+    assert_eq!(e["value"], "45");
+    assert_eq!(
+        strata_nas_proxy::timeouts::update_summary(&s.state).as_secs(),
+        45
+    );
+    b.call("reset-setting", &[("key", "UPDATE_SUMMARY_TIMEOUT_SECS")])
+        .await;
+    let view = settings(&mut b).await;
+    let e = entry(&view, "UPDATE_SUMMARY_TIMEOUT_SECS");
+    assert!(e["value"].is_null(), "{e}");
+    assert_eq!(e["suggestion"]["secs"], 180, "{e}");
+    assert_eq!(
+        strata_nas_proxy::timeouts::update_summary(&s.state).as_secs(),
+        180
+    );
+}
+
+#[tokio::test]
+async fn a_timeout_under_ten_seconds_is_refused() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    for value in ["9", "0", "lang", "1.5"] {
+        let resp = save(&mut b, "CODE_BENCH_TASK_TIMEOUT_SECS", value).await;
+        assert_eq!(resp.status(), 400, "{value}");
+        assert!(
+            resp.text()
+                .await
+                .unwrap()
+                .contains("CODE_BENCH_TASK_TIMEOUT_SECS: "),
+            "{value}"
+        );
+    }
+    assert_eq!(
+        save(&mut b, "CODE_BENCH_TASK_TIMEOUT_SECS", "10")
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(s.state.cfg().code_bench_task_timeout.unwrap().as_secs(), 10);
 }

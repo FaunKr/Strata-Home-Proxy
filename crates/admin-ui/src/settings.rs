@@ -337,13 +337,26 @@ fn SettingRow(
         } else {
             "Not set"
         }
+        .to_string()
     } else if entry.source == Source::Reported {
-        "Only used if the PC reports none"
+        "Only used if the PC reports none".to_string()
+    } else if let Some(s) = &entry.suggestion {
+        s.secs.to_string()
     } else if entry.optional {
-        "Not set"
+        "Not set".to_string()
     } else {
-        ""
+        String::new()
     };
+    let suggestion = entry.suggestion.as_ref().map(|s| {
+        // Suggestions are whole minutes.
+        let text = format!(
+            "Suggested: {} s ({} min), from {}.",
+            s.secs,
+            s.secs / 60,
+            s.from
+        );
+        view! { <p class="small note">{text}</p> }
+    });
     let reported = (entry.source == Source::Reported).then(|| {
         let mac = entry.value.clone().unwrap_or_default();
         view! {
@@ -409,6 +422,7 @@ fn SettingRow(
                     {reset_button}
                     <span class="hint mono small">{key}</span>
                 </div>
+                {suggestion}
                 {row_error}
             </div>
         </div>

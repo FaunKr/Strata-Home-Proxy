@@ -333,7 +333,8 @@ class RunnerTest(unittest.TestCase):
         self.assertTrue(task["timed_out"], task)
         self.assertEqual(task["state"], "done")
         self.assertEqual(task["total"], 2)
-        self.assertIn("stopped after", task["error"])
+        # Under a minute the limit is named in seconds, not as "0 min".
+        self.assertEqual(task["error"], "stopped after 1 s")
 
     def test_a_failing_opencode_keeps_its_message(self):
         os.environ["FAKE_MODE"] = "fail"

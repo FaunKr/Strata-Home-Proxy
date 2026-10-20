@@ -396,7 +396,8 @@ class Run:
                 self.process = None
         error = stats.error
         if timed_out.is_set():
-            error = f"stopped after {self.timeout // 60} min"
+            limit = f"{self.timeout} s" if self.timeout < 60 else f"{self.timeout // 60} min"
+            error = f"stopped after {limit}"
         elif code != 0 and not self.cancelled and not error:
             tail = "".join(errors)[-500:].strip()
             error = f"opencode ended with code {code}" + (f": {tail}" if tail else "")

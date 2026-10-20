@@ -10,6 +10,7 @@ use std::{
 
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing};
 use common::*;
+use strata_pc_agent::strata;
 
 const PROGRAM: &[u8] = b"MZ new program";
 
@@ -41,6 +42,12 @@ fn unchanged(s: &Setup) {
     assert!(s.fake.replaced.lock().unwrap().is_none());
     assert_eq!(s.fake.exits.load(Ordering::SeqCst), 0);
     assert!(!s.dir.join("strata-pc-agent.exe.neu").exists());
+    assert!(!marker(s).exists());
+}
+
+/// What the old service leaves for the new one when it stopped a running Strata.
+fn marker(s: &Setup) -> std::path::PathBuf {
+    s.dir.join("strata-after-update")
 }
 
 #[tokio::test]
@@ -96,6 +103,7 @@ async fn failed_download_leaves_everything_as_it_was() {
     assert!(body["reason"].as_str().unwrap().contains("404"), "{body}");
     tokio::time::sleep(strata_pc_agent::update::EXIT_DELAY).await;
     unchanged(&s);
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0, "Strata stays up");
 }
 
 #[tokio::test]
@@ -137,6 +145,10 @@ async fn failing_to_put_the_program_in_place_keeps_the_service_running() {
     );
     tokio::time::sleep(strata_pc_agent::update::EXIT_DELAY).await;
     unchanged(&s);
+    // The old service brings back the Strata it stopped.
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+    assert!(s.fake.strata_up.load(Ordering::SeqCst));
     // The next try may go ahead.
     *s.fake.replace_fails.lock().unwrap() = None;
     assert_eq!(post(&s, "/update", serde_json::json!({})).await.0, 202);
@@ -297,4 +309,176 @@ async fn no_standby_once_an_update_began_after_the_sleep_was_accepted() {
     tokio::time::sleep(Duration::from_millis(2500)).await;
     assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 0);
     assert_eq!(update.await.unwrap(), 202);
+}
+
+// --- #214 Strata stops before the handover and starts with the new service ---
+
+#[tokio::test]
+async fn update_stops_strata_before_the_handover_and_leaves_a_marker() {
+    let s = with_nas("update-stops-strata", StatusCode::OK, PROGRAM).await;
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 202, "{body}");
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *s.fake.strata_up_at_replace.lock().unwrap(),
+        Some(false),
+        "Strata ended before the program was swapped"
+    );
+    assert!(marker(&s).exists());
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_stopped_strata_gets_no_marker() {
+    let s = with_nas("update-strata-off", StatusCode::OK, PROGRAM).await;
+    s.fake.strata_up.store(false, Ordering::SeqCst);
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 202, "{body}");
+    assert!(s.fake.replaced.lock().unwrap().is_some());
+    assert!(!marker(&s).exists());
+}
+
+#[tokio::test]
+async fn a_strata_that_keeps_answering_refuses_the_update() {
+    let s = with_nas("update-strata-stays", StatusCode::OK, PROGRAM).await;
+    s.fake.strata_ignores_stop.store(true, Ordering::SeqCst);
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 409, "{body}");
+    assert!(
+        body["reason"].as_str().unwrap().contains("did not stop"),
+        "{body}"
+    );
+    tokio::time::sleep(strata_pc_agent::update::EXIT_DELAY).await;
+    unchanged(&s);
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        s.fake.starts.load(Ordering::SeqCst),
+        0,
+        "no second Strata next to the one still answering"
+    );
+    // The next try may go ahead.
+    s.fake.strata_ignores_stop.store(false, Ordering::SeqCst);
+    assert_eq!(post(&s, "/update", serde_json::json!({})).await.0, 202);
+}
+
+#[tokio::test]
+async fn nothing_in_the_old_service_starts_strata_after_the_handover() {
+    let (addr, _) = nas(StatusCode::OK, PROGRAM).await;
+    let s = setup_with("update-no-start", |c| {
+        c.nas_url = Some(format!("http://{addr}"));
+        c.fresh_strata_after_standby = true;
+    })
+    .await;
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 202, "{body}");
+    s.agent.watchdog_tick().await;
+    s.agent.resumed();
+    s.agent.set_gaming(true);
+    s.agent.set_gaming(false);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+}
+
+/// The new service's start on the folders the old one left.
+async fn new_service_starts(s: &Setup) {
+    strata::manage_configs_at_start(&s.restarted()).await.await;
+}
+
+#[tokio::test]
+async fn the_new_service_starts_strata_once_and_removes_the_marker() {
+    let s = setup("update-marker-start").await;
+    s.fake.strata_up.store(false, Ordering::SeqCst);
+    std::fs::write(marker(&s), b"").unwrap();
+    new_service_starts(&s).await;
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+    assert!(!marker(&s).exists());
+    new_service_starts(&s).await;
+    assert_eq!(
+        s.fake.starts.load(Ordering::SeqCst),
+        1,
+        "only after an update"
+    );
+}
+
+#[tokio::test]
+async fn the_marker_starts_no_strata_in_gaming_mode() {
+    let s = setup("update-marker-gaming").await;
+    s.agent.set_gaming(true);
+    std::fs::write(marker(&s), b"").unwrap();
+    new_service_starts(&s).await;
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+    assert!(!marker(&s).exists());
+}
+
+#[tokio::test]
+async fn the_marker_starts_no_strata_without_auto_start() {
+    let s = setup_with("update-marker-no-auto", |c| c.auto_start = false).await;
+    s.fake.strata_up.store(false, Ordering::SeqCst);
+    std::fs::write(marker(&s), b"").unwrap();
+    new_service_starts(&s).await;
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+    assert!(!marker(&s).exists());
+}
+
+#[tokio::test]
+async fn the_marker_starts_no_strata_without_a_start_script() {
+    let s = setup_with("update-marker-no-script", |c| c.strata_start = None).await;
+    s.fake.strata_up.store(false, Ordering::SeqCst);
+    std::fs::write(marker(&s), b"").unwrap();
+    new_service_starts(&s).await;
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+    assert!(!marker(&s).exists());
+}
+
+#[tokio::test]
+async fn a_request_that_began_during_the_download_refuses_the_update() {
+    let addr = slow_nas().await;
+    let s = setup_with("update-busy-later", |c| {
+        c.nas_url = Some(format!("http://{addr}"))
+    })
+    .await;
+    let update = start_update(&s);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    s.fake.strata_busy.store(true, Ordering::SeqCst);
+    assert_eq!(update.await.unwrap(), 409);
+    unchanged(&s);
+    assert_eq!(
+        s.fake.stops.load(Ordering::SeqCst),
+        0,
+        "the request goes on"
+    );
+}
+
+#[tokio::test]
+async fn a_loading_strata_that_cannot_be_stopped_refuses_the_update() {
+    let s = with_nas("update-stop-fails", StatusCode::OK, PROGRAM).await;
+    // Started by the service, not answering yet.
+    s.fake.strata_up.store(false, Ordering::SeqCst);
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    s.agent.strata().start();
+    s.fake.stop_fails.store(true, Ordering::SeqCst);
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 409, "{body}");
+    assert!(
+        body["reason"].as_str().unwrap().contains("did not stop"),
+        "{body}"
+    );
+    unchanged(&s);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1, "no second Strata");
+}
+
+#[tokio::test]
+async fn without_strata_programs_to_end_a_running_strata_refuses_the_update() {
+    let (addr, _) = nas(StatusCode::OK, PROGRAM).await;
+    let s = setup_with("update-no-processes", |c| {
+        c.strata_processes = vec![];
+        c.nas_url = Some(format!("http://{addr}"));
+    })
+    .await;
+    s.fake.strata_up.store(false, Ordering::SeqCst);
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    s.agent.strata().start();
+    let (code, body) = post(&s, "/update", serde_json::json!({})).await;
+    assert_eq!(code, 409, "{body}");
+    unchanged(&s);
 }

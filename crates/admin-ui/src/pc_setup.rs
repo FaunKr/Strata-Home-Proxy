@@ -116,22 +116,28 @@ fn ServiceState(
         .reported_mac
         .clone()
         .unwrap_or_else(|| "–".to_string());
-    let target = service
-        .available
-        .clone()
-        .map_or_else(|| "Update".to_string(), |v| format!("Update to {v}"));
+    let (target, wake_target) = service.available.clone().map_or_else(
+        || ("Update".to_string(), "Wake PC and update".to_string()),
+        |v| {
+            (
+                format!("Update to {v}"),
+                format!("Wake PC and update to {v}"),
+            )
+        },
+    );
     let button = (service.update_available && !service.updating).then(|| {
         view! {
             <div class="actions">
                 <button
                     type="button"
-                    disabled=move || !awake || update.pending().get()
+                    disabled=move || update.pending().get()
                     on:click=move |_| {
                         update.dispatch(UpdatePcService {});
                     }
                 >
                     {move || match (awake, update.pending().get()) {
-                        (false, _) => "Update (PC is asleep)".to_string(),
+                        (false, true) => "Waking PC …".to_string(),
+                        (false, false) => wake_target.clone(),
                         (true, true) => "Updating …".to_string(),
                         (true, false) => target.clone(),
                     }}

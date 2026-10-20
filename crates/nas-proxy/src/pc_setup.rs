@@ -1,7 +1,8 @@
 //! Setting up the PC service from the NAS: the Windows program the image
 //! carries, the one-time code behind the setup command, and the sign-up that
 //! trades the code for the token. All under `/admin/agent/`; like the rest of
-//! `/admin/`, nothing here wakes the PC or counts as activity.
+//! `/admin/`, nothing here wakes the PC or counts as activity. Only the
+//! update button does: it wakes a sleeping PC first.
 
 use std::{
     collections::HashMap,
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use strata_admin_ui::api::{PcServiceView, PcSetupCommand};
 
-use crate::{agent::UpdateAnswer, events::EventKind, state::AppState};
+use crate::{agent::UpdateAnswer, events::EventKind, files::write_private, state::AppState};
 
 /// Where the image puts `strata-pc-agent.exe`, unless `PC_AGENT_EXE` says otherwise.
 const DEFAULT_PROGRAM: &str = "/usr/local/share/strata-proxy/strata-pc-agent.exe";
@@ -38,9 +39,13 @@ const VERSION_MARKER: &[u8] = b"strata-pc-agent-version:";
 /// An update that has not reported its new version this long after the
 /// button failed; the service may take 5 min for the download alone.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(420);
+const RUNNING: &str = "An update is running already.";
+/// The version the PC service reported last, in `DATA_DIR`.
+const VERSION_FILE: &str = "pc-service-version.json";
 const UPDATE_TIMED_OUT: &str = "The PC service reported no new version after the update. Is it still running? Otherwise run the install command from the PC area on the PC.";
 
 pub struct PcSetup {
+    dir: Option<PathBuf>,
     program: Mutex<PathBuf>,
     code: Mutex<Option<Code>>,
     lifetime: Mutex<Duration>,
@@ -54,8 +59,8 @@ type FileStamp = (u64, Option<std::time::SystemTime>);
 
 #[derive(Default)]
 struct UpdateState {
-    /// The version in the last status; `Some(None)` from a service too old
-    /// to report one.
+    /// The version in the last status, also from before a restart;
+    /// `Some(None)` from a service too old to report one.
     reported: Option<Option<String>>,
     /// When the button asked for an update; until the service reports the
     /// new version, refuses or the update times out.
@@ -68,23 +73,38 @@ struct Code {
     until: Instant,
 }
 
-impl Default for PcSetup {
-    fn default() -> Self {
+/// What `VERSION_FILE` holds; `version` is `None` for a service too old to
+/// report one.
+#[derive(Serialize, Deserialize)]
+struct SavedVersion {
+    version: Option<String>,
+}
+
+impl PcSetup {
+    /// Reads the version saved in `dir` before a restart, if any.
+    pub fn new(dir: Option<PathBuf>) -> Self {
         let program = std::env::var_os("PC_AGENT_EXE")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_PROGRAM));
+        let reported = dir
+            .as_ref()
+            .and_then(|dir| std::fs::read(dir.join(VERSION_FILE)).ok())
+            .and_then(|bytes| serde_json::from_slice::<SavedVersion>(&bytes).ok())
+            .map(|saved| saved.version);
         Self {
+            dir,
             program: Mutex::new(program),
             code: Mutex::new(None),
             lifetime: Mutex::new(CODE_LIFETIME),
             program_version: Mutex::new(None),
-            update: Mutex::new(UpdateState::default()),
+            update: Mutex::new(UpdateState {
+                reported,
+                ..UpdateState::default()
+            }),
             update_timeout: Mutex::new(UPDATE_TIMEOUT),
         }
     }
-}
 
-impl PcSetup {
     /// Serves another file as the program, e.g. a stand-in in tests.
     pub fn set_program(&self, path: PathBuf) {
         *self.program.lock().unwrap() = path;
@@ -128,7 +148,11 @@ impl PcSetup {
     pub fn note_version(&self, version: Option<&str>) -> bool {
         let available = self.program_version();
         let mut update = self.update.lock().unwrap();
-        update.reported = Some(version.map(String::from));
+        let reported = Some(version.map(String::from));
+        if update.reported != reported {
+            update.reported = reported;
+            self.save(version);
+        }
         let current = version.is_some() && version == available.as_deref();
         if !current {
             return false;
@@ -136,6 +160,28 @@ impl PcSetup {
         // Up to date, however it got there: an old failure no longer matters.
         update.error = None;
         update.running_since.take().is_some()
+    }
+
+    /// Keeps `version` for after a restart; without `DATA_DIR`, nowhere.
+    fn save(&self, version: Option<&str>) {
+        let Some(dir) = &self.dir else { return };
+        let saved = SavedVersion {
+            version: version.map(String::from),
+        };
+        let bytes = serde_json::to_vec(&saved).expect("version serializes");
+        if let Err(e) = write_private(dir, VERSION_FILE, &bytes) {
+            tracing::warn!("{VERSION_FILE} not saved: {e}");
+        }
+    }
+
+    /// Whether the service last reported `available`.
+    fn already_runs(&self, available: &str) -> bool {
+        self.update
+            .lock()
+            .unwrap()
+            .reported
+            .as_ref()
+            .is_some_and(|v| v.as_deref() == Some(available))
     }
 
     /// Ends an update that took too long; its reason if it did.
@@ -166,13 +212,23 @@ impl PcSetup {
         (view, timed_out)
     }
 
+    /// Refuses while an update runs.
+    fn check_not_running(&self) -> Result<(), String> {
+        let mut update = self.update.lock().unwrap();
+        self.expire(&mut update);
+        if update.running_since.is_some() {
+            return Err(RUNNING.into());
+        }
+        Ok(())
+    }
+
     /// Marks an update as asked for, unless one runs or the service already
     /// runs `available`.
     fn begin_update(&self, available: &str) -> Result<(), String> {
         let mut update = self.update.lock().unwrap();
         self.expire(&mut update);
         if update.running_since.is_some() {
-            return Err("An update is running already.".into());
+            return Err(RUNNING.into());
         }
         if update
             .reported
@@ -253,8 +309,9 @@ fn version_in(program: &[u8]) -> Option<String> {
         })
 }
 
-/// The update button: asks the awake PC's service to load the program from
-/// the NAS. Never wakes the PC.
+/// The update button: asks the PC's service to load the program from the
+/// NAS, waking a sleeping PC first. The wake counts as use, so the PC sleeps
+/// again after the idle timeout.
 pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
     let agent = state.agent();
     if !agent.configured() {
@@ -263,13 +320,37 @@ pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
     let Some(available) = state.pc_setup.program_version() else {
         return Err("This image carries no PC service to update.".into());
     };
-    if state.ask_pc(&agent).await.is_none() {
-        return Err("The PC is asleep; an update needs the PC awake.".into());
+    let requested = || {
+        state
+            .events
+            .record(EventKind::PcServiceUpdateRequested, Some(by.to_string()));
+    };
+    let asleep = state.ask_pc(&agent).await.is_none();
+    if asleep {
+        // Checked before anything is recorded: a press that cannot wake the
+        // PC, or one during an update's restart, leaves no trace.
+        if let Some(why) = crate::strata::cannot_wake(state) {
+            return Err(why.into());
+        }
+        state.pc_setup.check_not_running()?;
+        // Recorded first, so the wake shows up with its reason.
+        requested();
+        state.touch();
+        crate::strata::wake(state, &format!("for the PC service update, {by}")).await?;
+        // The saved version may be stale: the fresh status decides.
+        state
+            .ask_pc(&agent)
+            .await
+            .ok_or("The PC service does not answer.")?;
+        if state.pc_setup.already_runs(&available) {
+            state.overview.refresh_now();
+            return Ok(());
+        }
     }
     state.pc_setup.begin_update(&available)?;
-    state
-        .events
-        .record(EventKind::PcServiceUpdateRequested, Some(by.to_string()));
+    if !asleep {
+        requested();
+    }
     state.overview.refresh_now();
     match agent.update().await {
         UpdateAnswer::Accepted => tracing::info!("PC service is updating to {available}"),

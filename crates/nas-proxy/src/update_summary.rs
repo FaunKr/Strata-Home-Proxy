@@ -298,7 +298,7 @@ async fn ask(state: &AppState, incoming: &Incoming) -> Result<(Vec<String>, Stri
     let cfg = state.cfg();
     let strata = cfg.strata_url.as_ref().ok_or("no Strata address")?;
     let status = state
-        .pc_status(&state.agent())
+        .ask_pc(&state.agent())
         .await
         .ok_or("the PC service does not answer")?;
     if status.gaming_mode || status.strata_job {

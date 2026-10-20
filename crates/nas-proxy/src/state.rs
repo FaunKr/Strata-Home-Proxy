@@ -167,14 +167,12 @@ impl AppState {
         self.probe(&self.cfg())
     }
 
-    /// Asks the PC service for its status; nothing else.
-    pub async fn pc_status(&self, agent: &AgentClient) -> Option<PcStatus> {
-        agent.status().await
-    }
-
-    /// Takes over what a status tells besides the PC's Zustand: a reported
-    /// MAC, the PC service's version, and the end of a Strata job.
-    pub async fn take_over(&self, agent: &AgentClient, status: &PcStatus) {
+    /// Asks the PC service for its status and takes over what it tells
+    /// besides the PC's Zustand: a reported MAC, the PC service's version,
+    /// and the end of a Strata job. Every caller wants these noted at once:
+    /// a job's end carries the Strata key it handed over.
+    pub async fn ask_pc(&self, agent: &AgentClient) -> Option<PcStatus> {
+        let status = agent.status().await?;
         if let Some(mac) = status.mac.as_deref().and_then(|m| parse_mac(m).ok())
             && self.settings.set_reported_mac(mac)
         {
@@ -185,7 +183,8 @@ impl AppState {
             self.events
                 .record(EventKind::PcServiceUpdated, status.version.clone());
         }
-        crate::strata::note_status(self, agent, status).await;
+        crate::strata::note_status(self, agent, &status).await;
+        Some(status)
     }
 
     /// Client for the PC service with the current address and token.
@@ -307,10 +306,7 @@ impl AppState {
         if !agent.configured() {
             return None;
         }
-        let status = self.pc_status(&agent).await;
-        if let Some(s) = &status {
-            self.take_over(&agent, s).await;
-        }
+        let status = self.ask_pc(&agent).await;
         self.note(|l, now, t| l.pc_answered(status.as_ref(), strata_answers, now, t));
         status
     }
@@ -325,7 +321,7 @@ impl AppState {
         if self.strata_healthy().await {
             return Readiness::Ready;
         }
-        match self.pc_status(&self.agent()).await {
+        match self.ask_pc(&self.agent()).await {
             Some(status) if status.gaming_mode => {
                 self.seen_gaming();
                 Readiness::Gaming
@@ -359,7 +355,7 @@ impl AppState {
             if last_agent_check.is_none_or(|t| t.elapsed() >= AGENT_CHECK_WHILE_WAKING) {
                 last_agent_check = Some(Instant::now());
                 pc_answers = false;
-                if let Some(status) = self.pc_status(&self.agent()).await {
+                if let Some(status) = self.ask_pc(&self.agent()).await {
                     if status.gaming_mode {
                         self.seen_gaming();
                         return Err(WakeError::Gaming);
@@ -416,10 +412,7 @@ impl AppState {
         if !agent.configured() {
             return;
         }
-        let status = self.pc_status(&agent).await;
-        if let Some(s) = &status {
-            self.take_over(&agent, s).await;
-        }
+        let status = self.ask_pc(&agent).await;
         // A missed answer is no sleeping PC while Strata still answers (a
         // busy PC or network); waking it again would restart the idle time.
         let strata_answers = status.is_none() && self.strata_healthy().await;
@@ -455,7 +448,7 @@ impl AppState {
         loop {
             let cfg = self.cfg();
             // A PC that just accepted sleep may still answer: not awake yet.
-            if !self.settling() && self.pc_status(&self.agent()).await.is_some() {
+            if !self.settling() && self.ask_pc(&self.agent()).await.is_some() {
                 let mut lifecycle = self.lifecycle.lock().unwrap();
                 if last_wol.is_some() {
                     self.record(lifecycle.woke(started.elapsed()));
@@ -486,7 +479,7 @@ impl AppState {
         if !agent.configured() {
             anyhow::bail!(NO_AGENT);
         }
-        if self.pc_status(&agent).await.is_none() {
+        if self.ask_pc(&agent).await.is_none() {
             if !enabled {
                 anyhow::bail!("The PC is asleep, so gaming mode is off already.");
             }

@@ -62,7 +62,7 @@ async fn follow(state: &AppState, tx: &mpsc::Sender<OutputMessage>) {
         let agent = state.agent();
         if !agent.configured() {
             notice(tx, &mut shown, OutputNotice::NoAgent).await;
-        } else if state.pc_status(&agent).await.is_none() {
+        } else if state.ask_pc(&agent).await.is_none() {
             notice(tx, &mut shown, OutputNotice::Asleep).await;
         } else {
             match agent.strata_log().await {

@@ -295,9 +295,12 @@ impl Lifecycle {
         self.pc = PcState::Waking;
     }
 
-    /// The wake-up the proxy started reached the PC after `waited`.
+    /// The wake-up the proxy started reached the PC after `waited`. A
+    /// Zustand noticed meanwhile, e.g. gaming mode, stays.
     pub fn woke(&mut self, waited: Duration) -> Record {
-        self.pc = PcState::Awake;
+        if self.pc == PcState::Waking {
+            self.pc = PcState::Awake;
+        }
         Record::new(
             EventKind::Awake,
             Some(format!("after {:.1} s", waited.as_secs_f64())),
@@ -674,6 +677,16 @@ mod tests {
         let mut l = asleep(&c);
         assert_eq!(l.woken_elsewhere(), seen(EventKind::PcSeenAwake));
         assert_eq!(l.woken_elsewhere(), None);
+    }
+
+    #[test]
+    fn a_wake_up_keeps_gaming_mode_seen_meanwhile() {
+        let c = Clock::new();
+        let mut l = asleep(&c);
+        l.wake_started();
+        let _ = l.seen_gaming();
+        let _ = l.woke(Duration::from_secs(5));
+        assert_eq!(l.pc(), PcState::Gaming);
     }
 
     #[test]

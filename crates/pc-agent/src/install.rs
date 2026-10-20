@@ -22,6 +22,12 @@ const PROJECTION_FLAGS: [(&str, &[&str]); 3] = [
     ("--cvec-mode", &["project"]),
     ("--cvec-dir", &["per-layer"]),
 ];
+/// Since Strata 8aaf188a: the args as setup last wrote them. A setup run
+/// takes every option of `args` that differs from them for one set by hand.
+const WRITTEN_KEY: &str = "args_written";
+/// Since Strata 8aaf188a: the options set by hand, which Strata puts over
+/// `args` at every start and every setup run.
+const USER_KEY: &str = "user_args";
 /// Strata's vector, in the Strata folder.
 const PROJECTION_VECTOR: [&str; 3] = [
     "data",
@@ -356,16 +362,35 @@ impl Model {
         args.as_array_mut().expect("args is an array")
     }
 
+    /// The args Strata starts with: `user_args` over `args`, as Strata's
+    /// `engine_args` puts them.
+    fn started_args(&self) -> Vec<Value> {
+        let user = self
+            .fields
+            .get(USER_KEY)
+            .and_then(Value::as_array)
+            .map_or_else(Vec::new, |user| groups(user));
+        let mut args: Vec<Value> = groups(self.args())
+            .into_iter()
+            .filter(|g| flag_of(g).is_empty() || !user.iter().any(|u| flag_of(u) == flag_of(g)))
+            .flatten()
+            .collect();
+        args.extend(user.into_iter().flatten());
+        args
+    }
+
     /// The context it starts with (`--max-context`), if the config says.
     pub fn context(&self) -> Option<u32> {
-        let args = self.args();
+        let args = self.started_args();
         let at = args.iter().position(|v| v == CONTEXT_FLAG)?;
         args.get(at + 1)?.as_str()?.parse().ok()
     }
 
     /// Whether the config loads a control vector, Strata's or another one.
     pub fn speed_projection(&self) -> bool {
-        self.args().iter().any(|v| v == PROJECTION_VECTOR_FLAG)
+        self.started_args()
+            .iter()
+            .any(|v| v == PROJECTION_VECTOR_FLAG)
     }
 
     /// Recovery from repeated reasoning passages, as Strata reads it: `true`
@@ -384,6 +409,35 @@ impl Model {
     pub fn restore_args(&mut self, before: &Model) {
         let args = before.args().to_vec();
         *self.args_mut() = args;
+        for key in [WRITTEN_KEY, USER_KEY] {
+            match before.fields.get(key) {
+                Some(v) => self.fields.insert(key.into(), v.clone()),
+                None => self.fields.remove(key),
+            };
+        }
+    }
+
+    /// Changes `args`, and `args_written` the same way, so that Strata does
+    /// not take the change for one set by hand; the options `owned` leave
+    /// `user_args`, where they would win over `args`. Neither key is added
+    /// to a config of an older Strata that has none.
+    fn change_args(&mut self, owned: &[&str], change: impl Fn(&mut Vec<Value>)) {
+        change(self.args_mut());
+        if let Some(Value::Array(written)) = self.fields.get_mut(WRITTEN_KEY) {
+            change(written);
+        }
+        if let Some(Value::Array(user)) = self.fields.get_mut(USER_KEY) {
+            let kept: Vec<Value> = groups(user)
+                .into_iter()
+                .filter(|g| !owned.contains(&flag_of(g)))
+                .flatten()
+                .collect();
+            if kept.is_empty() {
+                self.fields.remove(USER_KEY);
+            } else {
+                *user = kept;
+            }
+        }
     }
 
     /// The sampling its config and Chat settings give it with this Strata.
@@ -395,30 +449,8 @@ impl Model {
     /// adds past the trained length: every context the switch takes is
     /// within it. Everything setup derived from the old context stays.
     pub fn set_context(&mut self, context: u32) {
-        let args = self.args_mut();
-        let mut kept = Vec::with_capacity(args.len());
-        let mut set = false;
-        let mut drop_value = false;
-        for arg in args.drain(..) {
-            if std::mem::take(&mut drop_value) {
-                continue;
-            }
-            if arg.as_str().is_some_and(|a| ROPE_FLAGS.contains(&a)) {
-                drop_value = true;
-            } else if arg == CONTEXT_FLAG {
-                drop_value = true;
-                if !set {
-                    kept.extend([arg, context.to_string().into()]);
-                    set = true;
-                }
-            } else {
-                kept.push(arg);
-            }
-        }
-        if !set {
-            kept.extend([CONTEXT_FLAG.into(), context.to_string().into()]);
-        }
-        *args = kept;
+        let owned = [CONTEXT_FLAG, ROPE_FLAGS[0], ROPE_FLAGS[1]];
+        self.change_args(&owned, |args| with_context(args, context));
     }
 
     /// Switches the speed projection with the flags setup writes for it;
@@ -432,18 +464,72 @@ impl Model {
             ));
         }
         let vector = format!("{}:1.0", self.vector.display());
-        let args = self.args_mut();
-        without_speed_projection(args);
-        if on {
-            args.push(PROJECTION_VECTOR_FLAG.into());
-            args.push(vector.into());
-            for (flag, values) in PROJECTION_FLAGS {
-                args.push(flag.into());
-                args.extend(values.iter().map(|&v| Value::from(v)));
+        let mut owned = vec![PROJECTION_VECTOR_FLAG];
+        owned.extend(PROJECTION_FLAGS.iter().map(|(flag, _)| *flag));
+        self.change_args(&owned, |args| {
+            without_speed_projection(args);
+            if on {
+                args.push(PROJECTION_VECTOR_FLAG.into());
+                args.push(vector.clone().into());
+                for (flag, values) in PROJECTION_FLAGS {
+                    args.push(flag.into());
+                    args.extend(values.iter().map(|&v| Value::from(v)));
+                }
             }
-        }
+        });
         Ok(())
     }
+}
+
+/// `args` with this `--max-context` in its place, without rope scaling.
+fn with_context(args: &mut Vec<Value>, context: u32) {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut set = false;
+    let mut drop_value = false;
+    for arg in args.drain(..) {
+        if std::mem::take(&mut drop_value) {
+            continue;
+        }
+        if arg.as_str().is_some_and(|a| ROPE_FLAGS.contains(&a)) {
+            drop_value = true;
+        } else if arg == CONTEXT_FLAG {
+            drop_value = true;
+            if !set {
+                kept.extend([arg, context.to_string().into()]);
+                set = true;
+            }
+        } else {
+            kept.push(arg);
+        }
+    }
+    if !set {
+        kept.extend([CONTEXT_FLAG.into(), context.to_string().into()]);
+    }
+    *args = kept;
+}
+
+/// An argument list in Strata's groups (`strata_control/user_args.py`): an
+/// option and the values after it, up to the next `--option`.
+fn groups(args: &[Value]) -> Vec<Vec<Value>> {
+    let mut out: Vec<Vec<Value>> = Vec::new();
+    for arg in args {
+        match out.last_mut() {
+            Some(group) if !arg.as_str().is_some_and(|a| a.starts_with("--")) => {
+                group.push(arg.clone())
+            }
+            _ => out.push(vec![arg.clone()]),
+        }
+    }
+    out
+}
+
+/// A group's option; empty for values before the first one.
+fn flag_of(group: &[Value]) -> &str {
+    group
+        .first()
+        .and_then(Value::as_str)
+        .filter(|a| a.starts_with("--"))
+        .unwrap_or("")
 }
 
 /// Setup writes lower-case file names whatever the catalog's case.

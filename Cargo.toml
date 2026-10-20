@@ -2,6 +2,9 @@
 resolver = "3"
 members = ["crates/admin-ui", "crates/nas-proxy", "crates/pc-agent", "crates/pc-protocol"]
 
+[workspace.package]
+license = "MIT"
+
 # Line tables keep backtraces with file and line; full debug info and the
 # incremental cache grew target/ to 30 GB and filled the disk.
 [profile.dev]

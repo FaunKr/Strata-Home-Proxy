@@ -178,6 +178,55 @@ async fn a_cancel_while_strata_comes_up_rolls_back_and_ends_cancelled() {
 }
 
 #[tokio::test]
+async fn a_cancel_while_strata_is_busy_puts_the_old_config_back_without_a_restart() {
+    let s = setup("process-rollback-busy").await;
+    s.fake.strata_busy.store(true, Ordering::SeqCst);
+    let job = testing::job(&s.agent);
+    let ran = Arc::new(AtomicBool::new(false));
+    let agent = s.agent.clone();
+    let restore = restore(&ran);
+    let applied = tokio::spawn(async move {
+        agent
+            .strata()
+            .restart_or_roll_back(&job, "Restoring", restore)
+            .await
+    });
+    job_until(&s, "Warten auf die Anfrage", |j| {
+        j["step"] == "Waiting until Strata finishes the running request"
+    })
+    .await;
+    post(&s, "/strata/job/cancel", json!({})).await;
+    assert!(matches!(applied.await.unwrap(), Err(Step::Cancelled)));
+    assert!(ran.load(Ordering::SeqCst), "the old config comes back");
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_failed_restore_still_shows_strata_s_last_lines() {
+    let s = setup("process-restore-fails").await;
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    s.fake.command(
+        "START-HERE.bat",
+        FakeCommand {
+            lines: vec!["[X] out of memory".into()],
+            ..FakeCommand::default()
+        },
+    );
+    let job = testing::job(&s.agent);
+    let result = s
+        .agent
+        .strata()
+        .restart_or_roll_back(&job, "Restoring", || {
+            std::future::ready(Err(Step::Failed("config locked".into())))
+        })
+        .await;
+    assert!(matches!(result, Err(Step::Failed(e)) if e == "config locked"));
+    let shown = get(&s, "/strata/job").await;
+    assert_eq!(shown["lines"], json!(["[X] out of memory"]), "{shown}");
+}
+
+#[tokio::test]
 async fn strata_counts_as_loading_for_the_load_time_after_a_start() {
     let s = setup("process-loading").await;
     assert!(!s.agent.strata().loading(), "never started");

@@ -147,8 +147,8 @@ impl<'a> StrataProcess<'a> {
     /// If Strata does not answer within `context_start_secs`, or ends
     /// before, `restore` puts the old config back with `restore_step`
     /// shown and Strata starts with it; the job keeps Strata's last lines
-    /// then. After a cancel while Strata comes up, the old config comes
-    /// back too and the job ends cancelled.
+    /// then. After a cancel, while Strata is busy or while it comes up,
+    /// the old config comes back too and the job ends cancelled.
     pub async fn restart_or_roll_back<R, RF>(
         &self,
         job: &JobContext,
@@ -159,7 +159,11 @@ impl<'a> StrataProcess<'a> {
         R: FnOnce() -> RF,
         RF: Future<Output = Result<(), Step>>,
     {
-        self.restart_when_idle(job).await?;
+        if let Err(stopped) = self.restart_when_idle(job).await {
+            // Strata still runs the old config; only the file goes back.
+            job.cleanup(restore()).await?;
+            return Err(stopped);
+        }
         let started = if self.agent.gaming() {
             Ok(true)
         } else {
@@ -171,10 +175,14 @@ impl<'a> StrataProcess<'a> {
         let output = self.agent.output.last_lines(KEPT_LINES);
         job.cleanup(async {
             job.step(restore_step);
-            restore().await?;
-            self.restart().await;
+            let restored = restore().await;
+            if restored.is_ok() {
+                self.restart().await;
+            }
+            // Strata's own words explain the failure, also next to a
+            // failed restore.
             job.show_lines(output);
-            Ok::<_, Step>(())
+            restored
         })
         .await?;
         // A cancelled wait also leaves the old config, not an unproven one.

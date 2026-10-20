@@ -393,6 +393,7 @@ impl JobContext {
 }
 
 /// For tests of what job scripts build on.
+#[doc(hidden)]
 pub mod testing {
     use std::sync::Arc;
 

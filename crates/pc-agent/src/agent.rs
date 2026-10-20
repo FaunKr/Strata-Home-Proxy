@@ -303,6 +303,7 @@ impl Agent {
             return;
         }
         let healthy = self.strata_healthy().await;
+        let loading = self.strata().loading();
         let now = Instant::now();
         let restart = {
             let mut wd = self.watchdog.lock().unwrap();
@@ -310,7 +311,7 @@ impl Agent {
                 wd.unhealthy_since = None;
                 return;
             }
-            if self.strata().loading() {
+            if loading {
                 return;
             }
             let since = *wd.unhealthy_since.get_or_insert(now);

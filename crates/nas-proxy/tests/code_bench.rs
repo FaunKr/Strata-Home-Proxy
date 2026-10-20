@@ -846,3 +846,32 @@ async fn after_a_restart_mid_run_the_current_run_is_followed_and_the_model_broug
         "the model to bring back is kept after the run"
     );
 }
+
+#[tokio::test]
+async fn a_runner_that_stops_answering_gives_the_model_its_error_row_and_the_run_goes_on() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M", "swift-IQ2_XS"];
+    let (s, runner) = with_models(&ids).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    drive(&s, &runner, ids[0]).await;
+    for _ in 0..100 {
+        if last_activate(&s) == ids[1] {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    eventually_for(Duration::from_secs(10), "run for the second model", || {
+        last_run(&runner) == ids[1]
+    })
+    .await;
+    // The runner forgets the run: the proxy stops asking after a few misses.
+    *runner.current.lock().unwrap() = None;
+    eventually_for(
+        Duration::from_secs(10),
+        "error row for the second model",
+        || s.state.code_bench.error_row_for(ids[1]),
+    )
+    .await;
+    drive(&s, &runner, ids[2]).await;
+}

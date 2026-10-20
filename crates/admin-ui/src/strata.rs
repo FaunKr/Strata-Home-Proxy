@@ -1165,13 +1165,13 @@ fn CodeBenchCard() -> impl IntoView {
         });
     }
     let confirm = expect_context::<Confirm>();
-    let run = move |_| {
+    let run = move |minutes: u64| {
         confirm.ask(
             Question {
                 title: "Run the code benchmark?".into(),
                 text: format!(
                     "The active model solves {} Python tasks with opencode, up to {} minutes each. The PC wakes with the first request; other requests keep working meanwhile.",
-                    CODE_BENCH_TASKS, CODE_BENCH_TASK_MINUTES
+                    CODE_BENCH_TASKS, minutes
                 ),
                 confirm: "Run code benchmark",
                 danger: false,
@@ -1181,13 +1181,13 @@ fn CodeBenchCard() -> impl IntoView {
             },
         );
     };
-    let run_all = move |models: usize| {
+    let run_all = move |models: usize, minutes: u64| {
         confirm.ask(
             Question {
                 title: "Benchmark all models?".into(),
                 text: format!(
-                    "{models} models, {CODE_BENCH_TASKS} tasks each, up to {CODE_BENCH_TASK_MINUTES} minutes per task: at most {} hours in all. The model active before the run comes back at the end.",
-                    (models * CODE_BENCH_TASKS * CODE_BENCH_TASK_MINUTES).div_ceil(60),
+                    "{models} models, {CODE_BENCH_TASKS} tasks each, up to {minutes} minutes per task: at most {} hours in all. The model active before the run comes back at the end.",
+                    (models as u64 * CODE_BENCH_TASKS as u64 * minutes).div_ceil(60),
                 ),
                 confirm: "Benchmark all models",
                 danger: false,
@@ -1263,13 +1263,13 @@ fn CodeBenchCard() -> impl IntoView {
                                     </div>
                                 }
                             });
-                            let current = p.run.clone().map(|r| view! { <CodeBenchCurrent run=r cancel /> });
-                            let mut results = p.results.clone();
-                            results.sort_by(|a, b| {
-                                let (pa, ta) = run_totals(a);
-                                let (pb, tb) = run_totals(b);
-                                pb.cmp(&pa).then(ta.total_cmp(&tb))
-                            });
+                            let in_all = p.all.is_some();
+                            let current = p
+                                .run
+                                .clone()
+                                .map(|r| view! { <CodeBenchCurrent run=r cancel in_all /> });
+                            // Sorted by the proxy: tests passed, then time.
+                            let results = p.results.clone();
                             let results = if results.is_empty() {
                                 view! { <p>"No code benchmark has run yet."</p> }.into_any()
                             } else {
@@ -1280,6 +1280,7 @@ fn CodeBenchCard() -> impl IntoView {
                                     .into_any()
                             };
                             let models = p.models;
+                            let minutes = p.task_minutes.max(1);
                             view! {
                                 {problem}
                                 {progress}
@@ -1292,7 +1293,7 @@ fn CodeBenchCard() -> impl IntoView {
                                         disabled=move || {
                                             blocked || running.get() || start.pending().get()
                                         }
-                                        on:click=run
+                                        on:click=move |_| run(minutes)
                                     >
                                         "Run code benchmark"
                                     </button>
@@ -1305,7 +1306,7 @@ fn CodeBenchCard() -> impl IntoView {
                                                 || start_all.pending().get()
                                                 || models < 2
                                         }
-                                        on:click=move |_| run_all(models)
+                                        on:click=move |_| run_all(models, minutes)
                                     >
                                         "Benchmark all models"
                                     </button>
@@ -1321,7 +1322,6 @@ fn CodeBenchCard() -> impl IntoView {
 }
 
 const CODE_BENCH_TASKS: usize = 3;
-const CODE_BENCH_TASK_MINUTES: usize = 30;
 
 /// Hidden tests passed and seconds in total.
 fn run_totals(run: &CodeBenchRun) -> (u32, f64) {
@@ -1343,7 +1343,12 @@ fn duration_text(secs: f64) -> String {
 
 /// The running run, or the last one that ended without a result.
 #[component]
-fn CodeBenchCurrent(run: CodeBenchRun, cancel: ServerAction<CancelCodeBench>) -> impl IntoView {
+fn CodeBenchCurrent(
+    run: CodeBenchRun,
+    cancel: ServerAction<CancelCodeBench>,
+    /// Part of a run over all models: Cancel stops the models still to come too.
+    in_all: bool,
+) -> impl IntoView {
     let confirm = expect_context::<Confirm>();
     match run.state {
         CodeBenchState::Running => {
@@ -1375,8 +1380,12 @@ fn CodeBenchCurrent(run: CodeBenchRun, cancel: ServerAction<CancelCodeBench>) ->
                                     .ask(
                                         Question {
                                             title: "Cancel the code benchmark?".into(),
-                                            text: "The task that runs now ends, the others do not start."
-                                                .into(),
+                                            text: if in_all {
+                                                "The task that runs now ends, the other tasks and models do not start. The finished results stay and the model active before the run comes back."
+                                            } else {
+                                                "The task that runs now ends, the others do not start."
+                                            }
+                                            .into(),
                                             confirm: "Cancel",
                                             danger: true,
                                         },

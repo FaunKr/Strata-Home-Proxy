@@ -274,6 +274,7 @@ pub async fn page(state: &AppState) -> CodeBenchPage {
         results,
         all: state.code_bench.all_progress(),
         models,
+        task_minutes: timeouts::code_bench_task(state).as_secs().div_ceil(60),
     }
 }
 
@@ -301,6 +302,8 @@ async fn health(state: &AppState, url: &str) -> Result<(), String> {
 }
 
 const RUNNING: &str = "A code benchmark is running already.";
+/// Why the PC is woken, in the history.
+const WAKE_BY: &str = "for the code benchmark";
 const GAMING: &str = "Gaming mode is on.";
 const STRATA_JOB: &str = "A Strata job is running. Start the code benchmark once it ends.";
 const FEWER: &str =
@@ -339,51 +342,10 @@ pub async fn start(state: &std::sync::Arc<AppState>) -> Result<(), String> {
     }
     let model = active_model(state).await?;
     revoke_key(state);
-    let (key, info) = state.api_keys.create(KEY_NAME).map_err(|e| match e {
-        KeyError::DuplicateName => format!(
-            "A key named \"{KEY_NAME}\" exists under Access. Rename it: the code benchmark makes a key of that name for each run."
-        ),
-        e => e.to_string(),
-    })?;
-    state.code_bench.set_key(Some(info.prefix));
-    let tasks: Vec<_> = TASKS
-        .iter()
-        .map(|t| {
-            json!({
-                "name": t.name,
-                "title": t.title,
-                "files": {"TASK.md": t.task, "example_test.py": t.example},
-                "hidden_test": t.hidden,
-            })
-        })
-        .collect();
-    let body = json!({
-        "model": model,
-        "api_key": key,
-        "tasks": tasks,
-        // After `active_model`, so from the speeds the PC service just reported.
-        "timeout_secs": timeouts::code_bench_task(state).as_secs(),
-    });
-    let answer = async {
-        let resp = state
-            .probe_client()
-            .post(format!("{url}/runs"))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("The code-bench container does not answer: {e}"))?;
-        let code = resp.status();
-        let value: serde_json::Value = resp.json().await.unwrap_or_default();
-        if !code.is_success() {
-            return Err(value["reason"].as_str().map_or_else(
-                || format!("The code-bench container answered {code}."),
-                String::from,
-            ));
-        }
-        serde_json::from_value::<CodeBenchRun>(value)
-            .map_err(|e| format!("The code-bench container answered something unknown: {e}"))
-    }
-    .await;
+    let key = new_key(state)?;
+    // After `active_model`, so the limit comes from the speeds the PC service
+    // just reported.
+    let answer = post_run(state, &url, &model, &key).await;
     let run = match answer {
         Ok(run) => run,
         Err(e) => {
@@ -396,6 +358,18 @@ pub async fn start(state: &std::sync::Arc<AppState>) -> Result<(), String> {
     let state = std::sync::Arc::clone(state);
     tokio::spawn(async move { follow(&state, &url).await });
     Ok(())
+}
+
+/// The run's key under Access, its prefix kept so a restart can revoke it.
+fn new_key(state: &AppState) -> Result<String, String> {
+    let (key, info) = state.api_keys.create(KEY_NAME).map_err(|e| match e {
+        KeyError::DuplicateName => format!(
+            "A key named \"{KEY_NAME}\" exists under Access. Rename it: the code benchmark makes a key of that name for each run."
+        ),
+        e => e.to_string(),
+    })?;
+    state.code_bench.set_key(Some(info.prefix));
+    Ok(key)
 }
 
 /// Starts a run over all installed models: each is activated and solves the
@@ -448,13 +422,7 @@ pub async fn start_all(state: &Arc<AppState>) -> Result<(), String> {
             )
         })?;
     revoke_key(state);
-    let (key, info) = state.api_keys.create(KEY_NAME).map_err(|e| match e {
-        KeyError::DuplicateName => format!(
-            "A key named \"{KEY_NAME}\" exists under Access. Rename it: the code benchmark makes a key of that name for each run."
-        ),
-        e => e.to_string(),
-    })?;
-    state.code_bench.set_key(Some(info.prefix));
+    let key = new_key(state)?;
     state.code_bench.set_restore(&restore);
     state.code_bench.cancelled.store(false, Ordering::SeqCst);
     *state.code_bench.all.lock().unwrap() = Some(All {
@@ -525,35 +493,22 @@ async fn bring_back(state: &Arc<AppState>, model: &str) {
     state.code_bench.clear_restore();
 }
 
-/// Activates one model through the PC service and waits for the job. The
-/// proxy's own run guard stays up meanwhile, so a Strata job started by hand
-/// is refused until the run ends.
+/// Activates one model through the PC service, waking the PC first, and waits
+/// for the job. Strata's status poll notes the job's end under Events and
+/// clears its guard, as for a job started by hand.
 async fn activate(state: &Arc<AppState>, model: &str) -> Result<(), String> {
     let agent = state.agent();
     if !agent.configured() {
         return Err("The PC is not set up.".into());
     }
+    if state.ask_pc(&agent).await.is_none() {
+        crate::strata::wake(state, WAKE_BY).await?;
+    }
     let request = StrataJobRequest::Activate {
         model: model.to_string(),
     };
+    agent.start_strata_job(&request).await?;
     state.strata.set_job_running(true);
-    let result = activate_job(state, &agent, &request, model).await;
-    state.strata.set_job_running(false);
-    if result.is_ok() {
-        state
-            .events
-            .record(EventKind::StrataJobDone, Some(format!("Activate {model}")));
-    }
-    result
-}
-
-async fn activate_job(
-    state: &Arc<AppState>,
-    agent: &crate::agent::AgentClient,
-    request: &StrataJobRequest,
-    model: &str,
-) -> Result<(), String> {
-    agent.start_strata_job(request).await?;
     state.events.record(
         EventKind::StrataJobStarted,
         Some(format!("Activate {model}")),
@@ -584,8 +539,14 @@ async fn activate_job(
     }
 }
 
-/// Hands the runner the tasks for one model, with the key made for the run.
-async fn run_model(state: &Arc<AppState>, url: &str, model: &str, key: &str) -> Result<(), String> {
+/// Hands the runner the tasks for `model` with the run's key; the run as the
+/// runner took it.
+async fn post_run(
+    state: &AppState,
+    url: &str,
+    model: &str,
+    key: &str,
+) -> Result<CodeBenchRun, String> {
     let tasks: Vec<_> = TASKS
         .iter()
         .map(|t| {
@@ -618,8 +579,13 @@ async fn run_model(state: &Arc<AppState>, url: &str, model: &str, key: &str) -> 
             String::from,
         ));
     }
-    let run = serde_json::from_value::<CodeBenchRun>(value)
-        .map_err(|e| format!("The code-bench container answered something unknown: {e}"))?;
+    serde_json::from_value::<CodeBenchRun>(value)
+        .map_err(|e| format!("The code-bench container answered something unknown: {e}"))
+}
+
+/// One model's run inside a run over all models, followed to its end.
+async fn run_model(state: &Arc<AppState>, url: &str, model: &str, key: &str) -> Result<(), String> {
+    let run = post_run(state, url, model, key).await?;
     *state.code_bench.run.lock().unwrap() = Some(run);
     follow_run(state, url, true).await;
     Ok(())
@@ -635,8 +601,11 @@ pub fn resume(state: &Arc<AppState>) {
     if state.code_bench.key.lock().unwrap().is_none() {
         return;
     }
+    // No run starts until the model is back and the old key revoked.
+    state.code_bench.starting.store(true, Ordering::SeqCst);
     let state = Arc::clone(state);
     tokio::spawn(async move {
+        let _starting = Starting(&state.code_bench.starting);
         if let Some(run) = current(&state, &url).await
             && run.state == CodeBenchState::Running
         {
@@ -704,11 +673,9 @@ async fn follow(state: &Arc<AppState>, url: &str) {
 }
 
 /// One run to its end. As part of a run over all models (`in_all`) it keeps a
-/// failed run as its error row and leaves the shared key for the whole run;
-/// it returns the run as it ended.
-async fn follow_run(state: &Arc<AppState>, url: &str, in_all: bool) -> CodeBenchRun {
+/// failed run as its error row and leaves the shared key for the whole run.
+async fn follow_run(state: &Arc<AppState>, url: &str, in_all: bool) {
     let mut missed = 0;
-    let last;
     loop {
         let poll = *state.code_bench.poll.lock().unwrap();
         tokio::time::sleep(poll).await;
@@ -717,22 +684,18 @@ async fn follow_run(state: &Arc<AppState>, url: &str, in_all: bool) -> CodeBench
             if missed < LOST_AFTER {
                 continue;
             }
-            last = {
-                let mut guard = state.code_bench.run.lock().unwrap();
-                let run = guard.get_or_insert_with(|| CodeBenchRun {
-                    model: String::new(),
-                    state: CodeBenchState::Failed,
-                    error: None,
-                    started: clock::unix_now(),
-                    ended: None,
-                    tasks: vec![],
-                    at_text: String::new(),
-                });
-                run.state = CodeBenchState::Failed;
-                run.error = Some("The code-bench container stopped answering.".into());
-                run.ended = Some(clock::unix_now());
-                run.clone()
+            let lost = {
+                let mut current = state.code_bench.run.lock().unwrap();
+                current.as_mut().map(|run| {
+                    run.state = CodeBenchState::Failed;
+                    run.error = Some("The code-bench container stopped answering.".into());
+                    run.ended = Some(clock::unix_now());
+                    run.clone()
+                })
             };
+            if in_all && let Some(run) = lost {
+                state.code_bench.keep(run);
+            }
             break;
         };
         missed = 0;
@@ -750,25 +713,19 @@ async fn follow_run(state: &Arc<AppState>, url: &str, in_all: bool) -> CodeBench
                 *state.code_bench.run.lock().unwrap() = Some(run);
             }
             CodeBenchState::Done => {
-                state.code_bench.keep(run.clone());
+                state.code_bench.keep(run);
                 *state.code_bench.run.lock().unwrap() = None;
-                last = run;
                 break;
             }
             CodeBenchState::Cancelled | CodeBenchState::Failed => {
                 if in_all && run.state == CodeBenchState::Failed {
                     state.code_bench.keep(run.clone());
                 }
-                *state.code_bench.run.lock().unwrap() = Some(run.clone());
-                last = run;
+                *state.code_bench.run.lock().unwrap() = Some(run);
                 break;
             }
         }
     }
-    if !in_all {
-        state.overview.refresh_now();
-    }
-    last
 }
 
 /// The runner's current run; `None` when it does not answer or had none yet.

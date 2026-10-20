@@ -806,6 +806,9 @@ pub struct CodeBenchPage {
     /// at least two.
     #[serde(default)]
     pub models: usize,
+    /// The limit for each task of a run, in minutes, for the dialogs.
+    #[serde(default)]
+    pub task_minutes: u64,
 }
 
 #[server(prefix = "/admin/api", endpoint = "code-bench")]

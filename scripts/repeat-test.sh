@@ -27,16 +27,24 @@ bin=$(cargo test -q -p "$pkg" --test "$target" --no-run --message-format=json \
 # As cargo test does: from the package's directory.
 cd "$dir"
 all=$("$bin" --list 2>/dev/null | sed -n 's/: test$//p' | awk -v p="$prefix" 'index($0, p) == 1' | sort)
-# The filters pick tests of this file; without any, the whole file runs.
-if (($#)); then
-  all=$(grep -F "$(printf '%s\n' "$@")" <<<"$all" || true)
+# Arguments starting with - go to the test binary (--nocapture,
+# --test-threads=1, …); the others pick tests of this file by name, as
+# libtest's filters do. Without any, the whole file runs.
+flags=() filters=()
+for arg in "$@"; do
+  if [[ $arg == -* ]]; then flags+=("$arg"); else filters+=("$arg"); fi
+done
+if ((${#filters[@]})); then
+  all=$(awk -v p="$prefix" -v f="$(printf '%s\n' "${filters[@]}")" '
+    BEGIN { n = split(f, fs, "\n") }
+    { name = substr($0, length(p) + 1); for (i = 1; i <= n; i++) if (index(name, fs[i])) { print; next } }' <<<"$all")
 fi
 if [[ -z $all ]]; then
   echo "No test matches: $test $*" >&2
   exit 2
 fi
 mapfile -t names <<<"$all"
-set -- --exact "${names[@]}"
+set -- ${flags[@]+"${flags[@]}"} --exact "${names[@]}"
 failed=0 hung=0
 for i in $(seq "$count"); do
   rc=0

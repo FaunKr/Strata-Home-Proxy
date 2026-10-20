@@ -6,7 +6,7 @@
 - Check UI changes in the browser: `scripts/ui-check.sh` (`SHOTS=1` for screenshots).
 - New proxy tests use the harness with a simulated PC and Strata in `crates/nas-proxy/tests/common`; a proxy restart over the same `DATA_DIR` is `restarted` there, not a second `setup`.
 - What the PC service takes and answers over HTTP is written down as types in `crates/pc-protocol`; fields are only ever added, rules in `docs/pc-agent-api.md`.
-- Tests run with cargo-nextest (`cargo install cargo-nextest --locked`; version pinned in `.config/nextest.toml`). Each crate's integration tests are one binary: a new file in `tests/` needs its `mod` line in `tests/main.rs`, or check.sh fails.
+- Tests run with cargo-nextest, at least the version `.config/nextest.toml` pins (check.sh prints the install command). Each crate's integration tests are one binary: a new file in `tests/` needs its `mod` line in `tests/main.rs`, or check.sh fails.
 - Flaky or hanging tests: `scripts/repeat-test.sh` runs one test file many times and names the one that hangs.
 - CI costs, Actions minutes, which jobs a PR starts: `docs/ci.md`.
 

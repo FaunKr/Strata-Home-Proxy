@@ -85,7 +85,7 @@ jobs:
       # check.sh runs the tests with it, at the version .config/nextest.toml pins.
       - id: nextest
         if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
-        run: echo "version=$(sed -n 's/^nextest-version = { required = "\(.*\)" }$/\1/p' .config/nextest.toml)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(scripts/nextest-version.sh)" >> "$GITHUB_OUTPUT"
       - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         uses: taiki-e/install-action@v2
         with:

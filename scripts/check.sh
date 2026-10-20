@@ -73,18 +73,20 @@ if [[ ! -x $eslint ]]; then
   exit 2
 fi
 "$eslint" scripts
-# The test runner, at the version .config/nextest.toml pins (CI installs the same).
-nextest_version=$(sed -n 's/^nextest-version = { required = "\(.*\)" }$/\1/p' .config/nextest.toml)
-if ! cargo nextest --version >/dev/null 2>&1; then
-  echo "cargo-nextest missing: cargo install cargo-nextest@$nextest_version --locked (or brew install cargo-nextest)" >&2
+# The test runner, at least the version .config/nextest.toml pins (CI installs it).
+nextest_version=$(scripts/nextest-version.sh)
+installed=$(cargo nextest --version 2>/dev/null | sed -n '1s/^cargo-nextest \([0-9.]*\).*/\1/p' || true)
+if [[ -z $installed || $(printf '%s\n' "$nextest_version" "$installed" | sort -V | head -n1) != "$nextest_version" ]]; then
+  echo "cargo-nextest ${installed:-missing}, needs $nextest_version: cargo install cargo-nextest@$nextest_version --locked" >&2
   exit 2
 fi
 # The integration tests are one binary per crate (autotests = false): a file
 # in tests/ that tests/main.rs does not list would silently never run.
 for main in crates/*/tests/main.rs; do
-  for file in "${main%/main.rs}"/*.rs; do
-    name=$(basename "$file" .rs)
-    if [[ $name != main ]] && ! grep -qx "mod $name;" "$main"; then
+  for file in "${main%/main.rs}"/*.rs "${main%/main.rs}"/*/mod.rs; do
+    [[ -e $file ]] || continue
+    name=$(basename "${file%/mod.rs}" .rs)
+    if [[ $name != main ]] && ! grep -qE "(^|[] ])mod $name;" "$main"; then
       echo "$file does not run: add \"mod $name;\" to $main" >&2
       exit 1
     fi
@@ -148,5 +150,7 @@ tools/local-agent/test.sh
 python3 tools/code-bench/test_runner.py
 # Build first, then test. nextest kills a test after 60 s and names it
 # (.config/nextest.toml); a package without tests passes, as with cargo test.
+# nextest runs no doctests; there are none (cargo test --doc: 0 everywhere).
 cargo nextest run "${package_args[@]}" --no-run
-cargo nextest run "${package_args[@]}" --no-tests=pass
+# The time limit catches a run that hangs outside a single test.
+timeout 15m cargo nextest run "${package_args[@]}" --no-tests=pass

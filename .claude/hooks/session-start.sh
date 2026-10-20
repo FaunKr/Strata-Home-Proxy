@@ -14,10 +14,10 @@ rustup target add wasm32-unknown-unknown
 scripts/install-cargo-leptos.sh || true
 # cargo-nextest, the test runner of scripts/check.sh, at the version
 # .config/nextest.toml pins; get.nexte.st is blocked here, GitHub is not.
-if ! cargo nextest --version >/dev/null 2>&1; then
-  nextest_version=$(sed -n 's/^nextest-version = { required = "\(.*\)" }$/\1/p' .config/nextest.toml)
-  curl -fsSL "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$nextest_version/cargo-nextest-$nextest_version-x86_64-unknown-linux-gnu.tar.gz" \
-    | tar xz -C "$HOME/.cargo/bin" || true
+nextest_version=$(scripts/nextest-version.sh)
+if [[ $(cargo nextest --version 2>/dev/null | head -n1) != "cargo-nextest $nextest_version "* ]]; then
+  curl -fsSL "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$nextest_version/cargo-nextest-$nextest_version-$(uname -m)-unknown-linux-gnu.tar.gz" \
+    | tar xz -C "$HOME/.cargo/bin" || echo "cargo-nextest $nextest_version not installed" >&2
 fi
 cargo test --no-run --quiet
 # The same arguments as scripts/check.sh, or clippy checks again; a warning

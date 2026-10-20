@@ -12,7 +12,8 @@ if (($#)); then
   names=()
   for package in "$@"; do
     if [[ -f crates/$package/Cargo.toml ]]; then
-      package=$(sed -n 's/^name = "\(.*\)"$/\1/p' "crates/$package/Cargo.toml" | head -n 1)
+      name=$(sed -n 's/^name = "\(.*\)"$/\1/p' "crates/$package/Cargo.toml" | head -n 1)
+      package=${name:-$package}
     fi
     names+=("$package")
   done

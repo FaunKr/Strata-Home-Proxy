@@ -2,6 +2,7 @@
 name = "strata-pc-protocol"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 # The PC-Dienst's API as types: the PC-Dienst writes them, the Proxy reads
 # them, the Weboberfläche shows them. Only serde, so it builds for wasm too.

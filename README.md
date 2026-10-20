@@ -237,3 +237,7 @@ Die Weboberfläche (Leptos, [crates/admin-ui](crates/admin-ui)) braucht für den
 Browser-Teil `rustup target add wasm32-unknown-unknown` und
 `cargo install cargo-leptos --locked`. Dann baut `cargo leptos build` Proxy und
 Oberfläche, `cargo leptos watch` startet beides und baut bei Änderungen neu.
+
+## Lizenz
+
+MIT, siehe [LICENSE](LICENSE).

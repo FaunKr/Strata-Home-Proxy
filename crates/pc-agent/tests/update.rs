@@ -211,3 +211,39 @@ async fn no_job_starts_and_no_sleep_while_an_update_loads() {
     assert_eq!(code, 409, "{body}");
     assert_eq!(update.await.unwrap(), 202);
 }
+
+#[tokio::test]
+async fn neither_forced_sleep_nor_forced_restart_while_an_update_loads() {
+    // The NAS takes well longer than the checks below.
+    async fn slower() -> impl IntoResponse {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        PROGRAM.to_vec()
+    }
+    let addr =
+        serve(Router::new().route("/admin/agent/strata-pc-agent.exe", routing::get(slower))).await;
+    let s = setup_with("update-force", |c| {
+        c.nas_url = Some(format!("http://{addr}"))
+    })
+    .await;
+    let url = s.url.clone();
+    let update = tokio::spawn(async move {
+        client()
+            .post(format!("{url}/update"))
+            .bearer_auth("geheim")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    for path in ["/sleep/force", "/strata/kill"] {
+        let (code, body) = post(&s, path, serde_json::json!({})).await;
+        assert_eq!(code, 409, "{path}: {body}");
+        assert_eq!(body["reason"], "The PC service is updating", "{path}");
+    }
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+    assert_eq!(update.await.unwrap(), 202);
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 0);
+}

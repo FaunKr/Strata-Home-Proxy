@@ -458,3 +458,52 @@ async fn gaming_on_cancels_a_running_job() {
     assert_eq!(code, 202);
     assert_eq!(finished(&s).await["state"], "done");
 }
+
+// --- Forced sleep and forced Strata restart cancel a running job ---
+
+/// An install whose setup runs until it is cancelled.
+async fn hanging_install(s: &Setup) {
+    installable(s);
+    s.fake.command(
+        "START-HERE.bat",
+        FakeCommand {
+            hang: true,
+            ..FakeCommand::default()
+        },
+    );
+    post(s, "/strata/jobs", install()).await;
+    job_until(s, "Setup läuft", |_| {
+        !s.fake.runs_of("START-HERE.bat").is_empty()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn forced_sleep_cancels_a_running_job_and_its_download_continues_later() {
+    let s = setup("strata-force-sleep").await;
+    hanging_install(&s).await;
+    let (code, body) = post(&s, "/sleep/force", json!({})).await;
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(body["cancelled_job"], "install");
+    assert_eq!(finished(&s).await["state"], "cancelled");
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
+    // A new start with the same values continues the download.
+    installable(&s);
+    let (code, _) = post(&s, "/strata/jobs", install()).await;
+    assert_eq!(code, 202);
+    assert_eq!(finished(&s).await["state"], "done");
+}
+
+#[tokio::test]
+async fn forced_restart_kills_strata_once_the_cancelled_job_has_ended() {
+    let s = setup("strata-force-restart").await;
+    hanging_install(&s).await;
+    let (code, body) = post(&s, "/strata/kill", json!({})).await;
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(body, json!({"cancelled_job": "install", "started": true}));
+    // The answer comes after the job's end.
+    assert_eq!(get(&s, "/strata/job").await["state"], "cancelled");
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+}

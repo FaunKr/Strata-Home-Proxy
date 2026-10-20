@@ -516,7 +516,7 @@ fn go_to_standby(agent: &Arc<Agent>) {
         let platform_agent = Arc::clone(&agent);
         let result = tokio::task::spawn_blocking(move || platform_agent.platform.suspend()).await;
         if let Err(e) = result.map_err(anyhow::Error::from).and_then(|r| r) {
-            tracing::error!("Standby fehlgeschlagen: {e}");
+            tracing::error!("Standby failed: {e}");
         }
         // Also after a failed standby, so a stopped Strata comes back.
         agent.resumed();

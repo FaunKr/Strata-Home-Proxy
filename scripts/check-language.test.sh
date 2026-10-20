@@ -34,6 +34,15 @@ if out=$("$check" "$dir" 2>&1); then
 fi
 [[ $out == *"b.rs:2:"* ]] || fail "the hit does not name file and line: $out"
 
+printf 'tracing::warn!("Update fehlgeschlagen: {e}");\n' >"$dir/d.rs"
+commit "$dir"
+if out=$("$check" "$dir" 2>&1); then
+  fail "a German word without umlaut passes"
+fi
+[[ $out == *"d.rs:1:"* ]] || fail "the German word is not named: $out"
+printf 'Strata is not running; nothing was stopped.\n' >"$dir/d.rs"
+commit "$dir"
+
 printf '# a comment\n\nb.rs\n' >"$dir/scripts/language-allowlist"
 commit "$dir"
 "$check" "$dir" 2>/dev/null || fail "an allowlisted file fails"

@@ -10,10 +10,10 @@ use crate::{
     api::{
         CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
         ForceRestartStrata, ForcedRestart, GenerateUpdateSummary, PcView, SamplingField,
-        SamplingSource, SamplingSupport, StartCodeBench, StartStrataJob, StrataBenchmark,
-        StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel, StrataPage,
-        StrataSampling, StrataSize, StrataUpdate, UpdateSummary, error_text, get_code_bench,
-        get_strata,
+        SamplingSource, SamplingSupport, StartCodeBench, StartCodeBenchAll, StartStrataJob,
+        StrataBenchmark, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
+        StrataPage, StrataSampling, StrataSize, StrataUpdate, UpdateSummary, error_text,
+        get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
     labels::{STRATA_CONNECTION, STRATA_TIMEOUTS, TOO_OLD_FOR_KEY, strata_badge, strata_job_label},
@@ -1123,17 +1123,29 @@ const CODE_BENCH_POLL: std::time::Duration = std::time::Duration::from_secs(3);
 #[component]
 fn CodeBenchCard() -> impl IntoView {
     let start = ServerAction::<StartCodeBench>::new();
+    let start_all = ServerAction::<StartCodeBenchAll>::new();
     let cancel = ServerAction::<CancelCodeBench>::new();
     let tick = RwSignal::new(0u32);
     let page = Resource::new(
-        move || (tick.get(), start.version().get(), cancel.version().get()),
+        move || {
+            (
+                tick.get(),
+                start.version().get(),
+                start_all.version().get(),
+                cancel.version().get(),
+            )
+        },
         |_| get_code_bench(),
     );
     let running = Memo::new(move |_| {
-        page.get()
-            .and_then(|p| p.ok())
-            .and_then(|p| p.run)
-            .is_some_and(|r| r.state == CodeBenchState::Running)
+        page.get().and_then(|p| p.ok()).is_some_and(|p| {
+            // A run over all models stays live while it goes, so a task
+            // between two models still shows as running.
+            p.all.is_some()
+                || p.run
+                    .as_ref()
+                    .is_some_and(|r| r.state == CodeBenchState::Running)
+        })
     });
     #[cfg(feature = "hydrate")]
     {
@@ -1169,6 +1181,21 @@ fn CodeBenchCard() -> impl IntoView {
             },
         );
     };
+    let run_all = move |models: usize| {
+        confirm.ask(
+            Question {
+                title: "Benchmark all models?".into(),
+                text: format!(
+                    "{models} models, {CODE_BENCH_TASKS} tasks each, up to {CODE_BENCH_TASK_MINUTES} minutes each. The model active before the run comes back at the end.",
+                ),
+                confirm: "Benchmark all models",
+                danger: false,
+            },
+            move || {
+                start_all.dispatch(StartCodeBenchAll {});
+            },
+        );
+    };
     view! {
         <section class="card">
             <h2>"Code benchmark"</h2>
@@ -1176,6 +1203,7 @@ fn CodeBenchCard() -> impl IntoView {
                 "The active model solves three Python tasks with opencode in the code-bench container on the NAS. Hidden tests score what it leaves."
             </p>
             {action_error(start.value())}
+            {action_error(start_all.value())}
             {action_error(cancel.value())}
             <Transition>
                 {move || Suspend::new(async move {
@@ -1187,6 +1215,47 @@ fn CodeBenchCard() -> impl IntoView {
                                 .clone()
                                 .map(|text| view! { <p class="warning" role="status">{text}</p> });
                             let blocked = p.problem.is_some();
+                            let all = p.all.clone();
+                            let progress = all.map(|a| {
+                                view! {
+                                    <div class="job" role="status">
+                                        <p class="strong">{format!(
+                                            "Model {} of {}", a.model, a.models
+                                        )}</p>
+                                        <p class="hint">{format!(
+                                            "Model {} of {} · task {} of {}",
+                                            a.model, a.models, a.task, a.tasks
+                                        )}</p>
+                                        <p class="muted small">{format!(
+                                            "The model active before the run, {}, comes back at the end.", a.restore
+                                        )}</p>
+                                        <div class="actions">
+                                            <button
+                                                type="button"
+                                                class="secondary"
+                                                disabled=move || cancel.pending().get()
+                                                on:click=move |_| {
+                                                    confirm
+                                                        .ask(
+                                                            Question {
+                                                                title: "Cancel the run over all models?".into(),
+                                                                text: "The model that runs now ends, the others do not start. The finished results stay and the model active before the run comes back."
+                                                                    .into(),
+                                                                confirm: "Cancel",
+                                                                danger: true,
+                                                            },
+                                                            move || {
+                                                                cancel.dispatch(CancelCodeBench {});
+                                                            },
+                                                        );
+                                                }
+                                            >
+                                                "Cancel"
+                                            </button>
+                                        </div>
+                                    </div>
+                                }
+                            });
                             let current = p.run.clone().map(|r| view! { <CodeBenchCurrent run=r cancel /> });
                             let mut results = p.results.clone();
                             results.sort_by(|a, b| {
@@ -1203,8 +1272,10 @@ fn CodeBenchCard() -> impl IntoView {
                                     .collect_view()
                                     .into_any()
                             };
+                            let models = p.models;
                             view! {
                                 {problem}
+                                {progress}
                                 {current}
                                 {results}
                                 <div class="actions">
@@ -1217,6 +1288,19 @@ fn CodeBenchCard() -> impl IntoView {
                                         on:click=run
                                     >
                                         "Run code benchmark"
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="secondary"
+                                        disabled=move || {
+                                            blocked
+                                                || running.get()
+                                                || start_all.pending().get()
+                                                || models < 2
+                                        }
+                                        on:click=move |_| run_all(models)
+                                    >
+                                        "Benchmark all models"
                                     </button>
                                 </div>
                             }
@@ -1346,9 +1430,14 @@ fn CodeBenchResult(run: CodeBenchRun) -> impl IntoView {
         .into_iter()
         .map(|t| view! { <CodeBenchTaskRow task=t /> })
         .collect_view();
+    let failed = run
+        .error
+        .clone()
+        .map(|e| view! { <p class="error">{format!("{}: {e}", run.model)}</p> });
     view! {
         <div class="bench-run">
             <h3>{run.model.clone()}</h3>
+            {failed}
             <p>{format!("Total: {}", summary.join(" · "))}</p>
             <p class="muted small">{run.at_text.clone()}</p>
             <ul class="list">{tasks}</ul>

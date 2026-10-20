@@ -61,5 +61,13 @@
     "error": "stopped after 30 min"
    }
   ]
+ },
+ {
+  "model": "swift-IQ2_XS",
+  "state": "failed",
+  "error": "model did not load",
+  "started": 1792403000,
+  "ended": 1792403100,
+  "tasks": []
  }
 ]

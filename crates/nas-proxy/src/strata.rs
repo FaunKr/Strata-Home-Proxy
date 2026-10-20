@@ -121,6 +121,12 @@ impl StrataState {
         self.job_running.load(Ordering::SeqCst)
     }
 
+    /// A run over all models activates each model itself, so it sets the guard
+    /// here; a Strata job started by hand stays refused meanwhile.
+    pub fn set_job_running(&self, on: bool) {
+        self.job_running.store(on, Ordering::SeqCst);
+    }
+
     /// What the PC service reported last, kept over a restart; `None` until
     /// it answered once.
     pub fn last_info(&self) -> Option<StrataInfo> {

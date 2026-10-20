@@ -777,6 +777,20 @@ pub struct CodeBenchRun {
     pub at_text: String,
 }
 
+/// The progress of a run that benchmarks all models: `Model {model} of
+/// {models} · task {task} of {tasks}`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodeBenchAll {
+    /// Models in the run (m), and the one being benchmarked now (n), 1-based.
+    pub models: usize,
+    pub model: usize,
+    /// Tasks per model (N) and the one being solved now (k), 1-based.
+    pub tasks: usize,
+    pub task: usize,
+    /// The model active before the run, activated again at the end.
+    pub restore: String,
+}
+
 /// The code benchmark card.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CodeBenchPage {
@@ -784,8 +798,14 @@ pub struct CodeBenchPage {
     pub problem: Option<String>,
     /// The running run, or the last one if it did not finish.
     pub run: Option<CodeBenchRun>,
-    /// Each model's last finished run.
+    /// Each model's last finished run; a model that failed gets its error row.
     pub results: Vec<CodeBenchRun>,
+    /// A run over all models, or the last one that did not finish.
+    pub all: Option<CodeBenchAll>,
+    /// How many models are installed, so the card knows a run over all needs
+    /// at least two.
+    #[serde(default)]
+    pub models: usize,
 }
 
 #[server(prefix = "/admin/api", endpoint = "code-bench")]
@@ -800,6 +820,14 @@ pub async fn get_code_bench() -> Result<CodeBenchPage, ServerFnError> {
 pub async fn start_code_bench() -> Result<(), ServerFnError> {
     require_login(false).await?;
     backend()?.start_code_bench().await.map_err(bad_request)
+}
+
+/// Runs the code benchmark for every installed model in turn; the model active
+/// before it comes back at the end.
+#[server(prefix = "/admin/api", endpoint = "code-bench-start-all")]
+pub async fn start_code_bench_all() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?.start_code_bench_all().await.map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "code-bench-cancel")]

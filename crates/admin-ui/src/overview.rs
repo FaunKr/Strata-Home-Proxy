@@ -7,13 +7,14 @@ use leptos::prelude::*;
 use crate::{
     api::{
         ForceSleep, KeepAwake, KeepAwakeChoice, Overview, PcServiceView, PcView, PowerView,
-        SetGaming, Setup, SleepNow, SleepView, StrataView, Wake, error_text, get_setup,
+        SetGaming, Setup, SleepAnswer, SleepNow, SleepView, StrataView, Wake, error_text,
+        get_setup,
     },
     confirm::{Confirm, Question},
     hardware::HardwareCard,
     history::WeekCard,
     icons::Icon,
-    labels::{SLEEP_REFUSED, event_class, event_label, pc_badge, strata_badge, strata_job_label},
+    labels::{event_class, event_label, pc_badge, strata_badge, strata_job_label},
 };
 
 /// The buttons' actions; made once per page, so a result stays visible
@@ -351,7 +352,7 @@ fn Hero(overview: Overview, actions: Actions) -> impl IntoView {
                 force_sleep
                 offer=pc == PcView::Awake && setup.agent_configured
             />
-            {result_text(force_sleep.value())}
+            <ForceSleepResult force_sleep asleep=pc == PcView::Asleep />
         </section>
     }
 }
@@ -366,10 +367,16 @@ fn SleepResult(
 ) -> impl IntoView {
     let confirm = expect_context::<Confirm>();
     move || {
-        let text = sleep.value().get()?.err().map(|e| error_text(&e))?;
-        let Some(reason) = text.strip_prefix(SLEEP_REFUSED).map(String::from) else {
-            return Some(view! { <p class="error" role="alert">{text}</p> }.into_any());
+        let reason = match sleep.value().get()? {
+            Ok(SleepAnswer::Accepted) => return None,
+            Ok(SleepAnswer::Refused { reason }) => reason,
+            Err(e) => {
+                return Some(
+                    view! { <p class="error" role="alert">{error_text(&e)}</p> }.into_any(),
+                );
+            }
         };
+        let text = format!("Refused: {reason}");
         let button = offer.then(|| {
             view! {
                 <button
@@ -391,6 +398,23 @@ fn SleepResult(
             }
             .into_any(),
         )
+    }
+}
+
+/// What Force sleep answered: its error, or, once the PC counts as
+/// asleep, that it was forced to.
+#[component]
+fn ForceSleepResult(force_sleep: ServerAction<ForceSleep>, asleep: bool) -> impl IntoView {
+    move || match force_sleep.value().get()? {
+        Ok(()) => asleep.then(|| {
+            view! {
+                <p class="hint" role="status">
+                    "Forced to sleep; the next request wakes the PC."
+                </p>
+            }
+            .into_any()
+        }),
+        Err(e) => Some(view! { <p class="error" role="alert">{error_text(&e)}</p> }.into_any()),
     }
 }
 

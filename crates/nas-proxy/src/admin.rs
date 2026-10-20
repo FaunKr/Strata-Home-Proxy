@@ -8,13 +8,13 @@ use std::{
 
 use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
-    api::ForcedRestart,
+    api::{self as ui, ForcedRestart},
     api::{
         ApiKeyInfo, ApiKeysView, CodeBenchPage, CreatedKey, HistoryView, KeepAwakeChoice,
         OutputMessage, Overview, PcSetupCommand, Session, SettingEntry, SettingValue, SettingsView,
         Setup, Source, StrataJobForm, StrataPage,
     },
-    labels::{NO_AGENT, NO_ANSWER, NO_MAC, NOT_CONFIGURED, SLEEP_REFUSED},
+    labels::{NO_AGENT, NO_ANSWER, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
 };
 
@@ -168,7 +168,7 @@ impl Backend for UiBackend {
         Ok(())
     }
 
-    fn sleep_now(&self) -> BoxFuture<'static, Result<(), String>> {
+    fn sleep_now(&self) -> BoxFuture<'static, Result<ui::SleepAnswer, String>> {
         let state = Arc::clone(&self.0);
         async move {
             let agent = state.agent();
@@ -181,8 +181,8 @@ impl Backend for UiBackend {
             let answer = state.request_sleep(&agent).await;
             state.overview.refresh_now();
             match answer {
-                Ok(SleepAnswer::Accepted) => Ok(()),
-                Ok(SleepAnswer::Refused(reason)) => Err(format!("{SLEEP_REFUSED}{reason}")),
+                Ok(SleepAnswer::Accepted) => Ok(ui::SleepAnswer::Accepted),
+                Ok(SleepAnswer::Refused(reason)) => Ok(ui::SleepAnswer::Refused { reason }),
                 Err(_) => Err(NO_ANSWER.to_string()),
             }
         }

@@ -88,6 +88,8 @@ pub struct FakePc {
     pub strata_kills: AtomicUsize,
     /// An old PC service without the forced sleep and restart (404).
     pub no_force: AtomicBool,
+    /// How long `POST /strata/kill` takes before it answers.
+    pub kill_delay: Mutex<Duration>,
     pub update_requests: AtomicUsize,
     /// The PC service refuses updates with this reason (409).
     pub refuse_update: Mutex<Option<String>>,
@@ -427,6 +429,8 @@ pub async fn agent_force_sleep(State(pc): State<Pc>) -> Response {
 /// loads.
 pub async fn agent_strata_kill(State(pc): State<Pc>) -> Response {
     pc.strata_kills.fetch_add(1, Ordering::SeqCst);
+    let delay = *pc.kill_delay.lock().unwrap();
+    tokio::time::sleep(delay).await;
     if !pc.up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
@@ -749,6 +753,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         sleep_retry: Duration::from_millis(300),
         sleep_settle: Duration::from_millis(200),
         probe_timeout: Duration::from_millis(500),
+        force_timeout: Duration::from_secs(10),
         max_body_bytes: 1 << 20,
         power_awake_watts: 75.0,
         power_asleep_watts: 3.0,

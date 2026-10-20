@@ -42,10 +42,6 @@ pub enum UpdateAnswer {
     NoAnswer,
 }
 
-/// A forced Strata restart waits for a cancelled job to end and for the
-/// ended Strata to free its port.
-const FORCE_TIMEOUT: Duration = Duration::from_secs(60);
-
 /// The PC service's answer to a forced sleep or a forced Strata restart.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Forced<T> {
@@ -63,6 +59,9 @@ pub struct AgentClient {
     base: Option<String>,
     token: Option<String>,
     http: Client,
+    /// A forced Strata restart waits for a cancelled job to end and for the
+    /// ended Strata to free its port (`Config::force_timeout`).
+    force_timeout: Duration,
 }
 
 impl AgentClient {
@@ -71,6 +70,7 @@ impl AgentClient {
             base: cfg.pc_agent_url.clone(),
             token: cfg.pc_agent_token.clone(),
             http,
+            force_timeout: cfg.force_timeout,
         }
     }
 
@@ -148,7 +148,7 @@ impl AgentClient {
         let Some(req) = self.request(reqwest::Method::POST, path) else {
             return Forced::Refused("PC_AGENT_URL is not set".into());
         };
-        let Ok(resp) = req.timeout(FORCE_TIMEOUT).send().await else {
+        let Ok(resp) = req.timeout(self.force_timeout).send().await else {
             return Forced::NoAnswer;
         };
         if resp.status() == StatusCode::NOT_FOUND {

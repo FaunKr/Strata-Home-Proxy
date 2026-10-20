@@ -29,7 +29,8 @@ async fn forced_sleep_follows_a_refused_sleep_and_the_pc_counts_as_asleep() {
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     live.until("PC wach", |v| v["pc"] == "Awake").await;
-    assert_eq!(b.call("sleep-now", &[]).await.status(), 400);
+    let refused: Value = b.call("sleep-now", &[]).await.json().await.unwrap();
+    assert!(refused["Refused"]["reason"].is_string(), "{refused}");
 
     let resp = b.call("force-sleep", &[]).await;
     assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
@@ -177,4 +178,24 @@ async fn both_need_a_pc_service() {
             "{name}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_forced_restart_past_the_proxys_limit_counts_as_no_answer() {
+    let s = setup(true, |c| c.force_timeout = Duration::from_millis(500)).await;
+    *s.pc.kill_delay.lock().unwrap() = Duration::from_secs(3);
+    let mut b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    live.until("PC wach", |v| v["pc"] == "Awake").await;
+    let started = std::time::Instant::now();
+    let resp = b.call("strata-force-restart", &[]).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(resp.status(), 400);
+    let text = resp.text().await.unwrap();
+    assert!(text.ends_with("The PC service does not answer."), "{text}");
+    assert!(!kinds(&s.state).contains(&EventKind::ForcedStrataRestart));
 }

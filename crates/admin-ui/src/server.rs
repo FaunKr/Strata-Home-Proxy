@@ -28,7 +28,7 @@ use crate::{
     api::{
         ApiKeysView, CodeBenchPage, CreatedKey, ForcedRestart, HistoryView, KeepAwakeChoice,
         OutputMessage, Overview, PcSetupCommand, Session, SettingValue, SettingsView, Setup,
-        StrataJobForm, StrataPage,
+        SleepAnswer, StrataJobForm, StrataPage,
     },
     app::{App, shell},
 };
@@ -67,8 +67,9 @@ pub trait Backend: Send + Sync + 'static {
     fn strata_output(&self) -> BoxStream<'static, OutputMessage>;
     /// Starts waking the PC; a message for the user if it cannot be woken.
     fn wake(&self) -> Result<(), String>;
-    /// Asks the PC service to sleep; its reason if it refuses.
-    fn sleep_now(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// Asks the PC service to sleep: its answer, with the reason of a
+    /// refusal; `Err` when it could not be asked.
+    fn sleep_now(&self) -> BoxFuture<'static, Result<SleepAnswer, String>>;
     /// Asks the awake PC's service for a forced sleep; never wakes the PC.
     fn force_sleep(&self) -> BoxFuture<'static, Result<(), String>>;
     /// Asks the awake PC's service for a forced Strata restart; never wakes

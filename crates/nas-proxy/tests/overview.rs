@@ -379,8 +379,10 @@ async fn sleep_button_shows_a_refusal() {
     s.pc.refuse_sleep.store(true, Ordering::SeqCst);
     let mut b = logged_in(&s.url).await;
     let resp = b.call("sleep-now", &[]).await;
-    assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("Benutzer aktiv"));
+    // A refusal is an answer, with its reason apart for Force sleep.
+    assert_eq!(resp.status(), 200);
+    let answer: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(answer, json!({"Refused": {"reason": "Benutzer aktiv"}}));
     assert!(s.pc.up());
 }
 

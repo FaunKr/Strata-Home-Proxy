@@ -537,8 +537,17 @@ pub async fn wake() -> Result<(), ServerFnError> {
     backend()?.wake().map_err(bad_request)
 }
 
+/// What the PC service answered to Sleep now; mirrors the proxy's
+/// `agent::SleepAnswer`. A refusal is an answer, not an error, so the
+/// Overview can offer Force sleep under its reason.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SleepAnswer {
+    Accepted,
+    Refused { reason: String },
+}
+
 #[server(prefix = "/admin/api", endpoint = "sleep-now")]
-pub async fn sleep_now() -> Result<(), ServerFnError> {
+pub async fn sleep_now() -> Result<SleepAnswer, ServerFnError> {
     require_login(false).await?;
     backend()?.sleep_now().await.map_err(bad_request)
 }

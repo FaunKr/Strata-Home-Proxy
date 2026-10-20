@@ -2,13 +2,13 @@
 //! the PC service only while it does not consider the PC asleep or waking,
 //! so neither ever wakes the PC.
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use strata_admin_ui::labels::{NO_AGENT, NO_ANSWER, TOO_OLD_TO_FORCE, strata_job_label};
 use strata_pc_protocol::{ForcedRestart, ForcedSleep, StrataJobKind};
 
 use crate::{
-    agent::Forced,
+    agent::{AgentClient, Forced},
     events::EventKind,
     state::{AppState, PcState},
 };
@@ -16,63 +16,67 @@ use crate::{
 /// Asks for a forced sleep; an accepted one counts like an accepted sleep
 /// request (Nachlauf, then asleep).
 pub async fn sleep(state: &Arc<AppState>, by: &str) -> Result<(), String> {
-    let agent = state.agent();
-    if !agent.configured() {
-        return Err(NO_AGENT.into());
-    }
-    match state.snapshot().pc {
-        PcState::Asleep => return Err("The PC is asleep already.".into()),
-        PcState::Waking => return Err(WAKING.into()),
-        _ => {}
-    }
-    let answer = agent.force_sleep().await;
-    let result = match answer {
-        Forced::Done(forced) => {
-            state.forced_sleep_accepted(sleep_detail(by, &forced));
-            Ok(())
-        }
-        other => Err(failure(other)),
-    };
-    state.overview.refresh_now();
-    result
+    ask(
+        state,
+        "The PC is asleep already.",
+        |agent| async move { agent.force_sleep().await },
+        |forced| state.forced_sleep_accepted(sleep_detail(by, forced)),
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Asks for a forced Strata restart; the answer says whether Strata
 /// starts again.
 pub async fn restart_strata(state: &Arc<AppState>, by: &str) -> Result<ForcedRestart, String> {
+    ask(
+        state,
+        "The PC is asleep; restarting Strata never wakes it.",
+        |agent| async move { agent.force_restart().await },
+        |forced| {
+            state.events.record(
+                EventKind::ForcedStrataRestart,
+                Some(restart_detail(by, forced)),
+            );
+        },
+    )
+    .await
+}
+
+/// Sends a forced action with `send` to a configured PC service, unless
+/// the PC counts as asleep (`asleep` says so) or waking. `done` notes an
+/// accepted one; the overview refreshes after any answer.
+async fn ask<T, F>(
+    state: &Arc<AppState>,
+    asleep: &str,
+    send: impl FnOnce(AgentClient) -> F,
+    done: impl FnOnce(&T),
+) -> Result<T, String>
+where
+    F: Future<Output = Forced<T>>,
+{
     let agent = state.agent();
     if !agent.configured() {
         return Err(NO_AGENT.into());
     }
     match state.snapshot().pc {
-        PcState::Asleep => return Err("The PC is asleep; restarting Strata never wakes it.".into()),
-        PcState::Waking => return Err(WAKING.into()),
+        PcState::Asleep => return Err(asleep.into()),
+        PcState::Waking => {
+            return Err("The PC is waking up; try again once it is awake.".into());
+        }
         _ => {}
     }
-    let answer = agent.force_restart().await;
-    let result = match answer {
+    let result = match send(agent).await {
         Forced::Done(forced) => {
-            state.events.record(
-                EventKind::ForcedStrataRestart,
-                Some(restart_detail(by, &forced)),
-            );
+            done(&forced);
             Ok(forced)
         }
-        other => Err(failure(other)),
+        Forced::Refused(reason) => Err(reason),
+        Forced::TooOld => Err(TOO_OLD_TO_FORCE.into()),
+        Forced::NoAnswer => Err(NO_ANSWER.into()),
     };
     state.overview.refresh_now();
     result
-}
-
-const WAKING: &str = "The PC is waking up; try again once it is awake.";
-
-fn failure<T>(answer: Forced<T>) -> String {
-    match answer {
-        Forced::Done(_) => unreachable!("only failures"),
-        Forced::Refused(reason) => reason,
-        Forced::TooOld => TOO_OLD_TO_FORCE.into(),
-        Forced::NoAnswer => NO_ANSWER.into(),
-    }
 }
 
 /// `from the web UI, overriding user activity, gaming mode, cancelled job: …`
@@ -98,7 +102,7 @@ fn restart_detail(by: &str, forced: &ForcedRestart) -> String {
     let started = if forced.started {
         "Strata started again"
     } else {
-        "Strata stays stopped: nothing to start"
+        "Strata not started again"
     };
     format!("{by}{}, {started}", cancelled(forced.cancelled_job))
 }

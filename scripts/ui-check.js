@@ -112,11 +112,16 @@ async function forced(page, errors) {
     await restart.click(wait);
     await dialog.getByText('killed hard').waitFor(wait);
     await dialog.getByRole('button', { name: 'Restart Strata' }).click();
-    await sees('Strata stays stopped: nothing to start');
+    await sees('stays stopped: nothing to start');
   });
   await step('Force restart Strata while Strata loads', 'loading', async () => {
     await fakePc('loading');
     await page.locator('.strata-state .badge', { hasText: 'Loading' }).waitFor(wait);
+    await restart.waitFor(wait);
+  });
+  await step('Force restart Strata while Strata hangs', 'hung', async () => {
+    await fakePc('hung');
+    await page.locator('.strata-state .badge', { hasText: 'Offline' }).waitFor(wait);
     await restart.waitFor(wait);
   });
   await step('no Force restart Strata while gaming', 'gaming-strata', async () => {
@@ -140,6 +145,7 @@ async function forced(page, errors) {
   await step('forced sleep: the PC sleeps', 'asleep', async () => {
     await dialog.getByRole('button', { name: 'Force sleep' }).click();
     await page.locator('.hero-state', { hasText: 'Asleep' }).waitFor(wait);
+    await sees('Forced to sleep; the next request wakes the PC.');
     if (await force.count()) throw new Error('Force sleep still shows while asleep');
   });
   await step('no Force restart Strata while asleep', 'asleep-strata', async () => {

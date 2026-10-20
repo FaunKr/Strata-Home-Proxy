@@ -6,8 +6,10 @@
 // proxy asks for a new summary, and makes Strata hold or refuse the answer;
 // a held request is refused once the mode changes. mode=answer without
 // upstream goes back to the start.
-// POST /fake/pc?state=awake|loading|gaming|asleep sets what the PC service and
-// Strata answer: loading runs Strata without answering, asleep answers nothing.
+// POST /fake/pc?state=awake|loading|hung|gaming|asleep sets what the PC service
+// and Strata answer: loading runs Strata without answering yet, hung is past
+// its load time (the PC service no longer counts it as running), asleep
+// answers nothing.
 // Sleep now is refused; a forced sleep puts the fake PC to sleep, and a forced
 // Strata restart finds nothing to start.
 // The answers start from the PC service's samples in the protocol crate, so a
@@ -103,7 +105,7 @@ http.createServer((req, res) => {
     res.end();
   }
   else if (req.url.startsWith('/status')) {
-    json({ ...status, gaming_mode: pcState === 'gaming', strata_running: pcState !== 'gaming' });
+    json({ ...status, gaming_mode: pcState === 'gaming', strata_running: pcState === 'awake' || pcState === 'loading' });
   }
   else if (req.url.startsWith('/health') && pcState !== 'awake') {
     res.statusCode = 503;

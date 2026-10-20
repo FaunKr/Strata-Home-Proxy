@@ -316,7 +316,7 @@ fn restart_text(forced: &ForcedRestart) -> String {
     let mut text = if forced.started {
         "Strata was killed and starts again; it loads the model now.".to_string()
     } else {
-        "Strata was killed. Strata stays stopped: nothing to start (no start script set up, or auto-start is off).".to_string()
+        "Strata was killed and stays stopped: nothing to start (no start script set up, or auto-start is off), the start failed (see the Strata output), or a Strata job took over.".to_string()
     };
     if let Some(kind) = forced.cancelled_job {
         text.push_str(&format!(" Cancelled job: {}.", strata_job_label(kind)));

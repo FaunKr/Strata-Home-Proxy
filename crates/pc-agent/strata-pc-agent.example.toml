@@ -14,8 +14,8 @@ allowed_clients = ["192.168.1.10"]
 
 # Strata on this PC.
 strata_url = "http://127.0.0.1:8080"
-# Strata's API key, if /health or /slots ask for it.
-#strata_api_key = "..."
+# The Strata key is not set here: the service makes a new one at every start
+# of Strata and writes it into Strata's model configurations.
 
 # What starts Strata, and with which arguments.
 strata_start = 'C:\Strata\START-HERE.bat'

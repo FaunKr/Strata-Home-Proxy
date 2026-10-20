@@ -71,8 +71,34 @@ values (`Hardware`).
 If `hardware` is missing, the service is older; the Overview then asks for an
 update.
 
+`strata_key_generation` changes with every new Strata key, never the key
+itself; the proxy then fetches the key from `GET /strata/key`. The number
+starts at a random value with each start of the service, so the proxy
+compares it only for a change. The field is missing while no model
+configuration holds a key, and from services before the key per start.
+
 If the service does not answer, the proxy assumes the PC is asleep and wakes
 it.
+
+## `GET /strata/key`
+
+Response: `StrataKey`, the Strata key (`api_key`) and the
+`strata_key_generation` it belongs to. `404` while no model configuration
+holds a key.
+
+Before every start of Strata (auto-start, gaming mode off, resume, watchdog,
+the restart of a job, the forced restart, the start after a service update)
+the service makes a new key: 32 random bytes as hex. It writes it into
+`api_key` of every model configuration, keeping each file's modification
+time, and only then starts Strata, which reads it from there. A configuration
+it cannot read is noted in its log and stays as it is; if it cannot write
+one, none keeps the new key and Strata does not start. Until its first start
+of Strata the service reports the key the configurations already hold, so a
+service restarted beside a running Strata still knows it. When
+`serve/server.py` starts `strata.exe` again after a crash, or Strata is
+started by hand, the key stays.
+
+`strata_api_key` in the TOML is ignored, with a warning in the log.
 
 ## `POST /sleep`
 
@@ -259,19 +285,20 @@ little space, deleting the active model).
 | `kind` | Fields | What happens |
 | --- | --- | --- |
 | `install` | `family`, `size`, `context`, `api_key`, optional `experimental_speed_projection` | Git (via winget, if needed), `git clone`, setup without questions, starts Strata |
-| `add_model` | `family`, `size`, `context`, optional `api_key` and `experimental_speed_projection` | setup with `--setup` and the proxy's key (otherwise its own), the active model stays active |
+| `add_model` | `family`, `size`, `context`, optional `api_key` and `experimental_speed_projection` | setup with `--setup` and the key Strata runs with, the active model stays active |
 | `activate` | `model` | waits until Strata is not handling a request, restarts with the other start script |
 | `delete` | `model` | deletes this model's model folder, pack, configuration, start script and log |
 | `update` | – | `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts |
 | `benchmark` | – | `BENCH.bat --config <active model>`, keeps tokens/s with model and date |
 | `compare_models` | – | `benchmark` for each installed model in turn, each as it is set up; activates each model for this and at the end (also after cancelling) the previously active one again |
-| `set_key` | `api_key` | writes the key into all model configurations and restarts Strata |
+| `set_key` | `api_key` | waits until Strata is not handling a request and restarts it, which brings a new key |
 | `set_speed_projection` | `model`, `on` | turns speed projection on or off in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 
-The proxy generates the Strata key. It only applies once the job is finished
-(also across a proxy restart); if the job fails, the old one stays. The job's
-output shows `***` instead of the key.
+The service ignores `api_key` in every job: the key comes with the next start
+of Strata (see `GET /strata/key`). An older proxy still sends one; the field
+stays so its requests still parse. Setup gets the key Strata runs with, if
+there is one. The job's output shows `***` instead of the key.
 
 `experimental_speed_projection` (`false` if not given) passes setup
 `--experimental-speed-projection on` instead of `off` for Qwen and Coder. For

@@ -111,7 +111,8 @@ if ($NasUrl) {
         throw "Registration with the NAS failed. The one-time code is valid only once and only briefly: create a new install command in the PC area of the web UI. ($_)"
     }
     # What the registration sets is replaced; everything else in an existing
-    # config stays.
+    # config stays. A strata_api_key of an older install goes: the service
+    # makes the Strata key itself.
     $own = "^\s*(listen|token|allowed_clients|nas_url|strata_api_key)\s*="
     if ($update) {
         $lines = @(Get-Content $config | Where-Object { $_ -notmatch $own })
@@ -127,11 +128,6 @@ if ($NasUrl) {
     $lines += "token = `"$($reg.token)`""
     $lines += "allowed_clients = [`"$NasIp`"]"
     $lines += "nas_url = `"$NasBase`""
-    if ($reg.strata_api_key) {
-        # TOML string: escape \ and ".
-        $key = $reg.strata_api_key -replace '\\', '\\' -replace '"', '\"'
-        $lines += "strata_api_key = `"$key`""
-    }
     # Without a BOM, otherwise the service does not read the first line.
     [IO.File]::WriteAllLines($config, $lines)
     Write-Host "Registered with the NAS, config: $config"

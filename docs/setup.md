@@ -100,7 +100,6 @@ Only once the proxy runs on the NAS (see README):
 - [ ] Open `http://<NAS-IP>:8080/admin/`, log in with `admin` (or `UI_PASSWORD`) and set your own password
 - [ ] *PC* area: *Create install command* and paste the command into a PowerShell on the PC ([docs/pc-service.md](pc-service.md))
 - [ ] The checklist *Finish setup* on the *Overview* has disappeared (Strata address, MAC, PC service, API key and `DATA_DIR` are there)
-- [ ] Under *Strata → Connection* enter Strata's API key, so that the Overview shows running and waiting requests and tokens/s
 - [ ] The *Overview* shows PC and Strata correctly; *Sleep now* and *Wake PC* work
 
 What the web UI saves is stored in `/data` and applies right away. It takes precedence over
@@ -112,7 +111,6 @@ Forgot password: delete `/data/admin-password.json` and restart the container.
 After that `admin` (or `UI_PASSWORD`) applies again, all old
 logins are invalid and a new password is required at the first login.
 
-- [ ] Under *Strata → Connection* enter Strata's API key as `STRATA_API_KEY` (the value of `--api-key` from step 5)
 - [ ] Under *Access* create a separate key for each client and copy it right away; it is not shown again
 - [ ] Set up the skill `local-agent` ([tools/local-agent/README.md](../tools/local-agent/README.md)): its own key from *Access* and the Strata settings from the README; `local-agent check` is green
 - [ ] Skill's compaction proven on real hardware: the long test run from the README shows `context compacted` and ends without 400

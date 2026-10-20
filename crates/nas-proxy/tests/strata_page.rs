@@ -33,10 +33,6 @@ fn last_body(s: &Setup) -> Value {
     s.pc.job_bodies.lock().unwrap().last().cloned().unwrap()
 }
 
-fn strata_key(s: &Setup) -> Option<String> {
-    s.state.cfg().strata_api_key.clone()
-}
-
 #[tokio::test]
 async fn needs_a_login() {
     let s = setup(false, |_| {}).await;
@@ -96,7 +92,7 @@ async fn an_older_pc_service_asks_for_an_update() {
 }
 
 #[tokio::test]
-async fn install_wakes_the_pc_and_hands_it_a_new_strata_key() {
+async fn install_wakes_the_pc_and_sends_no_strata_key() {
     let s = setup(false, |_| {}).await;
     *s.pc.strata_info.lock().unwrap() = Some(strata_info(false));
     let mut b = logged_in(&s.url).await;
@@ -109,8 +105,8 @@ async fn install_wakes_the_pc_and_hands_it_a_new_strata_key() {
     assert_eq!(body["family"], "qwen");
     assert_eq!(body["size"], "IQ3_XXS");
     assert_eq!(body["context"], 65536);
-    let key = body["api_key"].as_str().unwrap().to_string();
-    assert_eq!(key.len(), 64);
+    // The protocol wants the field; the PC service makes the key.
+    assert_eq!(body["api_key"], "");
     let kinds = own_kinds(&s.state);
     assert_eq!(
         kinds.last(),
@@ -118,74 +114,31 @@ async fn install_wakes_the_pc_and_hands_it_a_new_strata_key() {
         "{kinds:?}"
     );
     assert!(kinds.contains(&EventKind::WakeRequested), "{kinds:?}");
-    // Until Strata is set up with it, the key counts nowhere.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(strata_key(&s), None);
-
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
-    eventually("key valid", || strata_key(&s).as_deref() == Some(&key)).await;
-    // The key reaches Strata with requests, never the page.
-    assert!(!text.contains(&key));
-    assert!(!page(&mut b).await.to_string().contains(&key));
-    assert!(
-        !b.call("settings", &[])
-            .await
-            .text()
-            .await
-            .unwrap()
-            .contains(&key)
-    );
-    post_json(&s, "/v1/chat/completions", json!({})).await;
-    let seen = s.pc.api_auth.lock().unwrap().clone().unwrap();
-    assert_eq!(seen.authorization, Some(format!("Bearer {key}")));
-}
-
-#[tokio::test]
-async fn a_failed_install_leaves_the_strata_key_alone() {
-    let s = setup(true, |_| {}).await;
-    let mut b = logged_in(&s.url).await;
-    assert_eq!(install(&mut b).await.status(), 200);
-    s.pc.update_job(|j| {
-        j.state = StrataJobState::Failed;
-        j.error = Some("no space".into());
-    });
-    eventually("failure recorded", || {
-        kinds(&s.state).contains(&EventKind::StrataJobFailed)
-    })
-    .await;
-    assert_eq!(strata_key(&s), None);
-}
-
-#[tokio::test]
-async fn a_new_key_still_counts_after_a_restart_of_the_proxy() {
-    let dir = data_dir("pending-key");
-    let data = dir.clone();
-    let s = setup(true, move |c| c.data_dir = Some(data)).await;
-    let mut b = logged_in(&s.url).await;
-    b.call("strata-job", &[("kind", "set_key")]).await;
-    let key = last_body(&s)["api_key"].as_str().unwrap().to_string();
-
-    let restarted = restarted(&s);
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
-    restarted.ask_pc(&restarted.agent()).await.unwrap();
-    assert_eq!(
-        restarted.cfg().strata_api_key.as_deref(),
-        Some(key.as_str())
-    );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[tokio::test]
 async fn a_status_from_before_the_start_does_not_end_the_job() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
-    b.call("strata-job", &[("kind", "set_key")]).await;
-    let key = last_body(&s)["api_key"].as_str().unwrap().to_string();
+    b.call("strata-job", &[("kind", "benchmark")]).await;
     // Like a status answered just before the job began.
     let stale = PcStatus::default();
     strata_nas_proxy::strata::note_status(&s.state, &s.state.agent(), &stale).await;
+    assert!(!kinds(&s.state).contains(&EventKind::StrataJobDone));
     s.pc.update_job(|j| j.state = StrataJobState::Done);
-    eventually("new key counts", || strata_key(&s).as_deref() == Some(&key)).await;
+    eventually("job done", || {
+        kinds(&s.state).contains(&EventKind::StrataJobDone)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_page_offers_no_new_strata_key() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = b.call("strata-job", &[("kind", "set_key")]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(s.pc.job_bodies.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -201,7 +154,6 @@ async fn a_refusal_comes_with_its_reason() {
             .unwrap()
             .contains("Not enough space on C:")
     );
-    assert_eq!(strata_key(&s), None);
     assert!(!kinds(&s.state).contains(&EventKind::StrataJobStarted));
 }
 
@@ -290,41 +242,6 @@ async fn cancel_ends_the_job() {
     let resp = b.call("strata-cancel", &[]).await;
     assert_eq!(resp.status(), 400);
     assert!(resp.text().await.unwrap().contains("No job is running"));
-}
-
-#[tokio::test]
-async fn a_new_strata_key_counts_once_strata_took_it_over() {
-    let s = setup(true, |_| {}).await;
-    s.state.settings.set("STRATA_API_KEY", "old").unwrap();
-    let mut b = logged_in(&s.url).await;
-    assert_eq!(
-        b.call("strata-job", &[("kind", "set_key")]).await.status(),
-        200
-    );
-    let key = last_body(&s)["api_key"].as_str().unwrap().to_string();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(strata_key(&s).as_deref(), Some("old"));
-
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
-    eventually("new key counts", || strata_key(&s).as_deref() == Some(&key)).await;
-    assert!(kinds(&s.state).contains(&EventKind::StrataKeyChanged));
-}
-
-#[tokio::test]
-async fn a_failed_key_change_keeps_the_old_key() {
-    let s = setup(true, |_| {}).await;
-    s.state.settings.set("STRATA_API_KEY", "old").unwrap();
-    let mut b = logged_in(&s.url).await;
-    b.call("strata-job", &[("kind", "set_key")]).await;
-    s.pc.update_job(|j| {
-        j.state = StrataJobState::Failed;
-        j.error = Some("Strata does not start".into());
-    });
-    eventually("failure recorded", || {
-        kinds(&s.state).contains(&EventKind::StrataJobFailed)
-    })
-    .await;
-    assert_eq!(strata_key(&s).as_deref(), Some("old"));
 }
 
 #[tokio::test]
@@ -432,12 +349,10 @@ async fn comparing_models_reaches_the_pc_service() {
 }
 
 #[tokio::test]
-async fn another_model_gets_the_strata_key_in_use() {
+async fn another_model_gets_no_strata_key_from_the_proxy() {
     let s = setup(true, |_| {}).await;
-    s.state
-        .settings
-        .set("STRATA_API_KEY", "strata-secret-0123456789")
-        .unwrap();
+    s.pc.set_strata_key("strata-secret-0123456789");
+    s.state.ask_pc(&s.state.agent()).await.unwrap();
     let mut b = logged_in(&s.url).await;
     let resp = b
         .call(
@@ -451,7 +366,7 @@ async fn another_model_gets_the_strata_key_in_use() {
         )
         .await;
     assert_eq!(resp.status(), 200);
-    assert_eq!(last_body(&s)["api_key"], "strata-secret-0123456789");
+    assert_eq!(last_body(&s).get("api_key"), None);
 }
 
 #[tokio::test]
@@ -463,7 +378,10 @@ async fn each_tab_has_its_own_path() {
         ("/admin/strata", "Load another model"),
         ("/admin/strata/output", "Console output"),
         ("/admin/strata/version", "Run benchmark"),
-        ("/admin/strata/connection", "Create new Strata key"),
+        (
+            "/admin/strata/connection",
+            "makes a new one at every start of Strata",
+        ),
     ] {
         let html = b.page(path).await;
         assert!(html.contains(content), "{path}: {html}");
@@ -505,7 +423,7 @@ async fn connection_tab_holds_exactly_the_strata_settings() {
     let b = logged_in(&s.url).await;
     let html = b.page("/admin/strata/connection").await;
     assert!(html.contains("id=\"setting-STRATA_URL\""), "{html}");
-    assert!(html.contains("id=\"setting-STRATA_API_KEY\""), "{html}");
+    assert!(!html.contains("STRATA_API_KEY"), "{html}");
     assert!(html.contains("id=\"setting-CODE_BENCH_URL\""), "{html}");
     let fields = html.matches("id=\"setting-").count();
     let keys = STRATA_CONNECTION.keys.len() + STRATA_TIMEOUTS.keys.len();
@@ -531,7 +449,6 @@ async fn a_running_job_shows_and_locks_the_buttons_in_every_tab() {
     for (path, button) in [
         ("/admin/strata", "Make active"),
         ("/admin/strata/version", "Run benchmark"),
-        ("/admin/strata/connection", "Create new Strata key"),
     ] {
         let html = b.page(path).await;
         assert!(html.contains("40 %"), "{path}: {html}");

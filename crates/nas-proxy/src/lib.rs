@@ -20,6 +20,7 @@ pub mod settings;
 pub mod state;
 pub mod strata;
 pub mod strata_client;
+pub mod strata_key;
 pub mod strata_output;
 pub mod timeouts;
 pub mod update_summary;
@@ -71,11 +72,6 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     }
     if current.pc_agent_url.is_none() {
         tracing::warn!("PC_AGENT_URL is missing: no gaming mode and no automatic sleep");
-    }
-    if current.strata_api_key.is_none() {
-        tracing::warn!(
-            "STRATA_API_KEY is missing: requests go to Strata without a key; if Strata requires one, it answers with 401"
-        );
     }
     state.spawn_idle_loop();
     state.spawn_plug_loop();

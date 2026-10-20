@@ -1,5 +1,6 @@
 //! `GET /status`, `POST /gaming`, `POST /sleep`, `POST /sleep/force`,
-//! `POST /strata/kill`, `POST /update` and the body of every refusal.
+//! `POST /strata/kill`, `POST /update`, `GET /strata/key` and the body of
+//! every refusal.
 
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +32,19 @@ pub struct PcStatus {
     /// The hardware readings; missing from services before them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hardware: Option<Hardware>,
+    /// Changes with every new Strata key, never the key itself: the proxy
+    /// then fetches it from `GET /strata/key`. Missing from services before
+    /// the key per start, and while no model config holds a key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strata_key_generation: Option<u64>,
+}
+
+/// `GET /strata/key`: the Strata key in Strata's model configs, and the
+/// generation the status reports for it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrataKey {
+    pub api_key: String,
+    pub generation: u64,
 }
 
 /// The hardware readings. A value the PC service could not read is `None`, sent

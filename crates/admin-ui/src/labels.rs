@@ -9,6 +9,8 @@ pub const NO_AGENT: &str = "No PC service is set up (PC_AGENT_URL).";
 pub const NO_ANSWER: &str = "The PC service does not answer.";
 pub const TOO_OLD_TO_FORCE: &str =
     "The PC service is too old for this, update it in the PC section.";
+pub const TOO_OLD_FOR_KEY: &str =
+    "The PC service is too old for the Strata key, update it in the PC section.";
 
 pub struct Label {
     pub title: &'static str,
@@ -20,10 +22,6 @@ pub fn label(key: &str) -> Label {
         "STRATA_URL" => (
             "Strata address",
             "Base URL of Strata on the PC, e.g. http://192.168.1.50:8080.",
-        ),
-        "STRATA_API_KEY" => (
-            "Strata API key",
-            "The same key as in Strata. The proxy adds it to every request to Strata and uses it for its own calls; clients use their own API keys. Never shown.",
         ),
         "PC_MAC" => (
             "MAC address",
@@ -161,8 +159,8 @@ pub const PC_WAKE_SLEEP: SectionDef = SectionDef {
 pub const STRATA_CONNECTION: SectionDef = SectionDef {
     id: "strata-connection",
     title: "Connection",
-    help: "Where Strata runs, and the key the proxy uses to talk to it.",
-    keys: &["STRATA_URL", "STRATA_API_KEY", "CODE_BENCH_URL"],
+    help: "Where Strata runs.",
+    keys: &["STRATA_URL", "CODE_BENCH_URL"],
     advanced: &[],
 };
 

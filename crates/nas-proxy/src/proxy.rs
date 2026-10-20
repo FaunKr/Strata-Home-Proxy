@@ -225,7 +225,18 @@ struct Incoming {
     body: Bytes,
 }
 
+/// Sends the request to Strata. If Strata refuses the Strata key, the PC
+/// service may have started it with a new one the proxy has not fetched yet:
+/// the request goes once more with the new key.
 async fn send_upstream(st: &AppState, req: &Incoming) -> Result<reqwest::Response, String> {
+    let resp = send_once(st, req).await?;
+    if resp.status() != StatusCode::UNAUTHORIZED || !crate::strata_key::refresh(st).await {
+        return Ok(resp);
+    }
+    send_once(st, req).await
+}
+
+async fn send_once(st: &AppState, req: &Incoming) -> Result<reqwest::Response, String> {
     // Checked before forwarding; only fails if the address was unset since.
     let strata = st.strata().ok_or("STRATA_URL is not set")?;
     strata
@@ -339,10 +350,10 @@ async fn forward(
 /// Logs that Strata refused the proxy's key, or that it lacks one, and
 /// returns the same text for the client.
 fn strata_refused(st: &AppState) -> &'static str {
-    let message = if st.cfg().strata_api_key.is_some() {
-        "Strata refuses the Strata key: check STRATA_API_KEY."
+    let message = if st.strata_key.unreported() {
+        "Strata requires a key, and the PC service reports none: update the PC service."
     } else {
-        "Strata requires a key: set STRATA_API_KEY in the settings."
+        "Strata refuses the Strata key the PC service reports."
     };
     tracing::warn!("{message}");
     message

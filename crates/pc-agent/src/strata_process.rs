@@ -108,27 +108,29 @@ impl<'a> StrataProcess<'a> {
             let now = Instant::now();
             (seen.start.replace(now), now)
         };
+        // No Strata loads after a failure; the start before counts again.
+        let failed = |e: String| {
+            tracing::error!("Starting Strata failed: {e}");
+            let mut seen = agent.times.0.lock().unwrap();
+            if seen.start == Some(now) {
+                seen.start = before;
+            }
+            false
+        };
+        // Every start gets a new key; Strata reads it from the configs.
+        if let Err(e) = agent.strata_key.renew(&agent.cfg) {
+            return failed(format!("new Strata key not written: {e}"));
+        }
         tracing::info!("Starting Strata");
         let mut run = match agent.platform().start_strata(program, args) {
             Ok(run) => run,
-            Err(e) => {
-                tracing::error!("Starting Strata failed: {e}");
-                // No Strata loads; the start before counts again.
-                let mut seen = agent.times.0.lock().unwrap();
-                if seen.start == Some(now) {
-                    seen.start = before;
-                }
-                return false;
-            }
+            Err(e) => return failed(e.to_string()),
         };
         let output = Arc::clone(&agent.output);
         let run_id = output.started();
         // The page shows this output; the key must not reach it. A new key
         // comes with a restart, so the one of this start is enough.
-        let key = managed
-            .api_key(&agent.cfg)
-            .filter(|k| !k.is_empty())
-            .map(String::from);
+        let key = agent.strata_key.key(&agent.cfg);
         tokio::spawn(async move {
             while let Some(line) = run.next_output().await {
                 match &key {

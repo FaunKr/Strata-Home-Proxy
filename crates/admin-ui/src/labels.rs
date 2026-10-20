@@ -256,6 +256,7 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::PcServiceUpdateFailed => "PC service update failed",
         EventKind::ForcedSleep => "Forced sleep",
         EventKind::ForcedStrataRestart => "Forced Strata restart",
+        EventKind::UpdateSummaryRequested => "Update summary requested",
     }
 }
 

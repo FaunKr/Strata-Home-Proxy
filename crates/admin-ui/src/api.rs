@@ -439,6 +439,8 @@ pub enum EventKind {
     /// A forced Strata restart; detail: who, the job it cancelled and
     /// whether Strata started again.
     ForcedStrataRestart,
+    /// "Generate summary now" on the Version tab (detail: who).
+    UpdateSummaryRequested,
 }
 
 impl EventKind {
@@ -618,6 +620,12 @@ pub struct StrataUpdate {
     pub left_out: u64,
     /// GitHub's comparison of the installed and the newest version.
     pub compare_url: Option<String>,
+    /// Why "Generate summary now" cannot start now; `None` if it can.
+    #[serde(default)]
+    pub blocked: Option<String>,
+    /// The PC sleeps: "Generate summary now" wakes it.
+    #[serde(default)]
+    pub wakes_pc: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -633,16 +641,14 @@ pub struct UpdateCommit {
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum UpdateSummary {
     /// Written by Strata with `model`.
-    Written {
-        lines: Vec<String>,
-        model: String,
-    },
+    Written { lines: Vec<String>, model: String },
     /// Strata is writing it now.
-    Writing {
-        fallback: Vec<String>,
-    },
+    Writing { fallback: Vec<String> },
     Unavailable {
         fallback: Vec<String>,
+        /// Why the last attempt for these commits failed.
+        #[serde(default)]
+        reason: Option<String>,
     },
 }
 
@@ -681,6 +687,17 @@ pub async fn start_strata_job(
 pub async fn force_restart_strata() -> Result<ForcedRestart, ServerFnError> {
     require_login(false).await?;
     backend()?.force_restart_strata().await.map_err(bad_request)
+}
+
+/// Has Strata write the update summary now, waking the PC first if it
+/// sleeps (#193).
+#[server(prefix = "/admin/api", endpoint = "strata-update-summary")]
+pub async fn generate_update_summary() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?
+        .generate_update_summary()
+        .await
+        .map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "strata-cancel")]

@@ -111,7 +111,13 @@ impl StrataClient {
             .json(body)
             .send()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    format!("Strata did not answer within {} s", limit.as_secs_f64())
+                } else {
+                    e.to_string()
+                }
+            })?;
         if !resp.status().is_success() {
             return Err(format!("Strata answers {}", resp.status()));
         }

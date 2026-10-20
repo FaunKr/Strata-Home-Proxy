@@ -26,6 +26,14 @@ fn status() {
     assert_eq!(status.version.as_deref(), Some("0.1.0+558db97"));
     let gpu = status.hardware.unwrap().gpu.unwrap();
     assert_eq!(gpu.fan_rpm, Some(0));
+    assert_eq!(status.strata_key_generation, Some(7));
+}
+
+#[test]
+fn strata_key() {
+    let key: StrataKey = same("strata-key.json");
+    assert_eq!(key.generation, 7);
+    assert_eq!(key.api_key.len(), 64);
 }
 
 #[test]

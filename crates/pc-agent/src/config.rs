@@ -24,7 +24,8 @@ pub struct Config {
     /// Strata as seen from the PC itself.
     #[serde(default = "default_strata_url")]
     pub strata_url: String,
-    /// Strata's API key, if it needs one for `/health` and `/slots`.
+    /// Ignored with a warning: the service makes a new Strata key at every
+    /// start of Strata. Kept so an older configuration still loads.
     #[serde(default)]
     pub strata_api_key: Option<String>,
     /// What starts Strata, usually a `.bat` in Strata's folder. Empty after the

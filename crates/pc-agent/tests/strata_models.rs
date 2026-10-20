@@ -45,7 +45,6 @@ fn installed(s: &Setup) {
             strata_start: Some(setup.installation().run_script("iq3_xxs")),
             strata_args: vec![],
             strata_processes: Some(vec![format!("{}/", cfg.strata_dir.display())]),
-            strata_api_key: Some(OLD_KEY.into()),
         })
         .unwrap();
 }
@@ -671,42 +670,146 @@ async fn cancelling_a_comparison_brings_the_active_model_back() {
     );
 }
 
-// --- #35 new Strata key ---
+// --- #35 new Strata key, #219 a new key with every start ---
+
+/// The key every model config holds; panics if two differ.
+fn config_key(s: &Setup) -> String {
+    let keys: Vec<String> = ["iq3_xxs", "coder-iq1_m"]
+        .iter()
+        .map(|id| read_config(s, id)["api_key"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(keys[0], keys[1], "every model holds the same key");
+    keys[0].clone()
+}
+
+fn modified(s: &Setup, id: &str) -> std::time::SystemTime {
+    let path = s.agent.cfg.strata_dir.join(format!("strata-{id}.json"));
+    std::fs::metadata(path).unwrap().modified().unwrap()
+}
+
+async fn key_answer(s: &Setup) -> (u16, Value) {
+    let resp = client()
+        .get(format!("{}/strata/key", s.url))
+        .bearer_auth("secret")
+        .send()
+        .await
+        .unwrap();
+    (
+        resp.status().as_u16(),
+        resp.json().await.unwrap_or(Value::Null),
+    )
+}
 
 #[tokio::test]
-async fn a_new_key_goes_into_every_model_and_strata_restarts() {
+async fn every_start_writes_a_new_key_into_every_model() {
+    let s = setup("models-key-start").await;
+    installed(&s);
+    let generation = get(&s, "/status").await["strata_key_generation"].clone();
+    assert!(generation.is_u64(), "the configs' key counts: {generation}");
+    let before = modified(&s, "coder-iq1_m");
+    std::thread::sleep(Duration::from_millis(20));
+
+    s.agent.strata().start();
+    let first = config_key(&s);
+    assert_ne!(first, OLD_KEY);
+    assert_eq!(first.len(), 64, "{first}");
+    assert_eq!(modified(&s, "coder-iq1_m"), before, "the time stays");
+    assert_eq!(
+        read_config(&s, "iq3_xxs")["port"],
+        8080,
+        "other values stay"
+    );
+    let status = get(&s, "/status").await;
+    assert_ne!(status["strata_key_generation"], generation);
+    assert!(!status.to_string().contains(&first), "{status}");
+    assert_eq!(
+        s.fake.health_auth.lock().unwrap().as_deref(),
+        Some(format!("Bearer {first}").as_str())
+    );
+
+    s.agent.strata().restart().await;
+    let second = config_key(&s);
+    assert_ne!(second, first);
+    let (code, answer) = key_answer(&s).await;
+    assert_eq!(code, 200);
+    assert_eq!(answer["api_key"], second);
+    assert_eq!(
+        answer["generation"],
+        get(&s, "/status").await["strata_key_generation"]
+    );
+}
+
+#[tokio::test]
+async fn before_a_start_the_key_is_the_one_in_the_configs() {
+    let s = setup("models-key-configs").await;
+    installed(&s);
+    let (code, answer) = key_answer(&s).await;
+    assert_eq!(code, 200);
+    assert_eq!(answer["api_key"], OLD_KEY);
+}
+
+#[tokio::test]
+async fn without_a_key_in_any_config_there_is_none() {
+    let s = setup("models-key-none").await;
+    assert_eq!(key_answer(&s).await.0, 404);
+    // The generation still tells the proxy this service makes keys.
+    assert!(get(&s, "/status").await["strata_key_generation"].is_u64());
+    // Without model configs nothing holds a key, and Strata starts anyway.
+    s.agent.strata().start();
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(key_answer(&s).await.0, 404);
+}
+
+#[tokio::test]
+async fn the_key_needs_the_token() {
+    let s = setup("models-key-token").await;
+    installed(&s);
+    let resp = client()
+        .get(format!("{}/strata/key", s.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 401);
+}
+
+#[tokio::test]
+async fn a_key_that_cannot_be_written_starts_no_strata() {
+    let s = setup("models-key-unwritable").await;
+    installed(&s);
+    // A folder where the temporary file goes makes the write fail.
+    let tmp = s.agent.cfg.strata_dir.join("strata-iq3_xxs.json.tmp");
+    std::fs::create_dir_all(tmp.join("x")).unwrap();
+    s.agent.strata().start();
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(config_key(&s), OLD_KEY, "no config keeps half a change");
+}
+
+#[tokio::test]
+async fn set_key_restarts_strata_with_a_key_of_its_own() {
     let s = setup("models-key").await;
     installed(&s);
     let done = job(&s, json!({"kind": "set_key", "api_key": NEW_KEY})).await;
     assert_eq!(done["state"], "done", "{done}");
-    assert!(!done.to_string().contains(NEW_KEY));
-    for name in ["iq3_xxs", "coder-iq1_m"] {
-        let cfg = read_config(&s, name);
-        assert_eq!(cfg["api_key"], NEW_KEY, "{name}");
-        assert_eq!(cfg["port"], 8080, "{name}: other values stay");
-        assert!(cfg["args"].is_array(), "{name}");
-    }
+    let key = config_key(&s);
+    assert_ne!(key, NEW_KEY, "an older proxy's key is not used");
+    assert_ne!(key, OLD_KEY);
+    assert!(!done.to_string().contains(&key));
     assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
-    get(&s, "/status").await;
-    assert_eq!(
-        s.fake.health_auth.lock().unwrap().as_deref(),
-        Some(format!("Bearer {NEW_KEY}").as_str())
-    );
-    assert!(!get(&s, "/strata").await.to_string().contains(NEW_KEY));
+    assert!(!get(&s, "/strata").await.to_string().contains(&key));
 }
 
 #[tokio::test]
-async fn a_bad_key_is_refused() {
-    let s = setup("models-key-bad").await;
+async fn set_key_takes_any_key_an_older_proxy_sends() {
+    let s = setup("models-key-any").await;
     installed(&s);
-    let (code, _) = post(
+    let (code, answer) = post(
         &s,
         "/strata/jobs",
         json!({"kind": "set_key", "api_key": "kurz"}),
     )
     .await;
-    assert_eq!(code, 400);
+    assert_eq!(code, 202, "{answer}");
 }
 
 #[tokio::test]
@@ -796,14 +899,18 @@ async fn the_benchmark_result_is_found_before_much_more_output() {
 }
 
 #[tokio::test]
-async fn a_damaged_model_config_stops_the_key_change() {
+async fn a_damaged_model_config_keeps_its_text_and_strata_still_starts() {
     let s = setup("models-key-damaged").await;
     installed(&s);
     strata_folder(&s).config_text("coder-iq1_m", "{\"exe\": \"x\",");
-    let done = job(&s, json!({"kind": "set_key", "api_key": NEW_KEY})).await;
-    assert_eq!(done["state"], "failed", "{done}");
-    assert_eq!(s.agent.managed().strata_api_key.as_deref(), Some(OLD_KEY));
-    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+    s.agent.strata().start();
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+    assert_ne!(read_config(&s, "iq3_xxs")["api_key"], OLD_KEY);
+    let damaged = s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json");
+    assert_eq!(
+        std::fs::read_to_string(damaged).unwrap(),
+        "{\"exe\": \"x\","
+    );
 }
 
 #[tokio::test]
@@ -828,7 +935,7 @@ async fn with_strata_started_by_start_here_the_model_used_last_is_active() {
 }
 
 #[tokio::test]
-async fn another_model_gets_the_key_the_proxy_sends() {
+async fn another_model_gets_the_key_strata_runs_with_not_the_proxys() {
     let s = setup("models-add-key").await;
     installed(&s);
     job(
@@ -837,8 +944,8 @@ async fn another_model_gets_the_key_the_proxy_sends() {
     )
     .await;
     let args = &s.fake.runs_of("START-HERE.bat")[0].args;
-    assert!(args.contains(&NEW_KEY.to_string()), "{args:?}");
-    assert!(!args.contains(&OLD_KEY.to_string()), "{args:?}");
+    assert!(args.contains(&OLD_KEY.to_string()), "{args:?}");
+    assert!(!args.contains(&NEW_KEY.to_string()), "{args:?}");
 }
 
 #[tokio::test]
@@ -946,7 +1053,8 @@ fn vector(s: &Setup) -> String {
 
 fn args_of(s: &Setup, id: &str) -> Value {
     let cfg = read_config(s, id);
-    assert_eq!(cfg["api_key"], OLD_KEY, "other values stay: {cfg}");
+    // A restart brings a new key; the key stays one.
+    assert!(cfg["api_key"].is_string(), "other values stay: {cfg}");
     assert_eq!(cfg["port"], 8080, "other values stay: {cfg}");
     cfg["args"].clone()
 }

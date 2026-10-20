@@ -1,16 +1,10 @@
-//! Start script, programs and key come from `strata-managed.json` or else the
-//! TOML. Code outside `managed.rs` reads them through `Managed::start`,
-//! `processes` and `api_key`, which know both; setting a managed value stays
-//! allowed.
+//! Start script and programs come from `strata-managed.json` or else the
+//! TOML. Code outside `managed.rs` reads them through `Managed::start` and
+//! `processes`, which know both; setting a managed value stays allowed.
 
 use std::path::Path;
 
-const FIELDS: &[&str] = &[
-    ".strata_start",
-    ".strata_args",
-    ".strata_processes",
-    ".strata_api_key",
-];
+const FIELDS: &[&str] = &[".strata_start", ".strata_args", ".strata_processes"];
 
 /// Whether the field at the end of `before` is only set here.
 fn sets(after: &str, next_line: &str) -> bool {
@@ -48,7 +42,7 @@ fn managed_values_are_read_through_their_accessors() {
     }
     assert!(
         found.is_empty(),
-        "read managed values through Managed::start, processes and api_key:\n{}",
+        "read managed values through Managed::start and processes:\n{}",
         found.join("\n")
     );
 }

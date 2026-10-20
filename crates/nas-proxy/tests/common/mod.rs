@@ -7,7 +7,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -47,8 +47,18 @@ pub struct FakePc {
     pub api_auth: Mutex<Option<SeenCredentials>>,
     /// The same for the last `/health` call.
     pub health_auth: Mutex<Option<SeenCredentials>>,
-    /// Strata answers API requests with 401 unless they carry this key.
+    /// Strata answers API requests with 401 unless they carry this key. The
+    /// PC service reports it with `key_generation`, as after a start of
+    /// Strata; `set_strata_key` sets both.
     pub strata_key: Mutex<Option<String>>,
+    pub key_generation: AtomicU64,
+    /// The PC service is older than the key per start: no generation in its
+    /// status and no `/strata/key`.
+    pub no_key_endpoint: AtomicBool,
+    /// `/strata/key` answers this instead of `strata_key`: a key Strata
+    /// refuses.
+    pub reported_key: Mutex<Option<String>>,
+    pub key_requests: AtomicUsize,
     /// Strata's process runs but does not answer yet (starting).
     pub starting: AtomicBool,
     /// Strata answers, but its model is not in memory (`"loaded": false`).
@@ -153,6 +163,18 @@ impl FakePc {
             .is_some_and(|j| j.state == StrataJobState::Running)
     }
     /// Changes the job, e.g. its progress or its end.
+    /// Strata starts with `key`, as the PC service does at every start.
+    pub fn set_strata_key(&self, key: &str) {
+        *self.strata_key.lock().unwrap() = Some(key.into());
+        self.key_generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// The key generation in the status; none from an older service.
+    fn reported_generation(&self) -> Option<u64> {
+        (!self.no_key_endpoint.load(Ordering::SeqCst))
+            .then(|| self.key_generation.load(Ordering::SeqCst))
+    }
+
     pub fn update_job(&self, change: impl FnOnce(&mut StrataJob)) {
         change(self.strata_job.lock().unwrap().as_mut().expect("no job"));
     }
@@ -165,6 +187,7 @@ impl FakePc {
             mac: self.report_mac.lock().unwrap().clone(),
             version: self.version.lock().unwrap().clone(),
             hardware: self.hardware.lock().unwrap().clone(),
+            strata_key_generation: self.reported_generation(),
             ..PcStatus::default()
         }
     }
@@ -321,6 +344,26 @@ pub async fn agent_status(State(pc): State<Pc>) -> Response {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     Json(pc.status()).into_response()
+}
+
+/// `GET /strata/key`: the key Strata takes; 404 without one.
+pub async fn agent_strata_key(State(pc): State<Pc>) -> Response {
+    if !pc.up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    pc.key_requests.fetch_add(1, Ordering::SeqCst);
+    let key = pc.reported_key.lock().unwrap().clone();
+    match (
+        pc.reported_generation(),
+        key.or_else(|| pc.strata_key.lock().unwrap().clone()),
+    ) {
+        (Some(generation), Some(api_key)) => Json(StrataKey {
+            api_key,
+            generation,
+        })
+        .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// `POST /update`: accepted, the service then reports `update_to`.
@@ -746,6 +789,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
             .route("/strata/job/cancel", post(agent_cancel_job))
             .route("/update", post(agent_update))
             .route("/strata-log", get(agent_strata_log))
+            .route("/strata/key", get(agent_strata_key))
             .with_state(pc.clone()),
     )
     .await;
@@ -760,7 +804,6 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     let mut cfg = Config {
         listen_addr: "127.0.0.1:0".parse().unwrap(),
         strata_url: Some(format!("http://{strata}")),
-        strata_api_key: None,
         pc_mac: Some(MAC),
         wol_addr: wol,
         pc_agent_url: Some(format!("http://{agent}")),

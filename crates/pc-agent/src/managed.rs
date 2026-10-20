@@ -1,5 +1,5 @@
 //! Values the service sets itself once it manages the Strata installation:
-//! start script, Strata's programs and its API key. They live in
+//! start script and Strata's programs. They live in
 //! `strata-managed.json` next to the configuration and come before the values
 //! in the TOML, which stays as the owner wrote it.
 
@@ -21,8 +21,8 @@ pub struct Managed {
     pub strata_args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strata_processes: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strata_api_key: Option<String>,
+    // An older service kept `strata_api_key` here too; the Strata key now
+    // comes with every start (see `strata_key`), so it is not read.
 }
 
 impl Managed {
@@ -64,11 +64,5 @@ impl Managed {
         self.strata_processes
             .as_deref()
             .unwrap_or(&cfg.strata_processes)
-    }
-
-    pub fn api_key<'a>(&'a self, cfg: &'a Config) -> Option<&'a str> {
-        self.strata_api_key
-            .as_deref()
-            .or(cfg.strata_api_key.as_deref())
     }
 }

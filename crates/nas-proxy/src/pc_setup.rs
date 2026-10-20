@@ -490,9 +490,6 @@ struct Registered {
     token: String,
     /// How the PC reaches the NAS, for later downloads.
     nas_url: String,
-    /// Strata's key, so the PC service can ask Strata about its health.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    strata_api_key: Option<String>,
 }
 
 /// Trades a valid code for a new token and enters the token and the address
@@ -533,7 +530,6 @@ async fn register(
     Json(Registered {
         token,
         nas_url: format!("http://{host}"),
-        strata_api_key: state.cfg().strata_api_key.clone(),
     })
     .into_response()
 }

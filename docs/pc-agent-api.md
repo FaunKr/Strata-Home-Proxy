@@ -17,6 +17,10 @@ talks to a newer proxy. Therefore:
 - An optional request field is absent as long as it is not set: the
   PC service rejects request fields it does not know. Kinds without fields
   (`update`, `benchmark`, `compare_models`) ignore extra fields.
+- A request field a newer PC service ignores is still sent with a value an
+  older one accepts: older services keep checking it (the `api_key` of
+  `install` is a random throwaway key, because older services refuse an
+  empty one).
 
 The crate's tests read the saved responses plus responses that lack the
 newer fields. A PC service test checks that the samples show every field it
@@ -71,8 +75,34 @@ values (`Hardware`).
 If `hardware` is missing, the service is older; the Overview then asks for an
 update.
 
+`strata_key_generation` changes with every new Strata key, never the key
+itself; the proxy then fetches the key from `GET /strata/key`. The number
+starts at a random value with each start of the service, so the proxy
+compares it only for a change. It is there even while no model
+configuration holds a key; only services before the key per start lack it.
+
 If the service does not answer, the proxy assumes the PC is asleep and wakes
 it.
+
+## `GET /strata/key`
+
+Response: `StrataKey`, the Strata key (`api_key`) and the
+`strata_key_generation` it belongs to. `404` while no model configuration
+holds a key.
+
+Before every start of Strata (auto-start, gaming mode off, resume, watchdog,
+the restart of a job, the forced restart, the start after a service update)
+the service makes a new key: 32 random bytes as hex. It writes it into
+`api_key` of every model configuration, keeping each file's modification
+time, and only then starts Strata, which reads it from there. A configuration
+it cannot read is noted in its log and stays as it is; if it cannot write
+one, none keeps the new key and Strata does not start. Until its first start
+of Strata the service reports the key the configurations already hold, so a
+service restarted beside a running Strata still knows it. When
+`serve/server.py` starts `strata.exe` again after a crash, or Strata is
+started by hand, the key stays.
+
+`strata_api_key` in the TOML is ignored, with a warning in the log.
 
 ## `POST /sleep`
 
@@ -203,7 +233,8 @@ started download resumes next time.
 ### `GET /strata`
 
 Response: `StrataReport`, that is `StrataInfo` and `update` next to it. What
-is installed, Strata's catalog with a recommendation for the PC's RAM,
+is installed, Strata's catalog with a recommendation for the PC's RAM and
+VRAM (setup's memory tiers, see [strata-api.md](strata-api.md)),
 free space, last benchmark and the running or last job.
 Never contains the Strata key. Along the way it asks Git at most once per
 hour whether there is a newer Strata version (`update_available`).
@@ -215,9 +246,17 @@ missing. `commits` are newest first, at most 200 (`total` counts all).
 lines. The proxy keeps all of this on the NAS; the web UI only gets
 short hash, subject and date.
 
+In the catalog, `memory_with_vram` says that `ram_gb` is RAM and VRAM
+together (Gyro), and `fits` then counts the biggest card's VRAM too, against
+setup's own figure (27.6 GB for Gyro-S). The recommended size always fits,
+because setup's low-RAM mode starts it. `vram_gb` is that card's VRAM, missing
+without a card. An older PC service leaves these fields out.
+
 Each installed model says with `speed_projection` whether its configuration
 loads a control vector (`--control-vector-scaled`, Strata's or a custom one).
-An older PC service leaves the field out.
+An older PC service leaves the field out. This and `context` are read from
+what Strata starts with: `args` with `user_args` over it, as Strata's
+`engine_args` does.
 
 `context` is the value of `--max-context` in its configuration (tokens),
 `null` if the flag is missing or its value is not a number. An older
@@ -273,38 +312,46 @@ little space, deleting the active model).
 | `kind` | Fields | What happens |
 | --- | --- | --- |
 | `install` | `family`, `size`, `context`, `api_key`, optional `experimental_speed_projection` | Git (via winget, if needed), `git clone`, setup without questions, starts Strata |
-| `add_model` | `family`, `size`, `context`, optional `api_key` and `experimental_speed_projection` | setup with `--setup` and the proxy's key (otherwise its own), the active model stays active |
+| `add_model` | `family`, `size`, `context`, optional `api_key` and `experimental_speed_projection` | setup with `--setup` and the key Strata runs with, the active model stays active |
 | `activate` | `model` | waits until Strata is not handling a request, restarts with the other start script |
 | `delete` | `model` | deletes this model's model folder, pack, configuration, start script and log |
 | `update` | – | `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts |
 | `benchmark` | – | `BENCH.bat --config <active model>`, keeps tokens/s with model and date |
 | `compare_models` | – | `benchmark` for each installed model in turn, each as it is set up; activates each model for this and at the end (also after cancelling) the previously active one again |
-| `set_key` | `api_key` | writes the key into all model configurations and restarts Strata |
+| `set_key` | `api_key` | waits until Strata is not handling a request and restarts it, which brings a new key |
 | `set_speed_projection` | `model`, `on` | turns speed projection on or off in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 
-The proxy generates the Strata key. It only applies once the job is finished
-(also across a proxy restart); if the job fails, the old one stays. The job's
-output shows `***` instead of the key.
+The service ignores `api_key` in every job: the key comes with the next start
+of Strata (see `GET /strata/key`). The proxy still sends a random one with
+`install`, because a service from before refuses an empty key. Setup gets the key Strata runs with, if
+there is one. The job's output shows `***` instead of the key.
 
 `experimental_speed_projection` (`false` if not given) passes setup
 `--experimental-speed-projection on` instead of `off` for Qwen and Coder. For
 other families, `true` is a `400`. The proxy sends the field only when it is
 checked (see "Older PC services").
 
-`set_speed_projection` only changes `args` in `strata-<id>.json`. `on: true`
+`set_speed_projection` only changes `args` in `strata-<id>.json`, and
+`args_written` the same way if the configuration has it, so that Strata does
+not take the change for one set by hand; the four flags and `--control-vector`
+(a vector of the user's own, which Strata keeps with them) leave `user_args`,
+which Strata puts over `args` (an empty `user_args` goes). A configuration
+without these keys gets none. `on: true`
 removes setup's flags and appends them again, with Strata's vector from the
 Strata folder (see [strata-api.md](strata-api.md)); if the vector is missing,
 the job fails and the configuration stays. `on: false` removes the
 four flags with their values, including a custom vector. Families other
-than Qwen and Coder are a `400`, a model from the catalog that is
+than Qwen and Coder (also Gyro) are a `400`, a model from the catalog that is
 not installed is a `409`, as with `activate`. The configuration's modification
 time stays, because without its own start script Strata starts the
 most recently modified one.
 
 `set_context` only sets the value of `--max-context` in `args` (if the flag
 is missing, it appends it) and removes `--rope-scaling` and `--rope-scale` with
-their values. It only takes contexts from the catalog up to 262144, the
+their values; `args_written` and `user_args` as with `set_speed_projection`,
+with `--max-context`, `--rope-scaling` and `--rope-scale`. It only takes
+contexts from the catalog up to 262144, the
 trained length
 (`MAX_SWITCHED_CONTEXT`): above that the model needs rope scaling, which only
 setup sets up (`400`). What setup derived from the old context
@@ -314,7 +361,8 @@ stays. A model from the catalog that is not installed is a
 
 For the active model, the job waits after the restart until Strata answers on
 `/health`. If Strata exits before that or does not answer within
-`context_start_secs` (default 600), it writes the old `args` back,
+`context_start_secs` (default 600), it writes the old `args`,
+`args_written` and `user_args` back,
 restarts Strata with them and fails; the last lines of the
 Strata output are then in the job's `lines`. If the wait is
 cancelled, the old `args` are restored as well. In gaming mode Strata

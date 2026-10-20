@@ -177,7 +177,8 @@ async fn shows_what_is_not_set_up() {
 
 #[tokio::test]
 async fn shows_running_and_waiting_requests_from_metrics() {
-    let s = setup(true, |c| c.strata_api_key = Some("secret".into())).await;
+    let s = setup(true, |_| {}).await;
+    s.pc.set_strata_key("secret");
     *s.pc.metrics.lock().unwrap() = Some(METRICS_BUSY.into());
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;

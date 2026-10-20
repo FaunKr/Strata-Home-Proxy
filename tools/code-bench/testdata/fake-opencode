@@ -19,6 +19,9 @@ if mode == "links":
     os.symlink(os.environ["FAKE_TARGET"], "leak.py")
 if mode == "dir":
     os.mkdir("hidden_test.py")
+if mode == "notes":
+    with open("NOTES.md", "w") as f:
+        f.write("plan: write double.py\n")
 if mode == "hang":
     time.sleep(600)
 if mode == "error":

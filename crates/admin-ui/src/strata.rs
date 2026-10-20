@@ -16,7 +16,7 @@ use crate::{
         get_strata,
     },
     confirm::{Confirm, Question},
-    labels::{STRATA_CONNECTION, STRATA_TIMEOUTS, strata_badge, strata_job_label},
+    labels::{STRATA_CONNECTION, STRATA_TIMEOUTS, TOO_OLD_FOR_KEY, strata_badge, strata_job_label},
     overview::{Live, strata_sentence},
     settings::SettingsSections,
 };
@@ -423,12 +423,11 @@ pub fn VersionTab() -> impl IntoView {
 #[component]
 pub fn ConnectionTab() -> impl IntoView {
     view! {
-        {with_page(|area, page| {
-            let blocked = area.blocked(&page);
-            let actions = area.actions;
+        {with_page(|_, page| {
+            let unreported = page.key_unreported;
             page.info
                 .filter(|i| i.installed)
-                .map(|_| view! { <StrataKey actions blocked /> })
+                .map(|_| view! { <StrataKey unreported /> })
         })}
         <SettingsSections sections=&[&STRATA_CONNECTION, &STRATA_TIMEOUTS] />
     }
@@ -562,7 +561,13 @@ fn ModelChoice(
         .recommended
         .clone()
         .filter(|r| sizes.iter().any(|s| &s.id == r))
-        .or_else(|| sizes.iter().find(|s| s.fits).map(|s| s.id.clone()))
+        // Never Gyro, as setup never pre-selects it.
+        .or_else(|| {
+            sizes
+                .iter()
+                .find(|s| s.fits && !s.memory_with_vram)
+                .map(|s| s.id.clone())
+        })
         .unwrap_or_else(|| sizes[0].id.clone());
     let choice = RwSignal::new(first);
     let context = RwSignal::new(info.default_context);
@@ -589,8 +594,14 @@ fn ModelChoice(
     let options = sizes
         .iter()
         .map(|s| {
+            // Gyro's memory is RAM and VRAM together.
+            let memory = if s.memory_with_vram {
+                "RAM + VRAM"
+            } else {
+                "RAM"
+            };
             let mut text = format!(
-                "{} {} · {} download · needs {} GB RAM",
+                "{} {} · {} download · needs {} GB {memory}",
                 family_title(&s.family),
                 s.size,
                 gb(s.download_gb),
@@ -600,7 +611,7 @@ fn ModelChoice(
                 text.push_str(" (recommended)");
             }
             if !s.fits {
-                text.push_str(" (not enough RAM)");
+                text.push_str(&format!(" (not enough {memory})"));
             }
             if s.partly_downloaded {
                 text.push_str(" (partly downloaded)");
@@ -629,7 +640,10 @@ fn ModelChoice(
             }
         })
         .collect_view();
-    let room = format!("The PC has {} RAM.", gb(info.ram_gb));
+    let room = match info.vram_gb {
+        Some(vram) => format!("The PC has {} RAM and {} VRAM.", gb(info.ram_gb), gb(vram)),
+        None => format!("The PC has {} RAM.", gb(info.ram_gb)),
+    };
     let disk = info
         .disk_free_gb
         .map(|free| format!(" Free on the drive of {}: {}.", info.data_dir, gb(free)));
@@ -1714,36 +1728,14 @@ fn BenchRow(
 }
 
 #[component]
-fn StrataKey(actions: Actions, blocked: Signal<bool>) -> impl IntoView {
-    let confirm = expect_context::<Confirm>();
+fn StrataKey(unreported: bool) -> impl IntoView {
     view! {
         <section class="card">
             <h2>"Strata key"</h2>
             <p class="muted">
-                "Only the proxy and Strata know it. Clients use their own API keys under Access. A new key applies once Strata has taken it over."
+                "Only the proxy and Strata know it. The PC service makes a new one at every start of Strata, and the proxy takes it over by itself. Clients use their own API keys under Access."
             </p>
-            <div class="actions">
-                <button
-                    type="button"
-                    class="secondary"
-                    disabled=move || blocked.get()
-                    on:click=move |_| {
-                        confirm
-                            .ask(
-                                Question {
-                                    title: "Create a new Strata key?".into(),
-                                    text: "Strata restarts to take it over and cannot answer requests for a moment. The proxy switches to the new key by itself."
-                                        .into(),
-                                    confirm: "Create new key",
-                                    danger: false,
-                                },
-                                move || actions.job(StrataJobKind::SetKey),
-                            );
-                    }
-                >
-                    "Create new Strata key"
-                </button>
-            </div>
+            {unreported.then(|| view! { <p class="warning" role="status">{TOO_OLD_FOR_KEY}</p> })}
         </section>
     }
 }

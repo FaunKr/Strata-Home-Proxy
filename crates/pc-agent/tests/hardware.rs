@@ -116,5 +116,5 @@ fn windows_reads_cpu_and_ram() {
     assert!((0.0..=100.0).contains(&load), "CPU-Last {load}");
     let total = cpu.ram_total_bytes.expect("RAM total");
     let used = cpu.ram_used_bytes.expect("RAM belegt");
-    assert!(0 < used && used <= total, "RAM {used} von {total}");
+    assert!(0 < used && used <= total, "RAM {used} of {total}");
 }

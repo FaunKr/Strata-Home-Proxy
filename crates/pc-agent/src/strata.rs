@@ -54,13 +54,11 @@ enum Plan {
     Install {
         size: &'static Size,
         context: u32,
-        api_key: String,
         speed_projection: bool,
     },
     AddModel {
         size: &'static Size,
         context: u32,
-        api_key: Option<String>,
         speed_projection: bool,
     },
     Activate {
@@ -73,9 +71,8 @@ enum Plan {
     Benchmark {
         id: String,
     },
-    SetKey {
-        api_key: String,
-    },
+    /// A restart: every start brings a new key.
+    SetKey,
     SetSpeedProjection {
         id: String,
         on: bool,
@@ -100,7 +97,7 @@ impl Plan {
             | Self::Benchmark { id }
             | Self::SetSpeedProjection { id, .. }
             | Self::SetContext { id, .. } => Some(id.clone()),
-            Self::Update | Self::SetKey { .. } | Self::CompareModels { .. } => None,
+            Self::Update | Self::SetKey | Self::CompareModels { .. } => None,
         }
     }
 }
@@ -174,14 +171,14 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             family,
             size: s,
             context: c,
-            api_key,
+            // The key comes with the start (see `strata_key`).
+            api_key: _,
             experimental_speed_projection: wanted,
         } => {
             let size = size(&family, &s)?;
             Ok(Plan::Install {
                 size,
                 context: context(c)?,
-                api_key: check_key(api_key)?,
                 speed_projection: check_speed_projection(size, wanted)?,
             })
         }
@@ -189,14 +186,13 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             family,
             size: s,
             context: c,
-            api_key,
+            api_key: _,
             experimental_speed_projection: wanted,
         } => {
             let size = size(&family, &s)?;
             let plan = Plan::AddModel {
                 size,
                 context: context(c)?,
-                api_key: api_key.map(check_key).transpose()?,
                 speed_projection: check_speed_projection(size, wanted)?,
             };
             strata_installed(&install)?;
@@ -235,10 +231,9 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             })?;
             Ok(Plan::Benchmark { id })
         }
-        StrataJobRequest::SetKey { api_key } => {
-            let api_key = check_key(api_key)?;
+        StrataJobRequest::SetKey { api_key: _ } => {
             strata_installed(&install)?;
-            Ok(Plan::SetKey { api_key })
+            Ok(Plan::SetKey)
         }
         StrataJobRequest::SetSpeedProjection { model, on } => {
             let id = installed_model(&install, &model)?;
@@ -303,21 +298,6 @@ fn active_model(agent: &Agent) -> Option<String> {
     Some(catalog::by_id(&id).map_or(id, Size::id))
 }
 
-/// Keys go into a command line and an HTTP header: printable ASCII only.
-fn check_key(key: String) -> Result<String, Refusal> {
-    let ok = (16..=256).contains(&key.len())
-        && key
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b));
-    if ok {
-        Ok(key)
-    } else {
-        Err(Refusal::BadRequest(
-            "The Strata key must have 16 to 256 characters of letters, digits, - and _".into(),
-        ))
-    }
-}
-
 /// Refuses a download that does not fit on the data drive. Of a model partly
 /// downloaded, only the rest counts.
 fn check_space(agent: &Agent, size: &Size) -> Result<(), Refusal> {
@@ -342,20 +322,18 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::Install {
             size,
             context,
-            api_key,
             speed_projection,
-        } => install(job, size, context, api_key, speed_projection).await,
+        } => install(job, size, context, speed_projection).await,
         Plan::AddModel {
             size,
             context,
-            api_key,
             speed_projection,
-        } => add_model(job, size, context, api_key, speed_projection).await,
+        } => add_model(job, size, context, speed_projection).await,
         Plan::Activate { id } => activate(job, &id).await,
         Plan::Delete { id } => delete(job, &id).await,
         Plan::Update => update(job).await,
         Plan::Benchmark { id } => benchmark(job, &id).await,
-        Plan::SetKey { api_key } => set_key(job, api_key).await,
+        Plan::SetKey => set_key(job).await,
         Plan::SetSpeedProjection { id, on } => set_speed_projection(job, &id, on).await,
         Plan::SetContext { id, context } => set_context(job, &id, context).await,
         Plan::CompareModels { ids, active } => compare_models(job, &ids, &active).await,
@@ -366,7 +344,6 @@ async fn install(
     job: &JobContext,
     size: &Size,
     context: u32,
-    api_key: String,
     speed_projection: bool,
 ) -> Result<Option<String>, Step> {
     let agent = job.agent();
@@ -393,7 +370,10 @@ async fn install(
         };
         job.command(clone, false).await?;
     }
-    setup(job, size, context, &api_key, speed_projection).await?;
+    // Setup writes a key only if one is known; the start below makes the
+    // one Strata runs with.
+    let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
+    setup(job, size, context, &key, speed_projection).await?;
     // A Strata started by hand ends with the old values, the new one starts
     // with the managed ones.
     agent.strata().stop();
@@ -402,7 +382,6 @@ async fn install(
         strata_start: Some(strata.run_script(&size.id())),
         strata_args: Vec::new(),
         strata_processes: Some(vec![folder_entry(&dir)]),
-        strata_api_key: Some(api_key),
     };
     agent
         .set_managed(managed)
@@ -415,14 +394,12 @@ async fn add_model(
     job: &JobContext,
     size: &Size,
     context: u32,
-    api_key: Option<String>,
     speed_projection: bool,
 ) -> Result<Option<String>, Step> {
     let agent = job.agent();
-    // The proxy's key first: a model with another key would answer it with 401.
-    let key = api_key
-        .or_else(|| agent.managed().api_key(&agent.cfg).map(String::from))
-        .unwrap_or_default();
+    // The key Strata runs with: a model with another key would answer the
+    // proxy with 401 until the next start.
+    let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
     setup(job, size, context, &key, speed_projection).await?;
     if active_changed(agent, &manage(agent).await) {
         agent.strata().restart_when_idle(job).await?;
@@ -667,21 +644,12 @@ fn load_benchmarks(agent: &Agent) -> Vec<StrataBenchmark> {
     }
 }
 
-/// Puts the key into every model's config and restarts Strata with it.
-async fn set_key(job: &JobContext, api_key: String) -> Result<Option<String>, Step> {
+/// Restarts Strata, which brings a new key into every model's config; the
+/// key an older proxy sends is not used.
+async fn set_key(job: &JobContext) -> Result<Option<String>, Step> {
     let agent = job.agent();
     agent.strata().wait_idle(job).await?;
-    job.step("Setting the key");
-    let install = Installation::of(&agent.cfg);
-    let key = api_key.clone();
-    tokio::task::spawn_blocking(move || install.set_key(&key))
-        .await
-        .map_err(|e| Step::Failed(e.to_string()))??;
-    let mut managed = agent.managed();
-    managed.strata_api_key = Some(api_key);
-    agent
-        .set_managed(managed)
-        .map_err(|e| Step::Failed(e.to_string()))?;
+    job.step("Starting Strata with a new key");
     agent.strata().restart_for(job).await;
     Ok(None)
 }
@@ -1106,6 +1074,7 @@ pub fn view(agent: &Agent) -> StrataReport {
     let cfg = &agent.cfg;
     let dir = &cfg.strata_dir;
     let ram_gb = agent.platform().ram_bytes() as f64 / (1u64 << 30) as f64;
+    let vram_gb = agent.platform().vram_bytes() as f64 / (1u64 << 30) as f64;
     let active = active_model(agent);
     let install = Installation::of(cfg);
     let support = install.support();
@@ -1151,14 +1120,16 @@ pub fn view(agent: &Agent) -> StrataReport {
                 size: s.size.into(),
                 download_gb: s.download_gb,
                 ram_gb: s.ram_gb,
-                fits: ram_gb == 0.0 || f64::from(s.ram_gb) <= ram_gb + 0.5,
+                memory_with_vram: s.with_vram,
+                fits: ram_gb == 0.0 || s.fits(ram_gb, vram_gb),
                 partly_downloaded: install.partly_downloaded(&s.id()),
             })
             .collect(),
-        recommended: catalog::recommend(ram_gb).map(Size::id),
+        recommended: catalog::recommend(ram_gb, vram_gb).map(Size::id),
         contexts: catalog::CONTEXTS.to_vec(),
         default_context: catalog::DEFAULT_CONTEXT,
         ram_gb,
+        vram_gb: (vram_gb > 0.0).then_some(vram_gb),
         disk_free_gb: agent
             .platform()
             .disk_free(&cfg.strata_data_dir)

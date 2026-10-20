@@ -300,6 +300,7 @@ impl JobContext {
             .map_err(|e| Step::Failed(e.to_string()))?;
         let cancelled = self.with(|inner| {
             inner.bench = BenchReading::default();
+            inner.progress = Progress::default();
             if !inner.cancelled {
                 inner.cancel = Some(run.canceller());
             }
@@ -329,9 +330,11 @@ impl JobContext {
                 if progress {
                     p.read(&line, job);
                     // In a comparison: which model the step belongs to.
+                    // A step shown again after a file check has it already.
                     if job.step != before
                         && let (Some(prefix), Some(step)) =
                             (step_prefix.as_deref(), job.step.as_mut())
+                        && !step.starts_with(&format!("{prefix} · "))
                     {
                         *step = format!("{prefix} · {step}");
                     }
@@ -471,31 +474,66 @@ fn table_value(line: &str, name: &str) -> Option<f64> {
         .ok()
 }
 
-/// Reads setup's output: the step, a download's progress, an error. The
-/// same lines Strata's own MCP tool reads (`tools/strata_mcp.py`).
+/// Reads setup's output: the step, a download's progress, a file check's
+/// progress, an error. The same lines Strata's own MCP tool reads
+/// (`tools/strata_mcp.py`).
 #[derive(Default)]
 struct Progress {
+    /// The number of setup's last step heading.
+    step: Option<u32>,
+    /// What the last figure counted, e.g. `model.gguf` or
+    /// `checking model.gguf`; a new one starts the speed over.
+    label: Option<String>,
+    /// While setup checks a file: the step to show again after it.
+    resume: Option<Option<String>>,
     /// Bytes at the last speed measurement.
     last: Option<(Instant, u64)>,
 }
 
 impl Progress {
     fn read(&mut self, line: &str, job: &mut StrataJob) {
-        if let Some(step) = parse_step(line) {
-            job.step = Some(step);
+        self.read_at(line, job, Instant::now());
+    }
+
+    fn read_at(&mut self, line: &str, job: &mut StrataJob, now: Instant) {
+        if let Some((n, title)) = parse_step(line) {
+            job.step = Some(step_text(n, title));
             job.percent = None;
             job.done_bytes = None;
             job.total_bytes = None;
             job.bytes_per_sec = None;
             job.eta_secs = None;
-            self.last = None;
+            *self = Self {
+                step: Some(n),
+                ..Self::default()
+            };
             return;
         }
-        if let Some((done, total, percent)) = parse_download(line) {
+        if let Some((label, done, total, percent)) = parse_download(line) {
+            if self.label.as_deref() != Some(label) {
+                self.label = Some(label.to_string());
+                self.last = None;
+                job.bytes_per_sec = None;
+                job.eta_secs = None;
+                // Setup hashes a big file after its download and prints the
+                // same figure for it (Strata 1972af6).
+                match (label.strip_prefix("checking "), self.resume.is_some()) {
+                    (Some(file), _) => {
+                        let checking = format!("Checking {file}");
+                        let step = match self.step {
+                            Some(n) => step_text(n, &checking),
+                            None => checking,
+                        };
+                        let before = job.step.replace(step);
+                        self.resume.get_or_insert(before);
+                    }
+                    (None, true) => job.step = self.resume.take().flatten(),
+                    (None, false) => {}
+                }
+            }
             job.percent = Some(percent);
             job.done_bytes = Some(done);
             job.total_bytes = Some(total);
-            let now = Instant::now();
             match self.last {
                 Some((at, bytes)) if now.duration_since(at) >= Duration::from_secs(1) => {
                     let secs = now.duration_since(at).as_secs_f64();
@@ -515,24 +553,29 @@ impl Progress {
     }
 }
 
-/// `=== Step 4: Downloading the model ===` → `4/7: Downloading the model`.
-fn parse_step(line: &str) -> Option<String> {
+/// `=== Step 4: Downloading the model ===` → 4 and `Downloading the model`.
+fn parse_step(line: &str) -> Option<(u32, &str)> {
     let rest = line
         .trim()
         .strip_prefix("=== Step ")?
         .strip_suffix(" ===")?;
     let (n, title) = rest.split_once(": ")?;
-    n.parse::<u32>().ok()?;
-    Some(format!("{n}/7: {title}"))
+    Some((n.parse().ok()?, title))
 }
 
-/// `  model.gguf: 12.3 / 68.0 GB (18%)` → bytes done, bytes in total, percent.
-fn parse_download(line: &str) -> Option<(u64, u64, u8)> {
-    let (_, rest) = line.trim().rsplit_once(": ")?;
+/// How a job shows setup's step `n`: `4/7: Downloading the model`.
+fn step_text(n: u32, title: &str) -> String {
+    format!("{n}/7: {title}")
+}
+
+/// `  model.gguf: 12.3 / 68.0 GB (18%)` → the label (`model.gguf`), bytes
+/// done, bytes in total, percent.
+fn parse_download(line: &str) -> Option<(&str, u64, u64, u8)> {
+    let (label, rest) = line.trim().rsplit_once(": ")?;
     let (amounts, percent) = rest.trim().strip_suffix("%)")?.split_once(" GB (")?;
     let (done, total) = amounts.split_once(" / ")?;
     let gb = |s: &str| s.trim().parse::<f64>().ok().map(|v| (v * 1e9) as u64);
-    Some((gb(done)?, gb(total)?, percent.trim().parse().ok()?))
+    Some((label, gb(done)?, gb(total)?, percent.trim().parse().ok()?))
 }
 
 #[cfg(test)]
@@ -542,15 +585,203 @@ mod tests {
     #[test]
     fn reads_setup_steps_and_downloads() {
         assert_eq!(
-            parse_step("=== Step 4: Downloading the model ===").as_deref(),
-            Some("4/7: Downloading the model")
+            parse_step("=== Step 4: Downloading the model ==="),
+            Some((4, "Downloading the model"))
         );
         assert_eq!(
             parse_download(
                 "  Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf: 12.5 / 50.0 GB (25%)"
             ),
-            Some((12_500_000_000, 50_000_000_000, 25))
+            Some((
+                "Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf",
+                12_500_000_000,
+                50_000_000_000,
+                25
+            ))
         );
         assert_eq!(parse_download("nothing: here"), None);
+    }
+
+    fn job() -> StrataJob {
+        StrataJob {
+            id: None,
+            kind: StrataJobKind::Install,
+            model: None,
+            state: StrataJobState::Running,
+            step: None,
+            percent: None,
+            done_bytes: None,
+            total_bytes: None,
+            bytes_per_sec: None,
+            eta_secs: None,
+            lines: Vec::new(),
+            error: None,
+            result: None,
+            started: 0,
+            ended: None,
+        }
+    }
+
+    /// Feeds `lines` one second apart, as setup prints them.
+    fn feed(progress: &mut Progress, job: &mut StrataJob, start: Instant, lines: &[&str]) {
+        for (i, line) in lines.iter().enumerate() {
+            progress.read_at(line, job, start + Duration::from_secs(i as u64));
+        }
+    }
+
+    #[test]
+    fn a_file_check_is_shown_as_checking_and_the_next_download_as_the_step() {
+        let (mut progress, mut job, start) = (Progress::default(), job(), Instant::now());
+        feed(
+            &mut progress,
+            &mut job,
+            start,
+            &[
+                "=== Step 5: downloading Qwen 3.8 Flash ===",
+                "  a-00001-of-00002.gguf:  50.00 / 50.00 GB (100%)",
+                "  checking a-00001-of-00002.gguf (SHA-256, 50.0 GB) ...",
+                "  checking a-00001-of-00002.gguf:  12.50 / 50.00 GB (25%)",
+            ],
+        );
+        assert_eq!(
+            job.step.as_deref(),
+            Some("5/7: Checking a-00001-of-00002.gguf")
+        );
+        assert_eq!(job.percent, Some(25));
+        assert_eq!(job.done_bytes, Some(12_500_000_000));
+        assert_eq!(job.total_bytes, Some(50_000_000_000));
+
+        progress.read_at(
+            "  a-00002-of-00002.gguf:   1.00 / 20.00 GB (5%)",
+            &mut job,
+            start + Duration::from_secs(10),
+        );
+        assert_eq!(job.step.as_deref(), Some("5/7: downloading Qwen 3.8 Flash"));
+        assert_eq!(job.percent, Some(5));
+    }
+
+    #[test]
+    fn a_check_counts_in_any_step_and_a_new_heading_replaces_it() {
+        let (mut progress, mut job, start) = (Progress::default(), job(), Instant::now());
+        feed(
+            &mut progress,
+            &mut job,
+            start,
+            &[
+                "=== Step 4: the Strata engine ===",
+                "  checking vulkan-sdk.tar:   0.60 / 1.20 GB (50%)",
+            ],
+        );
+        assert_eq!(job.step.as_deref(), Some("4/7: Checking vulkan-sdk.tar"));
+        progress.read_at(
+            "=== Step 5: downloading Qwen 3.8 Flash ===",
+            &mut job,
+            start + Duration::from_secs(5),
+        );
+        assert_eq!(job.step.as_deref(), Some("5/7: downloading Qwen 3.8 Flash"));
+        assert_eq!(job.percent, None);
+    }
+
+    #[test]
+    fn without_a_heading_the_step_from_before_the_check_comes_back() {
+        let (mut progress, mut job, start) = (Progress::default(), job(), Instant::now());
+        job.step = Some("Updating Strata".into());
+        feed(
+            &mut progress,
+            &mut job,
+            start,
+            &[
+                "  checking vulkan-sdk.tar:   0.60 / 1.20 GB (50%)",
+                "  checking vulkan-sdk.tar:   1.20 / 1.20 GB (100%)",
+            ],
+        );
+        assert_eq!(job.step.as_deref(), Some("Checking vulkan-sdk.tar"));
+        progress.read_at(
+            "  engine.zip:   0.10 / 0.50 GB (20%)",
+            &mut job,
+            start + Duration::from_secs(5),
+        );
+        assert_eq!(job.step.as_deref(), Some("Updating Strata"));
+    }
+
+    #[test]
+    fn checks_of_two_files_in_a_row_both_show_and_the_heading_comes_back() {
+        let (mut progress, mut job, start) = (Progress::default(), job(), Instant::now());
+        feed(
+            &mut progress,
+            &mut job,
+            start,
+            &[
+                "=== Step 5: downloading Qwen 3.8 Flash ===",
+                "  checking a-00001.gguf:  50.00 / 50.00 GB (100%)",
+                "  checking a-00002.gguf:   0.50 / 20.00 GB (2%)",
+            ],
+        );
+        assert_eq!(job.step.as_deref(), Some("5/7: Checking a-00002.gguf"));
+        progress.read_at(
+            "  mmproj.gguf:   0.10 / 1.00 GB (10%)",
+            &mut job,
+            start + Duration::from_secs(5),
+        );
+        assert_eq!(job.step.as_deref(), Some("5/7: downloading Qwen 3.8 Flash"));
+    }
+
+    #[test]
+    fn the_speed_starts_over_with_each_file() {
+        let (mut progress, mut job, start) = (Progress::default(), job(), Instant::now());
+        feed(
+            &mut progress,
+            &mut job,
+            start,
+            &[
+                "  checking a.gguf:  48.00 / 50.00 GB (96%)",
+                "  checking a.gguf:  50.00 / 50.00 GB (100%)",
+                "  checking b.gguf:   0.50 / 20.00 GB (2%)",
+            ],
+        );
+        // Not measured against a.gguf's bytes.
+        assert_eq!(job.bytes_per_sec, None);
+        progress.read_at(
+            "  checking b.gguf:   1.50 / 20.00 GB (7%)",
+            &mut job,
+            start + Duration::from_secs(3),
+        );
+        assert_eq!(job.bytes_per_sec, Some(1_000_000_000));
+    }
+
+    #[test]
+    fn the_speed_starts_over_when_downloading_and_checking_switch() {
+        let (mut progress, mut job, start) = (Progress::default(), job(), Instant::now());
+        feed(
+            &mut progress,
+            &mut job,
+            start,
+            &[
+                "=== Step 5: downloading Qwen 3.8 Flash ===",
+                "  a.gguf:  48.00 / 50.00 GB (96%)",
+                "  a.gguf:  50.00 / 50.00 GB (100%)",
+            ],
+        );
+        assert_eq!(job.bytes_per_sec, Some(2_000_000_000));
+        // The check's first figure has nothing of its own to measure against.
+        progress.read_at(
+            "  checking a.gguf:   1.00 / 50.00 GB (2%)",
+            &mut job,
+            start + Duration::from_secs(3),
+        );
+        assert_eq!(job.bytes_per_sec, None);
+        assert_eq!(job.eta_secs, None);
+        progress.read_at(
+            "  checking a.gguf:   1.50 / 50.00 GB (3%)",
+            &mut job,
+            start + Duration::from_secs(4),
+        );
+        assert_eq!(job.bytes_per_sec, Some(500_000_000));
+        progress.read_at(
+            "  b.gguf:   0.10 / 20.00 GB (0%)",
+            &mut job,
+            start + Duration::from_secs(5),
+        );
+        assert_eq!(job.bytes_per_sec, None);
     }
 }

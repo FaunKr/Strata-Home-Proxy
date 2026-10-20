@@ -74,6 +74,11 @@ const WAKES: &[&str] = &[
 #[tokio::test]
 async fn no_server_function_wakes_the_pc() {
     let s = setup(false, |_| {}).await;
+    // An update waiting in the image, so the update button would get as far
+    // as waking the PC if it were not in WAKES.
+    s.state
+        .pc_setup
+        .set_program(agent_program("no-wake", "0.1.0+waiting"));
     let mut b = logged_in(&s.url).await;
     let mut names: Vec<&str> = strata_admin_ui::server::server_fn_paths()
         .into_iter()

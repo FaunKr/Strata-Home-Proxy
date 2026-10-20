@@ -22,6 +22,12 @@ const PROJECTION_FLAGS: [(&str, &[&str]); 3] = [
     ("--cvec-mode", &["project"]),
     ("--cvec-dir", &["per-layer"]),
 ];
+/// Since Strata 8aaf188a: the args as setup last wrote them. A setup run
+/// takes every option of `args` that differs from them for one set by hand.
+const WRITTEN_KEY: &str = "args_written";
+/// Since Strata 8aaf188a: the options set by hand, which Strata puts over
+/// `args` at every start and every setup run.
+const USER_KEY: &str = "user_args";
 /// Strata's vector, in the Strata folder.
 const PROJECTION_VECTOR: [&str; 3] = [
     "data",
@@ -134,27 +140,48 @@ impl Installation {
         write_config(&self.config_path(&model.id), &model.fields)
     }
 
-    /// Sets the key in every model config, keeping everything else; if one
-    /// cannot be read or written, none keeps the new key.
+    /// The Strata key in the model configs: the first config's in the order
+    /// of their ids that has one. The service writes the same key into all.
+    pub fn key(&self) -> Option<String> {
+        let mut ids = self.models();
+        ids.sort();
+        ids.iter().find_map(|id| {
+            let (_, fields) = read_config(&self.config_path(id)).ok()??;
+            fields
+                .get("api_key")
+                .and_then(Value::as_str)
+                .filter(|k| !k.is_empty())
+                .map(String::from)
+        })
+    }
+
+    /// Sets the key in every model config, keeping everything else and each
+    /// file's modification time (Strata without its own start script starts
+    /// the config touched last). A config that cannot be read is logged and
+    /// left as it is, as Strata cannot start it either; if one cannot be
+    /// written, none keeps the new key.
     pub fn set_key(&self, key: &str) -> Result<(), String> {
-        // Every config is read first: one that does not parse stops the change
-        // before any has the new key.
         let mut changed = Vec::new();
         for id in self.models() {
             let path = self.config_path(&id);
-            let Some((text, mut fields)) = read_config(&path)? else {
-                continue;
+            let (text, mut fields) = match read_config(&path) {
+                Ok(Some(config)) => config,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!("No new Strata key in it: {e}");
+                    continue;
+                }
             };
             fields.insert("api_key".into(), key.into());
             changed.push((path, text, config_text(&fields)));
         }
         for (i, (path, _, new)) in changed.iter().enumerate() {
-            if let Err(e) = crate::write_replacing(path, new) {
+            if let Err(e) = write_keeping_time(path, new) {
                 // Back to the old key, so all configs agree with the service.
                 for (path, old, _) in &changed[..i] {
-                    let _ = crate::write_replacing(path, old);
+                    let _ = write_keeping_time(path, old);
                 }
-                return Err(format!("{} not written: {e}", path.display()));
+                return Err(e);
             }
         }
         Ok(())
@@ -335,16 +362,35 @@ impl Model {
         args.as_array_mut().expect("args is an array")
     }
 
+    /// The args Strata starts with: `user_args` over `args`, as Strata's
+    /// `engine_args` puts them.
+    fn started_args(&self) -> Vec<Value> {
+        let user = self
+            .fields
+            .get(USER_KEY)
+            .and_then(Value::as_array)
+            .map_or_else(Vec::new, |user| groups(user));
+        let mut args: Vec<Value> = groups(self.args())
+            .into_iter()
+            .filter(|g| flag_of(g).is_empty() || !user.iter().any(|u| flag_of(u) == flag_of(g)))
+            .flatten()
+            .collect();
+        args.extend(user.into_iter().flatten());
+        args
+    }
+
     /// The context it starts with (`--max-context`), if the config says.
     pub fn context(&self) -> Option<u32> {
-        let args = self.args();
+        let args = self.started_args();
         let at = args.iter().position(|v| v == CONTEXT_FLAG)?;
         args.get(at + 1)?.as_str()?.parse().ok()
     }
 
     /// Whether the config loads a control vector, Strata's or another one.
     pub fn speed_projection(&self) -> bool {
-        self.args().iter().any(|v| v == PROJECTION_VECTOR_FLAG)
+        self.started_args()
+            .iter()
+            .any(|v| v == PROJECTION_VECTOR_FLAG)
     }
 
     /// Recovery from repeated reasoning passages, as Strata reads it: `true`
@@ -363,6 +409,35 @@ impl Model {
     pub fn restore_args(&mut self, before: &Model) {
         let args = before.args().to_vec();
         *self.args_mut() = args;
+        for key in [WRITTEN_KEY, USER_KEY] {
+            match before.fields.get(key) {
+                Some(v) => self.fields.insert(key.into(), v.clone()),
+                None => self.fields.remove(key),
+            };
+        }
+    }
+
+    /// Changes `args`, and `args_written` the same way, so that Strata does
+    /// not take the change for one set by hand; the options `owned` leave
+    /// `user_args`, where they would win over `args`. Neither key is added
+    /// to a config of an older Strata that has none.
+    fn change_args(&mut self, owned: &[&str], change: impl Fn(&mut Vec<Value>)) {
+        change(self.args_mut());
+        if let Some(Value::Array(written)) = self.fields.get_mut(WRITTEN_KEY) {
+            change(written);
+        }
+        if let Some(Value::Array(user)) = self.fields.get_mut(USER_KEY) {
+            let kept: Vec<Value> = groups(user)
+                .into_iter()
+                .filter(|g| !owned.contains(&flag_of(g)))
+                .flatten()
+                .collect();
+            if kept.is_empty() {
+                self.fields.remove(USER_KEY);
+            } else {
+                *user = kept;
+            }
+        }
     }
 
     /// The sampling its config and Chat settings give it with this Strata.
@@ -374,30 +449,8 @@ impl Model {
     /// adds past the trained length: every context the switch takes is
     /// within it. Everything setup derived from the old context stays.
     pub fn set_context(&mut self, context: u32) {
-        let args = self.args_mut();
-        let mut kept = Vec::with_capacity(args.len());
-        let mut set = false;
-        let mut drop_value = false;
-        for arg in args.drain(..) {
-            if std::mem::take(&mut drop_value) {
-                continue;
-            }
-            if arg.as_str().is_some_and(|a| ROPE_FLAGS.contains(&a)) {
-                drop_value = true;
-            } else if arg == CONTEXT_FLAG {
-                drop_value = true;
-                if !set {
-                    kept.extend([arg, context.to_string().into()]);
-                    set = true;
-                }
-            } else {
-                kept.push(arg);
-            }
-        }
-        if !set {
-            kept.extend([CONTEXT_FLAG.into(), context.to_string().into()]);
-        }
-        *args = kept;
+        let owned = [CONTEXT_FLAG, ROPE_FLAGS[0], ROPE_FLAGS[1]];
+        self.change_args(&owned, |args| with_context(args, context));
     }
 
     /// Switches the speed projection with the flags setup writes for it;
@@ -411,18 +464,74 @@ impl Model {
             ));
         }
         let vector = format!("{}:1.0", self.vector.display());
-        let args = self.args_mut();
-        without_speed_projection(args);
-        if on {
-            args.push(PROJECTION_VECTOR_FLAG.into());
-            args.push(vector.into());
-            for (flag, values) in PROJECTION_FLAGS {
-                args.push(flag.into());
-                args.extend(values.iter().map(|&v| Value::from(v)));
+        // Strata keeps a vector of the user's own (`--control-vector`) with
+        // these in user_args; switching replaces any vector, as in args.
+        let mut owned = vec![PROJECTION_VECTOR_FLAG, "--control-vector"];
+        owned.extend(PROJECTION_FLAGS.iter().map(|(flag, _)| *flag));
+        self.change_args(&owned, |args| {
+            without_speed_projection(args);
+            if on {
+                args.push(PROJECTION_VECTOR_FLAG.into());
+                args.push(vector.clone().into());
+                for (flag, values) in PROJECTION_FLAGS {
+                    args.push(flag.into());
+                    args.extend(values.iter().map(|&v| Value::from(v)));
+                }
             }
-        }
+        });
         Ok(())
     }
+}
+
+/// `args` with this `--max-context` in its place, without rope scaling.
+fn with_context(args: &mut Vec<Value>, context: u32) {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut set = false;
+    let mut drop_value = false;
+    for arg in args.drain(..) {
+        if std::mem::take(&mut drop_value) {
+            continue;
+        }
+        if arg.as_str().is_some_and(|a| ROPE_FLAGS.contains(&a)) {
+            drop_value = true;
+        } else if arg == CONTEXT_FLAG {
+            drop_value = true;
+            if !set {
+                kept.extend([arg, context.to_string().into()]);
+                set = true;
+            }
+        } else {
+            kept.push(arg);
+        }
+    }
+    if !set {
+        kept.extend([CONTEXT_FLAG.into(), context.to_string().into()]);
+    }
+    *args = kept;
+}
+
+/// An argument list in Strata's groups (`strata_control/user_args.py`): an
+/// option and the values after it, up to the next `--option`.
+fn groups(args: &[Value]) -> Vec<Vec<Value>> {
+    let mut out: Vec<Vec<Value>> = Vec::new();
+    for arg in args {
+        match out.last_mut() {
+            Some(group) if !arg.as_str().is_some_and(|a| a.starts_with("--")) => {
+                group.push(arg.clone())
+            }
+            _ => out.push(vec![arg.clone()]),
+        }
+    }
+    out
+}
+
+/// A group's option; empty for values before the first one.
+fn flag_of(group: &[Value]) -> &str {
+    group
+        .first()
+        .and_then(Value::as_str)
+        .filter(|a| a.starts_with("--"))
+        .unwrap_or("")
 }
 
 /// Setup writes lower-case file names whatever the catalog's case.
@@ -448,8 +557,13 @@ fn read_config(path: &Path) -> Result<Option<(String, ConfigFields)>, String> {
 }
 
 fn write_config(path: &Path, fields: &ConfigFields) -> Result<(), String> {
+    write_keeping_time(path, &config_text(fields))
+}
+
+/// Replaces the file's text and gives it back its modification time.
+fn write_keeping_time(path: &Path, text: &str) -> Result<(), String> {
     let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-    crate::write_replacing(path, &config_text(fields))
+    crate::write_replacing(path, text)
         .map_err(|e| format!("{} not written: {e}", path.display()))?;
     if let Some(time) = modified {
         let kept = std::fs::File::options()
@@ -909,7 +1023,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_key_goes_into_every_config_or_none() {
+    fn a_new_key_goes_into_every_readable_config() {
         let f = Folders::new("key");
         let s = f.setup();
         s.model("a", config(json!([])))
@@ -922,14 +1036,19 @@ mod tests {
                 "new-key-0123456789"
             );
         }
+        assert_eq!(install.key().as_deref(), Some("new-key-0123456789"));
         s.config_text("c", "{ broken");
-        assert!(install.set_key("third-key-0123456789").is_err());
+        install.set_key("third-key-0123456789").unwrap();
         for id in ["a", "b"] {
             assert_eq!(
                 install.model(id).unwrap().fields()["api_key"],
-                "new-key-0123456789"
+                "third-key-0123456789"
             );
         }
+        assert_eq!(
+            std::fs::read_to_string(install.config_path("c")).unwrap(),
+            "{ broken"
+        );
     }
 
     #[test]

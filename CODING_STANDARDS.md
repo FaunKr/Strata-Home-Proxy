@@ -51,6 +51,15 @@ Questions already decided: `docs/adr/`.
   value would give another result.** Rounding, lower bounds and
   `max`/`min` hide this easily: if the formula gives the same result for many
   values, the test does not check the fallback.
+- **New behaviour gets a test of its own, named after it.** Not an
+  assertion added to a test about something else. A check on text (a
+  prompt, a message) asserts words that only the new instruction carries,
+  so the test fails when that part is dropped.
+- **A request does not rely on the last status the proxy noted.** Right
+  after a proxy start or a wake-up, a request can reach the PC or Strata
+  before the status poll ran. What the request decides (a message, a retry)
+  comes from state the request path itself keeps up to date, like the Strata
+  key held. A test for it sends the request before any status is noted.
 - **Waits a test would have to sit through are configurable.** A limit
   or retry interval that behaviour depends on comes from `Config` (like
   `idle_timeout`) or through a setter for tests (like `Monitor::set_poll`,

@@ -70,9 +70,14 @@ const strata = {
     { id: 'qwen', title: 'Qwen3.8-Flash-Next', speed_projection: true },
     { id: 'coder', title: 'Coder', speed_projection: true },
     { id: 'swift', title: 'Swift', speed_projection: false },
+    { id: 'gyro', title: 'Qwen3.8-Flash-Next (Gyro)', speed_projection: false },
   ],
-  catalog: [],
-  recommended: 'IQ3_XXS',
+  catalog: [
+    { id: 'IQ3_S', family: 'qwen', size: 'IQ3_S', download_gb: 83.6, ram_gb: 62, memory_with_vram: false, fits: true, partly_downloaded: false },
+    { id: 'gyro-Gyro-S', family: 'gyro', size: 'Gyro-S', download_gb: 58.5, ram_gb: 28, memory_with_vram: true, fits: true, partly_downloaded: false },
+    { id: 'gyro-Gyro-M', family: 'gyro', size: 'Gyro-M', download_gb: 92, ram_gb: 35, memory_with_vram: true, fits: false, partly_downloaded: false },
+  ],
+  recommended: 'IQ3_S',
   contexts: [32768, 65536, 131072],
   default_context: 65536,
   ram_gb: 64,
@@ -106,6 +111,9 @@ http.createServer((req, res) => {
   }
   else if (req.url.startsWith('/status')) {
     json({ ...status, gaming_mode: pcState === 'gaming', strata_running: pcState === 'awake' || pcState === 'loading' });
+  }
+  else if (req.url.startsWith('/strata/key')) {
+    json(sample('strata-key.json'));
   }
   else if (req.url.startsWith('/health') && pcState !== 'awake') {
     res.statusCode = 503;

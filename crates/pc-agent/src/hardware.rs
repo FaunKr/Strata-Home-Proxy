@@ -10,6 +10,12 @@ pub fn read() -> Hardware {
     windows::read()
 }
 
+/// Dedicated VRAM of the biggest card; 0 without one.
+#[cfg(windows)]
+pub fn vram_bytes() -> u64 {
+    windows::vram_bytes()
+}
+
 #[cfg(windows)]
 mod windows {
     use std::{
@@ -168,6 +174,12 @@ mod windows {
             .iter()
             .map(|(_, sum)| sum.clamp(0.0, 100.0) as f32)
             .reduce(f32::max)
+    }
+
+    /// Read once: a card's VRAM does not change while the service runs.
+    pub fn vram_bytes() -> u64 {
+        static VRAM: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        *VRAM.get_or_init(|| biggest_adapter().map_or(0, |a| a.vram_total))
     }
 
     struct Adapter {

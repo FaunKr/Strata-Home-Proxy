@@ -11,25 +11,10 @@ use strata_nas_proxy::events::EventKind;
 const OLD: &str = "0.1.0+alt1234";
 const NEW: &str = "0.1.0+neu5678";
 
-/// A stand-in for the image's `strata-pc-agent.exe` that carries `version`
-/// as the real program does, with the marker's prefix on its own before it
-/// (the compiler may put other text right after such a copy).
-fn program(name: &str, version: &str) -> std::path::PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("strata-proxy-update-{name}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let exe = dir.join("strata-pc-agent.exe");
-    let mut bytes = b"MZ\x90\x00 code strata-pc-agent-version:called `Result::unwrap()`\n".to_vec();
-    bytes.extend_from_slice(format!("strata-pc-agent-version:{version}\n").as_bytes());
-    bytes.extend_from_slice(b"\x00 more code");
-    std::fs::write(&exe, bytes).unwrap();
-    exe
-}
-
 /// An awake PC whose service runs `OLD`, with `NEW` in the image.
 async fn outdated(name: &str) -> Setup {
     let s = setup(true, |_| {}).await;
-    s.state.pc_setup.set_program(program(name, NEW));
+    s.state.pc_setup.set_program(agent_program(name, NEW));
     *s.pc.version.lock().unwrap() = Some(OLD.into());
     s
 }
@@ -182,7 +167,7 @@ async fn a_service_updated_by_hand_while_asleep_is_not_updated_after_the_wake() 
 #[tokio::test]
 async fn a_pc_that_does_not_wake_gets_no_update() {
     let s = setup(true, |c| c.wake_timeout = Duration::from_millis(800)).await;
-    s.state.pc_setup.set_program(program("no-wake", NEW));
+    s.state.pc_setup.set_program(agent_program("no-wake", NEW));
     *s.pc.version.lock().unwrap() = Some(OLD.into());
     s.pc.ignore_wol.store(true, Ordering::SeqCst);
     let mut b = logged_in(&s.url).await;
@@ -203,7 +188,7 @@ async fn a_pc_that_does_not_wake_gets_no_update() {
 #[tokio::test]
 async fn without_a_mac_a_sleeping_pc_gets_no_update() {
     let s = setup(false, |c| c.pc_mac = None).await;
-    s.state.pc_setup.set_program(program("no-mac", NEW));
+    s.state.pc_setup.set_program(agent_program("no-mac", NEW));
     let mut b = logged_in(&s.url).await;
     let resp = b.call("pc-service-update", &[]).await;
     assert_eq!(resp.status(), 400);
@@ -215,7 +200,9 @@ async fn without_a_mac_a_sleeping_pc_gets_no_update() {
 #[tokio::test]
 async fn without_a_strata_address_a_sleeping_pc_gets_no_update() {
     let s = setup(false, |c| c.strata_url = None).await;
-    s.state.pc_setup.set_program(program("no-strata", NEW));
+    s.state
+        .pc_setup
+        .set_program(agent_program("no-strata", NEW));
     let mut b = logged_in(&s.url).await;
     let resp = b.call("pc-service-update", &[]).await;
     assert_eq!(resp.status(), 400);
@@ -234,7 +221,7 @@ async fn without_a_strata_address_a_sleeping_pc_gets_no_update() {
 async fn after_restart(first: &Setup, name: &str) -> Browser {
     first.pc.awake.store(false, Ordering::SeqCst);
     let state = restarted(first);
-    state.pc_setup.set_program(program(name, NEW));
+    state.pc_setup.set_program(agent_program(name, NEW));
     logged_in_again(&serve_proxy(state).await).await
 }
 
@@ -242,7 +229,10 @@ async fn after_restart(first: &Setup, name: &str) -> Browser {
 async fn the_last_version_survives_a_restart() {
     let dir = data_dir("restart");
     let first = setup(true, |c| c.data_dir = Some(dir.clone())).await;
-    first.state.pc_setup.set_program(program("restart", NEW));
+    first
+        .state
+        .pc_setup
+        .set_program(agent_program("restart", NEW));
     *first.pc.version.lock().unwrap() = Some(OLD.into());
     let b = logged_in(&first.url).await;
     let mut live = Live::open(&b).await;
@@ -272,7 +262,7 @@ async fn a_service_without_version_stays_outdated_after_a_restart() {
     first
         .state
         .pc_setup
-        .set_program(program("restart-none", NEW));
+        .set_program(agent_program("restart-none", NEW));
     let b = logged_in(&first.url).await;
     Live::open(&b)
         .await
@@ -438,4 +428,33 @@ async fn a_failure_clears_once_the_service_runs_the_new_version() {
         })
         .await;
     assert_eq!(v["pc_service"]["update_available"], false);
+}
+
+/// The page that pressed the button may close before the PC service
+/// answers. The update goes on, and its answer still reaches the overview.
+#[tokio::test]
+async fn an_update_whose_page_closes_early_still_records_the_answer() {
+    let s = outdated("page-closes").await;
+    *s.pc.update_delay.lock().unwrap() = Duration::from_secs(3);
+    *s.pc.refuse_update.lock().unwrap() = Some("Strata is working on a request".into());
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    live.until("Version", |v| v["pc_service"]["version"] == OLD)
+        .await;
+    let closed = reqwest::Client::new()
+        .post(format!("{}/admin/api/pc-service-update", b.base))
+        .header("cookie", b.cookie.clone().unwrap())
+        .timeout(Duration::from_secs(1))
+        .send()
+        .await;
+    assert!(closed.is_err(), "the page closes before the answer");
+    let v = live
+        .until("reason", |v| !v["pc_service"]["update_error"].is_null())
+        .await;
+    assert!(
+        v["pc_service"]["update_error"]
+            .as_str()
+            .unwrap()
+            .contains("Strata is working")
+    );
 }

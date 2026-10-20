@@ -25,7 +25,8 @@ and asks it to go to sleep after the idle timeout.
   (*Access* area), as `Authorization: Bearer …` or `x-api-key`. Without a
   valid key it gets `401` with `x-strata-proxy-status: unauthorized` right away;
   the PC is not woken for it. Strata never gets the client's key, but the
-  Strata key (`STRATA_API_KEY`), which only the proxy knows.
+  Strata key, which only the proxy and the PC service know. The PC service
+  makes a new one at every start of Strata, and the proxy fetches it.
 - **PC asleep:** Send the wake packet (repeated every 10 s), wait until Strata
   answers on `/health`, then forward. Several simultaneous requests
   share one wake-up.
@@ -170,7 +171,7 @@ is in English and split into five areas: *Overview*, *PC*, *Strata*
   with links to the matching area. As long as the web UI is open, the proxy polls
   the PC service, `/health` and Strata's metrics every 5 s; this
   does not wake the PC and does not keep it awake. For the metrics the
-  proxy needs Strata's API key (`STRATA_API_KEY`). Which Strata endpoints
+  proxy needs the Strata key, which it fetches from the PC service. Which Strata endpoints
   the proxy uses: [docs/strata-api.md](docs/strata-api.md).
 - **Buttons:** *Wake PC* (the 15 min idle timeout counts from the wake-up),
   *Sleep now* (if the PC service refuses, the reason is shown), the switch

@@ -120,7 +120,6 @@ async fn each_area_shows_its_own_settings() {
             "/admin/strata/connection",
             &[
                 "STRATA_URL",
-                "STRATA_API_KEY",
                 "CODE_BENCH_URL",
                 "UPDATE_SUMMARY_TIMEOUT_SECS",
                 "CODE_BENCH_TASK_TIMEOUT_SECS",

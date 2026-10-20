@@ -31,6 +31,13 @@ pub trait Platform: Send + Sync + 'static {
     fn run(&self, spec: &CommandSpec) -> Result<Running>;
     /// Installed RAM in bytes; 0 if unknown.
     fn ram_bytes(&self) -> u64;
+    /// Dedicated VRAM of the biggest graphics card in bytes; 0 without one.
+    fn vram_bytes(&self) -> u64 {
+        self.hardware()
+            .gpu
+            .and_then(|gpu| gpu.vram_total_bytes)
+            .unwrap_or(0)
+    }
     /// Bytes free for this user on the drive that holds `path`, which need
     /// not exist yet.
     fn disk_free(&self, path: &Path) -> Option<u64>;
@@ -259,6 +266,7 @@ fn replace_program(downloaded: &Path) -> Result<()> {
         .map_err(undo)?;
     let mut cmd = Command::new(&program);
     cmd.args(std::env::args_os().skip(1));
+    cmd.env(REPLACES_ENV, std::process::id().to_string());
     if let Ok(dir) = std::env::current_dir() {
         cmd.current_dir(dir);
     }
@@ -266,6 +274,51 @@ fn replace_program(downloaded: &Path) -> Result<()> {
         .context("New program does not start")
         .map_err(undo)?;
     let _ = std::fs::remove_file(downloaded);
+    Ok(())
+}
+
+/// Set for the program an update starts: the process ID of the program it
+/// replaces, so the new one can end it when it keeps the port.
+pub const REPLACES_ENV: &str = "STRATA_PC_AGENT_REPLACES";
+
+/// The program this one replaces, when an update started it.
+pub fn replaced_pid() -> Option<u32> {
+    std::env::var(REPLACES_ENV).ok()?.parse().ok()
+}
+
+/// Ends the program an update replaced, when it still runs. Only a process
+/// of this program's name, so a reused process ID ends nothing else.
+pub fn end_replaced(pid: u32) -> Result<()> {
+    let program = std::env::current_exe().context("Path of the running program unknown")?;
+    let name = program
+        .file_name()
+        .context("Running program has no file name")?
+        .to_string_lossy()
+        .into_owned();
+    #[cfg(windows)]
+    {
+        let status = hidden(Command::new("taskkill").args([
+            "/F",
+            "/PID",
+            &pid.to_string(),
+            "/FI",
+            &format!("IMAGENAME eq {name}"),
+        ]))
+        .status()?;
+        // Exit code 128 means "not running", which is fine.
+        if !status.success() && status.code() != Some(128) {
+            bail!("taskkill ended with {status}");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        if comm.trim() == name {
+            Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .status()?;
+        }
+    }
     Ok(())
 }
 
@@ -357,6 +410,11 @@ impl Platform for System {
     #[cfg(windows)]
     fn hardware(&self) -> Hardware {
         crate::hardware::read()
+    }
+    /// At once, not from the readings: their first call has no values yet.
+    #[cfg(windows)]
+    fn vram_bytes(&self) -> u64 {
+        crate::hardware::vram_bytes()
     }
 }
 

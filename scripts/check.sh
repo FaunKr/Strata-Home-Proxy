@@ -8,6 +8,20 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The last line always says how the run ended, so a log read with `tail` or
+# a grep cannot mistake a failed run for a passed one.
+sample=""
+finish() {
+  local status=$?
+  rm -f "$sample"
+  if ((status == 0)); then
+    echo "check.sh: PASSED"
+  else
+    echo "check.sh: FAILED (exit $status)"
+  fi
+}
+trap finish EXIT
+
 if (($#)); then
   names=()
   for package in "$@"; do
@@ -43,6 +57,14 @@ if [[ -z ${CARGO_TARGET_DIR:-} && $git_dir != "$common_dir" ]]; then
   export CARGO_TARGET_DIR=${common_dir%/.git}/target
 fi
 target_dir=${CARGO_TARGET_DIR:-target}
+
+# The tree this run checks, untracked files included, read through an index of
+# its own. A full run that passes leaves a mark for it; the push guard
+# (.claude/hooks/push-guard.sh) lets through only commits with that tree.
+tree_index=$(mktemp)
+cp "$(git rev-parse --git-path index)" "$tree_index"
+tree=$(GIT_INDEX_FILE=$tree_index git add -A && GIT_INDEX_FILE=$tree_index git write-tree)
+rm -f "$tree_index"
 
 # shellcheck source=scripts/free-space.sh
 source "$(dirname "$0")/free-space.sh"
@@ -110,7 +132,6 @@ fi
 # The Docker build's version check, on a sample file: a full commit hash
 # matches the shortened ID in the .exe, a different one does not.
 sample="$(mktemp)"
-trap 'rm -f "$sample"' EXIT
 # shellcheck disable=SC2016 # the backticks are part of the sample.
 printf 'MZ strata-pc-agent-version:called `unwrap()`\nstrata-pc-agent-version:0.1.0+5e8b9f1\n' > "$sample"
 scripts/check-exe-version.sh "$sample" 5e8b9f13827f6f68bb56ea7e3e91c7654e0023b4
@@ -143,3 +164,8 @@ python3 tools/code-bench/test_runner.py
 cargo nextest run "${package_args[@]}" --no-run
 # The time limit catches a run that hangs outside a single test.
 timeout 15m cargo nextest run "${package_args[@]}" --no-tests=pass
+
+if [[ $packages == all ]]; then
+  mkdir -p "$target_dir/check-ok"
+  touch "$target_dir/check-ok/$tree"
+fi

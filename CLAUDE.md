@@ -1,6 +1,6 @@
 ## Working in the repo
 
-- PRs go against `main`. Start a branch from a fresh `git fetch origin main`; the clone's `origin/main` can be hours old.
+- PRs go against `main`. Start implementing from a freshly fetched `origin/main`: the session's clone may be hours behind.
 - Before pushing, run `scripts/check.sh` and push only when its last line reads `check.sh: PASSED`: the same checks as the CI job `test`. To iterate, `scripts/check.sh <crate>…` checks only those crates.
 - Before you suggest merging a PR: `/code-review` over its diff.
 - Check UI changes in the browser: `scripts/ui-check.sh` (`SHOTS=1` for screenshots).

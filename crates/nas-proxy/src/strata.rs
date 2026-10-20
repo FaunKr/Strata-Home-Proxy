@@ -94,7 +94,7 @@ impl StrataState {
                 &serde_json::to_vec(&last).expect("last answer serializes"),
             )
         {
-            tracing::error!("{LAST_FILE} nicht gespeichert: {e}");
+            tracing::error!("{LAST_FILE} not saved: {e}");
         }
         *kept = Some(last);
     }
@@ -106,12 +106,12 @@ fn read_last(path: &std::path::Path) -> Option<LastAnswer> {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
         Err(e) => {
-            tracing::warn!("{LAST_FILE} nicht lesbar: {e}");
+            tracing::warn!("{LAST_FILE} not readable: {e}");
             return None;
         }
     };
     serde_json::from_slice(&bytes)
-        .inspect_err(|e| tracing::warn!("{LAST_FILE} nicht lesbar: {e}"))
+        .inspect_err(|e| tracing::warn!("{LAST_FILE} not readable: {e}"))
         .ok()
 }
 

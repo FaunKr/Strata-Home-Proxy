@@ -527,7 +527,7 @@ fn go_to_standby(agent: &Arc<Agent>) {
         let platform_agent = Arc::clone(&agent);
         let result = tokio::task::spawn_blocking(move || platform_agent.platform.suspend()).await;
         if let Err(e) = result.map_err(anyhow::Error::from).and_then(|r| r) {
-            tracing::error!("Standby fehlgeschlagen: {e}");
+            tracing::error!("Standby failed: {e}");
         }
         // Also after a failed standby, so a stopped Strata comes back.
         agent.resumed();
@@ -588,7 +588,14 @@ async fn cancel_job(State(agent): State<Arc<Agent>>) -> Response {
 }
 
 async fn update(State(agent): State<Arc<Agent>>) -> Response {
-    match crate::update::update(&agent).await {
+    // In its own task: when the NAS's request ends early, axum drops this
+    // handler, and an update cut off after starting the new program would
+    // leave this one running with the port.
+    let update = tokio::spawn(async move { crate::update::update(&agent).await });
+    let Ok(result) = update.await else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    match result {
         Ok(()) => (StatusCode::ACCEPTED, Json(Answer::accepted())).into_response(),
         Err(UpdateError::Refused(reason)) => {
             (StatusCode::CONFLICT, Json(Refused::new(reason))).into_response()

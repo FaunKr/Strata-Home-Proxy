@@ -16,6 +16,10 @@ async fn main() {
         // Without a console, a message box is the only way to be seen.
         if gaming_cmd {
             platform::notify("Gaming mode", &format!("Error: {e:#}"));
+        } else if platform::replaced_pid().is_some() {
+            // Started by an update, with nobody at the screen: a message box
+            // would keep this process waiting for a click.
+            tracing::error!("PC service stopped: {e:#}");
         } else {
             platform::notify("Strata PC service", &format!("{e:#}"));
         }

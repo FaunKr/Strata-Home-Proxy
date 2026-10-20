@@ -170,7 +170,7 @@ impl PcSetup {
         };
         let bytes = serde_json::to_vec(&saved).expect("version serializes");
         if let Err(e) = write_private(dir, VERSION_FILE, &bytes) {
-            tracing::warn!("{VERSION_FILE} nicht gespeichert: {e}");
+            tracing::warn!("{VERSION_FILE} not saved: {e}");
         }
     }
 

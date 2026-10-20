@@ -101,6 +101,8 @@ pub struct FakePc {
     /// How long `POST /strata/kill` takes before it answers.
     pub kill_delay: Mutex<Duration>,
     pub update_requests: AtomicUsize,
+    /// How long `POST /update` takes before it answers.
+    pub update_delay: Mutex<Duration>,
     /// The PC service refuses updates with this reason (409).
     pub refuse_update: Mutex<Option<String>>,
     /// An old PC service without `/update` (404).
@@ -372,6 +374,8 @@ pub async fn agent_update(State(pc): State<Pc>) -> Response {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     pc.update_requests.fetch_add(1, Ordering::SeqCst);
+    let delay = *pc.update_delay.lock().unwrap();
+    tokio::time::sleep(delay).await;
     if pc.no_update.load(Ordering::SeqCst) {
         return StatusCode::NOT_FOUND.into_response();
     }

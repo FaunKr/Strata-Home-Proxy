@@ -3,11 +3,20 @@
 #
 # Usage: scripts/check.sh [package...]
 # Without arguments it checks the whole workspace. With package names it checks
-# only those; on pull requests CI passes the crates the PR affects.
+# only those; on pull requests CI passes the crates the PR affects. A folder
+# name under crates/ works too: pc-protocol stands for strata-pc-protocol.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if (($#)); then
+  names=()
+  for package in "$@"; do
+    if [[ -f crates/$package/Cargo.toml ]]; then
+      package=$(sed -n 's/^name = "\(.*\)"$/\1/p' "crates/$package/Cargo.toml" | head -n 1)
+    fi
+    names+=("$package")
+  done
+  set -- "${names[@]}"
   for package in "$@"; do
     # Workspace crates have a path ID; a dependency's name would match too.
     if [[ $(cargo pkgid "$package" 2>/dev/null) != path+file://"$PWD"/crates/* ]]; then

@@ -7,6 +7,9 @@
 # target/ui-check/. Needs cargo-leptos, Node and Playwright with Chromium.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+target_dir=${CARGO_TARGET_DIR:-target}
+# shellcheck source=scripts/free-space.sh
+source scripts/free-space.sh
 
 # Cloud sessions have Playwright here; elsewhere: npm install -g playwright.
 npm_root=$(npm root -g 2>/dev/null || true)

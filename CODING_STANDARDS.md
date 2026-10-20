@@ -55,6 +55,12 @@ Schon entschiedene Fragen: `docs/adr/`.
   Werte nur aus `catalog.rs` und prüft Modell-IDs gegen den Katalog, bevor sie
   in einen Pfad gehen. Der Strata-Key steht in keiner Antwort an die
   Weboberfläche und in keinem gespeicherten Vorgang.
+- **Jeder Weg aus einem Strata-Vorgang hinterlässt einen Stand, mit dem
+  Strata lief.** Das Review geht jedes `?`, jede Abbruchprüfung und jeden
+  gescheiterten Schritt durch: Was liegt danach auf der Platte, läuft Strata?
+  Eine zurückgerollte Konfiguration kommt in `cleanup` zurück, auch nach
+  einem Abbruch, und Stratas letzte Zeilen bleiben sichtbar, ob das
+  Zurückschreiben klappt oder nicht (`StrataProcess::restart_or_roll_back`).
 - **Clients für Dienste auf demselben Rechner setzen ein kurzes
   `connect_timeout`** (wie `STRATA_CONNECT_TIMEOUT` in `pc-agent/src/agent.rs`).
   Windows wiederholt eine abgewiesene Verbindung zu localhost rund 2 s lang;

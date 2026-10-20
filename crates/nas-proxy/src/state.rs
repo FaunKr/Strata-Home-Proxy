@@ -377,7 +377,7 @@ impl AppState {
             }
             if !settling && self.strata_healthy().await {
                 let mut lifecycle = self.lifecycle.lock().unwrap();
-                self.record(lifecycle.woke(started.elapsed()));
+                self.record(lifecycle.woke(started.elapsed(), Now::read()));
                 return Ok(());
             }
             if started.elapsed() >= cfg.wake_timeout {
@@ -495,7 +495,7 @@ impl AppState {
             if !self.settling() && self.ask_pc(&self.agent()).await.is_some() {
                 let mut lifecycle = self.lifecycle.lock().unwrap();
                 if last_wol.is_some() {
-                    self.record(lifecycle.woke(started.elapsed()));
+                    self.record(lifecycle.woke(started.elapsed(), Now::read()));
                 } else {
                     // Woken by someone else, e.g. at the desk.
                     self.record(lifecycle.woken_elsewhere());

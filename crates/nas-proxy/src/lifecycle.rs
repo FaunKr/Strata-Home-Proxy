@@ -138,6 +138,9 @@ pub struct Lifecycle {
     refused: Option<Refusal>,
     /// Wall-clock time, so it can be saved and survive a restart.
     keep_awake_until: Option<SystemTime>,
+    /// Unknown is the Zustand since the start, not that of a wake-up that
+    /// failed.
+    unknown_since_start: bool,
 }
 
 impl Lifecycle {
@@ -153,6 +156,7 @@ impl Lifecycle {
             next_sleep_attempt: None,
             refused: None,
             keep_awake_until,
+            unknown_since_start: true,
         }
     }
 
@@ -293,14 +297,17 @@ impl Lifecycle {
     /// The proxy starts sending magic packets.
     pub fn wake_started(&mut self) {
         self.pc = PcState::Waking;
+        self.unknown_since_start = false;
     }
 
-    /// The wake-up the proxy started reached the PC after `waited`. A
-    /// Zustand noticed meanwhile, e.g. gaming mode, stays.
-    pub fn woke(&mut self, waited: Duration) -> Record {
+    /// The wake-up the proxy started reached the PC after `waited`; the
+    /// Leerlaufzeit starts now. A Zustand noticed meanwhile, e.g. gaming
+    /// mode, stays.
+    pub fn woke(&mut self, waited: Duration, now: Now) -> Record {
         if self.pc == PcState::Waking {
             self.pc = PcState::Awake;
         }
+        self.touch(now);
         Record::new(
             EventKind::Awake,
             Some(format!("after {:.1} s", waited.as_secs_f64())),
@@ -325,18 +332,19 @@ impl Lifecycle {
         self.pc = PcState::Unknown;
     }
 
-    /// Gaming mode was switched by `by`. Off starts the Leerlaufzeit again,
-    /// so the PC sleeps after the session.
-    pub fn gaming_switched(&mut self, on: bool, by: &str, now: Now) -> Record {
-        let kind = if on {
-            self.pc = PcState::Gaming;
-            EventKind::GamingOn
+    /// Gaming mode was switched by `by`; recorded only if that changed the
+    /// Zustand. Off starts the Leerlaufzeit again, so the PC sleeps after the
+    /// session.
+    pub fn gaming_switched(&mut self, on: bool, by: &str, now: Now) -> Option<Record> {
+        let from = self.pc;
+        let (to, kind) = if on {
+            (PcState::Gaming, EventKind::GamingOn)
         } else {
-            self.pc = PcState::Awake;
             self.touch(now);
-            EventKind::GamingOff
+            (PcState::Awake, EventKind::GamingOff)
         };
-        Record::new(kind, Some(by.into()))
+        self.pc = to;
+        (from != to).then(|| Record::new(kind, Some(by.into())))
     }
 
     /// Starts the Leerlaufzeit again from now, e.g. after waking by hand.
@@ -361,12 +369,13 @@ impl Lifecycle {
         self.keep_awake_until.is_some_and(|t| t > now.wall)
     }
 
-    /// The PC is up. Woken or gaming just ended: the Leerlaufzeit starts now.
-    /// Unknown before (just started): it keeps running from the start.
+    /// The PC is up. Woken, gaming just ended or up after a failed wake-up:
+    /// the Leerlaufzeit starts now. Unknown since the start: it keeps
+    /// running from the start.
     fn mark_awake(&mut self, now: Now) {
         match self.pc {
             PcState::Awake => {}
-            PcState::Unknown => self.pc = PcState::Awake,
+            PcState::Unknown if self.unknown_since_start => self.pc = PcState::Awake,
             _ => {
                 self.pc = PcState::Awake;
                 self.touch(now);
@@ -381,6 +390,8 @@ impl Lifecycle {
             return None;
         }
         let kind = match self.pc {
+            // The wake-up records Awake with its time itself.
+            PcState::Awake if from == PcState::Waking => return None,
             PcState::Awake => EventKind::PcSeenAwake,
             PcState::Asleep => EventKind::PcSeenAsleep,
             PcState::Gaming => EventKind::PcSeenGaming,
@@ -658,7 +669,7 @@ mod tests {
         l.wake_started();
         assert_eq!(l.pc(), PcState::Waking);
         assert_eq!(
-            l.woke(Duration::from_millis(4200)),
+            l.woke(Duration::from_millis(4200), c.at(2000)),
             Record::new(EventKind::Awake, Some("after 4.2 s".into()))
         );
         assert_eq!(l.pc(), PcState::Awake);
@@ -685,7 +696,7 @@ mod tests {
         let mut l = asleep(&c);
         l.wake_started();
         let _ = l.seen_gaming();
-        let _ = l.woke(Duration::from_secs(5));
+        let _ = l.woke(Duration::from_secs(5), c.at(2000));
         assert_eq!(l.pc(), PcState::Gaming);
     }
 
@@ -695,16 +706,82 @@ mod tests {
         let mut l = awake(&c);
         assert_eq!(
             l.gaming_switched(true, "from the web UI", c.at(100)),
-            Record::new(EventKind::GamingOn, Some("from the web UI".into()))
+            Some(Record::new(
+                EventKind::GamingOn,
+                Some("from the web UI".into())
+            ))
         );
         assert_eq!(l.pc(), PcState::Gaming);
         assert_eq!(
             l.gaming_switched(false, "from the web UI", c.at(5000)),
-            Record::new(EventKind::GamingOff, Some("from the web UI".into()))
+            Some(Record::new(
+                EventKind::GamingOff,
+                Some("from the web UI".into())
+            ))
         );
         assert_eq!(l.pc(), PcState::Awake);
         assert!(!l.wants_sleep(0, c.at(5899), T));
         assert!(l.wants_sleep(0, c.at(5900), T));
+    }
+
+    #[test]
+    fn gaming_switched_to_what_it_was_records_nothing() {
+        let c = Clock::new();
+        let mut l = awake(&c);
+        assert_eq!(l.gaming_switched(false, "x", c.at(100)), None);
+        assert!(l.gaming_switched(true, "x", c.at(200)).is_some());
+        assert_eq!(l.gaming_switched(true, "x", c.at(300)), None);
+        assert_eq!(l.pc(), PcState::Gaming);
+    }
+
+    #[test]
+    fn a_wake_up_records_awake_once() {
+        let c = Clock::new();
+        let mut l = asleep(&c);
+        l.wake_started();
+        // The wake-up's own check of Strata.
+        let strata = l.strata_answered(true, c.at(2000), T);
+        assert_eq!((strata.up, strata.record), (true, None));
+        assert_eq!(l.pc(), PcState::Awake);
+        assert_eq!(
+            l.woke(Duration::from_secs(5), c.at(2000)).kind,
+            EventKind::Awake
+        );
+    }
+
+    #[test]
+    fn a_wake_up_starts_idle_time_again_also_into_gaming_mode() {
+        let c = Clock::new();
+        let mut l = asleep(&c);
+        l.wake_started();
+        let _ = l.woke(Duration::from_secs(5), c.at(2000));
+        assert!(!l.wants_sleep(0, c.at(2899), T));
+        assert!(l.wants_sleep(0, c.at(2900), T));
+
+        let mut l = asleep(&c);
+        l.wake_started();
+        let _ = l.seen_gaming();
+        let _ = l.woke(Duration::from_secs(5), c.at(2000));
+        assert_eq!(l.pc(), PcState::Gaming);
+        assert_eq!(l.snapshot(0, c.at(2000)).last_activity_at, c.at(2000).wall);
+    }
+
+    #[test]
+    fn a_pc_up_after_a_failed_wake_up_starts_idle_time_again() {
+        let c = Clock::new();
+        let mut l = asleep(&c);
+        l.wake_started();
+        let _ = l.wake_timed_out();
+        let seen_up = l.pc_answered(Some(&up()), false, c.at(2000), T);
+        assert_eq!(seen_up.record, seen(EventKind::PcSeenAwake));
+        assert!(!l.wants_sleep(0, c.at(2899), T));
+        assert!(l.wants_sleep(0, c.at(2900), T));
+
+        let mut l = asleep(&c);
+        l.wake_started();
+        l.wake_failed();
+        let _ = l.strata_answered(true, c.at(2000), T);
+        assert!(!l.wants_sleep(0, c.at(2899), T));
     }
 
     #[test]
@@ -735,14 +812,14 @@ mod tests {
             Box::new(|l| l.pc_answered(None, false, c.at(3), T).record),
             Box::new(|l| l.strata_answered(true, c.at(4), T).record),
             Box::new(|l| l.seen_gaming()),
-            Box::new(|l| Some(l.gaming_switched(false, "x", c.at(5)))),
-            Box::new(|l| Some(l.gaming_switched(true, "x", c.at(6)))),
+            Box::new(|l| l.gaming_switched(false, "x", c.at(5))),
+            Box::new(|l| l.gaming_switched(true, "x", c.at(6))),
             Box::new(|l| l.woken_elsewhere()),
             Box::new(|l| l.sleep_answered(Some(&SleepAnswer::Refused("x".into())), c.at(7), T)),
             Box::new(|l| l.sleep_answered(Some(&SleepAnswer::Accepted), c.at(8), T)),
             Box::new(|l| {
                 l.wake_started();
-                Some(l.woke(Duration::from_secs(9)))
+                Some(l.woke(Duration::from_secs(9), c.at(9)))
             }),
             Box::new(|l| Some(l.wake_timed_out())),
         ];

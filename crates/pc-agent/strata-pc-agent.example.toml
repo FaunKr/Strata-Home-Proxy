@@ -59,6 +59,10 @@ stop_settle_ms = 2000
 # for the answer.
 cancel_wait_secs = 60
 
+# How long a PC service update waits until the stopped Strata no longer
+# answers; if it still answers then, the update does not happen.
+update_stop_wait_secs = 10
+
 # MAC address reported to the NAS. Usually left empty: the service then
 # reports that of the network card through which the NAS reaches it.
 #mac = "AA-BB-CC-DD-EE-FF"

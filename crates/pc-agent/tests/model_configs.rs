@@ -91,6 +91,21 @@ async fn at_start_strata_restarts_after_its_request_and_only_on_a_change() {
 }
 
 #[tokio::test]
+async fn after_an_update_strata_starts_once_with_the_changed_config() {
+    let s = setup("configs-start-after-update").await;
+    installed(&s);
+    s.fake.strata_up.store(false, Ordering::SeqCst);
+    std::fs::write(s.dir.join("strata-after-update"), b"").unwrap();
+    strata::manage_configs_at_start(&s.restarted()).await.await;
+    assert_eq!(
+        read_config(&s, "iq3_xxs")["reasoning_loop_recovery"],
+        "recover"
+    );
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0, "no restart on top");
+}
+
+#[tokio::test]
 async fn a_config_that_cannot_be_read_is_left_and_the_others_change() {
     let s = setup("configs-broken").await;
     installed(&s);

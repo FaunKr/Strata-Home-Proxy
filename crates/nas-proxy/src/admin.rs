@@ -318,7 +318,15 @@ impl Backend for UiBackend {
 
     fn update_pc_service(&self) -> BoxFuture<'static, Result<(), String>> {
         let state = Arc::clone(&self.0);
-        async move { crate::pc_setup::update(&state, BY_UI).await }.boxed()
+        // In its own task: a page closed before the PC service answers drops
+        // this call, and the update must still go through and record its
+        // answer (the PC service may be swapping its program by then).
+        async move {
+            tokio::spawn(async move { crate::pc_setup::update(&state, BY_UI).await })
+                .await
+                .unwrap_or_else(|e| Err(format!("The update stopped: {e}")))
+        }
+        .boxed()
     }
 
     fn history(&self, range: String) -> BoxFuture<'static, HistoryView> {

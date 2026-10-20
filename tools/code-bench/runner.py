@@ -6,6 +6,12 @@ their hidden tests. For each task opencode works in a fresh folder against
 the proxy's OpenAI endpoint; afterwards the hidden tests score what it left.
 The proxy asks for the state until the run has ended.
 
+A task is of one of two kinds. A *files* task brings its files and its
+hidden Python tests along. A *repo* task names a checkout baked into the
+image (REPO_TASKS_DIR, see prepare_repo_task.py): opencode works in a fresh
+copy of it, then the real feature's test files are laid over the copy and
+cargo's test run scores the tests the feature added.
+
   GET  /health               {"opencode": "<version>", "problem": <why runs can't start, or null>}
   POST /runs                 starts a run; 409 while one runs
   GET  /runs/current         the running or last run, 404 before the first
@@ -19,8 +25,10 @@ import ipaddress
 import json
 import os
 import pwd
+import re
 import shutil
 import socket
+import stat
 import signal
 import subprocess
 import sys
@@ -35,13 +43,22 @@ LISTEN = os.environ.get("LISTEN_ADDR", "0.0.0.0:8096")
 PROXY_URL = os.environ.get("PROXY_URL", "http://host.docker.internal:8080").rstrip("/")
 OPENCODE = os.environ.get("OPENCODE_BIN", "opencode")
 PYTHON = os.environ.get("PYTHON_BIN", sys.executable)
+CARGO = os.environ.get("CARGO_BIN", "cargo")
+# The repo tasks' checkouts, hidden tests and test lists, made at build time.
+REPO_TASKS_DIR = os.environ.get("REPO_TASKS_DIR", "/opt/code-bench/repos")
 WORK_DIR = os.environ.get("WORK_DIR") or tempfile.gettempdir()
 # The hidden tests' own limit, after opencode.
 TEST_TIMEOUT = int(os.environ.get("TEST_TIMEOUT_SECS", "120"))
+# A repo task's tests: building and running them, after opencode.
+REPO_TEST_TIMEOUT = int(os.environ.get("REPO_TEST_TIMEOUT_SECS", "1200"))
 DEFAULT_TIMEOUT = 30 * 60
 # Files the agent leaves that the page shows, at most this much each.
 MAX_FILE_BYTES = 64 * 1024
 MAX_OUTPUT_CHARS = 8 * 1024
+MAX_DIFF_BYTES = 128 * 1024
+# What the runner puts into a repo task's checkout, and opencode's notes:
+# not part of the change the diff shows.
+NOT_IN_DIFF = ("TASK.md", "NOTES.md", "opencode.json")
 SCORE_MARK = "CODEBENCH_SCORE "
 # The user opencode and the hidden tests run as. Set in the image: the agent
 # then reaches neither the runner's API nor the NAS or the home network
@@ -86,7 +103,7 @@ print("%s" + json.dumps({"passed": result.testsRun - failed, "total": result.tes
 # is scored, and NOTES.md outlives a compaction of the context.
 PROMPT = (
     "Solve the task in TASK.md in the current folder. "
-    "Write the files it asks for into this folder and check them with the example tests. "
+    "Write or change the files it asks for in this folder and check them with the tests TASK.md names. "
     "Save a first working version of each file early and save it again after each "
     "improvement: you may be stopped at any time, and what is saved then counts. "
     "Keep your plan, what is done and what comes next in NOTES.md in this folder, "
@@ -222,14 +239,12 @@ def limit_text(secs):
 
 
 class Run:
-    def __init__(self, run_id, model, api_key, tasks, timeout):
+    def __init__(self, run_id, model, api_key, tasks):
         self.lock = threading.Lock()
         self.id = run_id
         self.model = model
         self.api_key = api_key
-        self.timeout = timeout
-        self.hidden = {t["name"]: t["hidden_test"] for t in tasks}
-        self.files = {t["name"]: t["files"] for t in tasks}
+        self.specs = {t["name"]: t for t in tasks}
         self.state = "running"
         self.error = None
         self.started = int(time.time())
@@ -252,6 +267,11 @@ class Run:
                 "files": {},
                 "test_output": "",
                 "error": None,
+                "kind": t["kind"],
+                # A repo task: the change against the checkout, and tests
+                # that passed there and fail after it.
+                "diff": None,
+                "broken": [],
             }
             for t in tasks
         ]
@@ -301,18 +321,25 @@ class Run:
 
     def task(self, i, name):
         self.update(i, state="running")
+        spec = self.specs[name]
         folder = tempfile.mkdtemp(prefix=f"code-bench-{name}-", dir=WORK_DIR)
         try:
-            for path, text in self.files[name].items():
+            if spec["kind"] == "repo":
+                copy_checkout(spec["repo"], folder)
+            for path, text in spec["files"].items():
                 write(folder, path, text)
             write(folder, "opencode.json", json.dumps(config(self.model, self.api_key)))
             give_to_agent(folder)
-            stats, secs, timed_out, error = self.opencode(i, folder)
+            stats, secs, timed_out, error = self.opencode(i, folder, spec["timeout"])
             if self.cancelled:
                 self.update(i, state="cancelled")
                 return
-            files = solution_files(folder, set(self.files[name]))
-            passed, total, output = score(folder, self.hidden[name])
+            if spec["kind"] == "repo":
+                files, diff = {}, repo_diff(spec["repo"], folder)
+                passed, total, output, broken = score_repo(spec["repo"], folder)
+            else:
+                files, diff, broken = solution_files(folder, set(spec["files"])), None, []
+                passed, total, output = score(folder, spec["hidden_test"])
             self.update(
                 i,
                 state="done",
@@ -325,13 +352,15 @@ class Run:
                 total=total,
                 timed_out=timed_out,
                 files=files,
+                diff=diff,
+                broken=broken,
                 test_output=output,
                 error=error,
             )
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
-    def opencode(self, i, folder):
+    def opencode(self, i, folder, timeout):
         """Lets opencode work on the task; its stats, the time, whether it
         ran out of time, and why it ended otherwise."""
         env = agent_env(
@@ -382,7 +411,7 @@ class Run:
 
         threading.Thread(target=reap, daemon=True).start()
 
-        timer = threading.Timer(self.timeout, deadline)
+        timer = threading.Timer(timeout, deadline)
         timer.start()
         errors = []
         reader = threading.Thread(target=lambda: errors.extend(process.stderr), daemon=True)
@@ -407,7 +436,7 @@ class Run:
                 self.process = None
         error = stats.error
         if timed_out.is_set():
-            error = f"stopped after {limit_text(self.timeout)}"
+            error = f"stopped after {limit_text(timeout)}"
         elif code != 0 and not self.cancelled and not error:
             tail = "".join(errors)[-500:].strip()
             error = f"opencode ended with code {code}" + (f": {tail}" if tail else "")
@@ -528,17 +557,49 @@ def kill_group(pid):
 
 def write(folder, path, text):
     """Writes a file the runner puts in a task folder. What the agent left
-    under that name goes first, and links are never followed: the runner may
-    be root, the folder is the agent's."""
-    full = os.path.join(folder, path)
-    os.makedirs(os.path.dirname(full), exist_ok=True)
-    if os.path.isdir(full) and not os.path.islink(full):
-        shutil.rmtree(full)
-    elif os.path.lexists(full):
-        os.unlink(full)
-    fd = os.open(full, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
+    under that name goes first, and links are never followed, not even for
+    the folders on the way: the runner may be root, the folder is the
+    agent's."""
+    parts = [p for p in path.split("/") if p not in ("", ".")]
+    if not parts or ".." in parts:
+        raise OSError(f"bad path {path!r}")
+    fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            sub = _open_dir(fd, part)
+            os.close(fd)
+            fd = sub
+        _remove(fd, parts[-1])
+        out = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=fd)
+    finally:
+        os.close(fd)
+    with os.fdopen(out, "w", encoding="utf-8") as f:
         f.write(text)
+
+
+def _open_dir(parent, name):
+    """The folder `name` in `parent`, made anew when something else is there."""
+    try:
+        return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # A link or a file in the folder's place.
+        _remove(parent, name)
+    os.mkdir(name, 0o755, dir_fd=parent)
+    return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+
+
+def _remove(parent, name):
+    """Removes whatever is at `name` in `parent`, without following links."""
+    try:
+        st = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(st.st_mode):
+        shutil.rmtree(name, dir_fd=parent)
+    else:
+        os.unlink(name, dir_fd=parent)
 
 
 def solution_files(folder, given):
@@ -615,6 +676,163 @@ def total_tests(hidden_test):
     return sum(1 for l in hidden_test.splitlines() if l.strip().startswith("def test_"))
 
 
+def repo_task(repo):
+    """A repo task's test command and lists (see prepare_repo_task.py)."""
+    with open(os.path.join(REPO_TASKS_DIR, repo, "task.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def copy_checkout(repo, folder):
+    """Fills the task folder with a copy of the repo task's checkout, its
+    prebuilt target folder included; times stay, so cargo builds on it."""
+    source = os.path.join(REPO_TASKS_DIR, repo, "checkout")
+    subprocess.run(["cp", "-a", source + "/.", folder], check=True, capture_output=True, timeout=600)
+
+
+def run_as_agent(args, folder, timeout, env=None):
+    """Runs a command in the task folder as the agent, in a process group of
+    its own; its output, its exit code (None when it ran out of time)."""
+    process = subprocess.Popen(
+        args,
+        cwd=folder,
+        env=agent_env(dict(os.environ, **(env or {}))),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        start_new_session=True,
+        **as_agent(),
+    )
+    try:
+        output, _ = process.communicate(timeout=timeout)
+        return output, process.returncode
+    except subprocess.TimeoutExpired:
+        kill_group(process.pid)
+        output, _ = process.communicate()
+        return output or "", None
+    finally:
+        kill_group(process.pid)
+
+
+# git as the agent, without the hooks or settings of anyone else: the folder
+# is the agent's, so is what its .git says.
+GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0"}
+
+
+def repo_diff(repo, folder):
+    """The agent's change against the checkout, before the hidden tests are
+    laid over it; also what it committed itself."""
+    base = repo_task(repo)["base"]
+    excludes = [f":(exclude){p}" for p in NOT_IN_DIFF]
+    git = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+    out, code = run_as_agent(git + ["add", "-A", "--", "."] + excludes, folder, 120, GIT_ENV)
+    if code != 0:
+        return f"(no diff: git add failed: {out.strip()[-500:]})"
+    out, code = run_as_agent(
+        git + ["diff", "--cached", "--no-color", "--no-ext-diff", "--no-textconv", base, "--", "."] + excludes,
+        folder,
+        120,
+        GIT_ENV,
+    )
+    if code != 0:
+        return f"(no diff: git diff failed: {out.strip()[-500:]})"
+    if len(out.encode()) > MAX_DIFF_BYTES:
+        out = out.encode()[:MAX_DIFF_BYTES].decode("utf-8", "replace") + "\n… (cut)"
+    return out
+
+
+def hidden_files(repo):
+    """The feature's test files, by path in the checkout."""
+    root = os.path.join(REPO_TASKS_DIR, repo, "hidden")
+    files = {}
+    for dirpath, _, names in os.walk(root):
+        for name in names:
+            full = os.path.join(dirpath, name)
+            with open(full, encoding="utf-8") as f:
+                files[os.path.relpath(full, root)] = f.read()
+    return files
+
+
+def cargo_results(output):
+    """Each test's outcome in cargo test's output, as `<test binary>::<test>`."""
+    results = {}
+    binary = None
+    for line in output.splitlines():
+        line = line.strip()
+        running = re.match(r"Running .*\((?:.*[/\\])?([^/\\)]+?)(?:-[0-9a-f]{8,})?(?:\.exe)?\)$", line)
+        if running:
+            binary = running.group(1)
+            continue
+        doc = re.match(r"Doc-tests (\S+)$", line)
+        if doc:
+            binary = "doc-" + doc.group(1)
+            continue
+        test = re.match(r"test (.+?) \.\.\. (ok|FAILED|ignored)", line)
+        if test and binary:
+            results[f"{binary}::{test.group(1)}"] = test.group(2)
+    return results
+
+
+def shown_output(output, results, counted):
+    """cargo's output without the passed tests the score doesn't count."""
+    passed_others = {k.split("::", 1)[1] for k, v in results.items() if v == "ok" and k not in counted}
+    keep = []
+    for line in output.splitlines():
+        test = re.match(r"test (.+?) \.\.\. ok$", line.strip())
+        if test and test.group(1) in passed_others:
+            continue
+        keep.append(line)
+    return "\n".join(keep)[-MAX_OUTPUT_CHARS:]
+
+
+def score_repo(repo, folder):
+    """How many of the feature's tests pass, out of how many, cargo's output
+    and the tests that passed on the checkout and fail now."""
+    task = repo_task(repo)
+    counted = list(task["counted"])
+    try:
+        for path, text in hidden_files(repo).items():
+            write(folder, path, text)
+    except OSError as e:
+        return 0, len(counted), f"The hidden tests could not be put in place: {e}", []
+    output, code = run_as_agent([CARGO] + task["command"], folder, REPO_TEST_TIMEOUT, {"CARGO_TERM_COLOR": "never"})
+    results = cargo_results(output)
+    if code is None:
+        output += f"\nThe tests took longer than {limit_text(REPO_TEST_TIMEOUT)}."
+    if not results:
+        # Nothing ran: it does not build. The compiler's errors explain why.
+        return 0, len(counted), output[-MAX_OUTPUT_CHARS:], []
+    passed = sum(1 for name in counted if results.get(name) == "ok")
+    broken = sorted(
+        name for name in task["passing_before"] if name not in counted and results.get(name) != "ok"
+    )
+    return passed, len(counted), shown_output(output, results, set(counted)), broken
+
+
+def task_spec(t, timeout):
+    """A task of the proxy's run body, checked."""
+    kind = str(t.get("kind") or "files")
+    spec = {
+        "name": str(t["name"]),
+        "title": str(t.get("title") or t["name"]),
+        "kind": kind,
+        "files": {str(k): str(v) for k, v in t["files"].items()},
+        "timeout": int(t.get("timeout_secs") or timeout),
+    }
+    if kind == "files":
+        spec["hidden_test"] = str(t["hidden_test"])
+    elif kind == "repo":
+        spec["repo"] = str(t["repo"])
+        if not spec["repo"] or "/" in spec["repo"] or spec["repo"].startswith("."):
+            raise ValueError(f"bad repo task name {spec['repo']!r}")
+        if not os.path.isfile(os.path.join(REPO_TASKS_DIR, spec["repo"], "task.json")):
+            raise ValueError(f"this image has no repo task {spec['repo']!r}")
+    else:
+        raise ValueError(f"unknown kind of task {kind!r}")
+    return spec
+
+
 class Runner:
     def __init__(self):
         self.lock = threading.Lock()
@@ -625,16 +843,9 @@ class Runner:
         try:
             model = str(body["model"])
             api_key = str(body["api_key"])
-            tasks = [
-                {
-                    "name": str(t["name"]),
-                    "title": str(t.get("title") or t["name"]),
-                    "files": {str(k): str(v) for k, v in t["files"].items()},
-                    "hidden_test": str(t["hidden_test"]),
-                }
-                for t in body["tasks"]
-            ]
+            # The run's limit is the default for tasks without one of their own.
             timeout = int(body.get("timeout_secs") or DEFAULT_TIMEOUT)
+            tasks = [task_spec(t, timeout) for t in body["tasks"]]
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             return 400, {"reason": f"bad run: {e}"}
         if not tasks or not model or "/" in model:
@@ -645,7 +856,7 @@ class Runner:
         with self.lock:
             if self.run is not None and self.run.view()["state"] == "running":
                 return 409, {"reason": "A code benchmark is running already."}
-            run = Run(self.next_id, model, api_key, tasks, timeout)
+            run = Run(self.next_id, model, api_key, tasks)
             self.next_id += 1
             self.run = run
         threading.Thread(target=run.work, daemon=True).start()

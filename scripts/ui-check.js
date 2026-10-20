@@ -119,7 +119,7 @@ async function forced(page, errors) {
   };
   const sees = async text => page.getByText(text).first().waitFor(wait);
 
-  await step('Force restart Strata: confirm and result', 'restart', async () => {
+  for (let n = 0; n < 6; n++) await step(`Force restart Strata: confirm and result #${n}`, `restart${n}`, async () => {
     await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
     await restart.click(wait);
     await dialog.getByText('killed hard').waitFor(wait);

@@ -33,7 +33,7 @@ async fn admin_does_not_wake_the_pc() {
     for path in [
         "/admin",
         "/admin/",
-        "/admin/gibt-es-nicht",
+        "/admin/does-not-exist",
         "/admin/pc",
         "/admin/pc/history",
         "/admin/strata",
@@ -48,7 +48,7 @@ async fn admin_does_not_wake_the_pc() {
     }
     // The paths before the areas are gone.
     for path in [
-        "/admin/gibt-es-nicht",
+        "/admin/does-not-exist",
         "/admin/settings",
         "/admin/api-keys",
         "/admin/password",
@@ -185,7 +185,7 @@ async fn a_page_finishes_while_another_router_is_built() {
     for _ in 0..20 {
         let html = tokio::time::timeout(Duration::from_secs(5), b.page("/admin/"))
             .await
-            .expect("Seite hängt");
+            .expect("page hangs");
         assert!(html.contains("Sign in"), "{html}");
     }
     drop(stop);

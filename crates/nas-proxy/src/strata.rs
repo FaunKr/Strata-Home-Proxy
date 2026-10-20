@@ -85,7 +85,7 @@ impl StrataState {
                 }),
             };
             if let Err(e) = written {
-                tracing::error!("{PENDING_FILE} nicht gespeichert: {e}");
+                tracing::error!("{PENDING_FILE} not saved: {e}");
             }
         }
         *self.pending.lock().unwrap() = pending;
@@ -314,12 +314,12 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
             format!(
                 "{}: {}",
                 detail(&job),
-                job.error.as_deref().unwrap_or("ohne Grund")
+                job.error.as_deref().unwrap_or("no reason given")
             ),
         ),
         StrataJobState::Interrupted | StrataJobState::Running => (
             EventKind::StrataJobFailed,
-            format!("{}: unterbrochen", detail(&job)),
+            format!("{}: interrupted", detail(&job)),
         ),
     };
     state.events.record(kind, Some(detail));
@@ -329,7 +329,7 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
         if job.id.unwrap_or_default() == pending.job && job.state == StrataJobState::Done {
             match state.settings.set("STRATA_API_KEY", &pending.key) {
                 Ok(()) => state.events.record(EventKind::StrataKeyChanged, None),
-                Err(e) => tracing::error!("Neuer Strata-Key nicht gespeichert: {e}"),
+                Err(e) => tracing::error!("New Strata key not saved: {e}"),
             }
         }
         strata.set_pending(None);

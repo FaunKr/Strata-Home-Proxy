@@ -74,14 +74,14 @@ impl Settings {
                 .and_then(|text| match serde_json::from_str(&text) {
                     Ok(s) => Some(s),
                     Err(e) => {
-                        tracing::warn!("{SETTINGS_FILE} nicht lesbar, wird ignoriert: {e}");
+                        tracing::warn!("{SETTINGS_FILE} not readable, ignored: {e}");
                         None
                     }
                 })
                 .unwrap_or_default();
             for (key, raw) in stored.values {
                 if let Err(e) = Config::default().apply(&key, &raw) {
-                    tracing::warn!("Gespeicherte Einstellung {key} wird ignoriert: {e}");
+                    tracing::warn!("Saved setting {key} ignored: {e}");
                     continue;
                 }
                 saved.insert(key, raw);
@@ -166,7 +166,7 @@ impl Settings {
         if let Some(dir) = &self.base.data_dir
             && let Err(e) = write_private(dir, REPORTED_MAC_FILE, format_mac(mac).as_bytes())
         {
-            tracing::warn!("Gemeldete MAC nicht gespeichert: {e}");
+            tracing::warn!("Reported MAC not saved: {e}");
         }
         inner.current = Arc::new(resolve(&self.base, &inner.saved, inner.reported_mac));
         true
@@ -301,11 +301,11 @@ mod tests {
     #[test]
     fn secrets_are_not_shown() {
         let s = Settings::new(base(None), &[]);
-        s.set("PC_AGENT_TOKEN", "geheim").unwrap();
+        s.set("PC_AGENT_TOKEN", "secret").unwrap();
         let token = entry(&s.entries(), "PC_AGENT_TOKEN").clone();
         assert_eq!(token.value.as_deref(), Some("set"));
         assert_eq!(token.saved, None);
-        assert_eq!(s.current().pc_agent_token.as_deref(), Some("geheim"));
+        assert_eq!(s.current().pc_agent_token.as_deref(), Some("secret"));
     }
 
     #[test]

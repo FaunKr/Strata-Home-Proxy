@@ -79,7 +79,7 @@ pub struct FakePc {
     pub job_polls: AtomicUsize,
     /// Version the PC service reports in `/status`; none, like an old service, if unset.
     pub version: Mutex<Option<String>>,
-    /// Hardwarewerte the PC service reports in `/status`; none, like a service
+    /// Hardware readings the PC service reports in `/status`; none, like a service
     /// from before them, if unset.
     pub hardware: Mutex<Option<Hardware>>,
     pub update_requests: AtomicUsize,
@@ -98,13 +98,13 @@ pub struct FakePc {
     /// The PC service answers this many `/status` calls with 503, like a busy
     /// PC or network, although the PC stays up.
     pub status_misses: AtomicUsize,
-    /// Leistung the simulated Messsteckdose reports, in watts.
+    /// Power the simulated power plug reports, in watts.
     pub plug_watts: Mutex<f64>,
-    /// The Messsteckdose answers like a Gen1 plug: `/status` only.
+    /// The power plug answers like a Gen1 plug: `/status` only.
     pub plug_gen1: AtomicBool,
-    /// The Messsteckdose answers every call with 503.
+    /// The power plug answers every call with 503.
     pub plug_down: AtomicBool,
-    /// The Messsteckdose takes longer than any probe timeout to answer.
+    /// The power plug takes longer than any probe timeout to answer.
     pub plug_hangs: AtomicBool,
 }
 
@@ -146,13 +146,7 @@ impl FakePc {
     }
     /// Changes the job, e.g. its progress or its end.
     pub fn update_job(&self, change: impl FnOnce(&mut StrataJob)) {
-        change(
-            self.strata_job
-                .lock()
-                .unwrap()
-                .as_mut()
-                .expect("kein Vorgang"),
-        );
+        change(self.strata_job.lock().unwrap().as_mut().expect("no job"));
     }
     /// What the PC service's `/status` answers now.
     fn status(&self) -> PcStatus {
@@ -170,7 +164,7 @@ impl FakePc {
 
 pub type Pc = Arc<FakePc>;
 
-/// Waits forever while the Messsteckdose hangs; 503 while it is down.
+/// Waits forever while the power plug hangs; 503 while it is down.
 async fn plug_trouble(pc: &FakePc) -> Option<Response> {
     if pc.plug_hangs.load(Ordering::SeqCst) {
         std::future::pending::<()>().await;
@@ -378,11 +372,7 @@ pub async fn agent_gaming(State(pc): State<Pc>, Json(body): Json<GamingRequest>)
 pub async fn agent_sleep(State(pc): State<Pc>) -> Response {
     pc.sleep_requests.fetch_add(1, Ordering::SeqCst);
     if pc.refuse_sleep.load(Ordering::SeqCst) {
-        return (
-            StatusCode::CONFLICT,
-            Json(Answer::refused("Benutzer aktiv")),
-        )
-            .into_response();
+        return (StatusCode::CONFLICT, Json(Answer::refused("User active"))).into_response();
     }
     pc.awake.store(false, Ordering::SeqCst);
     Json(Answer::accepted()).into_response()
@@ -550,7 +540,7 @@ pub async fn agent_cancel_job(State(pc): State<Pc>) -> Response {
     StatusCode::ACCEPTED.into_response()
 }
 
-/// Like the PC service: the Strata-Ausgabe kept so far, then each new message.
+/// Like the PC service: the Strata output kept so far, then each new message.
 pub async fn agent_strata_log(State(pc): State<Pc>) -> Response {
     if !pc.up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -637,7 +627,7 @@ pub struct Setup {
     pub url: String,
     /// An API key the proxy accepts; `post_json` sends it.
     pub key: String,
-    /// Address of the simulated Messsteckdose, not set up by default.
+    /// Address of the simulated power plug, not set up by default.
     pub plug: String,
 }
 
@@ -720,7 +710,7 @@ pub async fn eventually(what: &str, check: impl Fn() -> bool) {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("{what} ist nicht eingetreten");
+    panic!("{what} did not happen");
 }
 
 pub async fn post_json(s: &Setup, path: &str, body: Value) -> reqwest::Response {
@@ -737,7 +727,7 @@ pub fn kinds(state: &AppState) -> Vec<EventKind> {
     state.events.recent().into_iter().map(|e| e.kind).collect()
 }
 
-/// The Ereignisse without the marks the proxy sets for the history on its
+/// The events without the marks the proxy sets for the history on its
 /// own, which can land at any time.
 pub fn own_kinds(state: &AppState) -> Vec<EventKind> {
     kinds(state)
@@ -748,7 +738,7 @@ pub fn own_kinds(state: &AppState) -> Vec<EventKind> {
 
 /// Waits until the proxy has drawn this state of the PC in the history.
 pub async fn seen(s: &Setup, kind: EventKind) {
-    eventually(&format!("{kind:?} im Verlauf"), || {
+    eventually(&format!("{kind:?} in the history"), || {
         kinds(&s.state).contains(&kind)
     })
     .await;
@@ -808,7 +798,7 @@ impl Browser {
     }
 
     /// The page's HTML. A page that does not finish fails the test with
-    /// what arrived so far, e.g. the shell with "Lädt …" (#69).
+    /// what arrived so far, e.g. the shell with "Loading …" (#69).
     pub async fn page(&self, path: &str) -> String {
         use futures_util::StreamExt;
         let mut req = reqwest::Client::new().get(format!("{}{path}", self.base));
@@ -818,7 +808,7 @@ impl Browser {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         let mut html = Vec::new();
         let Ok(resp) = tokio::time::timeout_at(deadline, req.send()).await else {
-            panic!("{path}: keine Antwort");
+            panic!("{path}: no answer");
         };
         let mut body = resp
             .unwrap_or_else(|e| panic!("{path}: {e}"))
@@ -828,7 +818,7 @@ impl Browser {
                 Ok(Some(chunk)) => html.extend_from_slice(&chunk.unwrap()),
                 Ok(None) => return String::from_utf8(html).unwrap(),
                 Err(_) => panic!(
-                    "{path} wird nicht fertig, bisher:\n{}",
+                    "{path} does not finish, so far:\n{}",
                     String::from_utf8_lossy(&html)
                 ),
             }
@@ -868,9 +858,7 @@ pub async fn logged_in(base: &str) -> Browser {
     let mut b = Browser::new(base);
     b.call("login", &[("password", "admin")]).await;
     assert_eq!(
-        change(&mut b, "admin", "ein eigenes Passwort")
-            .await
-            .status(),
+        change(&mut b, "admin", "my own password").await.status(),
         200
     );
     b
@@ -880,9 +868,7 @@ pub async fn logged_in(base: &str) -> Browser {
 /// a restart with the same `DATA_DIR`.
 pub async fn logged_in_again(base: &str) -> Browser {
     let mut b = Browser::new(base);
-    let resp = b
-        .call("login", &[("password", "ein eigenes Passwort")])
-        .await;
+    let resp = b.call("login", &[("password", "my own password")]).await;
     assert_eq!(resp.status(), 200);
     b
 }
@@ -899,7 +885,7 @@ impl Live {
         Self::open_at(b, "/admin/api/overview-stream").await
     }
 
-    /// Opens another stream of the web UI, e.g. the Strata-Ausgabe.
+    /// Opens another stream of the web UI, e.g. the Strata output.
     pub async fn open_at(b: &Browser, path: &str) -> Self {
         let resp = Self::request_at(b, path).await;
         assert_eq!(resp.status(), 200);
@@ -945,7 +931,7 @@ impl Live {
             match tokio::time::timeout_at(deadline, self.next()).await {
                 Ok(v) if check(&v) => return v,
                 Ok(v) => last = v,
-                Err(_) => panic!("kein Stand mit {what}, zuletzt: {last}"),
+                Err(_) => panic!("no message with {what}, last: {last}"),
             }
         }
     }

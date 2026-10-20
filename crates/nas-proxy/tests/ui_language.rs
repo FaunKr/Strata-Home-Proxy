@@ -1,7 +1,7 @@
 //! The web UI is English. Its texts come from the admin-ui crate and from the
-//! proxy's `admin.rs`, which answers the UI's server functions. The PC
-//! service's messages and the proxy's logs and API errors stay German, so
-//! those files are not checked.
+//! proxy's `admin.rs`, which answers the UI's server functions. The whole
+//! repo is English; this test guards the UI texts, so only those files are
+//! checked.
 
 use std::path::{Path, PathBuf};
 
@@ -86,7 +86,7 @@ fn the_web_ui_has_no_german_texts() {
     }
     assert!(
         found.is_empty(),
-        "Texte der Weboberfläche auf Englisch:\n{}",
+        "Texts of the web UI in English:\n{}",
         found.join("\n")
     );
 }

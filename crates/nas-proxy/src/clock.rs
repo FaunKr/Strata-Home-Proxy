@@ -15,7 +15,7 @@ pub fn unix_now() -> u64 {
     unix(SystemTime::now())
 }
 
-/// The time zone of the NAS: the days of the Verlauf follow it, so the same
+/// The time zone of the NAS: the days of the history follow it, so the same
 /// range reads the same on the NAS and on any page.
 pub fn zone() -> TimeZone {
     TimeZone::system()

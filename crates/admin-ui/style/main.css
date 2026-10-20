@@ -437,7 +437,7 @@ dialog.confirm::backdrop { background: rgba(14, 10, 22, 0.55); }
 dialog.confirm h2 { font-size: 1.15rem; margin-bottom: 8px; }
 dialog.confirm .actions { justify-content: flex-end; margin-top: 24px; }
 
-/* --- Verlauf: one bar per day, filled by the hours of each state --- */
+/* --- History: one bar per day, filled by the hours of each state --- */
 
 .bars {
   display: flex;

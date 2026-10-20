@@ -1,4 +1,4 @@
-//! The Strata-Ausgabe for the web UI: the PC service's `GET /strata-log`,
+//! The Strata output for the web UI: the PC service's `GET /strata-log`,
 //! followed only while a page holds the stream and only while the PC is
 //! awake anyway. Never wakes the PC and never counts as activity.
 
@@ -11,11 +11,11 @@ use tokio::sync::mpsc;
 
 use crate::{clock, state::AppState};
 
-/// A message of the PC-Dienst as the page shows it.
+/// A message of the PC service as the page shows it.
 fn into_ui(message: StrataOutputMessage) -> OutputMessage {
     match message {
         StrataOutputMessage::Started { at } => OutputMessage::Line {
-            text: format!("Strata neu gestartet, {}", clock::local_text(at)),
+            text: format!("Strata restarted, {}", clock::local_text(at)),
         },
         StrataOutputMessage::Line { text } => OutputMessage::Line { text },
         StrataOutputMessage::Replace { text } => OutputMessage::Replace { text },
@@ -30,7 +30,7 @@ fn into_ui(message: StrataOutputMessage) -> OutputMessage {
     }
 }
 
-/// The Strata-Ausgabe for one page, for as long as it holds the stream.
+/// The Strata output for one page, for as long as it holds the stream.
 pub fn watch(state: &Arc<AppState>) -> BoxStream<'static, OutputMessage> {
     let (tx, rx) = mpsc::channel(64);
     let state = Arc::clone(state);

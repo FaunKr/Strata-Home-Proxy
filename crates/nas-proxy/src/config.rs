@@ -26,8 +26,8 @@ pub struct Config {
     pub pc_agent_url: Option<String>,
     /// Bearer token for the PC service (`PC_AGENT_TOKEN`).
     pub pc_agent_token: Option<String>,
-    /// Base URL of the Messsteckdose the PC is plugged into, a Shelly plug
-    /// (`SHELLY_URL`). Without it the overview shows no Leistung.
+    /// Base URL of the power plug the PC is plugged into, a Shelly plug
+    /// (`SHELLY_URL`). Without it the overview shows no power.
     pub shelly_url: Option<String>,
     /// Base URL of the code benchmark's runner, the container `code-bench`
     /// (`CODE_BENCH_URL`), e.g. `http://127.0.0.1:8096`. Without it there is
@@ -40,7 +40,7 @@ pub struct Config {
     /// How long opencode may work on one code benchmark task
     /// (`CODE_BENCH_TASK_TIMEOUT_SECS`); without it the suggestion applies.
     pub code_bench_task_timeout: Option<Duration>,
-    /// How often the Leistung of the Messsteckdose is recorded for the Verlauf
+    /// How often the power of the power plug is recorded for the history
     /// (`PLUG_SAMPLE_SECS`).
     pub plug_sample: Duration,
     /// Time without requests before the PC is asked to sleep (`IDLE_TIMEOUT_SECS`).
@@ -66,7 +66,7 @@ pub struct Config {
     /// Largest accepted request body in bytes (`MAX_BODY_BYTES`).
     pub max_body_bytes: usize,
     /// Watts the PC draws while awake (`POWER_AWAKE_WATTS`). The history
-    /// estimates energy from it when no Messsteckdose measures the PC.
+    /// estimates energy from it when no power plug measures the PC.
     pub power_awake_watts: f64,
     /// Watts the PC draws while asleep (`POWER_ASLEEP_WATTS`), for the same
     /// estimate.
@@ -245,9 +245,9 @@ impl Config {
             "SLEEP_RETRY_SECS" => self.sleep_retry = secs(raw)?,
             "SLEEP_SETTLE_SECS" => self.sleep_settle = secs(raw)?,
             "PROBE_TIMEOUT_MS" => self.probe_timeout = positive(millis(raw)?)?,
-            "MAX_BODY_BYTES" => self.max_body_bytes = number(raw, "Bytes")?,
-            "POWER_AWAKE_WATTS" => self.power_awake_watts = positive_decimal(raw, "Watt")?,
-            "POWER_ASLEEP_WATTS" => self.power_asleep_watts = decimal(raw, "Watt")?,
+            "MAX_BODY_BYTES" => self.max_body_bytes = number(raw, "bytes")?,
+            "POWER_AWAKE_WATTS" => self.power_awake_watts = positive_decimal(raw, "watts")?,
+            "POWER_ASLEEP_WATTS" => self.power_asleep_watts = decimal(raw, "watts")?,
             "PRICE_CT_PER_KWH" => self.price_ct_per_kwh = positive_decimal(raw, "ct/kWh")?,
             _ => unreachable!("every field in FIELDS is handled"),
         }
@@ -304,11 +304,11 @@ fn address(raw: &str) -> Result<SocketAddr> {
 }
 
 fn secs(raw: &str) -> Result<Duration> {
-    Ok(Duration::from_secs(number(raw, "Sekunden")?))
+    Ok(Duration::from_secs(number(raw, "seconds")?))
 }
 
 fn millis(raw: &str) -> Result<Duration> {
-    Ok(Duration::from_millis(number(raw, "Millisekunden")?))
+    Ok(Duration::from_millis(number(raw, "milliseconds")?))
 }
 
 /// A time limit for work on the PC; below 10 s nothing could finish.
@@ -412,8 +412,8 @@ mod tests {
         cfg.apply("STRATA_URL", "http://pc:8080/").unwrap();
         cfg.apply("PC_MAC", "aa-bb-cc-01-02-03").unwrap();
         cfg.apply("PC_AGENT_URL", "http://pc:8091").unwrap();
-        cfg.apply("PC_AGENT_TOKEN", "geheim").unwrap();
-        cfg.apply("STRATA_API_KEY", "auch-geheim").unwrap();
+        cfg.apply("PC_AGENT_TOKEN", "secret").unwrap();
+        cfg.apply("STRATA_API_KEY", "also-secret").unwrap();
         cfg.apply("SHELLY_URL", "192.168.1.228").unwrap();
         cfg.apply("CODE_BENCH_URL", "http://127.0.0.1:8096")
             .unwrap();
@@ -422,7 +422,7 @@ mod tests {
         for f in FIELDS {
             let text = cfg
                 .value(f.key)
-                .unwrap_or_else(|| panic!("{} fehlt", f.key));
+                .unwrap_or_else(|| panic!("{} is missing", f.key));
             let mut copy = Config::default();
             copy.apply(f.key, &text).unwrap();
             assert_eq!(copy.value(f.key), Some(text), "{}", f.key);

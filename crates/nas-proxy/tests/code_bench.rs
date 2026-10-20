@@ -350,7 +350,7 @@ async fn each_task_gets_the_suggested_or_the_saved_limit() {
 async fn eventually_for(limit: Duration, what: &str, check: impl Fn() -> bool) {
     let started = std::time::Instant::now();
     while !check() {
-        assert!(started.elapsed() < limit, "{what} nicht erreicht");
+        assert!(started.elapsed() < limit, "{what} not reached");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }

@@ -1,5 +1,5 @@
-//! The store of the Verlauf: Ereignisse and the Leistung of the Messsteckdose
-//! in SQLite in `DATA_DIR`, in memory without one. An existing `events.jsonl`
+//! The store of the history: events and the power of the power plug in
+//! SQLite in `DATA_DIR`, in memory without one. An existing `events.jsonl`
 //! is imported once.
 
 use std::path::{Path, PathBuf};
@@ -192,7 +192,7 @@ fn an_unusable_database_falls_back_to_memory() {
     let d = fresh_dir("broken");
     std::fs::write(
         d.join("events.db"),
-        "keine Datenbank, nur Text, lang genug für einen Kopf",
+        "no database, only text, long enough for a header",
     )
     .unwrap();
     let log = History::new(Some(d.clone()));
@@ -297,7 +297,7 @@ async fn samples_survive_a_restart() {
         history.samples(0, u64::MAX).await,
         vec![sample(100, 87.4), sample(160, 1.5)]
     );
-    // A sample is no Ereignis.
+    // A sample is no event.
     assert!(history.recent().is_empty());
     assert!(history.range(0, u64::MAX).await.is_empty());
     drop(history);

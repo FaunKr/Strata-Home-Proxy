@@ -1,7 +1,7 @@
-//! The Verlauf: Ereignisse about waking and sleeping and the Leistung of the
-//! Messsteckdose over time, for the web UI and the power estimate. Both live in
-//! a SQLite database in `DATA_DIR` (docs/adr/0003); without one the store is
-//! in memory.
+//! The history: events about waking and sleeping and the power of the power
+//! plug over time, for the web UI and the energy estimate. Both live in a
+//! SQLite database in `DATA_DIR` (docs/adr/0003); without one the store is in
+//! memory.
 
 use std::{
     collections::VecDeque,
@@ -27,7 +27,7 @@ const KEEP_IN_MEMORY: usize = 1000;
 /// again on the next start, even when new events were recorded meanwhile.
 const IMPORTED: i64 = 1;
 
-/// How often the proxy notes that it still runs. After a stop the Verlauf is
+/// How often the proxy notes that it still runs. After a stop the history is
 /// unknown from the last note on, so it is off by at most this long.
 pub const BEAT: Duration = Duration::from_secs(60);
 
@@ -42,7 +42,7 @@ pub struct Event {
     pub detail: Option<String>,
 }
 
-/// One reading of the Messsteckdose. Kept forever, like the Ereignisse.
+/// One reading of the power plug. Kept forever, like the events.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sample {
     /// Unix time in seconds.
@@ -50,7 +50,7 @@ pub struct Sample {
     pub watts: f64,
 }
 
-/// The samples of one hour, as the Verlauf sums them.
+/// The samples of one hour, as the history sums them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HourSamples {
     /// Unix time of the full hour.
@@ -73,7 +73,7 @@ impl History {
         let dir = data_dir.and_then(|dir| match fs::create_dir_all(&dir) {
             Ok(()) => Some(dir),
             Err(e) => {
-                tracing::warn!("DATA_DIR {} nicht nutzbar: {e}", dir.display());
+                tracing::warn!("DATA_DIR {} not usable: {e}", dir.display());
                 None
             }
         });
@@ -99,9 +99,9 @@ impl History {
             kind,
             detail,
         };
-        tracing::info!(?kind, detail = event.detail.as_deref(), "Ereignis");
+        tracing::info!(?kind, detail = event.detail.as_deref(), "event");
         if let Err(e) = insert(&self.db.lock().unwrap(), &event) {
-            tracing::warn!("Verlauf nicht geschrieben: {e}");
+            tracing::warn!("history not written: {e}");
         }
         let mut recent = self.recent.lock().unwrap();
         if recent.len() == KEEP_IN_MEMORY {
@@ -118,7 +118,7 @@ impl History {
             [to_sql(clock::unix_now())],
         );
         if let Err(e) = written {
-            tracing::warn!("Lebenszeichen nicht geschrieben: {e}");
+            tracing::warn!("beat not written: {e}");
         }
     }
 
@@ -196,7 +196,7 @@ impl History {
             params![to_sql(sample.ts), sample.watts],
         );
         if let Err(e) = written {
-            tracing::warn!("Messwert der Steckdose nicht geschrieben: {e}");
+            tracing::warn!("power plug reading not written: {e}");
         }
     }
 
@@ -220,7 +220,7 @@ impl History {
                         .and_then(Iterator::collect)
                 });
             rows.unwrap_or_else(|e| {
-                tracing::warn!("Messwerte der Steckdose nicht gelesen: {e}");
+                tracing::warn!("power plug readings not read: {e}");
                 Vec::new()
             })
         })
@@ -251,7 +251,7 @@ impl History {
                         .and_then(Iterator::collect)
                 });
             rows.unwrap_or_else(|e| {
-                tracing::warn!("Messwerte der Steckdose nicht gelesen: {e}");
+                tracing::warn!("power plug readings not read: {e}");
                 Vec::new()
             })
         })
@@ -288,20 +288,20 @@ fn open_database(dir: Option<&Path>) -> Connection {
             Ok(mut conn) => {
                 let jsonl = dir.join("events.jsonl");
                 if let Err(e) = import_jsonl(&mut conn, &jsonl) {
-                    tracing::warn!("Verlauf aus {} nicht übernommen: {e}", jsonl.display());
+                    tracing::warn!("history from {} not imported: {e}", jsonl.display());
                 }
                 if let Err(e) = record_stop(&mut conn) {
-                    tracing::warn!("Ende des letzten Laufs nicht verzeichnet: {e}");
+                    tracing::warn!("end of the last run not recorded: {e}");
                 }
                 return conn;
             }
             Err(e) => {
-                tracing::warn!("Verlauf-Datenbank {} nicht nutzbar: {e}", path.display());
+                tracing::warn!("history database {} not usable: {e}", path.display());
             }
         }
     }
-    let conn = Connection::open_in_memory().expect("Speicher für den Verlauf");
-    create_tables(&conn).expect("Verlauf im Speicher eingerichtet");
+    let conn = Connection::open_in_memory().expect("memory for the history");
+    create_tables(&conn).expect("history set up in memory");
     conn
 }
 
@@ -420,7 +420,7 @@ fn select(conn: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> Vec<Ev
             .map(|rows| rows.filter_map(Result::ok).collect())
     });
     rows.unwrap_or_else(|e| {
-        tracing::warn!("Verlauf nicht gelesen: {e}");
+        tracing::warn!("history not read: {e}");
         Vec::new()
     })
 }

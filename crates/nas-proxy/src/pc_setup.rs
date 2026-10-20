@@ -272,13 +272,13 @@ pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
         .record(EventKind::PcServiceUpdateRequested, Some(by.to_string()));
     state.overview.refresh_now();
     match agent.update().await {
-        UpdateAnswer::Accepted => tracing::info!("PC-Dienst wird auf {available} aktualisiert"),
+        UpdateAnswer::Accepted => tracing::info!("PC service is updating to {available}"),
         // It may still finish; the new version or the timeout tells.
         UpdateAnswer::NoAnswer => {
-            tracing::warn!("PC-Dienst antwortet nicht auf das Update, warte auf die neue Version")
+            tracing::warn!("PC service did not answer the update, waiting for the new version")
         }
         UpdateAnswer::Refused(reason) => {
-            tracing::warn!("Update des PC-Dienstes: {reason}");
+            tracing::warn!("Update of the PC service: {reason}");
             state.pc_setup.update_failed(&reason);
             state
                 .events
@@ -329,7 +329,7 @@ async fn program(State(state): State<Arc<AppState>>) -> Response {
         )
             .into_response(),
         Err(e) => {
-            tracing::warn!("{} nicht lesbar: {e}", path.display());
+            tracing::warn!("{} not readable: {e}", path.display());
             (StatusCode::NOT_FOUND, "This image carries no PC service").into_response()
         }
     }
@@ -437,10 +437,10 @@ async fn register(
         .set("PC_AGENT_TOKEN", &token)
         .and_then(|()| state.settings.set("PC_AGENT_URL", &url));
     if let Err(e) = entered {
-        tracing::error!("PC-Dienst nicht eingetragen: {e}");
+        tracing::error!("PC service not entered: {e}");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": format!("Nicht gespeichert: {e}")})),
+            Json(json!({"error": format!("Not saved: {e}")})),
         )
             .into_response();
     }
@@ -448,7 +448,7 @@ async fn register(
         .events
         .record(EventKind::PcServiceRegistered, Some(url.clone()));
     state.overview.refresh_now();
-    tracing::info!("PC-Dienst unter {url} eingerichtet");
+    tracing::info!("PC service set up at {url}");
     Json(Registered {
         token,
         nas_url: format!("http://{host}"),

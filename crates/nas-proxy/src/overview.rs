@@ -33,7 +33,7 @@ const POLL_JOB: Duration = Duration::from_secs(2);
 /// anyone; changes from requests and buttons show up this fast.
 const REFRESH: Duration = Duration::from_millis(250);
 const EVENTS_SHOWN: usize = 10;
-/// How often the Verlauf of the last 7 days is summed again for the overview;
+/// How often the history of the last 7 days is summed again for the overview;
 /// it changes by the hour, not by the tick.
 const WEEK_REFRESH: Duration = Duration::from_secs(60);
 
@@ -45,7 +45,7 @@ struct Probe {
     pc: Option<PcStatus>,
     /// The running Strata job, asked for only while one runs.
     job: Option<StrataJob>,
-    /// The Leistung of the Messsteckdose.
+    /// The power of the power plug.
     power: PowerView,
 }
 
@@ -58,7 +58,7 @@ pub struct Monitor {
     poll: Mutex<Duration>,
     /// Rounds of asking so far; for tests.
     rounds: AtomicUsize,
-    /// The last 7 days of the Verlauf and when they were summed.
+    /// The last 7 days of the history and when they were summed.
     week: Mutex<Option<(Instant, HistoryView)>>,
     /// Times the week was summed so far; for tests.
     weeks: AtomicUsize,
@@ -100,7 +100,7 @@ impl Monitor {
     }
 }
 
-/// The last 7 days of the Verlauf, summed again once `WEEK_REFRESH` passed.
+/// The last 7 days of the history, summed again once `WEEK_REFRESH` passed.
 async fn week(state: &Arc<AppState>) -> HistoryView {
     let monitor = &state.overview;
     if let Some((at, view)) = monitor.week.lock().unwrap().as_ref()
@@ -296,8 +296,8 @@ pub fn setup(state: &AppState) -> Setup {
     }
 }
 
-/// Values only while the PC counts as awake: none from before Schlafen,
-/// also not in the Nachlauf, when the PC may still answer.
+/// Values only while the PC counts as awake: none from before the sleep request,
+/// also not during settling, when the PC may still answer.
 fn hardware_view(pc: PcView, status: Option<&PcStatus>) -> HardwareView {
     match (pc, status) {
         (PcView::Awake | PcView::Gaming, Some(status)) => match &status.hardware {

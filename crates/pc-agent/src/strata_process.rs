@@ -7,13 +7,16 @@
 //! The watchdog decides *when* Strata needs a restart, a job *what* to
 //! change before one; *how* is this module's.
 //!
+//! During an update of the service nothing here starts Strata; the update
+//! stopped it, and the updated service starts it.
+//!
 //! Restarts may overlap, e.g. the watchdog's with gaming mode switched off
 //! during its pause: a start after a pause is left out when Strata was
 //! started since the last stop, so only one Strata runs.
 
 use std::{
     future::Future,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::Ordering},
     time::{Duration, Instant},
 };
 
@@ -92,8 +95,24 @@ impl<'a> StrataProcess<'a> {
 
     /// Starts Strata if `wanted` holds for what was seen; checked and
     /// recorded at once, so two starts cannot both pass. True when this
-    /// call started Strata.
+    /// call started Strata. None during an update: the updated service
+    /// starts Strata.
     fn start_if(&self, wanted: impl FnOnce(&Seen) -> bool) -> bool {
+        if self.agent.updating.load(Ordering::SeqCst) {
+            tracing::info!("The PC service is updating, Strata starts with the new one");
+            return false;
+        }
+        self.start_unless_updating_ignored(wanted)
+    }
+
+    /// For an update whose swap failed, while it still holds the update
+    /// flag: brings back the Strata it stopped, so no second update can
+    /// begin in between and find Strata down.
+    pub(crate) fn start_after_failed_update(&self) {
+        self.start_unless_updating_ignored(|_| true);
+    }
+
+    fn start_unless_updating_ignored(&self, wanted: impl FnOnce(&Seen) -> bool) -> bool {
         let agent = self.agent;
         let managed = agent.managed();
         let Some((program, args)) = managed.start(&agent.cfg) else {
@@ -143,8 +162,9 @@ impl<'a> StrataProcess<'a> {
         true
     }
 
-    /// Ends the programs the managed values name as Strata.
-    pub fn stop(&self) {
+    /// Ends the programs the managed values name as Strata. False when
+    /// there are none or ending them failed.
+    pub fn stop(&self) -> bool {
         let agent = self.agent;
         agent.times.0.lock().unwrap().stop = Some(Instant::now());
         tracing::info!("Stopping Strata");
@@ -152,11 +172,13 @@ impl<'a> StrataProcess<'a> {
         let processes = managed.processes(&agent.cfg);
         if processes.is_empty() {
             tracing::info!("No Strata programs set, nothing to stop");
-            return;
+            return false;
         }
         if let Err(e) = agent.platform().stop_strata(processes) {
             tracing::error!("Stopping Strata failed: {e}");
+            return false;
         }
+        true
     }
 
     /// Strata was started within `within`.

@@ -195,7 +195,7 @@ pub async fn generate(state: &Arc<AppState>, by: &str) -> Result<(), String> {
     if awake.is_none() {
         // Recorded first, so the wake shows up with its reason.
         requested();
-        if let Err(why) = wake(state).await {
+        if let Err(why) = wake(state, crate::strata::BY_UI).await {
             summaries.fail_last(&why);
             return Err(why);
         }

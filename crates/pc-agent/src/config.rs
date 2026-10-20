@@ -70,6 +70,10 @@ pub struct Config {
     /// longer for the answer (`force_timeout` there).
     #[serde(default = "default_cancel_wait")]
     pub cancel_wait_secs: u64,
+    /// How long an update waits for the Strata it stopped to stop answering;
+    /// one still answering then refuses the update.
+    #[serde(default = "default_update_stop_wait")]
+    pub update_stop_wait_secs: u64,
     /// Folder for the gaming flag and the log; next to the program by default.
     #[serde(default)]
     pub state_dir: Option<PathBuf>,
@@ -120,6 +124,9 @@ fn default_stop_settle() -> u64 {
 fn default_cancel_wait() -> u64 {
     60
 }
+fn default_update_stop_wait() -> u64 {
+    10
+}
 fn default_strata_repo() -> String {
     "https://github.com/Niko1221/Strata.git".into()
 }
@@ -157,6 +164,10 @@ impl Config {
 
     pub fn cancel_wait(&self) -> Duration {
         Duration::from_secs(self.cancel_wait_secs)
+    }
+
+    pub fn update_stop_wait(&self) -> Duration {
+        Duration::from_secs(self.update_stop_wait_secs)
     }
 
     pub fn user_idle(&self) -> Duration {

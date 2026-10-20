@@ -165,19 +165,33 @@ never wakes the PC for it. A service without this endpoint answers 404.
 ## `POST /update` (for the web UI)
 
 Downloads `strata-pc-agent.exe` from `nas_url` in the configuration
-(`/admin/agent/strata-pc-agent.exe`), renames the running .exe to
-`strata-pc-agent.exe.alt`, puts the new one in its place and starts it
-with the same arguments. The response comes after that; 1 s later the old
-service exits, the new one waits for the port until then and then deletes the
-`.alt`.
+(`/admin/agent/strata-pc-agent.exe`). Then it ends Strata as *Force restart
+Strata* does (a Strata started by hand too) and waits up to
+`update_stop_wait_secs` (10 s) until Strata no longer answers `/health`. Then
+it renames the running .exe to `strata-pc-agent.exe.alt`, puts the new one in
+its place and starts it with the same arguments. The response comes after
+that; 1 s later the old service exits, the new one waits for the port until
+then and then deletes the `.alt`.
+
+If Strata was running (or loading) before, the old service leaves the file
+`strata-after-update` in its state folder. The new service removes it at its
+start, brings the model configs up to date and then starts Strata once, with
+a start script and `auto_start`, outside gaming mode; a failed start is left
+to the watchdog. Without the file the watchdog starts Strata as usual. From
+the stop until the old service exits, nothing in it starts Strata (watchdog,
+waking from standby, gaming mode switched off).
 
 - `202` (`Answer`): the new .exe is about to run.
   From the download until the end, the service refuses Strata jobs and
   sleeping.
 - `409` (`Refused` with a reason): not now (Strata is handling a request, a
-  Strata job or an update is running) or set up without `nas_url`.
+  Strata job or an update is running; a request that began during the
+  download counts too), set up without `nas_url`, or a running Strata could
+  not be stopped or still answered after the stop ("Strata did not stop");
+  then nothing was swapped and no second Strata is started next to it.
 - `500` (`Refused`): download or replacement failed; the old service keeps
-  running, nothing has changed.
+  running. A failed download leaves Strata alone; after a failed replacement
+  the old service starts the Strata it stopped again.
 
 The proxy sends this only while the PC is awake and never wakes it for it. A
 service without this endpoint answers 404; the *PC* area then says to set it

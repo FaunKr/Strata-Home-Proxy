@@ -579,8 +579,8 @@ pub async fn set_gaming(enabled: bool) -> Result<(), ServerFnError> {
     backend()?.set_gaming(enabled).await.map_err(bad_request)
 }
 
-/// Updates the PC service to the program the NAS carries; only while the PC
-/// is awake, never wakes it.
+/// Updates the PC service to the program the NAS carries, waking a sleeping
+/// PC first.
 #[server(prefix = "/admin/api", endpoint = "pc-service-update")]
 pub async fn update_pc_service() -> Result<(), ServerFnError> {
     require_login(false).await?;

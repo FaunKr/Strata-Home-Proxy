@@ -35,7 +35,7 @@ const PENDING_FILE: &str = "strata-pending-key.json";
 /// The last answer of the PC service, shown while the PC sleeps; kept over a
 /// restart of the proxy.
 const LAST_FILE: &str = "strata-last.json";
-const BY_UI: &str = "for Strata, from the web UI";
+pub(crate) const BY_UI: &str = "for Strata, from the web UI";
 const ASLEEP: &str = "The PC is asleep or its service does not answer. A button here wakes it.";
 const TOO_OLD: &str = "The PC service cannot manage Strata yet. Please update the PC service.";
 
@@ -220,7 +220,7 @@ pub async fn start_job(state: &AppState, form: StrataJobForm) -> Result<(), Stri
         return Err("A code benchmark is running. Strata jobs wait until it ends.".into());
     }
     if state.ask_pc(&agent).await.is_none() {
-        wake(state).await?;
+        wake(state, BY_UI).await?;
     }
     let request = request(&form)?;
     let job = agent.start_strata_job(&request).await?;
@@ -242,18 +242,24 @@ pub async fn cancel(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
-/// Wakes the PC until its service answers, like gaming mode does.
-pub(crate) async fn wake(state: &AppState) -> Result<(), String> {
+/// Why `wake` cannot even start, if it cannot.
+pub(crate) fn cannot_wake(state: &AppState) -> Option<&'static str> {
     let cfg = state.cfg();
     if cfg.strata_url.is_none() {
-        return Err(NOT_CONFIGURED.into());
+        return Some(NOT_CONFIGURED);
     }
-    if cfg.pc_mac.is_none() {
-        return Err(NO_MAC.into());
+    cfg.pc_mac.is_none().then_some(NO_MAC)
+}
+
+/// Wakes the PC until its service answers, like gaming mode does; `by`
+/// says why in the history.
+pub(crate) async fn wake(state: &AppState, by: &str) -> Result<(), String> {
+    if let Some(why) = cannot_wake(state) {
+        return Err(why.into());
     }
     state
         .events
-        .record(EventKind::WakeRequested, Some(BY_UI.into()));
+        .record(EventKind::WakeRequested, Some(by.into()));
     state.wake_until_agent().await.map_err(|e| match e {
         WakeError::NoMac => NO_MAC.to_string(),
         _ => "The PC did not wake in time.".to_string(),

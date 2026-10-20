@@ -1,7 +1,7 @@
 //! What a Strata update brings, on the Version tab (#141): the incoming
 //! commits the PC service reports and the summary Strata writes of them.
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::Ordering;
 

@@ -80,14 +80,16 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           lookup-only: ${{ github.event_name == 'push' }}
-      # The test binaries of all packages no longer fit the runner's disk
-      # (the linker died with a bus error at 29 MB free); these preinstalled
-      # SDKs are not needed here.
-      - name: Free disk space
-        if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         run: npm install -g eslint@10.1.0
+      # check.sh runs the tests with it, at the version .config/nextest.toml pins.
+      - id: nextest
+        if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
+        run: echo "version=$(sed -n 's/^nextest-version = { required = "\(.*\)" }$/\1/p' .config/nextest.toml)" >> "$GITHUB_OUTPUT"
+      - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ steps.nextest.outputs.version }}
       # check.sh lints the workflows with it.
       - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         run: scripts/install-actionlint.sh "$RUNNER_TEMP/bin" && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

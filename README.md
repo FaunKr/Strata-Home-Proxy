@@ -232,7 +232,7 @@ is in English and split into five areas: *Overview*, *PC*, *Strata*
 ## Development
 
 ```sh
-cargo test         # starts a simulated Strata, PC service and WoL receiver
+cargo nextest run  # starts a simulated Strata, PC service and WoL receiver
 scripts/check.sh   # all CI checks: fmt, clippy (also wasm), tests
 ```
 

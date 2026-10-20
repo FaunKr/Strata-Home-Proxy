@@ -25,7 +25,7 @@ while IFS= read -r path; do
   case $path in
     # Shared: whatever changes here can break any job. check.sh also runs the
     # scripts' own tests, which only an unscoped run covers.
-    Cargo.toml | Cargo.lock | rust-toolchain* | .cargo/* | .github/workflows/* | scripts/* | deploy/truenas-auto-update.sh)
+    Cargo.toml | Cargo.lock | rust-toolchain* | .cargo/* | .config/* | .github/workflows/* | scripts/* | deploy/truenas-auto-update.sh)
       all
       exit 0
       ;;

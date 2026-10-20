@@ -1,6 +1,6 @@
 //! The Strata key: the proxy sends its own key to Strata, never the client's.
 
-mod common;
+use crate::common;
 
 use common::*;
 use serde_json::json;

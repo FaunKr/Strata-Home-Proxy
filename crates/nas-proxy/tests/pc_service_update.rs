@@ -1,7 +1,7 @@
 //! The PC service's version on the overview and the update button. The
 //! last version survives a restart; an update wakes a sleeping PC.
 
-mod common;
+use crate::common;
 
 use std::{sync::atomic::Ordering, time::Duration};
 

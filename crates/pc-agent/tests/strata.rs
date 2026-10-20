@@ -1,7 +1,7 @@
 //! Strata management through the service's HTTP interface, with fake git,
 //! winget and setup.
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::Ordering;
 

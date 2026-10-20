@@ -1,7 +1,7 @@
 //! What the service keeps in every model config: loop recovery and the
 //! recommended sampling (#157), at its start, after install and after an update.
 
-mod common;
+use crate::common;
 
 use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 

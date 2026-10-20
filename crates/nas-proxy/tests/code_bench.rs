@@ -1,7 +1,7 @@
 //! The code benchmark against a simulated runner (tools/code-bench/runner.py):
 //! what the proxy sends it, the run's own key, and the kept results.
 
-mod common;
+use crate::common;
 
 use std::{
     sync::{Arc, Mutex},

@@ -1,7 +1,7 @@
 //! The history as the page sees it: the proxy records what it notices when
 //! it looks at the PC, and the history counts only what it really observed.
 
-mod common;
+use crate::common;
 
 use std::{sync::atomic::Ordering, time::Duration};
 

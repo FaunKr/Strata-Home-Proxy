@@ -2,7 +2,7 @@
 //! Strata, rollback after a config change and the loading window, on the
 //! fake platform without a job request over HTTP.
 
-mod common;
+use crate::common;
 
 use std::{
     sync::{

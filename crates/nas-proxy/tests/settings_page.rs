@@ -1,6 +1,6 @@
 //! The settings page: every value with its origin, only after login.
 
-mod common;
+use crate::common;
 
 use common::*;
 use serde_json::Value;

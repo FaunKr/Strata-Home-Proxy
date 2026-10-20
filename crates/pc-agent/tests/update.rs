@@ -1,6 +1,6 @@
 //! Updating the service from the web UI, with a fake NAS serving the program.
 
-mod common;
+use crate::common;
 
 use std::{
     net::SocketAddr,

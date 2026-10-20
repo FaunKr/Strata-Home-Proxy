@@ -1,7 +1,7 @@
 //! The overview page: its live stream and its buttons, against the simulated
 //! PC with Strata and the PC service.
 
-mod common;
+use crate::common;
 
 use std::{sync::atomic::Ordering, time::Duration};
 

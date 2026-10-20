@@ -1,7 +1,7 @@
 //! Hardware readings on the overview: what the PC service reports about GPU and
 //! CPU, against the simulated PC.
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::Ordering;
 

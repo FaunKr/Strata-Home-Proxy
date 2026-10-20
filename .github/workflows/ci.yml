@@ -208,8 +208,9 @@ jobs:
           cache-to: type=gha,mode=max,scope=code-bench
   ci-ok:
     # The one check that sums up a run, for branch protection: jobs a pull
-    # request doesn't need are skipped, and skipped counts as passed.
-    if: always()
+    # request doesn't need are skipped, and skipped counts as passed. A run
+    # cancelled by a newer push skips it too; the newer run reports.
+    if: ${{ !cancelled() }}
     needs: [changes, test, image, ui]
     runs-on: ubuntu-latest
     steps:

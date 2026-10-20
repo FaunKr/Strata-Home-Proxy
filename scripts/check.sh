@@ -49,6 +49,12 @@ if ((free_gb < 10)); then
 fi
 
 cargo fmt --check
+# Strata starts and stops only in strata_process.rs (#184): the pause after a
+# stop, gaming mode and running jobs are checked there.
+if grep -rnE '\.(start|stop)_strata\(' crates/pc-agent/src --exclude=strata_process.rs --exclude=platform.rs; then
+  echo "Strata nur über agent.strata() starten und beenden (crates/pc-agent/src/strata_process.rs)" >&2
+  exit 1
+fi
 # The Node scripts of the browser check (eslint.config.mjs). Cloud sessions
 # have ESLint under /opt/node-tools; elsewhere: npm install -g eslint@10.1.0 (the version CI installs).
 eslint=$(command -v eslint || echo /opt/node-tools/node_modules/.bin/eslint)

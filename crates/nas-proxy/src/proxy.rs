@@ -350,7 +350,9 @@ async fn forward(
 /// Logs that Strata refused the proxy's key, or that it lacks one, and
 /// returns the same text for the client.
 fn strata_refused(st: &AppState) -> &'static str {
-    let message = if st.strata_key.unreported() {
+    // Decided by the key held, not by the last status: a request after a
+    // wake-up may reach Strata before the proxy noted any status.
+    let message = if st.strata_key.key().is_none() {
         "Strata requires a key, and the PC service reports none: update the PC service."
     } else {
         "Strata refuses the Strata key the PC service reports."

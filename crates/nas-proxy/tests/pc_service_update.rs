@@ -117,6 +117,43 @@ async fn a_sleeping_pc_keeps_its_last_version_and_is_woken_for_an_update() {
     );
     // The request comes before the wake it caused.
     assert!(requested < woken, "{kinds:?}");
+    let events = s.state.events.recent();
+    let detail = |kind| {
+        events
+            .iter()
+            .find(|e| e.kind == kind)
+            .and_then(|e| e.detail.clone())
+    };
+    assert_eq!(
+        detail(EventKind::PcServiceUpdateRequested).as_deref(),
+        Some("from the web UI")
+    );
+    assert_eq!(
+        detail(EventKind::WakeRequested).as_deref(),
+        Some("for the PC service update, from the web UI")
+    );
+}
+
+#[tokio::test]
+async fn a_press_while_the_service_restarts_for_an_update_does_not_wake() {
+    let s = outdated("restarting").await;
+    s.state.pc_setup.set_update_timeout(Duration::from_secs(60));
+    let mut b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    live.until("Version", |v| v["pc_service"]["version"] == OLD)
+        .await;
+    assert_eq!(b.call("pc-service-update", &[]).await.status(), 200);
+    // The service restarts with the new version and answers nothing meanwhile.
+    s.pc.awake.store(false, Ordering::SeqCst);
+    let resp = b.call("pc-service-update", &[]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(resp.text().await.unwrap().contains("running already"));
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+    let requests = kinds(&s.state)
+        .into_iter()
+        .filter(|k| *k == EventKind::PcServiceUpdateRequested)
+        .count();
+    assert_eq!(requests, 1);
 }
 
 #[tokio::test]
@@ -172,6 +209,23 @@ async fn without_a_mac_a_sleeping_pc_gets_no_update() {
     assert_eq!(resp.status(), 400);
     assert!(resp.text().await.unwrap().contains("No MAC address"));
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
+    assert!(!kinds(&s.state).contains(&EventKind::PcServiceUpdateRequested));
+}
+
+#[tokio::test]
+async fn without_a_strata_address_a_sleeping_pc_gets_no_update() {
+    let s = setup(false, |c| c.strata_url = None).await;
+    s.state.pc_setup.set_program(program("no-strata", NEW));
+    let mut b = logged_in(&s.url).await;
+    let resp = b.call("pc-service-update", &[]).await;
+    assert_eq!(resp.status(), 400);
+    assert!(
+        resp.text()
+            .await
+            .unwrap()
+            .contains("Strata address is missing")
+    );
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
     assert!(!kinds(&s.state).contains(&EventKind::PcServiceUpdateRequested));
 }
 

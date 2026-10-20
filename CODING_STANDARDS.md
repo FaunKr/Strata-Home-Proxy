@@ -35,7 +35,8 @@ Questions already decided: `docs/adr/`.
 ## Proxy and PC
 
 - **`/admin` never wakes the PC** and does not reset the idle
-  timeout. `no_server_function_wakes_the_pc` checks server functions on its own;
+  timeout, except the buttons meant to wake it (`WAKES` in
+  `tests/admin.rs`). `no_server_function_wakes_the_pc` checks server functions on its own;
   a route of its own like `overview-stream` needs a test of its own.
 - **Timers in tests with a margin.** If a test must see something before a
   timer expires (idle timeout, settling), the timer fires at least 2 s

@@ -39,6 +39,7 @@ const VERSION_MARKER: &[u8] = b"strata-pc-agent-version:";
 /// An update that has not reported its new version this long after the
 /// button failed; the service may take 5 min for the download alone.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(420);
+const RUNNING: &str = "An update is running already.";
 /// The version the PC service reported last, in `DATA_DIR`.
 const VERSION_FILE: &str = "pc-service-version.json";
 const UPDATE_TIMED_OUT: &str = "The PC service reported no new version after the update. Is it still running? Otherwise run the install command from the PC area on the PC.";
@@ -174,7 +175,7 @@ impl PcSetup {
     }
 
     /// Whether the service last reported `available`.
-    fn runs(&self, available: &str) -> bool {
+    fn already_runs(&self, available: &str) -> bool {
         self.update
             .lock()
             .unwrap()
@@ -211,13 +212,23 @@ impl PcSetup {
         (view, timed_out)
     }
 
+    /// Refuses while an update runs.
+    fn check_not_running(&self) -> Result<(), String> {
+        let mut update = self.update.lock().unwrap();
+        self.expire(&mut update);
+        if update.running_since.is_some() {
+            return Err(RUNNING.into());
+        }
+        Ok(())
+    }
+
     /// Marks an update as asked for, unless one runs or the service already
     /// runs `available`.
     fn begin_update(&self, available: &str) -> Result<(), String> {
         let mut update = self.update.lock().unwrap();
         self.expire(&mut update);
         if update.running_since.is_some() {
-            return Err("An update is running already.".into());
+            return Err(RUNNING.into());
         }
         if update
             .reported
@@ -314,27 +325,30 @@ pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
             .events
             .record(EventKind::PcServiceUpdateRequested, Some(by.to_string()));
     };
-    let woken = state.ask_pc(&agent).await.is_none();
-    if woken {
-        if state.cfg().pc_mac.is_none() {
-            return Err(strata_admin_ui::labels::NO_MAC.into());
+    let asleep = state.ask_pc(&agent).await.is_none();
+    if asleep {
+        // Checked before anything is recorded: a press that cannot wake the
+        // PC, or one during an update's restart, leaves no trace.
+        if let Some(why) = crate::strata::cannot_wake(state) {
+            return Err(why.into());
         }
+        state.pc_setup.check_not_running()?;
         // Recorded first, so the wake shows up with its reason.
         requested();
         state.touch();
-        crate::strata::wake(state).await?;
+        crate::strata::wake(state, &format!("for the PC service update, {by}")).await?;
         // The saved version may be stale: the fresh status decides.
         state
             .ask_pc(&agent)
             .await
             .ok_or("The PC service does not answer.")?;
-        if state.pc_setup.runs(&available) {
+        if state.pc_setup.already_runs(&available) {
             state.overview.refresh_now();
             return Ok(());
         }
     }
     state.pc_setup.begin_update(&available)?;
-    if !woken {
+    if !asleep {
         requested();
     }
     state.overview.refresh_now();

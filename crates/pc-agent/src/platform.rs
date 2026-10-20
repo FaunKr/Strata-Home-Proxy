@@ -31,6 +31,13 @@ pub trait Platform: Send + Sync + 'static {
     fn run(&self, spec: &CommandSpec) -> Result<Running>;
     /// Installed RAM in bytes; 0 if unknown.
     fn ram_bytes(&self) -> u64;
+    /// Dedicated VRAM of the biggest graphics card in bytes; 0 without one.
+    fn vram_bytes(&self) -> u64 {
+        self.hardware()
+            .gpu
+            .and_then(|gpu| gpu.vram_total_bytes)
+            .unwrap_or(0)
+    }
     /// Bytes free for this user on the drive that holds `path`, which need
     /// not exist yet.
     fn disk_free(&self, path: &Path) -> Option<u64>;
@@ -403,6 +410,11 @@ impl Platform for System {
     #[cfg(windows)]
     fn hardware(&self) -> Hardware {
         crate::hardware::read()
+    }
+    /// At once, not from the readings: their first call has no values yet.
+    #[cfg(windows)]
+    fn vram_bytes(&self) -> u64 {
+        crate::hardware::vram_bytes()
     }
 }
 

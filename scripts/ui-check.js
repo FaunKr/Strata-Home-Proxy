@@ -9,6 +9,8 @@ const areas = ['/admin', '/admin/pc', '/admin/pc/history', '/admin/strata', '/ad
 // scripts/fake-shelly.js, its Hardware card from scripts/fake-pc.js.
 const expected = {
   '/admin': ['87 W', 'Awake', '11.8 / 16.0 GB', '0 rpm', '41 % of limit', 'Last 7 days', 'kWh'],
+  // The catalog from scripts/fake-pc.js: Gyro's memory is RAM + VRAM.
+  '/admin/strata': ['needs 62 GB RAM (recommended)', 'needs 28 GB RAM + VRAM', 'needs 35 GB RAM + VRAM (not enough RAM + VRAM)'],
   '/admin/pc/history': ['Awake and asleep', 'Last 7 days', 'Last 12 months', 'From', 'Energy', 'Saved', "today's price"],
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.

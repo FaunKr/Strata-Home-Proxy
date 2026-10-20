@@ -1602,6 +1602,198 @@ fn keys_missing(actual: &Value, sample: &Value, at: &str, missing: &mut Vec<Stri
     }
 }
 
+// --- #239 the options Strata keeps as set by hand ---
+
+/// A model config as Strata writes it since commit 8aaf188a: `args_written`
+/// is `args` as setup last wrote it, `user_args` the options set by hand,
+/// which Strata puts over `args` at every start.
+fn config_with_user_args(s: &Setup, id: &str, args: Value, written: Value, user: Value) {
+    strata_folder(s).config(
+        id,
+        json!({"exe": "C:/Strata/engine/strata.exe", "args": args, "port": 8080,
+            "api_key": OLD_KEY, "args_written": written, "user_args": user}),
+    );
+}
+
+/// The speed projection as setup writes it, with Strata's own vector.
+fn projection(s: &Setup) -> Vec<Value> {
+    let mut flags = vec![json!("--control-vector-scaled"), json!(vector(s))];
+    flags.extend(ESP_FLAGS.map(|f| json!(f)));
+    flags
+}
+
+#[tokio::test]
+async fn switching_off_takes_the_projection_out_of_what_strata_keeps_as_set_by_hand() {
+    let s = setup("models-esp-user-off").await;
+    installed(&s);
+    // A setup run after the service switched it on: setup wrote it into
+    // args and moved it into user_args, next to an option of the user's own.
+    let mut args = vec![json!("--native"), json!("b.gguf")];
+    args.extend(projection(&s));
+    args.extend([json!("--threads"), json!("8")]);
+    let mut user = projection(&s);
+    user.extend([json!("--threads"), json!("8")]);
+    // A vector of the user's own, which Strata keeps there too.
+    user.extend([json!("--control-vector"), json!("D:/own/vector.gguf")]);
+    config_with_user_args(&s, "coder-iq1_m", json!(args), json!(args), json!(user));
+    let done = job(
+        &s,
+        json!({"kind": "set_speed_projection", "model": "coder-IQ1_M", "on": false}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let cfg = read_config(&s, "coder-iq1_m");
+    let left = json!(["--native", "b.gguf", "--threads", "8"]);
+    assert_eq!(cfg["args"], left, "{cfg}");
+    assert_eq!(cfg["args_written"], left, "not a hand edit: {cfg}");
+    assert_eq!(cfg["user_args"], json!(["--threads", "8"]), "{cfg}");
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "coder-IQ1_M")["speed_projection"], false);
+}
+
+#[tokio::test]
+async fn switching_on_is_written_as_strata_wrote_it_not_as_a_hand_edit() {
+    let s = setup("models-esp-user-on").await;
+    installed(&s);
+    vector(&s);
+    let args = json!(["--native", "b.gguf"]);
+    config_with_user_args(
+        &s,
+        "coder-iq1_m",
+        args.clone(),
+        args,
+        json!(["--threads", "8"]),
+    );
+    let done = job(
+        &s,
+        json!({"kind": "set_speed_projection", "model": "coder-IQ1_M", "on": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let cfg = read_config(&s, "coder-iq1_m");
+    let mut expected = vec![json!("--native"), json!("b.gguf")];
+    expected.extend(projection(&s));
+    assert_eq!(cfg["args"], json!(expected), "{cfg}");
+    assert_eq!(cfg["args_written"], cfg["args"], "{cfg}");
+    assert_eq!(cfg["user_args"], json!(["--threads", "8"]), "{cfg}");
+}
+
+#[tokio::test]
+async fn user_args_with_nothing_left_go() {
+    let s = setup("models-esp-user-empty").await;
+    installed(&s);
+    let mut args = vec![json!("--native"), json!("b.gguf")];
+    args.extend(projection(&s));
+    config_with_user_args(
+        &s,
+        "coder-iq1_m",
+        json!(args),
+        json!(args),
+        json!(projection(&s)),
+    );
+    job(
+        &s,
+        json!({"kind": "set_speed_projection", "model": "coder-IQ1_M", "on": false}),
+    )
+    .await;
+    let cfg = read_config(&s, "coder-iq1_m");
+    assert!(cfg.get("user_args").is_none(), "{cfg}");
+    assert_eq!(cfg["args_written"], json!(["--native", "b.gguf"]), "{cfg}");
+}
+
+#[tokio::test]
+async fn a_config_of_an_older_strata_gets_neither_key() {
+    let s = setup("models-esp-user-older").await;
+    installed(&s);
+    vector(&s);
+    job(
+        &s,
+        json!({"kind": "set_speed_projection", "model": "coder-IQ1_M", "on": true}),
+    )
+    .await;
+    job(
+        &s,
+        json!({"kind": "set_context", "model": "coder-IQ1_M", "context": 131072}),
+    )
+    .await;
+    let cfg = read_config(&s, "coder-iq1_m");
+    assert!(cfg.get("args_written").is_none(), "{cfg}");
+    assert!(cfg.get("user_args").is_none(), "{cfg}");
+}
+
+#[tokio::test]
+async fn the_page_shows_what_strata_starts_with() {
+    let s = setup("models-user-view").await;
+    installed(&s);
+    let args = json!(["--native", "b.gguf", "--max-context", "65536"]);
+    let mut user = projection(&s);
+    user.extend([json!("--max-context"), json!("131072")]);
+    config_with_user_args(&s, "coder-iq1_m", args.clone(), args, json!(user));
+    let view = get(&s, "/strata").await;
+    let coder = model(&view, "coder-IQ1_M");
+    assert_eq!(coder["speed_projection"], true, "{view}");
+    assert_eq!(coder["context"], 131072, "{view}");
+}
+
+#[tokio::test]
+async fn switching_the_context_takes_it_out_of_what_strata_keeps_as_set_by_hand() {
+    let s = setup("models-context-user").await;
+    installed(&s);
+    let args = json!(["--native", "b.gguf", "--max-context", "65536"]);
+    let user = json!([
+        "--max-context",
+        "524288",
+        "--rope-scaling",
+        "yarn",
+        "--rope-scale",
+        "2",
+        "--threads",
+        "8"
+    ]);
+    config_with_user_args(&s, "coder-iq1_m", args.clone(), args, user);
+    let done = job(
+        &s,
+        json!({"kind": "set_context", "model": "coder-IQ1_M", "context": 131072}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let cfg = read_config(&s, "coder-iq1_m");
+    let switched = json!(["--native", "b.gguf", "--max-context", "131072"]);
+    assert_eq!(cfg["args"], switched, "{cfg}");
+    assert_eq!(cfg["args_written"], switched, "{cfg}");
+    assert_eq!(cfg["user_args"], json!(["--threads", "8"]), "{cfg}");
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "coder-IQ1_M")["context"], 131072, "{view}");
+}
+
+#[tokio::test]
+async fn a_context_that_goes_back_brings_back_what_strata_kept() {
+    let s = setup_with("models-context-user-back", |c| c.context_start_secs = 3).await;
+    active_at_512k(&s, &["loading model"], true);
+    let args = json!([
+        "--native",
+        "a.gguf",
+        "--max-context",
+        "524288",
+        "--rope-scaling",
+        "yarn",
+        "--rope-scale",
+        "2"
+    ]);
+    let user = json!(["--max-context", "524288", "--threads", "8"]);
+    config_with_user_args(&s, "iq3_xxs", args.clone(), args, user);
+    let before = read_config(&s, "iq3_xxs");
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    let body = json!({"kind": "set_context", "model": "IQ3_XXS", "context": 262144});
+    assert_eq!(post(&s, "/strata/jobs", body).await.0, 202);
+    let done = finished_slowly(&s).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    let after = read_config(&s, "iq3_xxs");
+    for key in ["args", "args_written", "user_args"] {
+        assert_eq!(after[key], before[key], "{key}: {after}");
+    }
+}
+
 fn sample(name: &str) -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../pc-protocol/tests/samples")

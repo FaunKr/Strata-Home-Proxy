@@ -28,7 +28,7 @@ async fn forced_sleep_follows_a_refused_sleep_and_the_pc_counts_as_asleep() {
     s.pc.refuse_sleep.store(true, Ordering::SeqCst);
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC wach", |v| v["pc"] == "Awake").await;
+    live.until("PC awake", |v| v["pc"] == "Awake").await;
     let refused: Value = b.call("sleep-now", &[]).await.json().await.unwrap();
     assert!(refused["Refused"]["reason"].is_string(), "{refused}");
 
@@ -37,7 +37,7 @@ async fn forced_sleep_follows_a_refused_sleep_and_the_pc_counts_as_asleep() {
     assert_eq!(s.pc.force_sleeps.load(Ordering::SeqCst), 1);
     assert!(!s.pc.up());
     // Like an accepted sleep request: settling, then asleep.
-    let v = live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    let v = live.until("PC asleep", |v| v["pc"] == "Asleep").await;
     assert_eq!(v["sleep"], "Asleep");
     let kinds = own_kinds(&s.state);
     assert!(
@@ -67,7 +67,7 @@ async fn forced_sleep_names_gaming_mode_and_the_cancelled_job() {
         detail(&s, EventKind::ForcedSleep),
         "from the web UI, overriding gaming mode, cancelled job: Loading model"
     );
-    live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    live.until("PC asleep", |v| v["pc"] == "Asleep").await;
 }
 
 #[tokio::test]
@@ -76,7 +76,7 @@ async fn forced_restart_reaches_the_pc_service_and_strata_loads() {
     *s.pc.strata_job.lock().unwrap() = Some(job(StrataJobKind::Activate, StrataJobState::Running));
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC wach", |v| v["pc"] == "Awake").await;
+    live.until("PC awake", |v| v["pc"] == "Awake").await;
 
     let resp = b.call("strata-force-restart", &[]).await;
     assert_eq!(resp.status(), 200);
@@ -90,7 +90,7 @@ async fn forced_restart_reaches_the_pc_service_and_strata_loads() {
         detail(&s, EventKind::ForcedStrataRestart),
         "from the web UI, cancelled job: Making model active, Strata started again"
     );
-    live.until("Strata lädt", |v| v["strata"] == "Loading")
+    live.until("Strata loading", |v| v["strata"] == "Loading")
         .await;
     // The PC stays awake.
     assert!(s.pc.up());
@@ -113,7 +113,7 @@ async fn neither_wakes_a_sleeping_pc() {
     let s = setup(false, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    live.until("PC asleep", |v| v["pc"] == "Asleep").await;
     for name in ["force-sleep", "strata-force-restart"] {
         let resp = b.call(name, &[]).await;
         assert_eq!(resp.status(), 400, "{name}");
@@ -132,7 +132,7 @@ async fn an_older_pc_service_asks_for_an_update() {
     s.pc.no_force.store(true, Ordering::SeqCst);
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC wach", |v| v["pc"] == "Awake").await;
+    live.until("PC awake", |v| v["pc"] == "Awake").await;
     for name in ["force-sleep", "strata-force-restart"] {
         let resp = b.call(name, &[]).await;
         assert_eq!(resp.status(), 400, "{name}");
@@ -154,7 +154,7 @@ async fn a_pc_service_that_does_not_answer_says_so() {
     let s = setup(true, |c| c.pc_agent_url = Some("http://127.0.0.1:9".into())).await;
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC wach", |v| v["pc"] == "Awake").await;
+    live.until("PC awake", |v| v["pc"] == "Awake").await;
     for name in ["force-sleep", "strata-force-restart"] {
         let resp = b.call(name, &[]).await;
         assert_eq!(resp.status(), 400, "{name}");
@@ -186,7 +186,7 @@ async fn a_forced_restart_past_the_proxys_limit_counts_as_no_answer() {
     *s.pc.kill_delay.lock().unwrap() = Duration::from_secs(3);
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC wach", |v| v["pc"] == "Awake").await;
+    live.until("PC awake", |v| v["pc"] == "Awake").await;
     let started = std::time::Instant::now();
     let resp = b.call("strata-force-restart", &[]).await;
     assert!(

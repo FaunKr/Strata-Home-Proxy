@@ -1,4 +1,4 @@
-//! Hardwarewerte: what `/status` reports about GPU and CPU (see
+//! Hardware readings: what `/status` reports about GPU and CPU (see
 //! docs/pc-agent-api.md). Read from Windows itself, without a driver.
 
 pub use strata_pc_protocol::{Cpu, Gpu, Hardware};

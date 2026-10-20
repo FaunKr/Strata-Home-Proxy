@@ -1,37 +1,38 @@
-# Auf dem NAS: Werte in .env eintragen (Vorlage: env.example), dann
+# On the NAS: put the values into .env (template: env.example), then
 #   docker compose pull && docker compose up -d
 services:
   strata-proxy:
     image: ghcr.io/faunkr/strata-home-proxy:latest
-    # Alternativ selbst bauen statt laden: die Zeile oben durch "build: .." ersetzen.
+    # To build it yourself instead of pulling: replace the line above with "build: ..".
     container_name: strata-proxy
     restart: unless-stopped
-    # Host-Netz ist nötig: das Weckpaket ist ein Broadcast und kommt aus
-    # einem Bridge-Netz nicht ins Heimnetz.
+    # The host network is needed: the wake packet is a broadcast and does not
+    # get from a bridge network into the home network.
     network_mode: host
     env_file: .env
     environment:
       CODE_BENCH_URL: http://127.0.0.1:8096
     volumes:
       - ./data:/data
-  # Der Code-Benchmark (tools/code-bench): opencode löst darin Aufgaben gegen
-  # den Proxy. Ohne diesen Dienst fehlt nur der Code-Benchmark.
+  # The code benchmark (tools/code-bench): in it opencode solves tasks against
+  # the proxy. Without this service only the code benchmark is missing.
   code-bench:
     image: ghcr.io/faunkr/strata-code-bench:latest
     container_name: strata-code-bench
     restart: unless-stopped
-    # Nur der Proxy auf dem NAS erreicht den Runner.
+    # Only the proxy on the NAS reaches the runner.
     ports:
       - 127.0.0.1:8096:8096
-    # Der Proxy läuft im Host-Netz; so erreicht opencode ihn.
+    # The proxy runs in the host network; this is how opencode reaches it.
     extra_hosts:
       - host.docker.internal:host-gateway
     environment:
       PROXY_URL: http://host.docker.internal:8080
-    # Damit der Runner dem Agenten NAS, Heimnetz und die eigene API sperrt;
-    # ohne verweigert er Läufe.
+    # So that the runner can block the NAS, the home network and its own API for
+    # the coding agent; without it, it refuses runs.
     cap_add:
       - NET_ADMIN
-    # Der Agent führt hier Befehle aus: Grenzen gegen Ausreißer.
+    # The coding agent runs commands here: limits against runaways.
+
     mem_limit: 4g
     pids_limit: 512

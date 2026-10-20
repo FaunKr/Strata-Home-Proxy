@@ -1,4 +1,4 @@
-//! Hardwarewerte on the overview: what the PC service reports about GPU and
+//! Hardware readings on the overview: what the PC service reports about GPU and
 //! CPU, against the simulated PC.
 
 mod common;
@@ -34,7 +34,7 @@ async fn shows_the_values_of_an_awake_pc() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
-        .until("Hardwarewerte", |v| v["hardware"]["Values"].is_object())
+        .until("hardware readings", |v| v["hardware"]["Values"].is_object())
         .await;
     assert_eq!(v["hardware"]["Values"], cpu_only_shown());
 }
@@ -45,7 +45,7 @@ async fn a_sleeping_pc_has_none() {
     *s.pc.hardware.lock().unwrap() = Some(cpu_only());
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    let v = live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    let v = live.until("PC asleep", |v| v["pc"] == "Asleep").await;
     assert_eq!(v["hardware"], "Unavailable");
 }
 
@@ -55,10 +55,10 @@ async fn values_go_once_the_pc_sleeps() {
     *s.pc.hardware.lock().unwrap() = Some(cpu_only());
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("Hardwarewerte", |v| v["hardware"]["Values"].is_object())
+    live.until("hardware readings", |v| v["hardware"]["Values"].is_object())
         .await;
     assert_eq!(b.call("sleep-now", &[]).await.status(), 200);
-    let v = live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    let v = live.until("PC asleep", |v| v["pc"] == "Asleep").await;
     assert_eq!(v["hardware"], "Unavailable");
 }
 
@@ -87,7 +87,7 @@ async fn unreadable_values_stay_empty() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
-        .until("Hardwarewerte", |v| v["hardware"]["Values"].is_object())
+        .until("hardware readings", |v| v["hardware"]["Values"].is_object())
         .await;
     assert_eq!(
         v["hardware"]["Values"],
@@ -103,11 +103,11 @@ async fn an_older_pc_service_is_unsupported_until_it_reports() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    let v = live.until("PC wach", |v| v["pc"] == "Awake").await;
+    let v = live.until("PC awake", |v| v["pc"] == "Awake").await;
     assert_eq!(v["hardware"], "Unsupported");
     *s.pc.hardware.lock().unwrap() = Some(cpu_only());
     let v = live
-        .until("Hardwarewerte", |v| v["hardware"]["Values"].is_object())
+        .until("hardware readings", |v| v["hardware"]["Values"].is_object())
         .await;
     assert_eq!(v["hardware"]["Values"], cpu_only_shown());
 }
@@ -128,7 +128,7 @@ async fn gpu_values_reach_the_overview() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
-        .until("Hardwarewerte", |v| v["hardware"]["Values"].is_object())
+        .until("hardware readings", |v| v["hardware"]["Values"].is_object())
         .await;
     assert_eq!(
         v["hardware"]["Values"],
@@ -156,7 +156,7 @@ async fn a_stopped_fan_stays_zero() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
-        .until("Hardwarewerte", |v| v["hardware"]["Values"].is_object())
+        .until("hardware readings", |v| v["hardware"]["Values"].is_object())
         .await;
     assert_eq!(v["hardware"]["Values"]["gpu"]["fan_rpm"], 0);
     assert_eq!(v["hardware"]["Values"]["gpu"]["power_pct"], Value::Null);

@@ -9,7 +9,7 @@ use crate::StrataJobKind;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PcStatus {
     pub gaming_mode: bool,
-    /// Strata answers `/health`, or the PC-Dienst started it within its
+    /// Strata answers `/health`, or the PC service started it within its
     /// load time and has not stopped it since: a Strata that loads its
     /// model counts as running before it answers.
     #[serde(default)]
@@ -24,16 +24,16 @@ pub struct PcStatus {
     /// A Strata job (setup, download, update, benchmark) runs.
     #[serde(default)]
     pub strata_job: bool,
-    /// The PC-Dienst's version, e.g. `0.1.0+558db97`; missing from services
+    /// The PC service's version, e.g. `0.1.0+558db97`; missing from services
     /// before the update button.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// The Hardwarewerte; missing from services before them.
+    /// The hardware readings; missing from services before them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hardware: Option<Hardware>,
 }
 
-/// The Hardwarewerte. A value the PC-Dienst could not read is `None`, sent
+/// The hardware readings. A value the PC service could not read is `None`, sent
 /// as `null`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Hardware {
@@ -96,7 +96,7 @@ impl Answer {
 /// Standby follows as after an accepted `POST /sleep`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForcedSleep {
-    /// Someone used mouse or keyboard within the PC-Dienst's limit.
+    /// Someone used mouse or keyboard within the PC service's limit.
     pub user_active: bool,
     /// Strata was processing a request.
     pub strata_busy: bool,

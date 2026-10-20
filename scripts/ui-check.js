@@ -22,10 +22,10 @@ const summaryStates = [
 ];
 const views = [['desk', { width: 1280, height: 900 }, 'light'], ['phone', { width: 390, height: 844 }, 'dark']];
 // The same markers as crates/nas-proxy/tests/ui_language.rs.
-const german = /[äöüßÄÖÜ]|\b(nicht|und|oder|der|das|ist|wird|bitte|keine?|Abgelehnt|Einstellung|Fehler|Passwort)\b/;
-const password = 'ein eigenes Passwort';
+const german = /[äöüßÄÖÜ]|\b(nicht|und|oder|der|das|ist|wird|bitte|keine?|Abgelehnt|Einstellung|Fehler|Passwort)\b/; // language-check: allow
+const password = 'a password of my own';
 
-// A fresh DATA_DIR starts with "admin" and asks for an own password first.
+// A fresh DATA_DIR starts with "admin" and asks for a new password first.
 async function login(page) {
   await page.goto(base + '/admin');
   await page.fill('#password', 'admin');

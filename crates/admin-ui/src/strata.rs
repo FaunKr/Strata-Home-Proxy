@@ -1186,7 +1186,8 @@ fn CodeBenchCard() -> impl IntoView {
             Question {
                 title: "Benchmark all models?".into(),
                 text: format!(
-                    "{models} models, {CODE_BENCH_TASKS} tasks each, up to {CODE_BENCH_TASK_MINUTES} minutes each. The model active before the run comes back at the end.",
+                    "{models} models, {CODE_BENCH_TASKS} tasks each, up to {CODE_BENCH_TASK_MINUTES} minutes per task: at most {} hours in all. The model active before the run comes back at the end.",
+                    (models * CODE_BENCH_TASKS * CODE_BENCH_TASK_MINUTES).div_ceil(60),
                 ),
                 confirm: "Benchmark all models",
                 danger: false,
@@ -1216,43 +1217,49 @@ fn CodeBenchCard() -> impl IntoView {
                                 .map(|text| view! { <p class="warning" role="status">{text}</p> });
                             let blocked = p.problem.is_some();
                             let all = p.all.clone();
+                            // While a model loads there is no run to cancel
+                            // below, so the run over all models has its own.
+                            let between = p
+                                .run
+                                .as_ref()
+                                .is_none_or(|r| r.state != CodeBenchState::Running);
                             let progress = all.map(|a| {
+                                let cancel_all = between.then(|| view! {
+                                    <div class="actions">
+                                        <button
+                                            type="button"
+                                            class="secondary"
+                                            disabled=move || cancel.pending().get()
+                                            on:click=move |_| {
+                                                confirm
+                                                    .ask(
+                                                        Question {
+                                                            title: "Cancel the run over all models?".into(),
+                                                            text: "The models still to come do not start. The finished results stay and the model active before the run comes back."
+                                                                .into(),
+                                                            confirm: "Cancel",
+                                                            danger: true,
+                                                        },
+                                                        move || {
+                                                            cancel.dispatch(CancelCodeBench {});
+                                                        },
+                                                    );
+                                            }
+                                        >
+                                            "Cancel"
+                                        </button>
+                                    </div>
+                                });
                                 view! {
                                     <div class="job" role="status">
                                         <p class="strong">{format!(
-                                            "Model {} of {}", a.model, a.models
-                                        )}</p>
-                                        <p class="hint">{format!(
                                             "Model {} of {} · task {} of {}",
                                             a.model, a.models, a.task, a.tasks
                                         )}</p>
                                         <p class="muted small">{format!(
                                             "The model active before the run, {}, comes back at the end.", a.restore
                                         )}</p>
-                                        <div class="actions">
-                                            <button
-                                                type="button"
-                                                class="secondary"
-                                                disabled=move || cancel.pending().get()
-                                                on:click=move |_| {
-                                                    confirm
-                                                        .ask(
-                                                            Question {
-                                                                title: "Cancel the run over all models?".into(),
-                                                                text: "The model that runs now ends, the others do not start. The finished results stay and the model active before the run comes back."
-                                                                    .into(),
-                                                                confirm: "Cancel",
-                                                                danger: true,
-                                                            },
-                                                            move || {
-                                                                cancel.dispatch(CancelCodeBench {});
-                                                            },
-                                                        );
-                                                }
-                                            >
-                                                "Cancel"
-                                            </button>
-                                        </div>
+                                        {cancel_all}
                                     </div>
                                 }
                             });
@@ -1425,6 +1432,9 @@ fn CodeBenchResult(run: CodeBenchRun) -> impl IntoView {
     if model_secs > 0.0 {
         summary.push(tps((output as f64 / model_secs * 10.0).round() / 10.0));
     }
+    // An error row has no tasks, so no totals either.
+    let totals = (!run.tasks.is_empty())
+        .then(|| view! { <p>{format!("Total: {}", summary.join(" · "))}</p> });
     let tasks = run
         .tasks
         .into_iter()
@@ -1438,7 +1448,7 @@ fn CodeBenchResult(run: CodeBenchRun) -> impl IntoView {
         <div class="bench-run">
             <h3>{run.model.clone()}</h3>
             {failed}
-            <p>{format!("Total: {}", summary.join(" · "))}</p>
+            {totals}
             <p class="muted small">{run.at_text.clone()}</p>
             <ul class="list">{tasks}</ul>
         </div>

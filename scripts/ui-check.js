@@ -182,7 +182,7 @@ async function forced(page, errors) {
 // run over all models with its progress. Returns the number of findings.
 async function codeBench(page, errors) {
   const wait = { timeout: 15000 };
-  const findings = 0;
+  let findings = 0;
   const sees = async text => page.getByText(text).first().waitFor(wait);
   const step = async (name, shot, run) => {
     errors.length = 0;

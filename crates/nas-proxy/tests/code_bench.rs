@@ -151,25 +151,9 @@ fn last_run(runner: &Runner) -> String {
 }
 
 /// Drives one model of a run over all models: wait for its Activate, end the
-/// job, wait for its run, then end that run. `fail` ends the job with an error
-/// instead, so the run goes on without a run.
+/// job, wait for its run, then end that run.
 async fn drive(s: &Setup, runner: &Runner, model: &str) {
-    for _ in 0..100 {
-        if last_activate(s) == model {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert_eq!(last_activate(s), model, "Activate {model} not asked for");
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
-    for _ in 0..100 {
-        if last_run(runner) == model {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert_eq!(last_run(runner), model, "run for {model} not started");
-    drive_end(s, runner, model, run(model, "done")).await;
+    drive_model(s, runner, model, run(model, "done")).await;
 }
 
 /// Ends the run that the runner has started for `model` with `final`, and waits
@@ -632,6 +616,15 @@ async fn cancelling_a_run_over_all_models_keeps_finished_results_and_stops_the_r
             .map(|b| b["model"].as_str().unwrap().to_string())
             .collect();
     assert_eq!(order, vec![ids[0], ids[1], ids[1]]);
+
+    // The next run over all models starts from the first model again.
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    eventually_for(
+        Duration::from_secs(10),
+        "the next run's first model",
+        || s.pc.job_bodies.lock().unwrap().len() == 4 && last_activate(&s) == ids[0],
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -848,4 +841,8 @@ async fn after_a_restart_mid_run_the_current_run_is_followed_and_the_model_broug
             .collect();
     // Only the model active before the run is activated again.
     assert_eq!(order, vec![ids[1]]);
+    assert!(
+        !dir.join("code-bench-restore").exists(),
+        "the model to bring back is kept after the run"
+    );
 }

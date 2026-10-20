@@ -195,6 +195,14 @@ impl CodeBench {
         *self.restore.lock().unwrap() = Some(model.to_string());
     }
 
+    /// The run over all models ended: no model to bring back after a restart.
+    fn clear_restore(&self) {
+        if let Some(dir) = &self.dir {
+            let _ = std::fs::remove_file(dir.join(RESTORE_FILE));
+        }
+        *self.restore.lock().unwrap() = None;
+    }
+
     fn restore_model(&self) -> Option<String> {
         self.restore.lock().unwrap().clone()
     }
@@ -448,6 +456,7 @@ pub async fn start_all(state: &Arc<AppState>) -> Result<(), String> {
     })?;
     state.code_bench.set_key(Some(info.prefix));
     state.code_bench.set_restore(&restore);
+    state.code_bench.cancelled.store(false, Ordering::SeqCst);
     *state.code_bench.all.lock().unwrap() = Some(All {
         api: CodeBenchAll {
             models: ids.len(),
@@ -490,17 +499,30 @@ async fn run_all(state: &Arc<AppState>, url: &str, key: &str) {
             state.code_bench.add_row(id, &e);
             continue;
         }
+        if state.code_bench.cancelled.load(Ordering::SeqCst) {
+            break;
+        }
         if let Err(e) = run_model(state, url, id, key).await {
             state.code_bench.add_row(id, &e);
             continue;
         }
     }
-    if let Err(e) = activate(state, &restore).await {
-        state.code_bench.add_row(&restore, &e);
-    }
+    bring_back(state, &restore).await;
     *state.code_bench.all.lock().unwrap() = None;
     revoke_key(state);
     state.overview.refresh_now();
+}
+
+/// Activates the model active before a run over all models again. A failure is
+/// noted under Events: the model's own result row stays as it is.
+async fn bring_back(state: &Arc<AppState>, model: &str) {
+    if let Err(e) = activate(state, model).await {
+        state.events.record(
+            EventKind::StrataJobFailed,
+            Some(format!("Activate {model}: {e}")),
+        );
+    }
+    state.code_bench.clear_restore();
 }
 
 /// Activates one model through the PC service and waits for the job. The
@@ -515,7 +537,23 @@ async fn activate(state: &Arc<AppState>, model: &str) -> Result<(), String> {
         model: model.to_string(),
     };
     state.strata.set_job_running(true);
-    agent.start_strata_job(&request).await?;
+    let result = activate_job(state, &agent, &request, model).await;
+    state.strata.set_job_running(false);
+    if result.is_ok() {
+        state
+            .events
+            .record(EventKind::StrataJobDone, Some(format!("Activate {model}")));
+    }
+    result
+}
+
+async fn activate_job(
+    state: &Arc<AppState>,
+    agent: &crate::agent::AgentClient,
+    request: &StrataJobRequest,
+    model: &str,
+) -> Result<(), String> {
+    agent.start_strata_job(request).await?;
     state.events.record(
         EventKind::StrataJobStarted,
         Some(format!("Activate {model}")),
@@ -534,12 +572,8 @@ async fn activate(state: &Arc<AppState>, model: &str) -> Result<(), String> {
         missed = 0;
         match job.state {
             StrataJobState::Running => {}
-            StrataJobState::Done => {
-                state.strata.set_job_running(false);
-                return Ok(());
-            }
+            StrataJobState::Done => return Ok(()),
             _ => {
-                state.strata.set_job_running(false);
                 return Err(job
                     .error
                     .as_deref()
@@ -603,21 +637,15 @@ pub fn resume(state: &Arc<AppState>) {
     }
     let state = Arc::clone(state);
     tokio::spawn(async move {
-        match current(&state, &url).await {
-            Some(run) if run.state == CodeBenchState::Running => {
-                *state.code_bench.run.lock().unwrap() = Some(run);
-                let was_over_all = state.code_bench.restore_model().is_some();
-                let ended = follow_run(&state, &url, was_over_all).await;
-                if was_over_all && ended.state != CodeBenchState::Cancelled {
-                    state.code_bench.keep(ended);
-                    if let Some(restore) = state.code_bench.restore_model()
-                        && let Err(e) = activate(&state, &restore).await
-                    {
-                        state.code_bench.add_row(&restore, &e);
-                    }
-                }
-            }
-            _ => {}
+        if let Some(run) = current(&state, &url).await
+            && run.state == CodeBenchState::Running
+        {
+            *state.code_bench.run.lock().unwrap() = Some(run);
+            let was_over_all = state.code_bench.restore_model().is_some();
+            follow_run(&state, &url, was_over_all).await;
+        }
+        if let Some(restore) = state.code_bench.restore_model() {
+            bring_back(&state, &restore).await;
         }
         revoke_key(&state);
         state.overview.refresh_now();

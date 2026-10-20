@@ -57,6 +57,8 @@ pub struct Fake {
     pub strata_stays_down: AtomicBool,
     /// Starting Strata fails.
     pub start_fails: AtomicBool,
+    /// A stopped Strata keeps answering `/health`, like one that does not end.
+    pub strata_ignores_stop: AtomicBool,
     pub strata_busy: AtomicBool,
     pub mac: Mutex<Option<[u8; 6]>>,
     pub mac_lookups: AtomicUsize,
@@ -80,6 +82,8 @@ pub struct Fake {
     pub health_auth: Mutex<Option<String>>,
     /// Content of the program the last update put in place.
     pub replaced: Mutex<Option<Vec<u8>>>,
+    /// Whether Strata answered when the last update put the program in place.
+    pub strata_up_at_replace: Mutex<Option<bool>>,
     /// Putting the new program in place fails with this.
     pub replace_fails: Mutex<Option<String>>,
     /// Times the service ended itself after an update.
@@ -216,7 +220,9 @@ impl Platform for FakePlatform {
     fn stop_strata(&self, processes: &[String]) -> anyhow::Result<()> {
         *self.0.stopped.lock().unwrap() = Some(processes.to_vec());
         self.0.stops.fetch_add(1, Ordering::SeqCst);
-        self.0.strata_up.store(false, Ordering::SeqCst);
+        if !self.0.strata_ignores_stop.load(Ordering::SeqCst) {
+            self.0.strata_up.store(false, Ordering::SeqCst);
+        }
         if let Some(cancel) = self.0.strata_cancel.lock().unwrap().take() {
             cancel();
         }
@@ -254,6 +260,8 @@ impl Platform for FakePlatform {
         if let Some(e) = self.0.replace_fails.lock().unwrap().clone() {
             anyhow::bail!(e);
         }
+        *self.0.strata_up_at_replace.lock().unwrap() =
+            Some(self.0.strata_up.load(Ordering::SeqCst));
         *self.0.replaced.lock().unwrap() = Some(std::fs::read(downloaded)?);
         std::fs::remove_file(downloaded)?;
         Ok(())
@@ -341,6 +349,7 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         context_start_secs: 1,
         stop_settle_ms: 10,
         cancel_wait_secs: 30,
+        update_stop_wait_secs: 1,
         state_dir: Some(dir.to_path_buf()),
         mac: None,
         nas_url: None,

@@ -59,6 +59,10 @@ stop_settle_ms = 2000
 # trotzdem weiter. Das NAS wartet länger auf die Antwort.
 cancel_wait_secs = 60
 
+# So lange wartet ein Update des PC-Dienstes, bis das beendete Strata nicht
+# mehr antwortet; antwortet es danach noch, unterbleibt das Update.
+update_stop_wait_secs = 10
+
 # MAC-Adresse, die dem NAS gemeldet wird. Normalerweise leer lassen: der Dienst
 # meldet dann die der Netzwerkkarte, über die das NAS ihn erreicht.
 #mac = "AA-BB-CC-DD-EE-FF"

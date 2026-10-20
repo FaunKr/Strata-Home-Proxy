@@ -293,7 +293,8 @@ impl Agent {
         tracing::warn!("Strata wird zwangsweise neu gestartet");
         let process = self.strata();
         process.stop();
-        // The update restarts this service, which starts Strata then.
+        // An update beginning now hands over to the updated service, which
+        // starts Strata then.
         let started = process
             .start_after_stop(|| {
                 self.refuse_while_updating().map_err(|_| {
@@ -379,7 +380,12 @@ impl Agent {
     /// when it stopped answering, e.g. after standby upset the graphics driver.
     pub async fn watchdog_tick(&self) {
         // A job sets Strata up or switches it; starting it now would get in the way.
-        if self.gaming() || !self.cfg.auto_start || self.jobs.running() {
+        // An update stopped Strata for the updated service to start.
+        if self.gaming()
+            || !self.cfg.auto_start
+            || self.jobs.running()
+            || self.updating.load(Ordering::SeqCst)
+        {
             return;
         }
         // Nothing to start yet: the Strata page has not set a start script.

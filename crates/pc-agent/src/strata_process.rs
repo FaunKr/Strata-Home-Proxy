@@ -7,6 +7,9 @@
 //! The watchdog decides *when* Strata needs a restart, a job *what* to
 //! change before one; *how* is this module's.
 //!
+//! During an update of the service nothing here starts Strata; the update
+//! stopped it, and the updated service starts it.
+//!
 //! Restarts may overlap, e.g. the watchdog's with gaming mode switched off
 //! during its pause: a start after a pause is left out when Strata was
 //! started since the last stop, so only one Strata runs.
@@ -92,9 +95,14 @@ impl<'a> StrataProcess<'a> {
 
     /// Starts Strata if `wanted` holds for what was seen; checked and
     /// recorded at once, so two starts cannot both pass. True when this
-    /// call started Strata.
+    /// call started Strata. None during an update: the updated service
+    /// starts Strata.
     fn start_if(&self, wanted: impl FnOnce(&Seen) -> bool) -> bool {
         let agent = self.agent;
+        if agent.updating.load(std::sync::atomic::Ordering::SeqCst) {
+            tracing::info!("Der PC-Dienst wird aktualisiert, Strata startet mit dem neuen");
+            return false;
+        }
         let managed = agent.managed();
         let Some((program, args)) = managed.start(&agent.cfg) else {
             tracing::info!("Kein Startskript für Strata eingetragen, Strata bleibt aus");

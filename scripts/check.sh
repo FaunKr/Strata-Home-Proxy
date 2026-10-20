@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # The checks of the CI job `test`. CI runs this script, so local and CI agree.
 #
-# Usage: scripts/check.sh [package...]
+# Usage: scripts/check.sh [package... | --no-cargo]
 # Without arguments it checks the whole workspace. With package names it checks
 # only those; on pull requests CI passes the crates the PR affects. A folder
 # name under crates/ works too: pc-protocol stands for strata-pc-protocol.
+# --no-cargo builds, lints and tests no crate: CI passes it when a pull request
+# only changes what the scripts' own tests cover (scripts/ci-select.sh).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -22,7 +24,16 @@ finish() {
 }
 trap finish EXIT
 
-if (($#)); then
+cargo=true
+if [[ ${1:-} == --no-cargo ]]; then
+  if (($# > 1)); then
+    echo "--no-cargo takes no package names" >&2
+    exit 2
+  fi
+  cargo=false
+  packages=" "
+  package_args=()
+elif (($#)); then
   names=()
   for package in "$@"; do
     if [[ -f crates/$package/Cargo.toml ]]; then
@@ -69,7 +80,9 @@ rm -f "$tree_index"
 # shellcheck source=scripts/free-space.sh
 source "$(dirname "$0")/free-space.sh"
 
-cargo fmt --check
+if [[ $cargo == true ]]; then
+  cargo fmt --check
+fi
 # Strata starts and stops only in strata_process.rs (#184): the pause after a
 # stop, gaming mode and running jobs are checked there.
 if grep -rnE '\.(start|stop)_strata\(' crates/pc-agent/src --exclude=strata_process.rs --exclude=platform.rs; then
@@ -87,7 +100,7 @@ fi
 # The test runner, at least the version .config/nextest.toml pins (CI installs it).
 nextest_version=$(scripts/nextest-version.sh)
 installed=$(cargo nextest --version 2>/dev/null | sed -n '1s/^cargo-nextest \([0-9.]*\).*/\1/p' || true)
-if [[ -z $installed || $(printf '%s\n' "$nextest_version" "$installed" | sort -V | head -n1) != "$nextest_version" ]]; then
+if [[ $cargo == true ]] && [[ -z $installed || $(printf '%s\n' "$nextest_version" "$installed" | sort -V | head -n1) != "$nextest_version" ]]; then
   echo "cargo-nextest ${installed:-missing}, needs $nextest_version: cargo install cargo-nextest@$nextest_version --locked" >&2
   exit 2
 fi
@@ -108,7 +121,9 @@ scripts/ci-select.test.sh
 # The repo is English: no umlauts in tracked files (scripts/language-allowlist).
 scripts/check-language.test.sh
 scripts/check-language.sh
-cargo clippy "${package_args[@]}" --all-targets -- -D warnings
+if [[ $cargo == true ]]; then
+  cargo clippy "${package_args[@]}" --all-targets -- -D warnings
+fi
 # The browser half of the web UI, which the Docker image builds with cargo-leptos.
 if selected strata-admin-ui; then
   cargo clippy -p strata-admin-ui --target wasm32-unknown-unknown --no-default-features --features hydrate -- -D warnings
@@ -161,9 +176,11 @@ python3 tools/code-bench/test_runner.py
 # Build first, then test. nextest kills a test after 60 s and names it
 # (.config/nextest.toml); a package without tests passes, as with cargo test.
 # nextest runs no doctests; there are none (cargo test --doc: 0 everywhere).
-cargo nextest run "${package_args[@]}" --no-run
-# The time limit catches a run that hangs outside a single test.
-timeout 15m cargo nextest run "${package_args[@]}" --no-tests=pass
+if [[ $cargo == true ]]; then
+  cargo nextest run "${package_args[@]}" --no-run
+  # The time limit catches a run that hangs outside a single test.
+  timeout 15m cargo nextest run "${package_args[@]}" --no-tests=pass
+fi
 
 if [[ $packages == all ]]; then
   mkdir -p "$target_dir/check-ok"

@@ -20,38 +20,41 @@ expect() {
   [[ $got == "$want " ]] || fail "$* -> $got, expected $want"
 }
 # Passes when the selection for one changed path has value among key's words.
-# An empty package list with test=true means everything, so it passes too.
+# An empty package list with cargo=true means everything, so it passes too.
 expect_selects() {
   local path=$1 key=$2 value=$3 out got
   out=$(printf '%s\n' "$path" | scripts/ci-select.sh)
   got=$(sed -n "s/^$key=//p" <<<"$out")
   [[ " $got " == *" $value "* ]] && return
-  [[ $key == packages && -z $got && $out == *test=true* ]] && return
+  [[ $key == packages && -z $got && $out == *cargo=true* ]] && return
   fail "$path -> $key=$got, expected $value"
 }
 package_of() { sed -n 's/^name *= *"\(.*\)"/\1/p' "$1/Cargo.toml" | head -1; }
 
 # Fixed cases.
-all="test=true packages= image=true bench=true ui=true"
-expect "test=false packages= image=false bench=false ui=false" README.md docs/strata-api.md
+all="test=true packages= cargo=true image=true bench=true ui=true"
+expect "test=false packages= cargo=false image=false bench=false ui=false" README.md docs/strata-api.md
 expect "$all" Cargo.lock
 expect "$all" .github/workflows/ci.yml
 expect "$all" .config/nextest.toml
 expect "$all" scripts/check-exe-version.sh
 # Code alone runs the tests of its crates; the images build only when their
 # build definition changes.
-expect "test=true packages=strata-pc-agent image=false bench=false ui=false" crates/pc-agent/src/agent.rs
-expect "test=true packages=strata-admin-ui strata-nas-proxy image=false bench=false ui=true" crates/admin-ui/src/app.rs
-expect "test=true packages=strata-nas-proxy image=false bench=false ui=false" deploy/windows/install.ps1
-expect "test=true packages=strata-nas-proxy image=false bench=false ui=true" crates/nas-proxy/src/admin.rs
-expect "test=false packages= image=true bench=false ui=true" Dockerfile
-expect "test=false packages= image=true bench=false ui=false" .dockerignore
-expect "test=false packages= image=false bench=false ui=false" deploy/docker-compose.yml
-expect "test=true packages= image=false bench=false ui=false" tools/local-agent/local-agent
-expect "test=true packages= image=false bench=true ui=false" tools/code-bench/runner.py
-expect "test=true packages= image=false bench=true ui=false" tools/code-bench/Dockerfile
-expect "test=true packages= image=false bench=false ui=false" tools/code-bench/test_runner.py
-expect "test=true packages=strata-nas-proxy image=false bench=false ui=false" tools/code-bench/tasks/roman/TASK.md
+expect "test=true packages=strata-pc-agent cargo=true image=false bench=false ui=false" crates/pc-agent/src/agent.rs
+expect "test=true packages=strata-admin-ui strata-nas-proxy cargo=true image=false bench=false ui=true" crates/admin-ui/src/app.rs
+expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=false" deploy/windows/install.ps1
+expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=true" crates/nas-proxy/src/admin.rs
+expect "test=false packages= cargo=false image=true bench=false ui=true" Dockerfile
+expect "test=false packages= cargo=false image=true bench=false ui=false" .dockerignore
+expect "test=false packages= cargo=false image=false bench=false ui=false" deploy/docker-compose.yml
+expect "test=true packages= cargo=false image=false bench=false ui=false" tools/local-agent/local-agent
+expect "test=true packages= cargo=false image=false bench=true ui=false" tools/code-bench/runner.py
+expect "test=true packages= cargo=false image=false bench=true ui=false" tools/code-bench/Dockerfile
+expect "test=true packages= cargo=false image=false bench=false ui=false" tools/code-bench/test_runner.py
+expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=false" tools/code-bench/tasks/roman/TASK.md
+# A runner change next to a crate change: check.sh gets the crate and runs the
+# runners' tests anyway.
+expect "test=true packages=strata-pc-agent cargo=true image=false bench=true ui=false" tools/code-bench/runner.py crates/pc-agent/src/agent.rs
 [[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$all " ]] || fail "--all -> not everything"
 
 # Every crate selects itself.

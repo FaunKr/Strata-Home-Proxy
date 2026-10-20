@@ -38,6 +38,7 @@ Reference values after #151:
 | Run | Jobs | Minutes |
 |---|---|---|
 | PR with a code change | changes, test, ci-ok | approx. 6–10 |
+| PR that changes only `tools/local-agent/` or the code-bench runner (not its `tasks/`) | changes, test without Cargo (`cargo=false`, `check.sh --no-cargo`), ci-ok | approx. 1–2 (estimate) |
 | PR that changes a workflow, Cargo.lock or scripts/ | everything except Windows | approx. 18 |
 | Push to `main` | changes, test (check only), publish, ci-ok | approx. 5–10 |
 

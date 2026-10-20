@@ -2,12 +2,12 @@
 
 A proxy on the NAS that forwards requests to Strata on the PC, wakes the PC for them and sends it to sleep after an idle timeout.
 
-The glossary terms are the words the web UI shows. The _Avoid_ lists apply to docs, issues, code identifiers and every text. The web UI may name a product where the user recognises the device by it (e.g. "Shelly plug").
+The glossary terms are the words the web UI shows. The _Avoid_ lists apply to docs, issues, code identifiers and all other text. The web UI may name a product where the user recognises the device by it (e.g. "Shelly plug").
 
 ## Parties
 
 **Strata**:
-The own LLM engine on the PC (Niko1221/Strata) with an OpenAI- and Anthropic-compatible API. Not llama-server, even though some endpoints carry its names.
+Strata's own LLM engine on the PC (Niko1221/Strata) with an OpenAI- and Anthropic-compatible API. Not llama-server, even though some endpoints carry its names.
 _Avoid_: llama-server, llama.cpp, model server
 
 **Strata folder**:
@@ -26,12 +26,12 @@ _Avoid_: NAS proxy (except `nas-proxy` in code and file names), gateway
 The proxy's pages under `/admin`, split into the areas Overview, PC, Strata, Access and System, plus the login.
 _Avoid_: admin UI, dashboard, Weboberfläche
 
-**Setup command**:
+**Install command**:
 The PowerShell one-liner from the web UI's *PC* area that downloads the PC service from the NAS, installs it and registers it with the proxy.
-_Avoid_: installer, setup link, Einrichtungsbefehl
+_Avoid_: installer, setup link, setup command, Einrichtungsbefehl
 
 **One-time code**:
-The code in the setup command. Valid briefly and for one registration only; a new setup command invalidates the old one.
+The code in the install command. Short-lived and valid for one registration only; a new install command invalidates the old one.
 _Avoid_: pairing code, token (that is the shared secret of proxy and PC service), Einmalcode
 
 **Overview**:
@@ -41,7 +41,7 @@ _Avoid_: status page, home, Übersicht
 ## State of the PC
 
 **Wake-up**:
-The PC comes up after a wake packet, until Strata (or, for gaming mode, the PC service) answers.
+The period from the wake packet until Strata (or, for gaming mode, the PC service) answers.
 _Avoid_: boot, start, Aufwachen
 
 **Idle timeout**:
@@ -66,10 +66,10 @@ _Avoid_: Shelly, smart plug, Messsteckdose
 
 **Power**:
 What the power plug reports as the PC's current power draw, in watts; the Overview shows it in the Hardware area as *Power*, also while the PC sleeps.
-_Avoid_: power consumption, energy, Leistung
+_Avoid_: power consumption, Leistung
 
 **Energy**:
-The energy the PC used over a period of the history, in kWh and € at today's price. Measured where the power plug has readings for at least half of an hour, otherwise from the energy estimate; the web UI says "measured", "estimated" or "mixed".
+The energy the PC used over a period of the history, in kWh and € at today's price. Measured where the power plug has readings for at least half of that hour, otherwise from the energy estimate; the web UI says "measured", "estimated" or "mixed".
 _Avoid_: power consumption, Verbrauch
 
 **Energy estimate**:
@@ -82,7 +82,7 @@ _Avoid_: Ersparnis
 
 **Gaming mode**:
 A state of the PC in which Strata is stopped, requests are refused and the proxy does not send the PC to sleep.
-_Avoid_: game mode, Gaming-Modus
+_Avoid_: game mode, Spielemodus, Gaming-Modus
 
 **Keep awake**:
 A period, chosen on the Overview, during which the proxy does not send the PC to sleep.
@@ -92,10 +92,10 @@ _Avoid_: keep-alive, Wach halten
 
 **Model unloaded**:
 Strata answers but does not hold the model in memory and loads it with the next request.
-_Avoid_: Modell nicht geladen
+_Avoid_: entladen, Modell nicht geladen
 
 **Loading**:
-Strata runs according to the PC service but does not answer yet.
+The PC service reports Strata as running, but it does not answer yet.
 _Avoid_: starting, Lädt
 
 **Event**:

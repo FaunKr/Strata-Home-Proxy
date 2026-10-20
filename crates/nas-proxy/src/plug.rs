@@ -1,10 +1,10 @@
-//! Die Messsteckdose: the Shelly plug the PC is plugged into, asked for its
-//! current Leistung. Only for display; it has no say in waking or sleeping.
+//! The power plug: the Shelly plug the PC is plugged into, asked for its
+//! current power. Only for display; it has no say in waking or sleeping.
 
 use reqwest::Client;
 use serde_json::Value;
 
-/// The current Leistung in watts; `None` when the plug does not answer usefully.
+/// The current power in watts; `None` when the plug does not answer usefully.
 /// Works with both Shelly generations without being told which one it is.
 pub async fn power(client: &Client, base: &str) -> Option<f64> {
     // Gen2+ plugs: relay channel 0 is the only one a plug has.

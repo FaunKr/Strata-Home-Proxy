@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 license.workspace = true
 
-# The PC-Dienst's API as types: the PC-Dienst writes them, the Proxy reads
-# them, the Weboberfläche shows them. Only serde, so it builds for wasm too.
+# The PC service's API as types: the PC service writes them, the proxy reads
+# them, the web UI shows them. Only serde, so it builds for wasm too.
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 

@@ -18,7 +18,7 @@ async fn learned(s: &Setup) {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("MAC nicht gelernt: {:?}", s.state.cfg().pc_mac);
+    panic!("MAC not learned: {:?}", s.state.cfg().pc_mac);
 }
 
 #[tokio::test]

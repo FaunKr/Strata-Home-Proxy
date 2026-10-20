@@ -9,7 +9,7 @@ use crate::StrataJob;
 /// which needs no rope scaling. Longer ones only Setup sets up.
 pub const MAX_SWITCHED_CONTEXT: u32 = 262_144;
 
-/// `GET /strata` as the PC-Dienst answers it: what the Strata page shows,
+/// `GET /strata` as the PC service answers it: what the Strata page shows,
 /// and the incoming commits, which stay on the NAS.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StrataReport {
@@ -31,7 +31,7 @@ impl StrataReport {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StrataInfo {
     pub installed: bool,
-    /// Short commit of the Strata-Ordner.
+    /// Short commit of the Strata folder.
     #[serde(default)]
     pub version: Option<String>,
     /// Whether Strata's source has newer commits; `None` until known.
@@ -158,8 +158,8 @@ pub struct StrataBenchmark {
     pub result: String,
     /// Unix seconds.
     pub at: u64,
-    /// Local time text for the Weboberfläche, filled in by the Proxy; the
-    /// PC-Dienst never sends it.
+    /// Local time text for the web UI, filled in by the proxy; the
+    /// PC service never sends it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub at_text: String,
     /// Chat decode tokens per second; missing from older records.
@@ -173,7 +173,7 @@ pub struct StrataBenchmark {
     pub context: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed_projection: Option<bool>,
-    /// Short commit of the Strata-Ordner.
+    /// Short commit of the Strata folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Why its run in a comparison gave no result.
@@ -182,7 +182,7 @@ pub struct StrataBenchmark {
 }
 
 /// What an update would bring: the commits Strata's Git source has and the
-/// Strata-Ordner lacks.
+/// Strata folder lacks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Incoming {
     /// Full hash of the upstream commit.

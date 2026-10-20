@@ -1,4 +1,4 @@
-//! The Leistung of the Messsteckdose recorded at fixed times (`PLUG_SAMPLE_SECS`),
+//! The power of the power plug recorded at fixed times (`PLUG_SAMPLE_SECS`),
 //! against the simulated PC and its plug. The rig samples every 100 ms.
 
 mod common;
@@ -24,7 +24,7 @@ async fn sample_until(s: &Setup, what: &str, check: impl Fn(&Sample) -> bool) ->
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("kein Messwert mit {what}, zuletzt: {:?}", samples(s).await);
+    panic!("no sample with {what}, last: {:?}", samples(s).await);
 }
 
 /// Long enough for many rounds of the sample loop.
@@ -46,14 +46,10 @@ async fn samples_the_power_while_a_plug_is_set() {
     let before = now();
     s.state.settings.set("SHELLY_URL", &s.plug).unwrap();
     let first = sample_until(&s, "87.4 W", |x| x.watts == 87.4).await;
-    assert!(
-        (before..=now()).contains(&first.ts),
-        "Zeitpunkt {}",
-        first.ts
-    );
+    assert!((before..=now()).contains(&first.ts), "time {}", first.ts);
     *s.pc.plug_watts.lock().unwrap() = 312.0;
     sample_until(&s, "312 W", |x| x.watts == 312.0).await;
-    // A sample is no Ereignis.
+    // A sample is no event.
     assert!(own_kinds(&s.state).is_empty(), "{:?}", kinds(&s.state));
 }
 
@@ -114,7 +110,7 @@ async fn a_hanging_plug_leaves_no_samples_and_holds_back_nothing() {
     s.state.settings.set("SHELLY_URL", &s.plug).unwrap();
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
-    live.until("PC wach", |v| v["pc"] == "Awake").await;
+    live.until("PC awake", |v| v["pc"] == "Awake").await;
     // Requests go through while the plug hangs.
     assert_eq!(post_json(&s, "/v1/messages", json!({})).await.status(), 200);
     // The overview still follows the PC; the plug would hang forever.

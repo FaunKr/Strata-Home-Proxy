@@ -34,6 +34,9 @@ jobs:
       ui: ${{ steps.select.outputs.ui }}
     steps:
       - uses: actions/checkout@v4
+      # The repo is English (GLOSSARY.md). Checked here and not in test, so a
+      # docs-only pull request is checked too; it takes seconds.
+      - run: scripts/check-language.sh
       - id: select
         env:
           GH_TOKEN: ${{ github.token }}

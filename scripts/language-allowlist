@@ -1,0 +1,8 @@
+# Files scripts/check-language.sh skips, one path per line.
+# The Avoid lists name the former German terms.
+GLOSSARY.md
+# Test data: the German words the web UI must not contain.
+crates/nas-proxy/tests/ui_language.rs
+# The check itself and its tests name the characters.
+scripts/check-language.sh
+scripts/check-language.test.sh

@@ -30,12 +30,12 @@ pub enum UpdateError {
 pub async fn update(agent: &Arc<Agent>) -> Result<(), UpdateError> {
     let Some(nas) = agent.cfg.nas_url.clone() else {
         return Err(UpdateError::Refused(
-            "Der PC-Dienst kennt die Adresse des NAS nicht. Einmal mit dem Befehl aus dem Bereich PC der Weboberfläche neu einrichten."
+            "The PC service does not know the NAS's address. Set it up again once with the install command from the PC area of the web UI."
                 .into(),
         ));
     };
     if agent.updating.swap(true, Ordering::SeqCst) {
-        return Err(UpdateError::Refused("Ein Update läuft schon".into()));
+        return Err(UpdateError::Refused("An update is running already".into()));
     }
     // Set first, so no job starts between this check and the restart.
     // A restart of the service can take Strata down with it (its output runs
@@ -54,7 +54,7 @@ pub async fn update(agent: &Arc<Agent>) -> Result<(), UpdateError> {
     let result = download_and_replace(agent, &nas).await;
     match &result {
         Ok(()) => {
-            tracing::info!("Update eingesetzt, der PC-Dienst startet neu");
+            tracing::info!("Update in place, the PC service restarts");
             let agent = Arc::clone(agent);
             tokio::spawn(async move {
                 tokio::time::sleep(EXIT_DELAY).await;
@@ -77,19 +77,19 @@ async fn download_and_replace(agent: &Arc<Agent>, nas: &str) -> Result<(), Updat
         .timeout(DOWNLOAD_TIMEOUT)
         .send()
         .await
-        .map_err(|e| failed(format!("Download vom NAS fehlgeschlagen ({url}): {e}")))?;
+        .map_err(|e| failed(format!("Download from the NAS failed ({url}): {e}")))?;
     if !resp.status().is_success() {
         return Err(failed(format!(
-            "Der NAS liefert kein Programm (HTTP {})",
+            "The NAS sends no program (HTTP {})",
             resp.status()
         )));
     }
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| failed(format!("Download vom NAS abgebrochen: {e}")))?;
+        .map_err(|e| failed(format!("Download from the NAS was interrupted: {e}")))?;
     if !bytes.starts_with(b"MZ") {
-        return Err(failed("Der NAS lieferte kein Windows-Programm".into()));
+        return Err(failed("The NAS sent no Windows program".into()));
     }
     let file = agent.cfg.state_dir().join(DOWNLOAD_FILE);
     let platform_agent = Arc::clone(agent);
@@ -98,7 +98,7 @@ async fn download_and_replace(agent: &Arc<Agent>, nas: &str) -> Result<(), Updat
     // keeps answering.
     let replaced = tokio::task::spawn_blocking(move || {
         std::fs::write(&downloaded, &bytes)
-            .map_err(|e| anyhow::anyhow!("{} nicht speicherbar: {e}", downloaded.display()))?;
+            .map_err(|e| anyhow::anyhow!("{} cannot be saved: {e}", downloaded.display()))?;
         platform_agent.platform().replace_program(&downloaded)
     })
     .await
@@ -106,7 +106,7 @@ async fn download_and_replace(agent: &Arc<Agent>, nas: &str) -> Result<(), Updat
     .and_then(|r| r);
     if let Err(e) = replaced {
         let _ = std::fs::remove_file(&file);
-        return Err(failed(format!("Neues Programm nicht eingesetzt: {e:#}")));
+        return Err(failed(format!("New program not put in place: {e:#}")));
     }
     Ok(())
 }

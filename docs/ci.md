@@ -22,7 +22,9 @@ runs what a change needs (spec #146).
 
 Which jobs a pull request starts is decided by `scripts/ci-select.sh` from
 the changed paths; `scripts/ci-select.test.sh` checks the mapping against
-the repo. Reference values after #151:
+the repo. The `changes` job also runs `scripts/check-language.sh` on every
+run, docs-only pull requests included; it takes seconds and adds no job.
+Reference values after #151:
 
 | Run | Jobs | Minutes |
 |---|---|---|

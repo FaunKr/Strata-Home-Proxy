@@ -4,7 +4,7 @@
 //!
 //! The Proxy asks Strata straight, not through its own client path: the
 //! request is housekeeping, so it never wakes the PC, restarts the
-//! Leerlaufzeit or writes an Ereignis. It asks only an idle Strata with its
+//! idle timeout or writes an event. It asks only an idle Strata with its
 //! model loaded, once per upstream commit, and after a failure not again
 //! for an hour. The summary is kept in `DATA_DIR` until the update is
 //! installed, so it survives a restart and shows while the PC sleeps.
@@ -379,7 +379,7 @@ impl UpdateSummaries {
             }),
         };
         if let Err(e) = saved {
-            tracing::error!("{FILE} nicht gespeichert: {e}");
+            tracing::error!("{FILE} not saved: {e}");
         }
     }
 
@@ -449,7 +449,7 @@ impl UpdateSummaries {
     }
 
     fn fail(&self, upstream: &str, why: &str) {
-        tracing::info!("Keine Zusammenfassung des Strata-Updates: {why}");
+        tracing::info!("No summary of the Strata update: {why}");
         *self.failed.lock().unwrap() = Some(Failed {
             upstream: upstream.to_string(),
             at: Instant::now(),
@@ -507,7 +507,7 @@ async fn ask(state: &AppState, incoming: &Incoming) -> Result<(Vec<String>, Stri
         .await
         .ok_or("the PC service does not answer")?;
     if status.gaming_mode || status.strata_job {
-        return Err("Gaming-Modus or a Strata job".into());
+        return Err("gaming mode or a Strata job".into());
     }
     let health = strata.health().await?;
     if !health.loaded {

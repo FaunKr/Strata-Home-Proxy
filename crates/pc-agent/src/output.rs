@@ -1,4 +1,4 @@
-//! The Strata-Ausgabe: what a Strata started by the service writes to its
+//! The Strata output: what a Strata started by the service writes to its
 //! console. The last lines stay in memory for `GET /strata-log`, the lines of
 //! the current run also in `strata.log` next to the service's own log.
 
@@ -75,7 +75,7 @@ impl StrataOutput {
         inner.reading = true;
         inner.replaceable = false;
         inner.file = File::create(&self.file)
-            .inspect_err(|e| tracing::warn!("{} nicht anlegbar: {e}", self.file.display()))
+            .inspect_err(|e| tracing::warn!("{} cannot be created: {e}", self.file.display()))
             .ok();
         self.add(&mut inner, Entry::Started(at));
         inner.run
@@ -109,7 +109,7 @@ impl StrataOutput {
             && let Some(file) = inner.file.as_mut()
             && let Err(e) = writeln!(file, "{text}")
         {
-            tracing::warn!("{LOG_FILE} nicht geschrieben: {e}");
+            tracing::warn!("{LOG_FILE} not written: {e}");
             inner.file = None;
         }
     }
@@ -209,8 +209,8 @@ mod tests {
     #[test]
     fn clean_drops_escape_sequences() {
         assert_eq!(
-            clean("\u{1b}[1;32mok\u{1b}[0m \u{1b}]0;Titel\u{7}da\u{1b}[K"),
-            "ok da"
+            clean("\u{1b}[1;32mok\u{1b}[0m \u{1b}]0;Title\u{7}there\u{1b}[K"),
+            "ok there"
         );
         assert_eq!(clean("a\tb\u{8}"), "a\tb");
     }

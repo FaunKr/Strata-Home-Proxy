@@ -133,19 +133,19 @@ fn wake_error_parts(err: &WakeError) -> (StatusCode, &'static str, &'static str,
             StatusCode::SERVICE_UNAVAILABLE,
             "gaming",
             "overloaded_error",
-            "Strata ist nicht verfügbar: Gaming-Modus ist an.",
+            "Strata is not available: gaming mode is on.",
         ),
         WakeError::Timeout => (
             StatusCode::GATEWAY_TIMEOUT,
             "wake_timeout",
             "api_error",
-            "Strata ist nicht verfügbar: der PC ist nicht rechtzeitig aufgewacht.",
+            "Strata is not available: the PC did not wake in time.",
         ),
         WakeError::NoMac => (
             StatusCode::SERVICE_UNAVAILABLE,
             "no_mac",
             "api_error",
-            "Strata ist nicht verfügbar: die MAC-Adresse des PCs ist nicht bekannt, er kann nicht geweckt werden.",
+            "Strata is not available: the PC's MAC address is not known, so it cannot be woken.",
         ),
     }
 }
@@ -182,8 +182,7 @@ fn client_keys(headers: &HeaderMap) -> impl Iterator<Item = &str> {
 /// Answer for a missing or unknown API key. It comes before anything else, so
 /// such a request never wakes the PC or counts as activity.
 fn unauthorized(flavor: Flavor) -> Response {
-    const MESSAGE: &str =
-        "Kein gültiger API-Key. Keys gibt es in der Weboberfläche des Proxys unter Access.";
+    const MESSAGE: &str = "No valid API key. Keys are in the proxy's web UI under Access.";
     let body = match flavor {
         Flavor::Anthropic => flavor.error_json("authentication_error", MESSAGE),
         // What OpenAI itself answers for a wrong key.
@@ -203,7 +202,7 @@ fn unauthorized(flavor: Flavor) -> Response {
 fn not_configured(flavor: Flavor) -> Response {
     let body = flavor.error_json(
         "api_error",
-        "Proxy ist nicht eingerichtet: die Adresse von Strata fehlt (STRATA_URL, oder in der Weboberfläche unter Strata → Connection).",
+        "The proxy is not set up: Strata's address is missing (STRATA_URL, or in the web UI under Strata → Connection).",
     );
     tagged(
         (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response(),
@@ -271,7 +270,7 @@ fn with_pings(
 }
 
 /// What a client reads when its request is given up as lost.
-const LOST: &str = "Strata bearbeitet die Anfrage nicht mehr.";
+const LOST: &str = "Strata is no longer working on the request.";
 
 fn lost(flavor: Flavor) -> Response {
     (
@@ -282,10 +281,10 @@ fn lost(flavor: Flavor) -> Response {
 }
 
 fn upstream_failed(flavor: Flavor, e: &str) -> Response {
-    tracing::warn!("Weiterleitung an Strata fehlgeschlagen: {e}");
+    tracing::warn!("Forwarding to Strata failed: {e}");
     (
         StatusCode::BAD_GATEWAY,
-        axum::Json(flavor.error_json("api_error", "Strata hat nicht geantwortet.")),
+        axum::Json(flavor.error_json("api_error", "Strata did not answer.")),
     )
         .into_response()
 }
@@ -341,9 +340,9 @@ async fn forward(
 /// returns the same text for the client.
 fn strata_refused(st: &AppState) -> &'static str {
     let message = if st.cfg().strata_api_key.is_some() {
-        "Strata lehnt den Strata-Key ab: STRATA_API_KEY prüfen."
+        "Strata refuses the Strata key: check STRATA_API_KEY."
     } else {
-        "Strata verlangt einen Key: STRATA_API_KEY in den Einstellungen setzen."
+        "Strata requires a key: set STRATA_API_KEY in the settings."
     };
     tracing::warn!("{message}");
     message
@@ -445,9 +444,9 @@ async fn pass_on(st: &AppState, req: &Incoming, flavor: Flavor, tx: &mpsc::Sende
     let resp = match send_upstream(st, req).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!("Weiterleitung an Strata fehlgeschlagen: {e}");
+            tracing::warn!("Forwarding to Strata failed: {e}");
             let _ = tx
-                .send(flavor.error_event("api_error", "Strata hat nicht geantwortet."))
+                .send(flavor.error_event("api_error", "Strata did not answer."))
                 .await;
             return;
         }
@@ -461,7 +460,7 @@ async fn pass_on(st: &AppState, req: &Incoming, flavor: Flavor, tx: &mpsc::Sende
         // The status line is already sent; pass the error on as an event.
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        let message = format!("Strata antwortete mit {status}: {text}");
+        let message = format!("Strata answered with {status}: {text}");
         let _ = tx.send(flavor.error_event("api_error", &message)).await;
         return;
     }
@@ -478,7 +477,7 @@ async fn pass_on(st: &AppState, req: &Incoming, flavor: Flavor, tx: &mpsc::Sende
                 }
             }
             Err(e) => {
-                tracing::warn!("Antwort von Strata abgebrochen: {e}");
+                tracing::warn!("Answer from Strata cut off: {e}");
                 return;
             }
         }
@@ -501,7 +500,7 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
         Err(_) => {
             return (
                 StatusCode::PAYLOAD_TOO_LARGE,
-                axum::Json(flavor.error_json("invalid_request_error", "Anfrage ist zu groß.")),
+                axum::Json(flavor.error_json("invalid_request_error", "Request is too large.")),
             )
                 .into_response();
         }

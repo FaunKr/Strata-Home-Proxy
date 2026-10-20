@@ -1,8 +1,7 @@
-//! Der Verlauf: wie lange der PC an jedem Tag, jeder Woche oder jedem Monat
-//! eines Bereichs in welchem Zustand war. Die Kalenderrechnung ist rein -
-//! Ereignisse, Bereich und Zeitzone hinein, die Stunden je Balken hinaus -
-//! damit ihre Grenzen ohne einen laufenden Proxy geprüft werden können. Die
-//! Tage folgen der Zeitzone des NAS, wie `clock::zone` sie nennt.
+//! The history: how long the PC was in which state on each day, week or month
+//! of a range. The calendar arithmetic is pure - events, range and time zone
+//! in, hours per bar out - so its boundaries can be tested without a running
+//! proxy. The days follow the NAS's time zone, as `clock::zone` names it.
 
 use std::sync::Arc;
 
@@ -23,15 +22,15 @@ use crate::{
     state::AppState,
 };
 
-/// Bis zu so vielen Tagen zeichnet der Verlauf einen Balken je Tag.
+/// Up to this many days the history draws one bar per day.
 const DAY_BARS_UP_TO: usize = 62;
-/// Bis zu so vielen Tagen einen je Woche, darüber einen je Monat.
+/// Up to this many days one per week, beyond that one per month.
 const WEEK_BARS_UP_TO: usize = 366;
 
-/// Der früheste Tag, den ein gewählter Bereich zeigt.
+/// The earliest day a picked range shows.
 const EARLIEST: Date = jiff::civil::date(2000, 1, 1);
 
-/// Die Ereignisse, die etwas darüber sagen, wie es um den PC stand.
+/// The events that say something about the PC's state.
 const STATE_KINDS: &[EventKind] = &[
     EventKind::Awake,
     EventKind::PcSeenAwake,
@@ -45,7 +44,7 @@ const STATE_KINDS: &[EventKind] = &[
     EventKind::WakeTimeout,
 ];
 
-/// Der Zustand des PCs, wie die Ereignisse ihn beschreiben.
+/// The state of the PC, as the events describe it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum State {
     Awake,
@@ -54,16 +53,16 @@ enum State {
     Unknown,
 }
 
-/// Eine Zeitspanne, in der der PC in einem Zustand war.
+/// A span of time in which the PC was in one state.
 struct Period {
     from: i64,
     to: i64,
     state: State,
 }
 
-/// Was ein Ereignis über den Zustand ab dann sagt; `None` bei einem, der
-/// dazu nichts sagt. Die Zuordnung steht neben den Übergängen, die die
-/// Ereignisse schreiben.
+/// What an event says about the state from then on; `None` for one that
+/// says nothing about it. The mapping sits next to the transitions that
+/// write the events.
 fn state_after(kind: EventKind) -> Option<State> {
     lifecycle::state_after(kind).map(|pc| match pc {
         PcState::Awake => State::Awake,
@@ -73,14 +72,14 @@ fn state_after(kind: EventKind) -> Option<State> {
     })
 }
 
-/// Der Tag, dem diese Zeit in `tz` gehört.
+/// The day this time belongs to in `tz`.
 fn day_of(ts: i64, tz: &TimeZone) -> Option<Date> {
     Timestamp::from_second(ts)
         .ok()
         .map(|t| t.to_zoned(tz.clone()).date())
 }
 
-/// Der Anfang dieses Tages in `tz`; ein Tag ohne Mitternacht hat keinen.
+/// The start of this day in `tz`; a day without a midnight has none.
 fn day_start(day: Date, tz: &TimeZone) -> Option<i64> {
     day.to_datetime(Time::constant(0, 0, 0, 0))
         .to_zoned(tz.clone())
@@ -88,9 +87,9 @@ fn day_start(day: Date, tz: &TimeZone) -> Option<i64> {
         .map(|z| z.timestamp().as_second())
 }
 
-/// Die Kalendertage, die der Bereich `from..to` berührt. Jeder fängt mit
-/// seiner eigenen Mitternacht an, damit ein Tag mit Zeitumstellung 23 oder 25
-/// Stunden hat; ein Tag, der erst mit `to` anfängt, gehört nicht dazu.
+/// The calendar days the range `from..to` touches. Each begins at its own
+/// midnight, so a day with a clock change has 23 or 25 hours; a day that only
+/// begins at `to` is not one of them.
 fn days(from: i64, to: i64, tz: &TimeZone) -> Vec<Date> {
     let (Some(first), Some(last)) = (day_of(from, tz), day_of(to, tz)) else {
         return Vec::new();
@@ -109,14 +108,14 @@ fn days(from: i64, to: i64, tz: &TimeZone) -> Vec<Date> {
     out
 }
 
-/// Die Zeitspannen eines Zustands zwischen `from` und `to`. Die Ereignisse
-/// vor dem Bereich zählen mit: wie es zu dessen Beginn um den PC stand, steht
-/// im letzten Ereignis davor.
+/// The spans of each state between `from` and `to`. The events before the
+/// range count too: the PC's state when it begins is in the last event
+/// before it.
 fn periods(events: &[Event], from: i64, to: i64) -> Vec<Period> {
     let mut order: Vec<&Event> = events.iter().collect();
     order.sort_by_key(|event| event.ts);
     let mut out: Vec<Period> = Vec::new();
-    // Zu Anfang des Bereichs hat der Proxy nichts gesehen.
+    // At the start of the range the proxy has seen nothing.
     let mut state = State::Unknown;
     let mut began = from;
     for event in order {
@@ -130,14 +129,14 @@ fn periods(events: &[Event], from: i64, to: i64) -> Vec<Period> {
                 state = next;
                 began = ts;
             }
-            // Über einen Start des Proxies reicht kein Zustand. Ohne
-            // `ProxyStopped` davor (ein Lauf ohne Lebenszeichen) ist nicht
-            // bekannt, wann er endete: was galt, endet dann schon bei dem
-            // Ereignis, das es gesetzt hat.
+            // No state reaches across a start of the proxy. Without a
+            // `ProxyStopped` before it (a run without a beat) it is not
+            // known when that run ended: what held then ends at the very
+            // event that set it.
             None if event.kind == EventKind::ProxyStarted => state = State::Unknown,
-            // Bis zum nächsten bekannten Zustand ist nichts zu beobachten:
-            // nach einem Wecken ohne Antwort, und ab dem letzten Lebenszeichen
-            // eines beendeten Proxies.
+            // Nothing is observed until the next known state: after a
+            // waking without an answer, and from the last beat of a stopped
+            // proxy on.
             None if matches!(event.kind, EventKind::WakeTimeout | EventKind::ProxyStopped) => {
                 add(&mut out, state, began, ts, from, to);
                 state = State::Unknown;
@@ -150,8 +149,8 @@ fn periods(events: &[Event], from: i64, to: i64) -> Vec<Period> {
     out
 }
 
-/// Fügt diese Zeitspanne hinzu, gekürzt auf den Bereich; eine, die ganz
-/// außerhalb liegt, fehlt dann.
+/// Adds this span, cut to the range; one that lies entirely outside it is
+/// left out.
 fn add(out: &mut Vec<Period>, state: State, from: i64, to: i64, range_from: i64, range_to: i64) {
     let (from, to) = (from.max(range_from), to.min(range_to));
     if to > from {
@@ -159,7 +158,7 @@ fn add(out: &mut Vec<Period>, state: State, from: i64, to: i64, range_from: i64,
     }
 }
 
-/// Die Größe der Balken für einen Bereich über so viele Tage.
+/// The bar size for a range over this many days.
 pub fn bucket_for(days: usize) -> HistoryBucket {
     if days <= DAY_BARS_UP_TO {
         HistoryBucket::Day
@@ -170,7 +169,7 @@ pub fn bucket_for(days: usize) -> HistoryBucket {
     }
 }
 
-/// Der erste Tag des Balkens, zu dem `day` gehört; Wochen fangen montags an.
+/// The first day of the bar `day` belongs to; weeks begin on Monday.
 fn bucket_start(day: Date, bucket: HistoryBucket) -> Date {
     match bucket {
         HistoryBucket::Day => day,
@@ -181,7 +180,7 @@ fn bucket_start(day: Date, bucket: HistoryBucket) -> Date {
     }
 }
 
-/// Der erste Tag des Balkens danach.
+/// The first day of the next bar.
 fn bucket_end(start: Date, bucket: HistoryBucket) -> Option<Date> {
     match bucket {
         HistoryBucket::Day => start.tomorrow().ok(),
@@ -199,14 +198,14 @@ fn bucket_label(day: Date, bucket: HistoryBucket) -> String {
     day.strftime(format).to_string()
 }
 
-/// Stunden in jedem Zustand für jeden Tag von `from` bis `to`, in der
-/// Zeitzone `tz`, ohne Messwerte und Einstellungen.
+/// Hours in each state for every day from `from` to `to`, in the time zone
+/// `tz`, without readings or settings.
 pub fn day_hours(events: &[Event], from: i64, to: i64, tz: &TimeZone) -> Vec<HistoryDay> {
     let power = PowerSettings::default();
     bucket_hours(events, &[], 60, &power, from, to, tz, HistoryBucket::Day).0
 }
 
-/// Woher der Verbrauch eines Zeitraums kam.
+/// Where the energy of a period came from.
 #[derive(Clone, Copy, Debug, Default)]
 struct Sources {
     measured: bool,
@@ -219,8 +218,8 @@ impl Sources {
         self.estimated |= other.estimated;
     }
 
-    /// Ein Zeitraum ganz ohne Verbrauch, etwa nur unbekannte Zeit, gilt als
-    /// geschätzt.
+    /// A period without any energy, e.g. only unknown time, counts as
+    /// estimated.
     fn source(self) -> EnergySource {
         match (self.measured, self.estimated) {
             (true, true) => EnergySource::Mixed,
@@ -230,11 +229,10 @@ impl Sources {
     }
 }
 
-/// Der Verbrauch von `start` bis `end` in kWh, Stunde für Stunde: eine
-/// Stunde, deren Messwerte mindestens die Hälfte von ihr abdecken (je einer
-/// für `step` Sekunden), zählt mit ihrer mittleren Leistung, jede andere nach
-/// der Stromschätzung aus ihren Zuständen. Unbekannte Zeit ohne Messwerte
-/// zählt nichts. `hourly` ist nach Stunden sortiert.
+/// The energy from `start` to `end` in kWh, hour by hour: an hour whose
+/// readings cover at least half of it (one per `step` seconds) counts with
+/// its mean power, any other by the energy estimate from its states. Unknown
+/// time without readings counts nothing. `hourly` is sorted by hour.
 fn consumption(
     spans: &[Period],
     hourly: &[HourSamples],
@@ -275,7 +273,7 @@ fn consumption(
     (kwh, sources)
 }
 
-/// Verbrauch und Ersparnis zu diesen Stunden; € zum heutigen Preis.
+/// Energy and savings for these hours; € at today's price.
 fn energy(kwh: f64, asleep_h: f64, sources: Sources, power: &PowerSettings) -> Energy {
     let saved_kwh = asleep_h * (power.awake_watts - power.asleep_watts).max(0.0) / 1000.0;
     let eur = |kwh: f64| kwh * power.price_ct_per_kwh / 100.0;
@@ -288,11 +286,10 @@ fn energy(kwh: f64, asleep_h: f64, sources: Sources, power: &PowerSettings) -> E
     }
 }
 
-/// Stunden in jedem Zustand, Verbrauch und Ersparnis für jeden Balken von
-/// `from` bis `to` in der Zeitzone `tz`, und ihre Summe. Wochen und Monate
-/// schneidet der Kalender von `tz`; der erste und der letzte Balken zählen
-/// nur, was im Bereich liegt. `hourly` sind die Messwerte je Stunde, je einer
-/// für `step` Sekunden.
+/// Hours in each state, energy and savings for every bar from `from` to `to`
+/// in the time zone `tz`, and their sum. Weeks and months are cut by the
+/// calendar of `tz`; the first and the last bar count only what lies in the
+/// range. `hourly` are the readings per hour, one per `step` seconds.
 #[allow(clippy::too_many_arguments)]
 pub fn bucket_hours(
     events: &[Event],
@@ -364,21 +361,21 @@ pub fn bucket_hours(
     (bars, totals)
 }
 
-/// Ein Bereich, wie die Seite ihn verlangt.
+/// A range, as the page asks for it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Range {
-    /// Die letzten so vielen Tage, heute mitgezählt.
+    /// The last N days, today included.
     Days(u32),
-    /// Die letzten zwölf Monate, heute mitgezählt.
+    /// The last twelve months, today included.
     Year,
-    /// Zurück bis zum ersten Ereignis.
+    /// Back to the first event.
     All,
-    /// Von einem Tag bis zu einem anderen, beide mitgezählt.
+    /// From one day to another, both included.
     Dates(Date, Date),
 }
 
-/// Liest `7d`, `12m`, `all` oder `2026-01-01..2026-03-31`; alles andere sind
-/// die letzten 7 Tage.
+/// Reads `7d`, `12m`, `all` or `2026-01-01..2026-03-31`; anything else is
+/// the last 7 days.
 fn parse_range(text: &str) -> Range {
     let text = text.trim();
     if text == "all" {
@@ -398,8 +395,8 @@ fn parse_range(text: &str) -> Range {
     Range::Days(7)
 }
 
-/// Von wann bis wann der Bereich reicht, als Unix-Zeit: von der Mitternacht
-/// seines ersten Tages bis zum Ende seines letzten, höchstens bis `now`.
+/// From when to when the range runs, as Unix time: from the midnight of its
+/// first day to the end of its last, at most up to `now`.
 fn resolve(range: Range, now: i64, first: Option<i64>, tz: &TimeZone) -> (i64, i64) {
     let Some(today) = day_of(now, tz) else {
         return (now, now);
@@ -419,8 +416,8 @@ fn resolve(range: Range, now: i64, first: Option<i64>, tz: &TimeZone) -> (i64, i
             today,
         ),
         Range::All => (first.and_then(|ts| day_of(ts, tz)).unwrap_or(today), today),
-        // Vor 2000 gab es keinen Proxy; was danach kommt, ist noch nicht
-        // geschehen. Beides hält einen vertippten Bereich klein.
+        // Before 2000 there was no proxy; what comes after today has not
+        // happened yet. Both keep a mistyped range small.
         Range::Dates(a, b) => (a.max(EARLIEST), b.min(today)),
     };
     let from = day_start(first_day, tz).unwrap_or(now);
@@ -433,18 +430,18 @@ fn resolve(range: Range, now: i64, first: Option<i64>, tz: &TimeZone) -> (i64, i
     (from.min(to), to)
 }
 
-/// Was die Seite sieht: jeder Balken des Bereichs und die Summe.
+/// What the page sees: every bar of the range and the sum.
 pub async fn view(state: &Arc<AppState>, range: &str) -> HistoryView {
     let tz = clock::zone();
     let range = parse_range(range);
-    // Nur "alles" fängt beim ersten Ereignis an.
+    // Only "all" begins at the first event.
     let first = match range {
         Range::All => state.events.first_ts().await.map(|ts| ts as i64),
         _ => None,
     };
     let (from, to) = resolve(range, clock::unix_now() as i64, first, &tz);
-    // Wie es zu Beginn des Bereichs um den PC stand, sagt das letzte Ereignis
-    // davor; die anderen davor ändern nichts mehr.
+    // How the PC stood when the range begins is in the last event before it;
+    // the others before it change nothing any more.
     let (from_u, to_u) = (from.max(0) as u64, to.max(0) as u64);
     let mut events: Vec<Event> = state
         .events
@@ -471,7 +468,7 @@ pub async fn view(state: &Arc<AppState>, range: &str) -> HistoryView {
         bucket,
         totals,
         from: date(from).unwrap_or_default(),
-        // Das Ende gehört nicht mehr dazu: der letzte Tag ist der davor.
+        // The end is no longer part of it: the last day is the one before.
         to: date(to - 1).unwrap_or_default(),
     }
 }
@@ -481,8 +478,8 @@ mod tests {
     use super::*;
     use jiff::Zoned;
 
-    /// Hält die Zeitzone fest, damit die Tests nicht vom `TZ` des Rechners
-    /// abhängen: ein Tag ist hier der, den der NAS in Berlin zählt.
+    /// Fixes the time zone so the tests do not depend on the machine's `TZ`:
+    /// a day here is the one the NAS in Berlin counts.
     fn tz() -> TimeZone {
         TimeZone::get("Europe/Berlin").unwrap()
     }
@@ -499,7 +496,7 @@ mod tests {
         }
     }
 
-    /// Die Stunden eines Tages: wach, gaming, schlafend, unbekannt.
+    /// The hours of a day: awake, gaming, asleep, unknown.
     fn hours(day: &HistoryDay) -> (f64, f64, f64, f64) {
         (day.awake_h, day.gaming_h, day.asleep_h, day.unknown_h)
     }
@@ -511,7 +508,7 @@ mod tests {
     const FROM: &str = "2026-10-18T00:00:00+02:00[Europe/Berlin]";
     const TO: &str = "2026-10-20T00:00:00+02:00[Europe/Berlin]";
 
-    /// Zwei Tage: Sonntag der 18. und Montag der 19. Oktober 2026.
+    /// Two days: Sunday 18 and Monday 19 October 2026.
     fn two_days(events: &[Event]) -> Vec<HistoryDay> {
         day_hours(events, ts(FROM), ts(TO), &tz())
     }
@@ -532,7 +529,7 @@ mod tests {
 
     #[test]
     fn a_state_before_the_range_continues_into_it() {
-        // Der PC schlief schon, bevor der Bereich und der Proxy anfangen.
+        // The PC was asleep before the range and the proxy begin.
         let asleep = ev(
             EventKind::PcSeenAsleep,
             "2026-10-17T20:00:00+02:00[Europe/Berlin]",
@@ -559,16 +556,16 @@ mod tests {
             ),
         ]);
         assert_eq!(hours(&days[0]), (2.0, 0.0, 0.0, 22.0));
-        // Die wache Zeit vom Sonntag reicht bis 2 Uhr in den Montag, die
-        // schlafende bis 7 Uhr, danach ist der PC wieder wach.
+        // The awake time from Sunday runs until 2 o'clock into Monday, the
+        // asleep time until 7, after that the PC is awake again.
         assert_eq!(hours(&days[1]), (19.0, 0.0, 5.0, 0.0));
         assert_eq!(total(&days[0]) + total(&days[1]), 48.0);
     }
 
     #[test]
     fn a_restart_leaves_unknown_from_the_last_event() {
-        // Was vor dem Neustart galt, gilt nicht über ihn hinweg: der Proxy
-        // könnte in der Zeit etwas übersehen haben.
+        // What held before the restart does not hold across it: the proxy
+        // may have missed something in the meantime.
         let days = two_days(&[
             ev(
                 EventKind::PcSeenAwake,
@@ -589,7 +586,7 @@ mod tests {
 
     #[test]
     fn a_stopped_proxy_leaves_unknown_from_its_last_beat() {
-        // Der PC schlief, der Proxy lief bis 3 Uhr und startete um 9 Uhr neu.
+        // The PC was asleep, the proxy ran until 3 o'clock and restarted at 9.
         let days = two_days(&[
             ev(
                 EventKind::PcSeenAsleep,
@@ -614,7 +611,7 @@ mod tests {
 
     #[test]
     fn a_wake_timeout_leaves_unknown_until_the_next_state() {
-        // Vor dem fehlgeschlagenen Aufwachen war der PC wach.
+        // Before the failed wake-up the PC was awake.
         let days = two_days(&[
             ev(
                 EventKind::PcSeenAwake,
@@ -682,8 +679,8 @@ mod tests {
 
     #[test]
     fn a_state_over_a_clock_change_is_counted_once() {
-        // In der Nacht zum 25. Oktober 2026 laufen die Uhren zurück; wache
-        // Zeit von Mittag Sonnabend bis Mittag Montag sind 12 + 25 + 12 Stunden.
+        // In the night before 25 October 2026 the clocks go back; awake time
+        // from noon Saturday to noon Monday is 12 + 25 + 12 hours.
         let awake = ev(
             EventKind::PcSeenAwake,
             "2026-10-24T12:00:00+02:00[Europe/Berlin]",
@@ -716,7 +713,7 @@ mod tests {
 
     #[test]
     fn weeks_start_on_monday_and_the_first_is_cut_to_the_range() {
-        // Mittwoch, 7. Oktober, bis Montag, 19. Oktober 2026, ohne den 19.
+        // Wednesday 7 October to Monday 19 October 2026, without the 19th.
         let bars = bucketed(
             &[],
             "2026-10-07T00:00:00+02:00[Europe/Berlin]",
@@ -725,7 +722,7 @@ mod tests {
         );
         assert_eq!(labels(&bars), ["2026-10-07", "2026-10-12"]);
         assert_eq!(bars[0].label, "07 Oct");
-        // Mittwoch bis Sonntag, dann eine ganze Woche.
+        // Wednesday to Sunday, then a whole week.
         assert_eq!(total(&bars[0]), 5.0 * 24.0);
         assert_eq!(total(&bars[1]), 7.0 * 24.0);
     }
@@ -739,7 +736,7 @@ mod tests {
             HistoryBucket::Week,
         );
         assert_eq!(labels(&bars), ["2026-10-19", "2026-10-26"]);
-        // Die Uhren laufen in der Nacht zum Sonntag, 25. Oktober, zurück.
+        // The clocks go back in the night to Sunday 25 October.
         assert_eq!(total(&bars[0]), 169.0);
         assert_eq!(total(&bars[1]), 168.0);
     }
@@ -762,10 +759,10 @@ mod tests {
         );
         assert_eq!(labels(&bars), ["2026-01-15", "2026-02-01", "2026-03-01"]);
         assert_eq!(bars[1].label, "Feb 2026");
-        // Die wache Zeit vom 31. Januar reicht 12 Stunden in den Februar.
+        // The awake time from 31 January runs 12 hours into February.
         assert_eq!(hours(&bars[0]), (12.0, 0.0, 0.0, 16.0 * 24.0 + 12.0));
         assert_eq!(hours(&bars[1]), (12.0, 0.0, 28.0 * 24.0 - 12.0, 0.0));
-        // Der März hat mit der Umstellung auf Sommerzeit eine Stunde weniger.
+        // March has one hour less with the change to summer time.
         assert_eq!(hours(&bars[2]), (0.0, 0.0, 31.0 * 24.0 - 1.0, 0.0));
     }
 
@@ -809,14 +806,14 @@ mod tests {
             (day("2026-10-13"), now)
         );
         assert_eq!(resolve(Range::Year, now, None, &tz()).0, day("2025-10-20"));
-        // Ohne Ereignis ist "alles" heute; sonst ab dem Tag des ersten.
+        // Without an event "all" is today; otherwise from the day of the first.
         assert_eq!(resolve(Range::All, now, None, &tz()).0, day("2026-10-19"));
         let first = ts("2026-05-03T17:00:00+02:00[Europe/Berlin]");
         assert_eq!(
             resolve(Range::All, now, Some(first), &tz()).0,
             day("2026-05-03")
         );
-        // Ein Bereich bis zu einem vergangenen Tag endet mit dessen Ende.
+        // A range up to a past day ends with the end of that day.
         let date = |text: &str| text.parse::<Date>().unwrap();
         assert_eq!(
             resolve(
@@ -835,7 +832,7 @@ mod tests {
         price_ct_per_kwh: 30.0,
     };
 
-    /// Ein Tag, der Sonntag, mit Messwerten und den Einstellungen oben.
+    /// One day, the Sunday, with readings and the settings above.
     fn one_day(events: &[Event], samples: &[HourSamples]) -> (Vec<HistoryDay>, HistoryTotals) {
         bucket_hours(
             events,
@@ -853,8 +850,8 @@ mod tests {
         (a - b).abs() < 1e-9
     }
 
-    /// Ein Messwert jede Minute von `from` an, `minutes` lang, je Stunde
-    /// zusammengefasst wie `History::hourly`.
+    /// A reading every minute from `from` on, for `minutes`, summed up per
+    /// hour like `History::hourly`.
     fn every_minute(from: &str, minutes: i64, watts: f64) -> Vec<HourSamples> {
         let mut hours: Vec<HourSamples> = Vec::new();
         for m in 0..minutes {
@@ -874,7 +871,7 @@ mod tests {
 
     #[test]
     fn the_estimate_counts_gaming_as_awake_and_unknown_as_nothing() {
-        // 10 h unbekannt, 4 h wach, 2 h gaming, 8 h schlafend.
+        // 10 h unknown, 4 h awake, 2 h gaming, 8 h asleep.
         let (days, totals) = one_day(
             &[
                 ev(
@@ -896,7 +893,7 @@ mod tests {
         // 6 h × 100 W + 8 h × 5 W
         assert!(close(energy.kwh, 0.64), "{energy:?}");
         assert!(close(energy.eur, 0.192), "{energy:?}");
-        // Nur der Schlaf spart: 8 h × (100 W − 5 W)
+        // Only sleep saves: 8 h × (100 W − 5 W)
         assert!(close(energy.saved_kwh, 0.76), "{energy:?}");
         assert!(close(energy.saved_eur, 0.228), "{energy:?}");
         assert_eq!(energy.source, EnergySource::Estimated);
@@ -909,14 +906,14 @@ mod tests {
             EventKind::PcSeenAsleep,
             "2026-10-17T00:00:00+02:00[Europe/Berlin]",
         );
-        // 30 Minuten mit 40 W in der ersten Stunde, sonst nichts gemessen.
+        // 30 minutes at 40 W in the first hour, nothing else measured.
         let samples = every_minute(FROM, 30, 40.0);
         let (days, _) = one_day(&[asleep], &samples);
         let energy = days[0].energy;
-        // 1 h × 40 W gemessen, 23 h × 5 W geschätzt
+        // 1 h × 40 W measured, 23 h × 5 W estimated
         assert!(close(energy.kwh, 0.04 + 0.115), "{energy:?}");
         assert_eq!(energy.source, EnergySource::Mixed);
-        // Die Ersparnis kommt immer aus den Einstellungen.
+        // The savings always come from the settings.
         assert!(close(energy.saved_kwh, 24.0 * 0.095), "{energy:?}");
     }
 
@@ -938,7 +935,7 @@ mod tests {
 
     #[test]
     fn a_fully_measured_day_is_measured_even_while_unknown() {
-        // Kein Ereignis: der Zustand ist unbekannt, die Steckdose misst.
+        // No event: the state is unknown, the power plug measures.
         let samples = every_minute(FROM, 24 * 60, 50.0);
         let (days, totals) = one_day(&[], &samples);
         assert!(close(days[0].energy.kwh, 1.2), "{:?}", days[0].energy);
@@ -953,7 +950,7 @@ mod tests {
             EventKind::PcSeenAsleep,
             "2026-10-17T00:00:00+02:00[Europe/Berlin]",
         );
-        // Der Sonntag ganz gemessen, der Montag nur geschätzt.
+        // Sunday fully measured, Monday only estimated.
         let samples = every_minute(FROM, 24 * 60, 5.0);
         let (days, totals) = bucket_hours(
             &[asleep],
@@ -977,7 +974,7 @@ mod tests {
             EventKind::PcSeenAsleep,
             "2026-10-17T00:00:00+02:00[Europe/Berlin]",
         );
-        // Alle 5 Minuten ein Messwert: 6 von 12 decken die halbe Stunde ab.
+        // A reading every 5 minutes: 6 of 12 cover half the hour.
         let hour = vec![HourSamples {
             hour: ts(FROM) as u64,
             slots: 6,

@@ -123,7 +123,7 @@ async fn install_wakes_the_pc_and_hands_it_a_new_strata_key() {
     assert_eq!(strata_key(&s), None);
 
     s.pc.update_job(|j| j.state = StrataJobState::Done);
-    eventually("Key gilt", || strata_key(&s).as_deref() == Some(&key)).await;
+    eventually("key valid", || strata_key(&s).as_deref() == Some(&key)).await;
     // The key reaches Strata with requests, never the page.
     assert!(!text.contains(&key));
     assert!(!page(&mut b).await.to_string().contains(&key));
@@ -147,9 +147,9 @@ async fn a_failed_install_leaves_the_strata_key_alone() {
     assert_eq!(install(&mut b).await.status(), 200);
     s.pc.update_job(|j| {
         j.state = StrataJobState::Failed;
-        j.error = Some("kein Platz".into());
+        j.error = Some("no space".into());
     });
-    eventually("Fehlschlag vermerkt", || {
+    eventually("failure recorded", || {
         kinds(&s.state).contains(&EventKind::StrataJobFailed)
     })
     .await;
@@ -158,15 +158,14 @@ async fn a_failed_install_leaves_the_strata_key_alone() {
 
 #[tokio::test]
 async fn a_new_key_still_counts_after_a_restart_of_the_proxy() {
-    let dir = std::env::temp_dir().join(format!("strata-pending-key-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = data_dir("pending-key");
     let data = dir.clone();
     let s = setup(true, move |c| c.data_dir = Some(data)).await;
     let mut b = logged_in(&s.url).await;
     b.call("strata-job", &[("kind", "set_key")]).await;
     let key = last_body(&s)["api_key"].as_str().unwrap().to_string();
 
-    let restarted = strata_nas_proxy::AppState::new((*s.state.cfg()).clone());
+    let restarted = restarted(&s);
     s.pc.update_job(|j| j.state = StrataJobState::Done);
     restarted.ask_pc(&restarted.agent()).await.unwrap();
     assert_eq!(
@@ -186,13 +185,13 @@ async fn a_status_from_before_the_start_does_not_end_the_job() {
     let stale = PcStatus::default();
     strata_nas_proxy::strata::note_status(&s.state, &s.state.agent(), &stale).await;
     s.pc.update_job(|j| j.state = StrataJobState::Done);
-    eventually("neuer Key gilt", || strata_key(&s).as_deref() == Some(&key)).await;
+    eventually("new key counts", || strata_key(&s).as_deref() == Some(&key)).await;
 }
 
 #[tokio::test]
 async fn a_refusal_comes_with_its_reason() {
     let s = setup(true, |_| {}).await;
-    *s.pc.refuse_job.lock().unwrap() = Some("Nicht genug Platz auf C:".into());
+    *s.pc.refuse_job.lock().unwrap() = Some("Not enough space on C:".into());
     let mut b = logged_in(&s.url).await;
     let resp = install(&mut b).await;
     assert_eq!(resp.status(), 400);
@@ -200,7 +199,7 @@ async fn a_refusal_comes_with_its_reason() {
         resp.text()
             .await
             .unwrap()
-            .contains("Nicht genug Platz auf C:")
+            .contains("Not enough space on C:")
     );
     assert_eq!(strata_key(&s), None);
     assert!(!kinds(&s.state).contains(&EventKind::StrataJobStarted));
@@ -234,16 +233,16 @@ async fn progress_comes_through_the_live_stream() {
     let mut b = logged_in(&s.url).await;
     assert_eq!(install(&mut b).await.status(), 200);
     let mut live = Live::open(&b).await;
-    live.until("Vorgang", |v| v["strata_job"]["kind"] == "install")
+    live.until("job", |v| v["strata_job"]["kind"] == "install")
         .await;
     s.pc.update_job(|j| {
-        j.step = Some("4/7: Modell laden".into());
+        j.step = Some("4/7: loading model".into());
         j.percent = Some(40);
     });
     live.until("40 %", |v| v["strata_job"]["percent"] == 40)
         .await;
     s.pc.update_job(|j| j.state = StrataJobState::Done);
-    live.until("Ende", |v| v["strata_job"].is_null()).await;
+    live.until("end", |v| v["strata_job"].is_null()).await;
     let kinds = own_kinds(&s.state);
     assert!(kinds.contains(&EventKind::StrataJobDone), "{kinds:?}");
 }
@@ -264,16 +263,16 @@ async fn a_failed_job_is_recorded_with_why() {
     assert_eq!(install(&mut b).await.status(), 200);
     s.pc.update_job(|j| {
         j.state = StrataJobState::Failed;
-        j.error = Some("[X] Download abgebrochen".into());
+        j.error = Some("[X] Download aborted".into());
     });
-    eventually("Fehlschlag vermerkt", || {
+    eventually("failure recorded", || {
         kinds(&s.state).contains(&EventKind::StrataJobFailed)
     })
     .await;
     let event = s.state.events.recent().pop().unwrap();
     assert!(
-        event.detail.unwrap().contains("[X] Download abgebrochen"),
-        "Grund fehlt"
+        event.detail.unwrap().contains("[X] Download aborted"),
+        "reason missing"
     );
 }
 
@@ -284,7 +283,7 @@ async fn cancel_ends_the_job() {
     assert_eq!(install(&mut b).await.status(), 200);
     assert_eq!(b.call("strata-cancel", &[]).await.status(), 200);
     assert_eq!(s.pc.job_cancels.load(Ordering::SeqCst), 1);
-    eventually("Abbruch vermerkt", || {
+    eventually("cancellation recorded", || {
         kinds(&s.state).contains(&EventKind::StrataJobCancelled)
     })
     .await;
@@ -296,7 +295,7 @@ async fn cancel_ends_the_job() {
 #[tokio::test]
 async fn a_new_strata_key_counts_once_strata_took_it_over() {
     let s = setup(true, |_| {}).await;
-    s.state.settings.set("STRATA_API_KEY", "alt").unwrap();
+    s.state.settings.set("STRATA_API_KEY", "old").unwrap();
     let mut b = logged_in(&s.url).await;
     assert_eq!(
         b.call("strata-job", &[("kind", "set_key")]).await.status(),
@@ -304,28 +303,28 @@ async fn a_new_strata_key_counts_once_strata_took_it_over() {
     );
     let key = last_body(&s)["api_key"].as_str().unwrap().to_string();
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(strata_key(&s).as_deref(), Some("alt"));
+    assert_eq!(strata_key(&s).as_deref(), Some("old"));
 
     s.pc.update_job(|j| j.state = StrataJobState::Done);
-    eventually("neuer Key gilt", || strata_key(&s).as_deref() == Some(&key)).await;
+    eventually("new key counts", || strata_key(&s).as_deref() == Some(&key)).await;
     assert!(kinds(&s.state).contains(&EventKind::StrataKeyChanged));
 }
 
 #[tokio::test]
 async fn a_failed_key_change_keeps_the_old_key() {
     let s = setup(true, |_| {}).await;
-    s.state.settings.set("STRATA_API_KEY", "alt").unwrap();
+    s.state.settings.set("STRATA_API_KEY", "old").unwrap();
     let mut b = logged_in(&s.url).await;
     b.call("strata-job", &[("kind", "set_key")]).await;
     s.pc.update_job(|j| {
         j.state = StrataJobState::Failed;
-        j.error = Some("Strata startet nicht".into());
+        j.error = Some("Strata does not start".into());
     });
-    eventually("Fehlschlag vermerkt", || {
+    eventually("failure recorded", || {
         kinds(&s.state).contains(&EventKind::StrataJobFailed)
     })
     .await;
-    assert_eq!(strata_key(&s).as_deref(), Some("alt"));
+    assert_eq!(strata_key(&s).as_deref(), Some("old"));
 }
 
 #[tokio::test]
@@ -402,7 +401,7 @@ async fn shows_each_models_benchmark_fastest_first() {
             ..benchmark("coder-IQ1_M", "52 Token/s")
         },
         StrataBenchmark {
-            error: Some("Strata kam nicht hoch".into()),
+            error: Some("Strata did not come up".into()),
             ..benchmark("swift-IQ2_XS", "")
         },
     ];
@@ -411,7 +410,7 @@ async fn shows_each_models_benchmark_fastest_first() {
     let html = b.page("/admin/strata/version").await;
     let coder = html.find("coder-IQ1_M").unwrap();
     let qwen = html.find("Decode 38.5 tok/s").unwrap();
-    let swift = html.find("No result: Strata kam nicht hoch").unwrap();
+    let swift = html.find("No result: Strata did not come up").unwrap();
     assert!(coder < qwen && qwen < swift, "{html}");
     assert!(html.contains("Decode 52 tok/s · Prompt –"), "{html}");
     assert!(html.contains("Prompt 612 tok/s"), "{html}");
@@ -437,7 +436,7 @@ async fn another_model_gets_the_strata_key_in_use() {
     let s = setup(true, |_| {}).await;
     s.state
         .settings
-        .set("STRATA_API_KEY", "strata-geheim-0123456789")
+        .set("STRATA_API_KEY", "strata-secret-0123456789")
         .unwrap();
     let mut b = logged_in(&s.url).await;
     let resp = b
@@ -452,7 +451,7 @@ async fn another_model_gets_the_strata_key_in_use() {
         )
         .await;
     assert_eq!(resp.status(), 200);
-    assert_eq!(last_body(&s)["api_key"], "strata-geheim-0123456789");
+    assert_eq!(last_body(&s)["api_key"], "strata-secret-0123456789");
 }
 
 #[tokio::test]
@@ -861,4 +860,111 @@ async fn sampling_from_chat_settings_is_marked_as_such() {
         "{html}"
     );
     assert!(html.contains("Without thinking: greedy"), "{html}");
+}
+
+// --- #208 the last answer kept over a restart ---
+
+/// A proxy with `dir` as `DATA_DIR` whose PC service answered with `report`
+/// and the running `job`.
+async fn answered(dir: &std::path::Path, report: StrataReport, job: Option<StrataJob>) -> Setup {
+    let data = dir.to_path_buf();
+    let s = setup(true, move |c| c.data_dir = Some(data)).await;
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    *s.pc.strata_job.lock().unwrap() = job;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(page(&mut b).await["stale"], false);
+    s
+}
+
+/// The proxy of `s` started again, with the PC asleep.
+async fn restarted_asleep(s: &Setup) -> Browser {
+    s.pc.awake.store(false, Ordering::SeqCst);
+    logged_in_again(&serve_proxy(restarted(s)).await).await
+}
+
+#[tokio::test]
+async fn a_restarted_proxy_shows_the_last_answer_while_the_pc_sleeps() {
+    let dir = data_dir("restart");
+    let mut report = strata_info(true);
+    report.info.update_available = Some(true);
+    report.info.benchmarks = vec![benchmark("IQ3_XXS", "ok")];
+    let s = answered(&dir, report, None).await;
+
+    let mut b = restarted_asleep(&s).await;
+    let v = page(&mut b).await;
+    assert!(v["problem"].as_str().unwrap().contains("asleep"), "{v}");
+    assert_eq!(v["stale"], true, "{v}");
+    assert_eq!(v["info"]["version"], "477ac13", "{v}");
+    assert_eq!(v["info"]["update_available"], true, "{v}");
+    assert_eq!(v["info"]["models"][0]["id"], "IQ3_XXS", "{v}");
+    assert_eq!(v["info"]["benchmarks"][0]["model"], "IQ3_XXS", "{v}");
+    let as_of = v["as_of"].as_str().unwrap_or_else(|| panic!("{v}"));
+    assert!(as_of.contains(':'), "{v}");
+
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("477ac13"), "{html}");
+    assert!(html.contains("Update available"), "{html}");
+    assert!(html.contains(as_of), "{html}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn an_answer_from_now_has_no_as_of() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(page(&mut b).await["as_of"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_job_running_at_the_last_answer_is_not_kept() {
+    let dir = data_dir("job");
+    let s = answered(
+        &dir,
+        strata_info(true),
+        Some(job(StrataJobKind::Benchmark, StrataJobState::Running)),
+    )
+    .await;
+
+    let mut b = restarted_asleep(&s).await;
+    let v = page(&mut b).await;
+    assert_eq!(v["stale"], true, "{v}");
+    assert_eq!(v["info"]["job"], Value::Null, "{v}");
+    let html = b.page("/admin/strata/version").await;
+    let at = html
+        .find(">Update Strata<")
+        .unwrap_or_else(|| panic!("{html}"));
+    let tag = &html[html[..at].rfind("<button").unwrap()..at];
+    assert!(!tag.contains("disabled"), "{tag}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn an_unreadable_last_answer_counts_as_none() {
+    let dir = data_dir("broken");
+    let s = answered(&dir, strata_info(true), None).await;
+    std::fs::write(dir.join("strata-last.json"), "{ kaputt").unwrap();
+
+    let mut b = restarted_asleep(&s).await;
+    let v = page(&mut b).await;
+    assert!(v["problem"].as_str().unwrap().contains("asleep"), "{v}");
+    assert_eq!(v["stale"], false, "{v}");
+    assert_eq!(v["info"], Value::Null, "{v}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn update_from_the_kept_answer_wakes_the_pc() {
+    let dir = data_dir("update");
+    let s = answered(&dir, strata_info(true), None).await;
+
+    let mut b = restarted_asleep(&s).await;
+    assert_eq!(page(&mut b).await["stale"], true);
+    let resp = b.call("strata-job", &[("kind", "update")]).await;
+    assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
+    assert!(s.pc.wol_packets.load(Ordering::SeqCst) > 0);
+    assert_eq!(last_body(&s)["kind"], "update");
+    std::fs::remove_dir_all(&dir).unwrap();
 }

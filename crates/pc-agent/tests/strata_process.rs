@@ -55,7 +55,7 @@ async fn a_restart_when_idle_waits_for_the_running_request() {
     let job = testing::job(&s.agent);
     let agent = s.agent.clone();
     let restart = tokio::spawn(async move { agent.strata().restart_when_idle(&job).await });
-    job_until(&s, "Warten auf die Anfrage", |j| {
+    job_until(&s, "waiting for the request", |j| {
         j["step"] == "Waiting until Strata finishes the running request"
     })
     .await;
@@ -167,7 +167,7 @@ async fn a_cancel_while_strata_comes_up_rolls_back_and_ends_cancelled() {
             .restart_or_roll_back(&job, "Restoring", restore)
             .await
     });
-    job_until(&s, "Warten auf Strata", |j| {
+    job_until(&s, "waiting for Strata", |j| {
         j["step"] == "Waiting until Strata is ready"
     })
     .await;
@@ -191,7 +191,7 @@ async fn a_cancel_while_strata_is_busy_puts_the_old_config_back_without_a_restar
             .restart_or_roll_back(&job, "Restoring", restore)
             .await
     });
-    job_until(&s, "Warten auf die Anfrage", |j| {
+    job_until(&s, "waiting for the request", |j| {
         j["step"] == "Waiting until Strata finishes the running request"
     })
     .await;

@@ -1,6 +1,6 @@
-//! Der Verlauf im Bereich *PC*: die Stunden, die der PC wach, im Gaming-Modus,
-//! schlafend oder unbeobachtet verbracht hat. Der Proxy rechnet die Tage aus;
-//! diese Seite zeichnet nur, was er sagt.
+//! The history in the *PC* area: the hours the PC spent awake, in gaming mode,
+//! asleep or unobserved. The proxy works out the days; this page only draws
+//! what it says.
 
 use leptos::prelude::*;
 
@@ -12,7 +12,7 @@ use crate::{
     labels::HISTORY_STATES,
 };
 
-/// Die Bereiche, aus denen die Seite wählt, wie `get_history` sie nimmt.
+/// The ranges the page picks from, as `get_history` takes them.
 const RANGES: &[(&str, &str)] = &[
     ("7d", "Last 7 days"),
     ("30d", "Last 30 days"),
@@ -20,7 +20,7 @@ const RANGES: &[(&str, &str)] = &[
     ("all", "All"),
 ];
 
-/// Bis zu so vielen Balken steht unter jedem sein Name.
+/// Up to this many bars, each has its name below it.
 const NAMED_BARS: usize = 14;
 
 #[component]
@@ -36,8 +36,8 @@ pub fn HistoryPage() -> impl IntoView {
                 match history.await {
                     Ok(view) => {
                         let caption = caption(&range.get(), &view);
-                        // Ohne PC-Dienst sieht der Proxy nur, was er selbst
-                        // auslöst: der Verlauf bleibt lückenhaft.
+                        // Without a PC service the proxy only sees what it
+                        // causes itself: the history has gaps.
                         let without_agent = (!view.agent_configured).then(|| {
                             view! {
                                 <p class="warning" role="status">
@@ -74,7 +74,7 @@ pub fn HistoryPage() -> impl IntoView {
     }
 }
 
-/// Was über den Balken steht: der Bereich und wie lang ein Balken ist.
+/// What stands above the bars: the range and how long a bar is.
 fn caption(range: &str, view: &HistoryView) -> String {
     let name = RANGES.iter().find(|(key, _)| *key == range).map_or_else(
         || format!("{} – {}", view.from, view.to),
@@ -87,7 +87,7 @@ fn caption(range: &str, view: &HistoryView) -> String {
     }
 }
 
-/// Ein Bereich, den die Seite sich holen kann.
+/// A range the page can fetch.
 fn preset(range: RwSignal<String>, key: &'static str, name: &'static str) -> impl IntoView {
     let pressed = move || range.with(|r| r == key);
     view! {
@@ -102,7 +102,7 @@ fn preset(range: RwSignal<String>, key: &'static str, name: &'static str) -> imp
     }
 }
 
-/// Zwei Tage, zwischen denen die Seite den Verlauf zeigt, beide mitgezählt.
+/// Two days between which the page shows the history, both included.
 #[component]
 fn Picker(range: RwSignal<String>, from: String, to: String) -> impl IntoView {
     let from = RwSignal::new(from);
@@ -135,7 +135,7 @@ fn Picker(range: RwSignal<String>, from: String, to: String) -> impl IntoView {
     }
 }
 
-/// Die letzten 7 Tage auf der Übersicht, mit dem Weg zum ganzen Verlauf.
+/// The last 7 days on the Overview, with the way to the whole history.
 #[component]
 pub fn WeekCard(week: HistoryView) -> impl IntoView {
     let totals = week.totals;
@@ -157,11 +157,11 @@ pub fn WeekCard(week: HistoryView) -> impl IntoView {
     }
 }
 
-/// Die Balken und die Summe, oder ein leerer Verlauf, wenn noch nichts zu
-/// sehen ist.
+/// The bars and the sum, or an empty history when there is nothing to see
+/// yet.
 fn shown(view: HistoryView) -> AnyView {
     let totals = view.totals;
-    // Gemessene Energie zeigt die Seite auch über unbekannte Zeit.
+    // The page shows measured energy even over unknown time.
     if totals.awake_h + totals.gaming_h + totals.asleep_h + totals.energy.kwh <= 0.0 {
         return view! {
             <p class="muted">
@@ -194,7 +194,7 @@ fn shown(view: HistoryView) -> AnyView {
     .into_any()
 }
 
-/// Jeder Balken mit seinen Zahlen, auch für Telefone ohne Tooltip.
+/// Every bar with its numbers, also for phones without a tooltip.
 #[component]
 fn PerBar(days: Vec<HistoryDay>) -> impl IntoView {
     view! {
@@ -253,7 +253,7 @@ fn eur(value: f64) -> String {
     format!("€{value:.2}")
 }
 
-/// "4.2 h awake · 0.64 kWh · €0.23 saved", wie Übersicht und Seite es sagen.
+/// "4.2 h awake · 0.64 kWh · €0.23 saved", as the Overview and the page say it.
 fn summary_line(totals: &HistoryTotals) -> String {
     format!(
         "{} h awake · {} · {} saved",
@@ -263,8 +263,8 @@ fn summary_line(totals: &HistoryTotals) -> String {
     )
 }
 
-/// Ein Balken pro Tag, Woche oder Monat, der älteste zuerst. Sind es viele,
-/// stehen nur der erste und der letzte Name darunter.
+/// One bar per day, week or month, the oldest first. When there are many,
+/// only the first and the last name stand below them.
 #[component]
 fn Bars(days: Vec<HistoryDay>) -> impl IntoView {
     let named = days.len() <= NAMED_BARS;
@@ -298,8 +298,8 @@ fn Bars(days: Vec<HistoryDay>) -> impl IntoView {
 
 #[component]
 fn Bar(day: HistoryDay, named: bool) -> impl IntoView {
-    // Der Balken selbst ist der Maßstab, damit ein Tag mit Zeitumstellung
-    // oder ein angeschnittener Monat gefüllt ist und keiner zu viel wird.
+    // The bar itself is the scale, so a day with a clock change or a cut-off
+    // month is filled and none overflows.
     let total = (day.awake_h + day.gaming_h + day.asleep_h + day.unknown_h).max(1.0);
     let share = |hours: f64| format!("{:.3}%", hours / total * 100.0);
     let Energy {
@@ -375,7 +375,7 @@ fn Totals(totals: HistoryTotals, power: PowerSettings) -> impl IntoView {
     }
 }
 
-/// "75" oder "2.5": ohne Nachkommastellen, wo keine sind.
+/// "75" or "2.5": without decimals where there are none.
 fn number(value: f64) -> String {
     if value.fract() == 0.0 {
         format!("{value:.0}")

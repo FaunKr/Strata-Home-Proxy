@@ -1,6 +1,6 @@
 //! The area "PC": the PC service with its updates, the one-line install
 //! command, and the settings for reaching, waking and sleeping the PC; the
-//! other tab of the area is the Verlauf in `history`.
+//! other tab of the area is the history in `history`.
 
 use leptos::prelude::*;
 use leptos_router::components::{A, Outlet};

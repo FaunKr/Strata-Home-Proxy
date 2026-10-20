@@ -48,7 +48,7 @@ fn managed_values_are_read_through_their_accessors() {
     }
     assert!(
         found.is_empty(),
-        "verwaltete Werte über Managed::start, processes und api_key lesen:\n{}",
+        "read managed values through Managed::start, processes and api_key:\n{}",
         found.join("\n")
     );
 }

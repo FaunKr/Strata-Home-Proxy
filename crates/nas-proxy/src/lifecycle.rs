@@ -1,14 +1,14 @@
-//! The PC lifecycle: every decision about the PC's Zustand, the Leerlaufzeit,
-//! the Nachlauf after an accepted Schlafen-Anfrage, refusals and Wach halten.
+//! The PC lifecycle: every decision about the PC's state, the idle timeout,
+//! settling after an accepted sleep request, refusals and keep awake.
 //!
-//! It does no I/O and reads no clock. The shell in `state` asks the PC-Dienst
+//! It does no I/O and reads no clock. The shell in `state` asks the PC service
 //! and Strata, sends magic packets and tells this module what it saw, with
 //! the time as a [`Now`] and the durations of the current Config as
-//! [`Timings`]. Each call hands back the Ereignis to record, if any; the shell
-//! records it while it still holds the lock, so the Verlauf keeps the order
-//! of changes. [`state_after`] reads those Ereignisse back for the Verlauf.
+//! [`Timings`]. Each call hands back the event to record, if any; the shell
+//! records it while it still holds the lock, so the history keeps the order
+//! of changes. [`state_after`] reads those events back for the history.
 //!
-//! Ereignisse that change no Zustand (WakeSent, WakeRequested, MacLearned,
+//! Events that change no state (WakeSent, WakeRequested, MacLearned,
 //! PcServiceUpdated) stay with the I/O that causes them.
 
 use std::time::{Duration, Instant, SystemTime};
@@ -73,11 +73,11 @@ impl Now {
 /// runs, so each call gets them anew.
 #[derive(Clone, Copy, Debug)]
 pub struct Timings {
-    /// The Leerlaufzeit.
+    /// The idle timeout.
     pub idle_timeout: Duration,
-    /// The Nachlauf.
+    /// Settling.
     pub settle: Duration,
-    /// How long a refused or failed Schlafen-Anfrage waits.
+    /// How long a refused or failed sleep request waits.
     pub retry: Duration,
 }
 
@@ -91,7 +91,7 @@ impl From<&Config> for Timings {
     }
 }
 
-/// An Ereignis to record.
+/// An event to record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {
     pub kind: EventKind,
@@ -109,7 +109,7 @@ impl Record {
 #[must_use]
 pub struct Observed {
     /// The PC service: the PC is up and not in gaming mode. Strata: its
-    /// answer counts (none during the Nachlauf).
+    /// answer counts (none during settling).
     pub up: bool,
     pub record: Option<Record>,
 }
@@ -138,13 +138,13 @@ pub struct Lifecycle {
     refused: Option<Refusal>,
     /// Wall-clock time, so it can be saved and survive a restart.
     keep_awake_until: Option<SystemTime>,
-    /// Unknown is the Zustand since the start, not that of a wake-up that
+    /// Unknown is the state since the start, not that of a wake-up that
     /// failed.
     unknown_since_start: bool,
 }
 
 impl Lifecycle {
-    /// Just started: nothing seen yet, the Leerlaufzeit runs from now.
+    /// Just started: nothing seen yet, the idle timeout runs from now.
     pub fn new(now: Now, keep_awake_until: Option<SystemTime>) -> Self {
         Self {
             pc: PcState::Unknown,
@@ -253,7 +253,7 @@ impl Lifecycle {
     }
 
     /// Whether to ask the PC to sleep now: the PC is up, nothing ran for the
-    /// Leerlaufzeit, no Wach halten, and no refusal or failure waits.
+    /// idle timeout, no keep awake, and no refusal or failure waits.
     pub fn wants_sleep(&self, in_flight: usize, now: Now, t: Timings) -> bool {
         in_flight == 0
             && now.at.saturating_duration_since(self.last_activity) >= t.idle_timeout
@@ -261,7 +261,7 @@ impl Lifecycle {
             && self.next_sleep_attempt.is_none_or(|at| at <= now.at)
     }
 
-    /// Notes the answer to a Schlafen-Anfrage; `None` when none came. A
+    /// Notes the answer to a sleep request; `None` when none came. A
     /// refusal or a missing answer postpones the next attempt by the retry
     /// wait.
     pub fn sleep_answered(
@@ -301,7 +301,7 @@ impl Lifecycle {
     }
 
     /// The wake-up the proxy started reached the PC after `waited`; the
-    /// Leerlaufzeit starts now. A Zustand noticed meanwhile, e.g. gaming
+    /// idle timeout starts now. A state noticed meanwhile, e.g. gaming
     /// mode, stays.
     pub fn woke(&mut self, waited: Duration, now: Now) -> Record {
         if self.pc == PcState::Waking {
@@ -333,7 +333,7 @@ impl Lifecycle {
     }
 
     /// Gaming mode was switched by `by`; recorded only if that changed the
-    /// Zustand. Off starts the Leerlaufzeit again, so the PC sleeps after the
+    /// state. Off starts the idle timeout again, so the PC sleeps after the
     /// session.
     pub fn gaming_switched(&mut self, on: bool, by: &str, now: Now) -> Option<Record> {
         let from = self.pc;
@@ -347,7 +347,7 @@ impl Lifecycle {
         (from != to).then(|| Record::new(kind, Some(by.into())))
     }
 
-    /// Starts the Leerlaufzeit again from now, e.g. after waking by hand.
+    /// Starts the idle timeout again from now, e.g. after waking by hand.
     pub fn touch(&mut self, now: Now) {
         self.last_activity = now.at;
         self.last_activity_at = now.wall;
@@ -370,7 +370,7 @@ impl Lifecycle {
     }
 
     /// The PC is up. Woken, gaming just ended or up after a failed wake-up:
-    /// the Leerlaufzeit starts now. Unknown since the start: it keeps
+    /// the idle timeout starts now. Unknown since the start: it keeps
     /// running from the start.
     fn mark_awake(&mut self, now: Now) {
         match self.pc {
@@ -383,7 +383,7 @@ impl Lifecycle {
         }
     }
 
-    /// The Ereignis of a Zustand the proxy noticed on its own, if it changed
+    /// The event of a state the proxy noticed on its own, if it changed
     /// since `from`.
     fn seen(&self, from: PcState) -> Option<Record> {
         if self.pc == from {
@@ -395,7 +395,7 @@ impl Lifecycle {
             PcState::Awake => EventKind::PcSeenAwake,
             PcState::Asleep => EventKind::PcSeenAsleep,
             PcState::Gaming => EventKind::PcSeenGaming,
-            // Steps on the way; the Verlauf reads them from the Ereignisse
+            // Steps on the way; the history reads them from the events
             // around them.
             PcState::Waking | PcState::Unknown => return None,
         };
@@ -403,9 +403,9 @@ impl Lifecycle {
     }
 }
 
-/// What an Ereignis says about the Zustand from then on, for the Verlauf;
+/// What an event says about the state from then on, for the history;
 /// `None` for one that says nothing about it. The counterpart of the
-/// Ereignisse this module hands out.
+/// events this module hands out.
 pub fn state_after(kind: EventKind) -> Option<PcState> {
     match kind {
         EventKind::Awake | EventKind::PcSeenAwake | EventKind::GamingOff => Some(PcState::Awake),
@@ -556,13 +556,13 @@ mod tests {
     fn idle_time_in_flight_and_keep_awake_hold_sleep_off() {
         let c = Clock::new();
         let mut l = awake(&c);
-        assert!(!l.wants_sleep(0, c.at(899), T), "Leerlaufzeit not over");
+        assert!(!l.wants_sleep(0, c.at(899), T), "idle timeout not over");
         assert!(l.wants_sleep(0, c.at(900), T));
         assert!(!l.wants_sleep(1, c.at(900), T), "a request runs");
 
         l.set_keep_awake(Some(c.at(1000).wall));
-        assert!(!l.wants_sleep(0, c.at(999), T), "Wach halten");
-        assert!(l.wants_sleep(0, c.at(1000), T), "Wach halten ended");
+        assert!(!l.wants_sleep(0, c.at(999), T), "keep awake");
+        assert!(l.wants_sleep(0, c.at(1000), T), "keep awake ended");
     }
 
     #[test]
@@ -595,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn during_the_nachlauf_answers_do_not_count() {
+    fn during_settling_answers_do_not_count() {
         let c = Clock::new();
         let mut l = asleep(&c);
         let pc = l.pc_answered(Some(&up()), false, c.at(1029), T);
@@ -617,17 +617,17 @@ mod tests {
     fn a_refusal_waits_and_is_shown_until_something_happens() {
         let c = Clock::new();
         let mut l = awake(&c);
-        let refused = SleepAnswer::Refused("Spiel läuft".into());
+        let refused = SleepAnswer::Refused("Game running".into());
         assert_eq!(
             l.sleep_answered(Some(&refused), c.at(900), T),
             Some(Record::new(
                 EventKind::SleepRefused,
-                Some("Spiel läuft".into())
+                Some("Game running".into())
             ))
         );
         assert_eq!(l.pc(), PcState::Awake);
         let shown = l.snapshot(0, c.at(900)).refused.unwrap();
-        assert_eq!(shown.reason, "Spiel läuft");
+        assert_eq!(shown.reason, "Game running");
         assert_eq!(shown.retry_at, c.at(960).wall);
         assert!(!l.wants_sleep(0, c.at(959), T));
         assert!(l.wants_sleep(0, c.at(960), T));
@@ -798,11 +798,11 @@ mod tests {
 
     type Step<'a> = Box<dyn Fn(&mut Lifecycle) -> Option<Record> + 'a>;
 
-    /// Every Ereignis the lifecycle hands out tells the Verlauf the Zustand it
-    /// left behind. One that tells nothing keeps the Zustand, or leaves a step
-    /// on the way that the Verlauf reads from the Ereignisse around it.
+    /// Every event the lifecycle hands out tells the history the state it
+    /// left behind. One that tells nothing keeps the state, or leaves a step
+    /// on the way that the history reads from the events around it.
     #[test]
-    fn the_verlauf_reads_back_what_the_lifecycle_records() {
+    fn the_history_reads_back_what_the_lifecycle_records() {
         let c = Clock::new();
         let mut l = Lifecycle::new(c.at(0), None);
         let mut kinds = Vec::new();
@@ -838,6 +838,6 @@ mod tests {
         }
         kinds.sort_by_key(|k| format!("{k:?}"));
         kinds.dedup();
-        assert_eq!(kinds.len(), 9, "every Ereignis the lifecycle can hand out");
+        assert_eq!(kinds.len(), 9, "every event the lifecycle can hand out");
     }
 }

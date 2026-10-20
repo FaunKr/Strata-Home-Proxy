@@ -114,7 +114,7 @@ impl CodeBench {
         if let Some(dir) = &self.dir {
             let text = prefix.clone().unwrap_or_default();
             if let Err(e) = write_private(dir, KEY_FILE, text.as_bytes()) {
-                tracing::error!("{KEY_FILE} nicht gespeichert: {e}");
+                tracing::error!("{KEY_FILE} not saved: {e}");
             }
         }
         *self.key.lock().unwrap() = prefix;
@@ -128,7 +128,7 @@ impl CodeBench {
         if let Some(dir) = &self.dir {
             let bytes = serde_json::to_vec_pretty(&*results).expect("results serialize");
             if let Err(e) = write_private(dir, RESULTS_FILE, &bytes) {
-                tracing::error!("{RESULTS_FILE} nicht gespeichert: {e}");
+                tracing::error!("{RESULTS_FILE} not saved: {e}");
             }
         }
     }
@@ -394,7 +394,7 @@ fn revoke_key(state: &AppState) {
     if let Some(key) = ours
         && let Err(e) = state.api_keys.revoke(&key.name, &key.prefix)
     {
-        tracing::error!("Key des Code-Benchmarks nicht widerrufen: {e}");
+        tracing::error!("Code benchmark key not revoked: {e}");
         return;
     }
     state.code_bench.set_key(None);

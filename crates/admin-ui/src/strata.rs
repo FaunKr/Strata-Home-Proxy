@@ -233,11 +233,11 @@ pub fn StrataArea() -> impl IntoView {
                         let stale = p
                             .stale
                             .then(|| {
-                                view! {
-                                    <p class="hint">
-                                        "As of the last time the PC service answered."
-                                    </p>
-                                }
+                                let text = p.as_of.as_ref().map_or_else(
+                                    || "As of the last time the PC service answered.".to_string(),
+                                    |at| format!("As of {at}, when the PC service last answered."),
+                                );
+                                view! { <p class="hint">{text}</p> }
                             });
                         let gaming = p
                             .gaming
@@ -400,6 +400,7 @@ pub fn VersionTab() -> impl IntoView {
             let blocked = area.blocked(&page);
             let actions = area.actions;
             let update = page.update;
+            let asleep = page.stale;
             match page.info {
                 None => update
                     .map(|update| {
@@ -412,7 +413,7 @@ pub fn VersionTab() -> impl IntoView {
                     })
                     .into_any(),
                 Some(info) if !info.installed => not_installed().into_any(),
-                Some(info) => view! { <Version info update actions blocked /> }.into_any(),
+                Some(info) => view! { <Version info update asleep actions blocked /> }.into_any(),
             }
         })}
         <CodeBenchCard />
@@ -1054,10 +1055,17 @@ fn ContextSwitch(
 fn Version(
     info: StrataInfo,
     update: Option<StrataUpdate>,
+    /// The PC sleeps: the update wakes it first.
+    asleep: bool,
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
     let confirm = expect_context::<Confirm>();
+    let text = if asleep {
+        "The PC wakes up first. Strata then restarts with the new version and cannot answer requests for a moment."
+    } else {
+        "Strata restarts with the new version and cannot answer requests for a moment."
+    };
     let version = info
         .version
         .clone()
@@ -1092,8 +1100,7 @@ fn Version(
                             .ask(
                                 Question {
                                     title: "Update Strata?".into(),
-                                    text: "Strata restarts with the new version and cannot answer requests for a moment."
-                                        .into(),
+                                    text: text.into(),
                                     confirm: "Update Strata",
                                     danger: false,
                                 },

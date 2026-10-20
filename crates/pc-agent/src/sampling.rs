@@ -18,7 +18,7 @@ const CONFIG_BLOCK_NAME: &str = "sampling_defaults_from_config";
 /// cannot be read, so a passing error changes nothing.
 pub fn support_of(strata_dir: &std::path::Path) -> Option<SamplingSupport> {
     let server = std::fs::read_to_string(strata_dir.join("serve").join("server.py"))
-        .inspect_err(|e| tracing::debug!("serve/server.py nicht lesbar: {e}"))
+        .inspect_err(|e| tracing::debug!("serve/server.py not readable: {e}"))
         .ok()?;
     Some(if server.contains(MODEL_CARD_NAME) {
         SamplingSupport::ModelCard

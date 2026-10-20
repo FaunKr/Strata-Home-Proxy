@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Lässt eine Testdatei viele Male laufen, um wackelnde oder hängende Tests
-# zu fassen. Ein Lauf über dem Zeitlimit zählt als hängend und nennt die
-# Tests, die nicht fertig wurden.
-# Aufruf: scripts/repeat-test.sh <paket> <testdatei> <anzahl> [filter…]
-# Beispiel: scripts/repeat-test.sh strata-nas-proxy settings_page 100
-# Zeitlimit pro Lauf der ganzen Datei in Sekunden: LIMIT (Vorgabe 60).
+# Runs a test file many times to catch flaky or hanging tests. A run over
+# the time limit counts as hanging and names the tests that did not
+# finish.
+# Usage: scripts/repeat-test.sh <package> <test file> <count> [filter…]
+# Example: scripts/repeat-test.sh strata-nas-proxy settings_page 100
+# Time limit per run of the whole file in seconds: LIMIT (default 60).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if (($# < 3)); then
-  echo "Aufruf: scripts/repeat-test.sh <paket> <testdatei> <anzahl> [filter…]" >&2
-  echo "Beispiel: scripts/repeat-test.sh strata-nas-proxy settings_page 100" >&2
+  echo "Usage: scripts/repeat-test.sh <package> <test file> <count> [filter…]" >&2
+  echo "Example: scripts/repeat-test.sh strata-nas-proxy settings_page 100" >&2
   exit 2
 fi
 pkg=$1 test=$2 count=$3
 shift 3
-# Wie cargo test: aus dem Verzeichnis des Pakets.
+# As cargo test does: from the package's directory.
 read -r bin dir < <(cargo test -q -p "$pkg" --test "$test" --no-run --message-format=json \
   | jq -r 'select(.executable != null and .target.kind == ["test"]) | "\(.executable) \(.manifest_path | rtrimstr("/Cargo.toml"))"' | tail -n1)
 cd "$dir"
@@ -26,11 +26,12 @@ for i in $(seq "$count"); do
   if [ "$rc" -eq 124 ]; then
     hung=$((hung + 1))
     done_=$(sed -n 's/^test \(.*\) \.\.\. .*/\1/p' <<<"$out" | sort)
-    echo "Lauf $i hängt in: $(comm -23 <(echo "$all") <(echo "$done_") | tr '\n' ' ')"
+    echo "Run $i hangs in: $(comm -23 <(echo "$all") <(echo "$done_") | tr '\n' ' ')"
   elif [ "$rc" -ne 0 ]; then
     failed=$((failed + 1))
-    echo "Lauf $i rot: $(sed -n '/^failures:$/,/^test result/s/^    \([^ ]*\)$/\1/p' <<<"$out" | sort -u | tr '\n' ' ')"
+    echo "Run $i failed: $(sed -n '/^failures:$/,/^test result/s/^    \([^ ]*\)$/\1/p' <<<"$out" | sort -u | tr '\n' ' ')"
   fi
 done
-echo "$count Läufe: $failed rot, $hung hängend"
+echo "$count runs: $failed failed, $hung hanging"
+
 [ "$failed" -eq 0 ] && [ "$hung" -eq 0 ]

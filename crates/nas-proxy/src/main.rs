@@ -12,12 +12,12 @@ async fn main() -> anyhow::Result<()> {
             let cfg = strata_nas_proxy::Settings::new(cfg, &[]).current();
             let mac = cfg
                 .pc_mac
-                .ok_or_else(|| anyhow::anyhow!("Keine MAC-Adresse bekannt (PC_MAC)"))?;
+                .ok_or_else(|| anyhow::anyhow!("No MAC address known (PC_MAC)"))?;
             strata_nas_proxy::wol::send(mac, cfg.wol_addr).await?;
-            println!("Weckpaket an {} gesendet", cfg.wol_addr);
+            println!("Wake packet sent to {}", cfg.wol_addr);
             Ok(())
         }
         None => strata_nas_proxy::run(cfg).await,
-        Some(other) => anyhow::bail!("Unbekannter Befehl {other:?}, erlaubt ist nur \"wake\""),
+        Some(other) => anyhow::bail!("Unknown command {other:?}, only \"wake\" is allowed"),
     }
 }

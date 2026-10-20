@@ -6,7 +6,7 @@ mod common;
 use std::{sync::atomic::Ordering, time::Duration};
 
 use common::*;
-use strata_nas_proxy::{AppState, Config, api_router, events::EventKind};
+use strata_nas_proxy::events::EventKind;
 
 const OLD: &str = "0.1.0+alt1234";
 const NEW: &str = "0.1.0+neu5678";
@@ -47,7 +47,7 @@ async fn overview_shows_the_version_and_whether_an_update_is_available() {
 
     *s.pc.version.lock().unwrap() = Some(NEW.into());
     let v = live
-        .until("gleiche Version", |v| v["pc_service"]["version"] == NEW)
+        .until("same version", |v| v["pc_service"]["version"] == NEW)
         .await;
     assert_eq!(v["pc_service"]["update_available"], false);
 }
@@ -59,7 +59,7 @@ async fn a_service_without_version_counts_as_outdated() {
     let b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
-        .until("PC-Dienst", |v| !v["pc_service"].is_null())
+        .until("PC service", |v| !v["pc_service"].is_null())
         .await;
     assert!(v["pc_service"]["version"].is_null());
     assert_eq!(v["pc_service"]["update_available"], true);
@@ -70,7 +70,7 @@ async fn without_a_program_in_the_image_there_is_no_update() {
     let s = outdated("no-program").await;
     s.state
         .pc_setup
-        .set_program(std::env::temp_dir().join("gibt-es-nicht/strata-pc-agent.exe"));
+        .set_program(std::env::temp_dir().join("does-not-exist/strata-pc-agent.exe"));
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live
@@ -90,7 +90,7 @@ async fn a_sleeping_pc_keeps_its_last_version_and_is_woken_for_an_update() {
     live.until("Version", |v| v["pc_service"]["version"] == OLD)
         .await;
     s.pc.awake.store(false, Ordering::SeqCst);
-    let v = live.until("PC schläft", |v| v["pc"] == "Asleep").await;
+    let v = live.until("PC asleep", |v| v["pc"] == "Asleep").await;
     assert_eq!(v["pc_service"]["version"], OLD);
     assert_eq!(v["pc_service"]["update_available"], true);
 
@@ -229,25 +229,13 @@ async fn without_a_strata_address_a_sleeping_pc_gets_no_update() {
     assert!(!kinds(&s.state).contains(&EventKind::PcServiceUpdateRequested));
 }
 
-/// The proxy started again on `dir` with the image carrying `NEW`, the PC
-/// asleep and not asked yet; a browser logged in to it.
-async fn restarted(dir: &std::path::Path, name: &str) -> Browser {
-    let state = AppState::new(Config {
-        data_dir: Some(dir.to_path_buf()),
-        ..Config::default()
-    });
+/// The proxy of `first` started again with the image carrying `NEW` and the
+/// PC asleep, not asked yet; a browser logged in to it.
+async fn after_restart(first: &Setup, name: &str) -> Browser {
+    first.pc.awake.store(false, Ordering::SeqCst);
+    let state = restarted(first);
     state.pc_setup.set_program(program(name, NEW));
-    logged_in_again(&format!("http://{}", serve(api_router(state)).await)).await
-}
-
-/// A fresh data dir for the restart tests.
-fn data_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "strata-proxy-version-{name}-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
+    logged_in_again(&serve_proxy(state).await).await
 }
 
 #[tokio::test]
@@ -267,7 +255,7 @@ async fn the_last_version_survives_a_restart() {
     })
     .await;
 
-    let b = restarted(&dir, "restart").await;
+    let b = after_restart(&first, "restart").await;
     let v = Live::open(&b)
         .await
         .until("gespeicherte Version", |v| !v["pc_service"].is_null())
@@ -291,7 +279,7 @@ async fn a_service_without_version_stays_outdated_after_a_restart() {
         .until("gemeldet", |v| !v["pc_service"].is_null())
         .await;
 
-    let b = restarted(&dir, "restart-none").await;
+    let b = after_restart(&first, "restart-none").await;
     let v = Live::open(&b)
         .await
         .until("gespeicherte Version", |v| !v["pc_service"].is_null())
@@ -312,7 +300,7 @@ async fn update_button_updates_the_service_and_records_it() {
     assert_eq!(b.call("pc-service-update", &[]).await.status(), 200);
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 1);
     let v = live
-        .until("neue Version", |v| v["pc_service"]["version"] == NEW)
+        .until("new version", |v| v["pc_service"]["version"] == NEW)
         .await;
     assert_eq!(v["pc_service"]["update_available"], false);
     assert_eq!(v["pc_service"]["updating"], false);
@@ -321,32 +309,32 @@ async fn update_button_updates_the_service_and_records_it() {
     let requested = events
         .iter()
         .find(|e| e.kind == EventKind::PcServiceUpdateRequested)
-        .expect("Update im Verlauf");
+        .expect("update in the history");
     assert_eq!(requested.detail.as_deref(), Some("from the web UI"));
     let updated = events
         .iter()
         .find(|e| e.kind == EventKind::PcServiceUpdated)
-        .expect("neue Version im Verlauf");
+        .expect("new version in the history");
     assert_eq!(updated.detail.as_deref(), Some(NEW));
 }
 
 #[tokio::test]
 async fn a_refused_update_shows_its_reason() {
     let s = outdated("refused").await;
-    *s.pc.refuse_update.lock().unwrap() = Some("Strata bearbeitet eine Anfrage".into());
+    *s.pc.refuse_update.lock().unwrap() = Some("Strata is working on a request".into());
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     live.until("Version", |v| v["pc_service"]["version"] == OLD)
         .await;
     b.call("pc-service-update", &[]).await;
     let v = live
-        .until("Grund", |v| !v["pc_service"]["update_error"].is_null())
+        .until("reason", |v| !v["pc_service"]["update_error"].is_null())
         .await;
     assert!(
         v["pc_service"]["update_error"]
             .as_str()
             .unwrap()
-            .contains("Strata bearbeitet")
+            .contains("Strata is working")
     );
     assert_eq!(v["pc_service"]["update_available"], true);
     assert!(kinds(&s.state).contains(&EventKind::PcServiceUpdateFailed));
@@ -362,7 +350,7 @@ async fn an_old_service_without_update_is_told_to_set_up_again() {
         .await;
     b.call("pc-service-update", &[]).await;
     let v = live
-        .until("Grund", |v| !v["pc_service"]["update_error"].is_null())
+        .until("reason", |v| !v["pc_service"]["update_error"].is_null())
         .await;
     assert!(
         v["pc_service"]["update_error"]
@@ -383,10 +371,10 @@ async fn an_update_that_never_reports_back_fails_after_a_while() {
     live.until("Version", |v| v["pc_service"]["version"] == OLD)
         .await;
     b.call("pc-service-update", &[]).await;
-    live.until("Update läuft", |v| v["pc_service"]["updating"] == true)
+    live.until("update running", |v| v["pc_service"]["updating"] == true)
         .await;
     let v = live
-        .until("Fehler", |v| !v["pc_service"]["update_error"].is_null())
+        .until("error", |v| !v["pc_service"]["update_error"].is_null())
         .await;
     assert_eq!(v["pc_service"]["updating"], false);
     assert!(kinds(&s.state).contains(&EventKind::PcServiceUpdateFailed));
@@ -406,14 +394,14 @@ async fn a_second_press_while_an_update_runs_changes_nothing() {
     assert!(resp.text().await.unwrap().contains("running already"));
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 1);
     let v = live
-        .until("Update läuft", |v| v["pc_service"]["updating"] == true)
+        .until("update running", |v| v["pc_service"]["updating"] == true)
         .await;
     assert!(v["pc_service"]["update_error"].is_null());
 
     // The new version arrives: counted as done, no error from the second press.
     *s.pc.version.lock().unwrap() = Some(NEW.into());
     let v = live
-        .until("neue Version", |v| v["pc_service"]["version"] == NEW)
+        .until("new version", |v| v["pc_service"]["version"] == NEW)
         .await;
     assert_eq!(v["pc_service"]["updating"], false);
     assert!(v["pc_service"]["update_error"].is_null());
@@ -434,18 +422,18 @@ async fn an_up_to_date_service_is_not_updated() {
 #[tokio::test]
 async fn a_failure_clears_once_the_service_runs_the_new_version() {
     let s = outdated("clears").await;
-    *s.pc.refuse_update.lock().unwrap() = Some("Strata bearbeitet eine Anfrage".into());
+    *s.pc.refuse_update.lock().unwrap() = Some("Strata is working on a request".into());
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     live.until("Version", |v| v["pc_service"]["version"] == OLD)
         .await;
     b.call("pc-service-update", &[]).await;
-    live.until("Grund", |v| !v["pc_service"]["update_error"].is_null())
+    live.until("reason", |v| !v["pc_service"]["update_error"].is_null())
         .await;
     // Set up again with the command, say: the right version runs.
     *s.pc.version.lock().unwrap() = Some(NEW.into());
     let v = live
-        .until("ohne Fehler", |v| {
+        .until("no error", |v| {
             v["pc_service"]["version"] == NEW && v["pc_service"]["update_error"].is_null()
         })
         .await;

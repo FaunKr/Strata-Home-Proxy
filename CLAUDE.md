@@ -1,34 +1,35 @@
-## Arbeiten im Repo
+## Working in the repo
 
-- PRs gehen gegen `main`.
-- Vor dem Push `scripts/check.sh`: dieselben Checks wie der CI-Job `test`. Zum Iterieren prüft `scripts/check.sh <crate>…` nur diese Crates.
-- Bevor du vorschlägst, einen PR zu mergen: `/code-review` über seinen Diff.
-- UI-Änderungen im Browser prüfen: `scripts/ui-check.sh` (`SHOTS=1` für Screenshots).
-- Neue Proxy-Tests nutzen das Gerüst mit simuliertem PC und Strata in `crates/nas-proxy/tests/common`.
-- Was der PC-Dienst über HTTP nimmt und antwortet, steht als Typen in `crates/pc-protocol`; Felder kommen nur dazu, Regeln in `docs/pc-agent-api.md`.
-- Wackelnde oder hängende Tests: `scripts/repeat-test.sh` lässt eine Testdatei vielfach laufen und nennt, welcher hängt.
-- CI-Kosten, Actions-Minuten, welche Jobs ein PR startet: `docs/ci.md`.
+- PRs go against `main`.
+- Before pushing, run `scripts/check.sh`: the same checks as the CI job `test`. To iterate, `scripts/check.sh <crate>…` checks only those crates.
+- Before you suggest merging a PR: `/code-review` over its diff.
+- Check UI changes in the browser: `scripts/ui-check.sh` (`SHOTS=1` for screenshots).
+- New proxy tests use the harness with a simulated PC and Strata in `crates/nas-proxy/tests/common`.
+- What the PC service takes and answers over HTTP is written down as types in `crates/pc-protocol`; fields are only ever added, rules in `docs/pc-agent-api.md`.
+- Flaky or hanging tests: `scripts/repeat-test.sh` runs one test file many times and names the one that hangs.
+- CI costs, Actions minutes, which jobs a PR starts: `docs/ci.md`.
 
-## Ablauf
+## Process
 
-- Jeder Schritt der Pipeline (/grill-me, /to-spec, /to-tickets, /implement, /code-review, Merge, /retro) startet erst, wenn Faun ihn aufruft; nach einem Schritt berichten und warten.
-- Ein Refactor, der als ein PR landet, ist ein Ticket mit Checkliste, kein Baum aus Unter-Tickets.
-- Schreibt ein Spec „X nur im Modul“, gilt das für Code, Helfer und Fixtures. Tests dürfen die äußeren Namen ausschreiben, die sie festnageln (Dateinamen, die Strata selbst liest).
+- Each step of the pipeline (/grill-me, /to-spec, /to-tickets, /implement, /code-review, merge, /retro) starts only when Faun calls it; after a step, report and wait.
+- A refactor that lands as one PR is one ticket with a checklist, not a tree of sub-tickets.
+- If a spec says "X only in the module", that applies to code, helpers and fixtures. Tests may spell out the outer names they pin down (file names Strata itself reads).
+- Issues, specs, PR text, commit messages and retros are written in English, using the terms in `GLOSSARY.md`.
 
 ## Agent skills
 
 ### Issue tracker
 
-Issues liegen in GitHub Issues von FaunKr/Strata-Home-Proxy. See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues of FaunKr/Strata-Home-Proxy. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Standard-Labels: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
+Standard labels: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context: ein `GLOSSARY.md` und `docs/adr/` im Repo-Root. See `docs/agents/domain.md`.
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
 ### Strata
 
-Strata ist eine eigene Engine, kein llama-server. Endpunkte, Felder, Metriken und Auth, die Proxy und PC-Dienst nutzen: `docs/strata-api.md`.
+Strata is its own engine, not llama-server. Endpoints, fields, metrics and auth that the proxy and the PC service use: `docs/strata-api.md`.

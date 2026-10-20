@@ -83,6 +83,9 @@ pub trait Backend: Send + Sync + 'static {
     /// it refuses.
     fn start_strata_job(&self, form: StrataJobForm) -> BoxFuture<'static, Result<(), String>>;
     fn cancel_strata_job(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// Has Strata write the update summary now, waking the PC first; why
+    /// not if it cannot start.
+    fn generate_update_summary(&self) -> BoxFuture<'static, Result<(), String>>;
     /// The code benchmark: its state and each model's last result.
     fn code_bench(&self) -> BoxFuture<'static, CodeBenchPage>;
     /// Starts a code benchmark of the active model; a message if it cannot.

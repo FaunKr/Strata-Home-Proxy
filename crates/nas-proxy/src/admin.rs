@@ -281,6 +281,11 @@ impl Backend for UiBackend {
         async move { crate::strata::cancel(&state).await }.boxed()
     }
 
+    fn generate_update_summary(&self) -> BoxFuture<'static, Result<(), String>> {
+        let state = Arc::clone(&self.0);
+        async move { crate::update_summary::generate(&state, BY_UI).await }.boxed()
+    }
+
     fn code_bench(&self) -> BoxFuture<'static, CodeBenchPage> {
         let state = Arc::clone(&self.0);
         async move { crate::code_bench::page(&state).await }.boxed()

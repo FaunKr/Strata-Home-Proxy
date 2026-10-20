@@ -31,10 +31,12 @@ use tokio::sync::broadcast;
 
 use crate::{
     config::{Config, format_mac, parse_mac},
+    job::Jobs,
     managed::Managed,
     output::{StrataOutput, StrataOutputMessage, StrataOutputNotice},
     platform::Platform,
-    strata::{self, Jobs, Refusal, StrataJobRequest, UpdateCheck},
+    strata::{self, Refusal, StrataJobRequest, UpdateCheck},
+    strata_process::{LastStart, StrataProcess},
     update::UpdateError,
 };
 
@@ -78,6 +80,7 @@ pub struct Agent {
     macs: Mutex<HashMap<IpAddr, CachedMac>>,
     managed: Mutex<Managed>,
     pub(crate) jobs: Jobs,
+    pub(crate) last_start: LastStart,
     pub(crate) updates: UpdateCheck,
     /// An update of this program is under way.
     pub(crate) updating: AtomicBool,
@@ -86,7 +89,6 @@ pub struct Agent {
 
 struct Watchdog {
     unhealthy_since: Option<Instant>,
-    last_start: Option<Instant>,
 }
 
 /// One entry of llama.cpp-style `/slots`; only the busy flag matters.
@@ -122,11 +124,11 @@ impl Agent {
             gaming: AtomicBool::new(gaming),
             watchdog: Mutex::new(Watchdog {
                 unhealthy_since: None,
-                last_start: None,
             }),
             macs: Mutex::new(HashMap::new()),
             managed: Mutex::new(managed),
             jobs,
+            last_start: LastStart::default(),
             updates: UpdateCheck::default(),
             updating: AtomicBool::new(false),
             output,
@@ -135,6 +137,11 @@ impl Agent {
 
     pub(crate) fn platform(&self) -> &dyn Platform {
         self.platform.as_ref()
+    }
+
+    /// Strata's process: every start and stop goes through it.
+    pub fn strata(&self) -> StrataProcess<'_> {
+        StrataProcess::of(self)
     }
 
     /// Replaces the managed values and keeps them for the next start.
@@ -237,52 +244,9 @@ impl Agent {
             ));
         }
         if self.strata_busy().await {
-            return Err("Strata bearbeitet eine Anfrage".into());
+            return Err("Strata is processing a request".into());
         }
         Ok(())
-    }
-
-    /// Strata was started so recently that it may still be loading.
-    pub(crate) fn strata_loading(&self) -> bool {
-        self.watchdog
-            .lock()
-            .unwrap()
-            .last_start
-            .is_some_and(|t| t.elapsed() < Duration::from_secs(self.cfg.load_time_secs))
-    }
-
-    pub(crate) fn start_strata(&self) {
-        let managed = self.managed();
-        let Some((program, args)) = managed.start(&self.cfg) else {
-            tracing::info!("Kein Startskript für Strata eingetragen, Strata bleibt aus");
-            return;
-        };
-        self.watchdog.lock().unwrap().last_start = Some(Instant::now());
-        tracing::info!("Strata wird gestartet");
-        let mut run = match self.platform.start_strata(program, args) {
-            Ok(run) => run,
-            Err(e) => {
-                tracing::error!("Strata-Start fehlgeschlagen: {e}");
-                return;
-            }
-        };
-        let output = Arc::clone(&self.output);
-        let run_id = output.started();
-        // The page shows this output; the key must not reach it. A new key
-        // comes with a restart, so the one of this start is enough.
-        let key = managed
-            .api_key(&self.cfg)
-            .filter(|k| !k.is_empty())
-            .map(String::from);
-        tokio::spawn(async move {
-            while let Some(line) = run.next_output().await {
-                match &key {
-                    Some(key) => output.push(run_id, &line.replace(key.as_str(), "***")),
-                    None => output.push(run_id, &line),
-                }
-            }
-            output.ended(run_id);
-        });
     }
 
     /// What the Strata-Ausgabe has to say besides its lines.
@@ -295,19 +259,6 @@ impl Agent {
             StrataOutputNotice::NotStartedByAgent
         } else {
             StrataOutputNotice::NotRunning
-        }
-    }
-
-    pub(crate) fn stop_strata(&self) {
-        tracing::info!("Strata wird beendet");
-        let managed = self.managed();
-        let processes = managed.processes(&self.cfg);
-        if processes.is_empty() {
-            tracing::info!("Keine Strata-Programme eingetragen, nichts zu beenden");
-            return;
-        }
-        if let Err(e) = self.platform.stop_strata(processes) {
-            tracing::error!("Strata-Ende fehlgeschlagen: {e}");
         }
     }
 
@@ -333,9 +284,9 @@ impl Agent {
             if self.jobs.cancel() {
                 tracing::info!("Gaming an: Strata-Vorgang abgebrochen");
             }
-            self.stop_strata();
+            self.strata().stop();
         } else {
-            self.start_strata();
+            self.strata().start();
         }
         self.watchdog.lock().unwrap().unhealthy_since = None;
     }
@@ -359,10 +310,7 @@ impl Agent {
                 wd.unhealthy_since = None;
                 return;
             }
-            let loading = wd.last_start.is_some_and(|t| {
-                now.duration_since(t) < Duration::from_secs(self.cfg.load_time_secs)
-            });
-            if loading {
+            if self.strata().loading() {
                 return;
             }
             let since = *wd.unhealthy_since.get_or_insert(now);
@@ -370,9 +318,7 @@ impl Agent {
         };
         if restart {
             tracing::warn!("Strata antwortet nicht, Neustart");
-            self.stop_strata();
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            self.start_strata();
+            self.strata().restart().await;
             self.watchdog.lock().unwrap().unhealthy_since = None;
         }
     }
@@ -384,20 +330,17 @@ impl Agent {
     /// is started again here, so the GPU begins with an empty memory.
     pub fn resumed(&self) {
         tracing::info!("PC ist aus dem Standby zurück");
-        let just_started = {
-            let mut wd = self.watchdog.lock().unwrap();
-            wd.unhealthy_since = None;
-            wd.last_start.is_some_and(|t| t.elapsed() < RESUME_GAP)
-        };
+        self.watchdog.lock().unwrap().unhealthy_since = None;
+        let just_started = self.strata().started_within(RESUME_GAP);
         if self.cfg.fresh_strata_after_standby && !self.gaming() && !just_started {
-            self.start_strata();
+            self.strata().start();
         }
     }
 
     /// Runs before standby; ends Strata when `fresh_strata_after_standby` is set.
     fn before_standby(&self) {
         if self.cfg.fresh_strata_after_standby {
-            self.stop_strata();
+            self.strata().stop();
         }
     }
 

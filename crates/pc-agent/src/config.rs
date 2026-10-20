@@ -60,6 +60,10 @@ pub struct Config {
     /// long, else its old context comes back.
     #[serde(default = "default_context_start")]
     pub context_start_secs: u64,
+    /// Pause between ending Strata and starting it again, so the ended one
+    /// frees its port first.
+    #[serde(default = "default_stop_settle")]
+    pub stop_settle_ms: u64,
     /// Folder for the gaming flag and the log; next to the program by default.
     #[serde(default)]
     pub state_dir: Option<PathBuf>,
@@ -104,6 +108,9 @@ fn default_load() -> u64 {
 fn default_context_start() -> u64 {
     600
 }
+fn default_stop_settle() -> u64 {
+    2000
+}
 fn default_strata_repo() -> String {
     "https://github.com/Niko1221/Strata.git".into()
 }
@@ -133,6 +140,10 @@ impl Config {
 
     pub fn state_dir(&self) -> PathBuf {
         self.state_dir.clone().unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    pub fn stop_settle(&self) -> Duration {
+        Duration::from_millis(self.stop_settle_ms)
     }
 
     pub fn user_idle(&self) -> Duration {

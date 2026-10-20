@@ -332,6 +332,7 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         restart_after_secs: 0,
         load_time_secs: 1,
         context_start_secs: 1,
+        stop_settle_ms: 10,
         state_dir: Some(dir.to_path_buf()),
         mac: None,
         nas_url: None,

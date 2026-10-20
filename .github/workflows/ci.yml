@@ -98,11 +98,11 @@ jobs:
       - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         run: scripts/install-actionlint.sh "$RUNNER_TEMP/bin" && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
-        # Unquoted on purpose: one argument per package, none for everything.
         run: |
           if [[ $CARGO == false ]]; then
             scripts/check.sh --no-cargo
           else
+            # Unquoted on purpose: one argument per package, none for everything.
             # shellcheck disable=SC2086
             scripts/check.sh $PACKAGES
           fi

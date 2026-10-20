@@ -19,16 +19,15 @@ if [[ ${1:-} == --all ]]; then
 fi
 packages=()
 unscoped=false
-# Checked by check.sh without Cargo: its scripts' own tests.
-scripts=false
+# The runners' own tests, which check.sh runs without Cargo too.
+runners=false
 image=false
 bench=false
 # The browser check (scripts/ui-check.sh): the web UI and the proxy that serves it.
 ui=false
 while IFS= read -r path; do
   case $path in
-    # Shared: whatever changes here can break any job. check.sh also runs the
-    # scripts' own tests, which only an unscoped run covers.
+    # Shared: whatever changes here can break any job.
     Cargo.toml | Cargo.lock | rust-toolchain* | .cargo/* | .config/* | .github/workflows/* | scripts/* | deploy/truenas-auto-update.sh)
       all
       exit 0
@@ -49,18 +48,18 @@ while IFS= read -r path; do
     .dockerignore) image=true ;;
     # The local-agent runner: check.sh runs its tests and shellcheck. It is no
     # crate, so no crate needs a build for it.
-    tools/local-agent | tools/local-agent/*) scripts=true ;;
+    tools/local-agent | tools/local-agent/*) runners=true ;;
     # The code benchmark: the proxy embeds its tasks (include_str!), check.sh
     # runs the runner's tests; its image holds only the runner.
     tools/code-bench/tasks/*) packages+=(strata-nas-proxy) ;;
-    tools/code-bench/Dockerfile | tools/code-bench/runner.py) scripts=true bench=true ;;
-    tools/code-bench | tools/code-bench/*) scripts=true ;;
+    tools/code-bench/Dockerfile | tools/code-bench/runner.py) runners=true bench=true ;;
+    tools/code-bench | tools/code-bench/*) runners=true ;;
   esac
 done
 
 package_list=$(printf '%s\n' ${packages[@]+"${packages[@]}"} | sort -u | xargs)
 cargo=$([[ -n $package_list || $unscoped == true ]] && echo true || echo false)
-echo "test=$([[ $cargo == true || $scripts == true ]] && echo true || echo false)"
+echo "test=$([[ $cargo == true || $runners == true ]] && echo true || echo false)"
 echo "packages=$package_list"
 echo "cargo=$cargo"
 echo "image=$image"

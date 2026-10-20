@@ -6,7 +6,7 @@
 - Check UI changes in the browser: `scripts/ui-check.sh` (`SHOTS=1` for screenshots).
 - New proxy tests use the harness with a simulated PC and Strata in `crates/nas-proxy/tests/common`; a proxy restart over the same `DATA_DIR` is `restarted` there, not a second `setup`.
 - What the PC service takes and answers over HTTP is written down as types in `crates/pc-protocol`; fields are only ever added, rules in `docs/pc-agent-api.md`.
-- Flaky or hanging tests: `scripts/repeat-test.sh` runs one test file many times and names the one that hangs.
+- Flaky or hanging tests: `scripts/repeat-test.sh` runs one test file many times and names the one that hangs. Before pushing a new or changed proxy test file, run it 20 times this way: CI is slower and catches races the session misses.
 - CI costs, Actions minutes, which jobs a PR starts: `docs/ci.md`.
 
 ## Process

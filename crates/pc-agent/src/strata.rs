@@ -2,21 +2,26 @@
 //! add, switch, delete, update, benchmark or compare models. At most one job runs at a
 //! time; it keeps the PC awake and the watchdog away. Every job runs fixed
 //! programs with values from [`crate::catalog`]; requests carry no commands.
+//!
+//! Each job is a short script: it works through its [`JobContext`] (steps,
+//! cancel, waiting, commands, cleanup) and starts and stops Strata only
+//! through [`crate::strata_process`].
 
 use std::{
-    collections::VecDeque,
     future::Future,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use crate::{
     agent::Agent,
     catalog::{self, Size},
-    command::{Cancel, CommandSpec},
+    command::CommandSpec,
     install::{Installation, Model},
+    job::{JobContext, POLL, Step, unix_now},
     managed::Managed,
+    strata_process::Applied,
 };
 pub use strata_pc_protocol::{
     ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, StrataBenchmark, StrataFamily,
@@ -24,22 +29,14 @@ pub use strata_pc_protocol::{
     StrataReport, StrataSize,
 };
 
-const JOB_FILE: &str = "strata-job.json";
 /// The last benchmark run, as older services kept it alone.
 const BENCH_FILE: &str = "strata-benchmark.json";
 /// The last benchmark of each model.
 const BENCHES_FILE: &str = "strata-benchmarks.json";
 /// How often the page's visits ask Git whether Strata has a newer version.
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
-/// How often a job looks again while it waits for Strata.
-const POLL: Duration = Duration::from_millis(250);
 /// How long a benchmark waits for Strata to load its model.
 const READY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-/// Time for an ended Strata to free its port before the next one starts,
-/// as the watchdog gives it.
-const STOP_SETTLE: Duration = Duration::from_secs(2);
-/// Lines of output a job keeps, for the page to show after a failure.
-const KEPT_LINES: usize = 20;
 /// Strata's port and network access, as the proxy expects them.
 const STRATA_PORT: &str = "8080";
 const STRATA_HOST: &str = "0.0.0.0";
@@ -108,87 +105,6 @@ impl Plan {
     }
 }
 
-#[derive(Default)]
-pub struct Jobs {
-    inner: Mutex<JobsInner>,
-}
-
-#[derive(Default)]
-struct JobsInner {
-    current: Option<StrataJob>,
-    /// Ends the command the running job waits for.
-    cancel: Option<Cancel>,
-    cancelled: bool,
-    progress: Progress,
-    /// The key on the running command's line, kept out of its stored output.
-    secret: Option<String>,
-    /// A benchmark's speeds, read as its output comes.
-    bench: BenchReading,
-    /// Goes before each step, e.g. which model of a comparison.
-    step_prefix: Option<String>,
-}
-
-impl Jobs {
-    /// The last job from `dir`; one that was running then is interrupted now.
-    pub fn load(dir: &Path) -> Self {
-        let current = std::fs::read_to_string(dir.join(JOB_FILE))
-            .ok()
-            .and_then(|text| serde_json::from_str::<StrataJob>(&text).ok())
-            .map(|mut job| {
-                if job.state == StrataJobState::Running {
-                    job.state = StrataJobState::Interrupted;
-                    job.ended = Some(unix_now());
-                }
-                job
-            });
-        Self {
-            inner: Mutex::new(JobsInner {
-                current,
-                ..JobsInner::default()
-            }),
-        }
-    }
-
-    pub fn current(&self) -> Option<StrataJob> {
-        self.inner.lock().unwrap().current.clone()
-    }
-
-    pub fn running(&self) -> bool {
-        self.inner
-            .lock()
-            .unwrap()
-            .current
-            .as_ref()
-            .is_some_and(|j| j.state == StrataJobState::Running)
-    }
-
-    /// Ends the running job; downloaded parts stay for the next start.
-    pub fn cancel(&self) -> bool {
-        let cancel = {
-            let mut inner = self.inner.lock().unwrap();
-            if !inner
-                .current
-                .as_ref()
-                .is_some_and(|j| j.state == StrataJobState::Running)
-            {
-                return false;
-            }
-            inner.cancelled = true;
-            inner.cancel.clone()
-        };
-        if let Some(cancel) = cancel {
-            cancel();
-        }
-        true
-    }
-
-    fn update(&self, f: impl FnOnce(&mut StrataJob)) {
-        if let Some(job) = self.inner.lock().unwrap().current.as_mut() {
-            f(job);
-        }
-    }
-}
-
 /// Starts a job, or says why not.
 pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob, Refusal> {
     // The service ends after an update, and a job with it.
@@ -205,57 +121,15 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
     if let Plan::Install { size, .. } | Plan::AddModel { size, .. } = &plan {
         check_space(agent, size)?;
     }
-    let job = {
-        let mut inner = agent.jobs.inner.lock().unwrap();
-        if let Some(running) = inner
-            .current
-            .as_ref()
-            .filter(|j| j.state == StrataJobState::Running)
-        {
-            return Err(Refusal::Conflict(format!(
-                "A job is running already ({})",
-                kind_text(running.kind)
-            )));
-        }
-        let id = inner
-            .current
-            .as_ref()
-            .and_then(|j| j.id)
-            .map_or(1, |id| id + 1);
-        let job = StrataJob {
-            id: Some(id),
-            kind,
-            model: plan.model(),
-            state: StrataJobState::Running,
-            step: None,
-            percent: None,
-            done_bytes: None,
-            total_bytes: None,
-            bytes_per_sec: None,
-            eta_secs: None,
-            lines: Vec::new(),
-            error: None,
-            result: None,
-            started: unix_now(),
-            ended: None,
-        };
-        inner.current = Some(job.clone());
-        inner.cancel = None;
-        inner.cancelled = false;
-        inner.progress = Progress::default();
-        inner.secret = None;
-        inner.bench = BenchReading::default();
-        inner.step_prefix = None;
-        job
-    };
-    save_job(agent);
-    tracing::info!(kind = ?job.kind, model = ?job.model, "Strata-Vorgang gestartet");
-    let runner = Arc::clone(agent);
+    let (job, record) = JobContext::begin(agent, kind, plan.model()).map_err(|running| {
+        Refusal::Conflict(format!("A job is running already ({})", kind_text(running)))
+    })?;
+    tracing::info!(kind = ?record.kind, model = ?record.model, "Strata-Vorgang gestartet");
     tokio::spawn(async move {
-        let outcome = run(&runner, plan).await;
-        finish(&runner, outcome);
+        let result = run(&job, plan).await;
+        job.finish(result);
     });
-    Ok(job)
+    Ok(record)
 }
 
 /// Strata's experimental speed projection, only where setup offers it.
@@ -463,61 +337,39 @@ fn check_space(agent: &Agent, size: &Size) -> Result<(), Refusal> {
     Ok(())
 }
 
-enum Outcome {
-    Done(Option<String>),
-    Failed(String),
-    Cancelled,
-}
-
-async fn run(agent: &Arc<Agent>, plan: Plan) -> Outcome {
-    let result = match plan {
+async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
+    match plan {
         Plan::Install {
             size,
             context,
             api_key,
             speed_projection,
-        } => install(agent, size, context, api_key, speed_projection).await,
+        } => install(job, size, context, api_key, speed_projection).await,
         Plan::AddModel {
             size,
             context,
             api_key,
             speed_projection,
-        } => add_model(agent, size, context, api_key, speed_projection).await,
-        Plan::Activate { id } => activate(agent, &id).await,
-        Plan::Delete { id } => delete(agent, &id).await,
-        Plan::Update => update(agent).await,
-        Plan::Benchmark { id } => benchmark(agent, &id).await,
-        Plan::SetKey { api_key } => set_key(agent, api_key).await,
-        Plan::SetSpeedProjection { id, on } => set_speed_projection(agent, &id, on).await,
-        Plan::SetContext { id, context } => set_context(agent, &id, context).await,
-        Plan::CompareModels { ids, active } => compare_models(agent, &ids, &active).await,
-    };
-    match result {
-        Ok(result) => Outcome::Done(result),
-        Err(Step::Cancelled) => Outcome::Cancelled,
-        Err(Step::Failed(e)) => Outcome::Failed(e),
-    }
-}
-
-/// Why a job stopped early.
-enum Step {
-    Cancelled,
-    Failed(String),
-}
-
-impl From<String> for Step {
-    fn from(e: String) -> Self {
-        Self::Failed(e)
+        } => add_model(job, size, context, api_key, speed_projection).await,
+        Plan::Activate { id } => activate(job, &id).await,
+        Plan::Delete { id } => delete(job, &id).await,
+        Plan::Update => update(job).await,
+        Plan::Benchmark { id } => benchmark(job, &id).await,
+        Plan::SetKey { api_key } => set_key(job, api_key).await,
+        Plan::SetSpeedProjection { id, on } => set_speed_projection(job, &id, on).await,
+        Plan::SetContext { id, context } => set_context(job, &id, context).await,
+        Plan::CompareModels { ids, active } => compare_models(job, &ids, &active).await,
     }
 }
 
 async fn install(
-    agent: &Arc<Agent>,
+    job: &JobContext,
     size: &Size,
     context: u32,
     api_key: String,
     speed_projection: bool,
 ) -> Result<Option<String>, Step> {
+    let agent = job.agent();
     let dir = agent.cfg.strata_dir.clone();
     let strata = Installation::of(&agent.cfg);
     if !strata.is_set_up() {
@@ -528,8 +380,8 @@ async fn install(
             )
             .into());
         }
-        let git = git(agent).await?;
-        set_step(agent, "Fetching Strata");
+        let git = git(job).await?;
+        job.step("Fetching Strata");
         let clone = CommandSpec {
             program: git,
             args: vec![
@@ -539,12 +391,12 @@ async fn install(
             ],
             dir: None,
         };
-        command(agent, clone, false).await?;
+        job.command(clone, false).await?;
     }
-    setup(agent, size, context, &api_key, speed_projection).await?;
+    setup(job, size, context, &api_key, speed_projection).await?;
     // A Strata started by hand ends with the old values, the new one starts
     // with the managed ones.
-    agent.stop_strata();
+    agent.strata().stop();
     manage(agent).await;
     let managed = Managed {
         strata_start: Some(strata.run_script(&size.id())),
@@ -555,90 +407,34 @@ async fn install(
     agent
         .set_managed(managed)
         .map_err(|e| Step::Failed(e.to_string()))?;
-    restart_strata(agent).await;
+    agent.strata().start_again().await;
     Ok(None)
 }
 
 async fn add_model(
-    agent: &Arc<Agent>,
+    job: &JobContext,
     size: &Size,
     context: u32,
     api_key: Option<String>,
     speed_projection: bool,
 ) -> Result<Option<String>, Step> {
+    let agent = job.agent();
     // The proxy's key first: a model with another key would answer it with 401.
     let key = api_key
         .or_else(|| agent.managed().api_key(&agent.cfg).map(String::from))
         .unwrap_or_default();
-    setup(agent, size, context, &key, speed_projection).await?;
+    setup(job, size, context, &key, speed_projection).await?;
     if active_changed(agent, &manage(agent).await) {
-        wait_idle(agent).await?;
-        set_step(agent, "Restarting Strata");
-        agent.stop_strata();
-        restart_strata(agent).await;
+        agent.strata().restart_when_idle(job).await?;
     }
     Ok(None)
 }
 
-/// Waits until Strata has no request at work, so a restart cuts none off.
-async fn wait_idle(agent: &Agent) -> Result<(), Step> {
-    wait_for(
-        agent,
-        "Waiting until Strata finishes the running request",
-        None,
-        || async { !agent.strata_busy().await },
-    )
-    .await
-}
-
-/// Waits until `ready` holds, showing `step` while it does not; ends on
-/// cancel and after `limit`.
-async fn wait_for<F, Fut>(
-    agent: &Agent,
-    step: &str,
-    limit: Option<Duration>,
-    mut ready: F,
-) -> Result<(), Step>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
-{
-    let started = Instant::now();
-    let mut shown = false;
-    loop {
-        if agent.jobs.inner.lock().unwrap().cancelled {
-            return Err(Step::Cancelled);
-        }
-        if ready().await {
-            return Ok(());
-        }
-        if !shown {
-            set_step(agent, step);
-            shown = true;
-        }
-        if limit.is_some_and(|l| started.elapsed() >= l) {
-            return Err(format!(
-                "{step}: nach {} min aufgegeben",
-                started.elapsed().as_secs() / 60
-            )
-            .into());
-        }
-        tokio::time::sleep(POLL).await;
-    }
-}
-
-/// Starts Strata again after a job ended it, unless gaming mode is on.
-async fn restart_strata(agent: &Agent) {
-    tokio::time::sleep(STOP_SETTLE).await;
-    if !agent.gaming() {
-        agent.start_strata();
-    }
-}
-
-async fn activate(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
-    wait_idle(agent).await?;
-    set_step(agent, "Starting Strata with the new model");
-    agent.stop_strata();
+async fn activate(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    agent.strata().wait_idle(job).await?;
+    job.step("Starting Strata with the new model");
+    agent.strata().stop();
     let dir = &agent.cfg.strata_dir;
     let mut managed = agent.managed();
     managed.strata_start = Some(Installation::of(&agent.cfg).run_script(id));
@@ -650,14 +446,14 @@ async fn activate(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> 
         .set_managed(managed)
         .map_err(|e| Step::Failed(e.to_string()));
     // Also when saving failed: Strata runs again, with the old model then.
-    restart_strata(agent).await;
+    agent.strata().start_again().await;
     saved?;
     Ok(None)
 }
 
-async fn delete(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
-    set_step(agent, "Deleting files");
-    let install = Installation::of(&agent.cfg);
+async fn delete(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
+    job.step("Deleting files");
+    let install = Installation::of(&job.agent().cfg);
     let id = id.to_string();
     tokio::task::spawn_blocking(move || install.remove(&id))
         .await
@@ -667,60 +463,32 @@ async fn delete(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
 
 /// Like Strata's `UPDATE.bat`: the newest code, then setup's `--update`
 /// with Strata ended, so the engine can be replaced. Model files stay.
-async fn update(agent: &Arc<Agent>) -> Result<Option<String>, Step> {
+async fn update(job: &JobContext) -> Result<Option<String>, Step> {
+    let agent = job.agent();
     let dir = agent.cfg.strata_dir.clone();
-    let git = git(agent).await?;
-    set_step(agent, "Fetching the new version");
+    let git = git(job).await?;
+    job.step("Fetching the new version");
     let pull = CommandSpec {
         program: git,
         args: vec!["pull".into(), "--ff-only".into()],
         dir: Some(dir.clone()),
     };
-    command(agent, pull, false).await?;
-    wait_idle(agent).await?;
-    agent.stop_strata();
+    job.command(pull, false).await?;
+    agent.strata().wait_idle(job).await?;
+    agent.strata().stop();
     let spec = CommandSpec {
         program: dir.join("START-HERE.bat"),
         args: vec!["--update".into()],
         dir: Some(dir),
     };
-    let updated = command(agent, spec, true).await;
+    let updated = job.command(spec, true).await;
     if updated.is_ok() {
         manage(agent).await;
     }
-    restart_strata(agent).await;
+    agent.strata().start_again().await;
     updated?;
     agent.updates.found(Some(false), None);
     Ok(None)
-}
-
-/// The speeds a benchmark printed so far.
-#[derive(Clone, Copy, Debug, Default)]
-struct BenchReading {
-    decode: Option<f64>,
-    prompt: Option<f64>,
-}
-
-impl BenchReading {
-    /// From the short table `tools/strata_bench.py` prints at the end.
-    fn read(&mut self, line: &str) {
-        if let Some(tps) = table_value(line, "chat decode tok/s") {
-            self.decode = Some(tps);
-        } else if let Some(tps) = table_value(line, "4K prompt tok/s") {
-            self.prompt = Some(tps);
-        }
-    }
-}
-
-/// `  chat decode tok/s     38.50   (37.10 - 39.20, n=3)` → 38.5 for
-/// `chat decode tok/s`.
-fn table_value(line: &str, name: &str) -> Option<f64> {
-    line.trim()
-        .strip_prefix(name)?
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()
 }
 
 fn round1(v: f64) -> f64 {
@@ -729,30 +497,26 @@ fn round1(v: f64) -> f64 {
 
 /// Runs Strata's `BENCH.bat` against the running Strata and keeps its
 /// speeds for the model.
-async fn benchmark(agent: &Arc<Agent>, id: &str) -> Result<Option<String>, Step> {
-    let record = measure(agent, id).await?;
+async fn benchmark(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
+    let record = measure(job, id).await?;
     let result = record.result.clone();
-    keep_benchmark(agent, record);
+    keep_benchmark(job.agent(), record);
     Ok(Some(result))
 }
 
 /// One benchmark of the running model `id`.
-async fn measure(agent: &Arc<Agent>, id: &str) -> Result<StrataBenchmark, Step> {
+async fn measure(job: &JobContext, id: &str) -> Result<StrataBenchmark, Step> {
+    let agent = job.agent();
     // A Strata that is still loading gets no second start; one that hangs
     // ends first.
-    if !agent.strata_healthy().await && !agent.strata_loading() {
-        agent.stop_strata();
-        restart_strata(agent).await;
+    if !agent.strata_healthy().await && !agent.strata().loading() {
+        agent.strata().restart().await;
     }
-    wait_for(
-        agent,
-        "Waiting until Strata is ready",
-        Some(READY_TIMEOUT),
-        || agent.strata_healthy(),
-    )
+    job.wait_for("Waiting until Strata is ready", Some(READY_TIMEOUT), || {
+        agent.strata_healthy()
+    })
     .await?;
-    set_step(agent, "Running the benchmark (about 10 min)");
-    agent.jobs.inner.lock().unwrap().bench = BenchReading::default();
+    job.step("Running the benchmark (about 10 min)");
     let dir = agent.cfg.strata_dir.clone();
     let install = Installation::of(&agent.cfg);
     let config = install.config_path(id);
@@ -761,8 +525,8 @@ async fn measure(agent: &Arc<Agent>, id: &str) -> Result<StrataBenchmark, Step> 
         args: vec!["--config".into(), config.display().to_string()],
         dir: Some(dir.clone()),
     };
-    command(agent, spec, false).await?;
-    let reading = agent.jobs.inner.lock().unwrap().bench;
+    job.command(spec, false).await?;
+    let reading = job.bench();
     let tps = reading
         .decode
         .ok_or_else(|| "The benchmark reported no tokens/s".to_string())?;
@@ -785,19 +549,19 @@ async fn measure(agent: &Arc<Agent>, id: &str) -> Result<StrataBenchmark, Step> 
 /// the active model again at the end, also after a cancel. A model that
 /// does not come up or report keeps its error and the next one follows.
 async fn compare_models(
-    agent: &Arc<Agent>,
+    job: &JobContext,
     ids: &[String],
     active: &str,
 ) -> Result<Option<String>, Step> {
+    let agent = job.agent();
     let mut outcome = Ok(());
     for (i, id) in ids.iter().enumerate() {
-        agent.jobs.inner.lock().unwrap().step_prefix =
-            Some(format!("{}/{}: {id}", i + 1, ids.len()));
+        job.set_prefix(Some(format!("{}/{}: {id}", i + 1, ids.len())));
         let measured = async {
             if active_model(agent).as_deref() != Some(id.as_str()) {
-                activate(agent, id).await?;
+                activate(job, id).await?;
             }
-            measure(agent, id).await
+            measure(job, id).await
         }
         .await;
         match measured {
@@ -827,13 +591,14 @@ async fn compare_models(
             }
         }
     }
-    agent.jobs.inner.lock().unwrap().step_prefix = None;
+    job.set_prefix(None);
     if active_model(agent).as_deref() != Some(active) {
-        // Back to the model from before, also after a cancel: the job's
-        // own cancel is spent, the switch must not end on it.
-        agent.jobs.inner.lock().unwrap().cancelled = false;
-        set_step(agent, &format!("Activating {active} again"));
-        activate(agent, active).await?;
+        // Back to the model from before, also after a cancel.
+        job.cleanup(async {
+            job.step(&format!("Activating {active} again"));
+            activate(job, active).await
+        })
+        .await?;
     }
     outcome?;
     let benches = load_benchmarks(agent);
@@ -903,9 +668,10 @@ fn load_benchmarks(agent: &Agent) -> Vec<StrataBenchmark> {
 }
 
 /// Puts the key into every model's config and restarts Strata with it.
-async fn set_key(agent: &Arc<Agent>, api_key: String) -> Result<Option<String>, Step> {
-    wait_idle(agent).await?;
-    set_step(agent, "Setting the key");
+async fn set_key(job: &JobContext, api_key: String) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    agent.strata().wait_idle(job).await?;
+    job.step("Setting the key");
     let install = Installation::of(&agent.cfg);
     let key = api_key.clone();
     tokio::task::spawn_blocking(move || install.set_key(&key))
@@ -916,9 +682,7 @@ async fn set_key(agent: &Arc<Agent>, api_key: String) -> Result<Option<String>, 
     agent
         .set_managed(managed)
         .map_err(|e| Step::Failed(e.to_string()))?;
-    set_step(agent, "Restarting Strata");
-    agent.stop_strata();
-    restart_strata(agent).await;
+    agent.strata().restart_for(job).await;
     Ok(None)
 }
 
@@ -926,18 +690,16 @@ async fn set_key(agent: &Arc<Agent>, api_key: String) -> Result<Option<String>, 
 /// writes for it; everything else in the config stays. The active model
 /// restarts with it once Strata has no request at work.
 async fn set_speed_projection(
-    agent: &Arc<Agent>,
+    job: &JobContext,
     id: &str,
     on: bool,
 ) -> Result<Option<String>, Step> {
-    set_step(agent, "Changing the configuration");
+    let agent = job.agent();
+    job.step("Changing the configuration");
     change_model(agent, id, move |model| model.set_speed_projection(on)).await?;
     // The engine reads its flags at the start: the active model starts again.
     if active_model(agent).as_deref() == Some(id) {
-        wait_idle(agent).await?;
-        set_step(agent, "Restarting Strata");
-        agent.stop_strata();
-        restart_strata(agent).await;
+        agent.strata().restart_when_idle(job).await?;
     }
     Ok(None)
 }
@@ -946,8 +708,9 @@ async fn set_speed_projection(
 /// derived from the old one stay. The active model restarts with it once
 /// Strata has no request at work; if it does not come up, its old config
 /// comes back and Strata starts with that.
-async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Option<String>, Step> {
-    set_step(agent, "Changing the configuration");
+async fn set_context(job: &JobContext, id: &str, context: u32) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    job.step("Changing the configuration");
     let before = change_model(agent, id, move |model| {
         model.set_context(context);
         Ok(())
@@ -956,36 +719,24 @@ async fn set_context(agent: &Arc<Agent>, id: &str, context: u32) -> Result<Optio
     if active_model(agent).as_deref() != Some(id) {
         return Ok(None);
     }
-    wait_idle(agent).await?;
-    set_step(agent, "Restarting Strata");
-    agent.stop_strata();
-    restart_strata(agent).await;
-    let started = if agent.gaming() {
-        Ok(true)
-    } else {
-        started_with_new_args(agent).await
-    };
-    if let Ok(true) = started {
-        return Ok(None);
+    let applied = agent
+        .strata()
+        .restart_or_roll_back(job, "Restoring the old context", || async move {
+            change_model(agent, id, move |model| {
+                model.restore_args(&before);
+                Ok(())
+            })
+            .await
+            .map(drop)
+        })
+        .await?;
+    match applied {
+        Applied::Kept => Ok(None),
+        Applied::RolledBack => Err(Step::Failed(format!(
+            "Strata did not start with {}K context; the old context applies again",
+            context / 1024
+        ))),
     }
-    let output = agent.output.last_lines(KEPT_LINES);
-    set_step(agent, "Restoring the old context");
-    change_model(agent, id, move |model| {
-        model.restore_args(&before);
-        Ok(())
-    })
-    .await?;
-    agent.stop_strata();
-    restart_strata(agent).await;
-    if let Some(job) = agent.jobs.inner.lock().unwrap().current.as_mut() {
-        job.lines = output;
-    }
-    // A cancelled wait also leaves the old context, not an unproven one.
-    started?;
-    Err(Step::Failed(format!(
-        "Strata did not start with {}K context; the old context applies again",
-        context / 1024
-    )))
 }
 
 /// Changes a model's config off the runtime's threads; gives it from before.
@@ -1006,26 +757,6 @@ async fn change_model(
     .await
     .map_err(|e| Step::Failed(e.to_string()))?
     .map_err(Step::Failed)
-}
-
-/// Whether the restarted Strata answers: `false` once it has ended or not
-/// answered within `context_start_secs`.
-async fn started_with_new_args(agent: &Agent) -> Result<bool, Step> {
-    set_step(agent, "Waiting until Strata is ready");
-    let limit = Duration::from_secs(agent.cfg.context_start_secs);
-    let started = Instant::now();
-    loop {
-        if agent.jobs.inner.lock().unwrap().cancelled {
-            return Err(Step::Cancelled);
-        }
-        if agent.strata_healthy().await {
-            return Ok(true);
-        }
-        if !agent.output.reading() || started.elapsed() >= limit {
-            return Ok(false);
-        }
-        tokio::time::sleep(POLL).await;
-    }
 }
 
 /// [`Installation::manage`] off the runtime's threads.
@@ -1059,8 +790,7 @@ pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output =
             return;
         }
         tracing::info!("Konfiguration des aktiven Modells angepasst, Strata startet neu");
-        agent.stop_strata();
-        restart_strata(&agent).await;
+        agent.strata().restart_unless_job_runs().await;
     }
 }
 
@@ -1208,12 +938,13 @@ fn parse_numstat(line: &str) -> Option<ChangedFile> {
 
 /// Runs Strata's setup without questions, with the fixed values and the key.
 async fn setup(
-    agent: &Arc<Agent>,
+    job: &JobContext,
     size: &Size,
     context: u32,
     api_key: &str,
     speed_projection: bool,
 ) -> Result<(), Step> {
+    let agent = job.agent();
     let dir = &agent.cfg.strata_dir;
     let mut args: Vec<String> = vec!["--yes".into(), "--no-start".into(), "--no-browser".into()];
     if !Installation::of(&agent.cfg).models().is_empty() {
@@ -1240,7 +971,7 @@ async fn setup(
     );
     if !api_key.is_empty() {
         args.extend(["--api-key".into(), api_key.to_string()]);
-        agent.jobs.inner.lock().unwrap().secret = Some(api_key.to_string());
+        job.hide(api_key);
     }
     if takes_speed_projection(size) {
         // Always explicit: otherwise setup takes it over from an earlier install.
@@ -1252,15 +983,16 @@ async fn setup(
         args,
         dir: Some(dir.clone()),
     };
-    command(agent, spec, true).await
+    job.command(spec, true).await
 }
 
 /// Git, installed with winget for this user if it is missing.
-async fn git(agent: &Arc<Agent>) -> Result<PathBuf, Step> {
+async fn git(job: &JobContext) -> Result<PathBuf, Step> {
+    let agent = job.agent();
     if let Some(git) = find_git(agent).await {
         return Ok(git);
     }
-    set_step(agent, "Installing Git");
+    job.step("Installing Git");
     let winget = CommandSpec {
         program: "winget".into(),
         args: [
@@ -1279,7 +1011,7 @@ async fn git(agent: &Arc<Agent>) -> Result<PathBuf, Step> {
         .to_vec(),
         dir: None,
     };
-    command(agent, winget, false).await.map_err(|e| match e {
+    job.command(winget, false).await.map_err(|e| match e {
         Step::Failed(e) => Step::Failed(format!(
             "Git is missing and could not be installed ({e}); please install Git for Windows"
         )),
@@ -1335,204 +1067,6 @@ async fn output(agent: &Agent, spec: &CommandSpec) -> Option<(i32, Vec<String>)>
     Some((run.wait().await?, lines))
 }
 
-/// Runs one command of a job: keeps its output, reads setup's progress
-/// when `progress` is set, and ends it on cancel.
-async fn command(agent: &Arc<Agent>, spec: CommandSpec, progress: bool) -> Result<(), Step> {
-    let mut run = agent
-        .platform()
-        .run(&spec)
-        .map_err(|e| Step::Failed(e.to_string()))?;
-    {
-        let mut inner = agent.jobs.inner.lock().unwrap();
-        if inner.cancelled {
-            drop(inner);
-            run.canceller()();
-            return Err(Step::Cancelled);
-        }
-        inner.cancel = Some(run.canceller());
-    }
-    while let Some(line) = run.next_line().await {
-        let step_changed = {
-            let mut inner = agent.jobs.inner.lock().unwrap();
-            let JobsInner {
-                current,
-                progress: p,
-                secret,
-                bench,
-                step_prefix,
-                ..
-            } = &mut *inner;
-            let line = match secret.as_deref() {
-                Some(key) => line.replace(key, "***"),
-                None => line,
-            };
-            bench.read(&line);
-            let Some(job) = current.as_mut() else {
-                continue;
-            };
-            let before = job.step.clone();
-            if progress {
-                p.read(&line, job);
-                // In a comparison: which model the step belongs to.
-                if job.step != before
-                    && let (Some(prefix), Some(step)) = (step_prefix.as_deref(), job.step.as_mut())
-                {
-                    *step = format!("{prefix} · {step}");
-                }
-            }
-            let mut lines: VecDeque<String> = std::mem::take(&mut job.lines).into();
-            lines.push_back(line);
-            while lines.len() > KEPT_LINES {
-                lines.pop_front();
-            }
-            job.lines = lines.into();
-            job.step != before
-        };
-        if step_changed {
-            save_job(agent);
-        }
-    }
-    let code = run.wait().await;
-    let cancelled = {
-        let mut inner = agent.jobs.inner.lock().unwrap();
-        inner.cancel = None;
-        inner.cancelled
-    };
-    if cancelled {
-        return Err(Step::Cancelled);
-    }
-    match code {
-        Some(0) => Ok(()),
-        code => {
-            let error = agent.jobs.current().and_then(|j| j.error);
-            let program = spec.program.file_name().map_or_else(
-                || spec.program.display().to_string(),
-                |n| n.to_string_lossy().into_owned(),
-            );
-            let ended = match code {
-                Some(code) => format!("{program} ended with code {code}"),
-                None => format!("{program} was ended"),
-            };
-            Err(Step::Failed(match error {
-                Some(error) => format!("{ended}: {error}"),
-                None => ended,
-            }))
-        }
-    }
-}
-
-fn set_step(agent: &Agent, step: &str) {
-    let mut inner = agent.jobs.inner.lock().unwrap();
-    let step = match &inner.step_prefix {
-        Some(prefix) => format!("{prefix} · {step}"),
-        None => step.to_string(),
-    };
-    if let Some(job) = inner.current.as_mut() {
-        job.step = Some(step);
-        job.percent = None;
-    }
-    drop(inner);
-    save_job(agent);
-}
-
-fn finish(agent: &Agent, outcome: Outcome) {
-    agent.jobs.update(|job| {
-        job.ended = Some(unix_now());
-        job.bytes_per_sec = None;
-        job.eta_secs = None;
-        match outcome {
-            Outcome::Done(result) => {
-                job.state = StrataJobState::Done;
-                job.result = result;
-                job.percent = Some(100);
-            }
-            Outcome::Failed(error) => {
-                job.state = StrataJobState::Failed;
-                job.error = Some(error);
-            }
-            Outcome::Cancelled => job.state = StrataJobState::Cancelled,
-        }
-    });
-    save_job(agent);
-    if let Some(job) = agent.jobs.current() {
-        tracing::info!(kind = ?job.kind, state = ?job.state, error = ?job.error, "Strata-Vorgang beendet");
-    }
-}
-
-fn save_job(agent: &Agent) {
-    let Some(job) = agent.jobs.current() else {
-        return;
-    };
-    let text = serde_json::to_string_pretty(&job).expect("job serializes");
-    if let Err(e) = crate::write_replacing(&agent.cfg.state_dir().join(JOB_FILE), &text) {
-        tracing::warn!("{JOB_FILE} nicht gespeichert: {e}");
-    }
-}
-
-/// Reads setup's output: the step, a download's progress, an error. The
-/// same lines Strata's own MCP tool reads (`tools/strata_mcp.py`).
-#[derive(Default)]
-struct Progress {
-    /// Bytes at the last speed measurement.
-    last: Option<(Instant, u64)>,
-}
-
-impl Progress {
-    fn read(&mut self, line: &str, job: &mut StrataJob) {
-        if let Some(step) = parse_step(line) {
-            job.step = Some(step);
-            job.percent = None;
-            job.done_bytes = None;
-            job.total_bytes = None;
-            job.bytes_per_sec = None;
-            job.eta_secs = None;
-            self.last = None;
-            return;
-        }
-        if let Some((done, total, percent)) = parse_download(line) {
-            job.percent = Some(percent);
-            job.done_bytes = Some(done);
-            job.total_bytes = Some(total);
-            let now = Instant::now();
-            match self.last {
-                Some((at, bytes)) if now.duration_since(at) >= Duration::from_secs(1) => {
-                    let secs = now.duration_since(at).as_secs_f64();
-                    let speed = (done.saturating_sub(bytes) as f64 / secs) as u64;
-                    job.bytes_per_sec = Some(speed);
-                    job.eta_secs = (speed > 0).then(|| total.saturating_sub(done) / speed);
-                    self.last = Some((now, done));
-                }
-                Some(_) => {}
-                None => self.last = Some((now, done)),
-            }
-            return;
-        }
-        if let Some(error) = line.trim().strip_prefix("[X]") {
-            job.error = Some(error.trim().to_string());
-        }
-    }
-}
-
-/// `=== Step 4: Downloading the model ===` → `4/7: Downloading the model`.
-fn parse_step(line: &str) -> Option<String> {
-    let rest = line
-        .trim()
-        .strip_prefix("=== Step ")?
-        .strip_suffix(" ===")?;
-    let (n, title) = rest.split_once(": ")?;
-    n.parse::<u32>().ok()?;
-    Some(format!("{n}/7: {title}"))
-}
-
-/// `  model.gguf: 12.3 / 68.0 GB (18%)` → bytes done, bytes in total, percent.
-fn parse_download(line: &str) -> Option<(u64, u64, u8)> {
-    let (_, rest) = line.trim().rsplit_once(": ")?;
-    let (amounts, percent) = rest.trim().strip_suffix("%)")?.split_once(" GB (")?;
-    let (done, total) = amounts.split_once(" / ")?;
-    let gb = |s: &str| s.trim().parse::<f64>().ok().map(|v| (v * 1e9) as u64);
-    Some((gb(done)?, gb(total)?, percent.trim().parse().ok()?))
-}
-
 /// The folder as a `strata_processes` entry.
 fn folder_entry(dir: &Path) -> String {
     let mut entry = dir.display().to_string();
@@ -1555,12 +1089,6 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SetContext => "Change context",
         StrataJobKind::CompareModels => "Compare models",
     }
-}
-
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
 }
 
 /// `GET /strata`.
@@ -1656,24 +1184,4 @@ fn git_commit(dir: &Path) -> Option<String> {
             .to_string(),
     };
     (full.len() >= 7).then(|| full[..7].to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reads_setup_steps_and_downloads() {
-        assert_eq!(
-            parse_step("=== Step 4: Downloading the model ===").as_deref(),
-            Some("4/7: Downloading the model")
-        );
-        assert_eq!(
-            parse_download(
-                "  Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf: 12.5 / 50.0 GB (25%)"
-            ),
-            Some((12_500_000_000, 50_000_000_000, 25))
-        );
-        assert_eq!(parse_download("nothing: here"), None);
-    }
 }

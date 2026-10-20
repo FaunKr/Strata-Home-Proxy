@@ -50,6 +50,10 @@ load_time_secs = 240
 # kommt sein alter Kontext zurück.
 context_start_secs = 600
 
+# Pause zwischen dem Beenden von Strata und dem nächsten Start, damit das
+# beendete seinen Port freigibt.
+stop_settle_ms = 2000
+
 # MAC-Adresse, die dem NAS gemeldet wird. Normalerweise leer lassen: der Dienst
 # meldet dann die der Netzwerkkarte, über die das NAS ihn erreicht.
 #mac = "AA-BB-CC-DD-EE-FF"

@@ -7,11 +7,13 @@ pub mod command;
 pub mod config;
 pub mod hardware;
 pub mod install;
+pub mod job;
 pub mod managed;
 pub mod output;
 pub mod platform;
 pub mod sampling;
 pub mod strata;
+pub mod strata_process;
 pub mod update;
 
 use std::{sync::Arc, time::Duration};

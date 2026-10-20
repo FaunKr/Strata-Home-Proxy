@@ -43,7 +43,7 @@ pub async fn update(agent: &Arc<Agent>) -> Result<(), UpdateError> {
     let busy = if agent.jobs.running() {
         Some("A Strata job is running")
     } else if agent.strata_busy().await {
-        Some("Strata bearbeitet eine Anfrage")
+        Some("Strata is processing a request")
     } else {
         None
     };

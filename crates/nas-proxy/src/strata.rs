@@ -112,6 +112,8 @@ impl StrataState {
             info,
             at: clock::unix_now(),
         };
+        // Written under the lock: an older answer never overwrites a newer one.
+        let mut kept = self.last.lock().unwrap();
         if let Some(dir) = &self.dir
             && let Err(e) = write_private(
                 dir,
@@ -121,7 +123,7 @@ impl StrataState {
         {
             tracing::error!("{LAST_FILE} nicht gespeichert: {e}");
         }
-        *self.last.lock().unwrap() = Some(last);
+        *kept = Some(last);
     }
 }
 
@@ -146,10 +148,18 @@ impl StrataState {
         self.job_running.load(Ordering::SeqCst)
     }
 
-    /// What the PC service reported last; `None` since the Proxy started
-    /// until it answers.
+    /// What the PC service reported last, kept over a restart; `None` until
+    /// it answered once.
     pub fn last_info(&self) -> Option<StrataInfo> {
         self.last.lock().unwrap().as_ref().map(|l| l.info.clone())
+    }
+
+    /// The last answer with its benchmark times, and the local time it came.
+    fn shown_last(&self) -> Option<(StrataInfo, String)> {
+        let last = self.last.lock().unwrap().clone()?;
+        let mut info = last.info;
+        with_local_times(&mut info);
+        Some((info, clock::local_text(last.at)))
     }
 }
 
@@ -167,19 +177,13 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
         };
     }
     let Some(status) = state.ask_pc(&agent).await else {
-        let mut last = state.strata.last.lock().unwrap().clone();
-        // Benchmark times read relative to today.
-        if let Some(info) = last.as_mut().map(|l| &mut l.info) {
-            for bench in info.benchmark.iter_mut().chain(info.benchmarks.iter_mut()) {
-                bench.at_text = clock::local_text(bench.at);
-            }
-        }
+        let (info, as_of) = state.strata.shown_last().unzip();
         return StrataPage {
             problem: Some(ASLEEP.into()),
             gaming: false,
-            stale: last.is_some(),
-            as_of: last.as_ref().map(|l| clock::local_text(l.at)),
-            info: last.map(|l| l.info),
+            stale: info.is_some(),
+            as_of,
+            info,
             update: state.strata.update.stale(),
         };
     };
@@ -193,9 +197,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             update: None,
         };
     };
-    for bench in info.benchmark.iter_mut().chain(info.benchmarks.iter_mut()) {
-        bench.at_text = clock::local_text(bench.at);
-    }
+    with_local_times(&mut info);
     state.strata.set_last(info.clone());
     let job = status.strata_job
         || info
@@ -219,6 +221,13 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
         stale: false,
         as_of: None,
         update,
+    }
+}
+
+/// Benchmark times in local time, relative to today.
+fn with_local_times(info: &mut StrataInfo) {
+    for bench in info.benchmark.iter_mut().chain(info.benchmarks.iter_mut()) {
+        bench.at_text = clock::local_text(bench.at);
     }
 }
 

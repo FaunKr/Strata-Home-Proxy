@@ -382,6 +382,7 @@ async fn carries_the_load_lines_or_says_none_were_seen() {
     report.info.models[0].load_lines = Some(LoadLines {
         at: 1_760_000_000,
         lines: vec!["loading experts".into(), "listening on 0.0.0.0:8080".into()],
+        answered: true,
     });
     report
         .info
@@ -395,9 +396,29 @@ async fn carries_the_load_lines_or_says_none_were_seen() {
         "{text}"
     );
     assert!(text.contains("until it answered"), "{text}");
+    assert!(!text.contains("failed"), "{text}");
     let text = prompt(&mut b, "swift-IQ2_XS").await;
     assert!(
         text.contains("### Load lines\n\nNo load seen yet."),
         "{text}"
     );
+}
+
+#[tokio::test]
+async fn a_load_that_ended_without_answering_reads_as_failed() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.models[0].load_lines = Some(LoadLines {
+        at: 1_760_000_000,
+        lines: vec!["out of VRAM".into()],
+        answered: false,
+    });
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert!(
+        text.contains("until it ended without answering, so this load failed"),
+        "{text}"
+    );
+    assert!(text.contains("```text\nout of VRAM\n```"), "{text}");
 }

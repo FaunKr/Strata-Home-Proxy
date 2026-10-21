@@ -480,9 +480,12 @@ async fn delete(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
     job.step("Deleting files");
     let install = Installation::of(&job.agent().cfg);
     let id = id.to_string();
-    tokio::task::spawn_blocking(move || install.remove(&id))
+    let model = id.clone();
+    tokio::task::spawn_blocking(move || install.remove(&model))
         .await
         .map_err(|e| Step::Failed(e.to_string()))??;
+    let id = catalog::by_id(&id).map_or(id, Size::id);
+    job.agent().output.forget_load(&id);
     Ok(None)
 }
 

@@ -7,16 +7,14 @@ use std::{fmt::Write, sync::Arc};
 
 use strata_admin_ui::api::{CodeBenchRun, CodeBenchState};
 use strata_pc_protocol::{
-    MachineFacts, SamplingField, SamplingSource, SamplingSupport, StrataBenchmark, StrataInfo,
-    StrataModel,
+    LOAD_LINES, MachineFacts, SamplingField, SamplingSource, SamplingSupport, StrataBenchmark,
+    StrataInfo, StrataModel,
 };
 
 use crate::{clock, state::AppState};
 
 const STRATA_REPO: &str = "https://github.com/Niko1221/Strata";
 const NOT_RUN: &str = "not run yet";
-/// The PC service keeps at most this many load lines per model.
-const LOAD_LINES: usize = 100;
 
 /// The prompt for installed `model`, from what the PC service reports now
 /// or reported last; never wakes the PC. `Err` says why there is none.
@@ -113,15 +111,24 @@ pub fn build(
         fenced(out, "json", chat);
     }
     let _ = writeln!(out, "\n### Load lines\n");
-    match model.load_lines.as_ref().filter(|l| !l.lines.is_empty()) {
+    match &model.load_lines {
         Some(load) => {
-            let _ = writeln!(
-                out,
-                "Strata's output while it last loaded this model, until it answered \
-                 (at most the last {LOAD_LINES} lines), on {}:\n",
-                clock::full_text(load.at)
-            );
-            fenced(out, "text", &load.lines.join("\n"));
+            let when = clock::full_text(load.at);
+            let end = if load.answered {
+                "until it answered"
+            } else {
+                "until it ended without answering, so this load failed"
+            };
+            if load.lines.is_empty() {
+                let _ = writeln!(out, "The last load, on {when}, printed no lines ({end}).");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "Strata's output while it last loaded this model, on {when}, {end} \
+                     (at most the last {LOAD_LINES} lines):\n"
+                );
+                fenced(out, "text", &load.lines.join("\n"));
+            }
         }
         None => {
             let _ = writeln!(out, "No load seen yet.");

@@ -199,7 +199,7 @@ impl Agent {
         self.gaming.load(Ordering::SeqCst)
     }
 
-    fn strata_get(&self, path: &str) -> reqwest::RequestBuilder {
+    pub(crate) fn strata_get(&self, path: &str) -> reqwest::RequestBuilder {
         let req = self.http.get(format!("{}{path}", self.cfg.strata_url));
         match self.strata_key.key(&self.cfg) {
             Some(key) => req.bearer_auth(key),
@@ -207,15 +207,8 @@ impl Agent {
         }
     }
 
-    /// Whether Strata answers `/health`; an answer ends the load whose
-    /// lines are being kept.
     pub(crate) async fn strata_healthy(&self) -> bool {
-        let healthy =
-            matches!(self.strata_get("/health").send().await, Ok(r) if r.status().is_success());
-        if healthy {
-            self.output.loaded();
-        }
-        healthy
+        matches!(self.strata_get("/health").send().await, Ok(r) if r.status().is_success())
     }
 
     /// True if Strata reports a slot at work. Strata builds without `/slots`

@@ -84,7 +84,8 @@
           "strata.exe: loading Qwen3.8-Flash-Next-IQ3_XXS.gguf",
           "experts on the GPU: 38 of 48",
           "listening on 0.0.0.0:8080"
-        ]
+        ],
+        "answered": true
       }
     },
     {

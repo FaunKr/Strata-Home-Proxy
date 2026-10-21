@@ -519,6 +519,7 @@ pub fn strata_info(installed: bool) -> StrataReport {
         vram_gb: None,
         disk_free_gb: Some(500.0),
         data_dir: "C:\\Strata-data".into(),
+        machine: None,
         benchmark: None,
         benchmarks: vec![],
         job: None,

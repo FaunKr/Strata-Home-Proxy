@@ -13,6 +13,7 @@ use anyhow::{Context, Result, bail};
 use crate::{
     command::{self, CommandSpec, Running},
     hardware::Hardware,
+    machine::MachineFacts,
 };
 
 pub trait Platform: Send + Sync + 'static {
@@ -57,6 +58,11 @@ pub trait Platform: Send + Sync + 'static {
     /// The hardware readings; returns at once, `/status` asks every few seconds.
     fn hardware(&self) -> Hardware {
         Hardware::default()
+    }
+    /// What the PC is; `data_dir` is the Strata data folder. Slow: the
+    /// caller reads it once.
+    fn machine(&self, _data_dir: &Path) -> MachineFacts {
+        MachineFacts::default()
     }
 }
 
@@ -425,6 +431,10 @@ impl Platform for System {
     #[cfg(windows)]
     fn vram_bytes(&self) -> u64 {
         crate::hardware::vram_bytes()
+    }
+    #[cfg(windows)]
+    fn machine(&self, data_dir: &Path) -> MachineFacts {
+        crate::machine::read(data_dir)
     }
 }
 

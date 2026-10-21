@@ -1193,6 +1193,7 @@ pub fn view(agent: &Agent) -> StrataReport {
             .disk_free(&cfg.strata_data_dir)
             .map(|b| b as f64 / 1e9),
         data_dir: cfg.strata_data_dir.display().to_string(),
+        machine: Some(agent.machine()),
         benchmark: load_benchmark(agent),
         benchmarks: load_benchmarks(agent),
         job: agent.jobs.current(),

@@ -160,9 +160,11 @@ async fn drive(s: &Setup, runner: &Runner, model: &str) {
 /// until the proxy kept its result.
 async fn drive_end(s: &Setup, runner: &Runner, model: &str, end_run: Value) {
     *runner.current.lock().unwrap() = Some(end_run);
-    eventually_for(Duration::from_secs(10), "result for {model}", || {
-        has_result(&s.state.code_bench, model)
-    })
+    eventually_for(
+        Duration::from_secs(10),
+        &format!("result for {model}"),
+        || has_result(&s.state.code_bench, model),
+    )
     .await;
 }
 
@@ -191,12 +193,18 @@ async fn drive_load_fail(s: &Setup, model: &str) {
     });
 }
 
-/// Waits until the job that activates `model` runs on the simulated PC.
+/// Waits until the job that activates `model` runs on the simulated PC. The
+/// request alone is not enough: bringing a model back after its failed load
+/// asks for the same model again.
 async fn wait_for_activate(s: &Setup, model: &str) {
     eventually_for(
         Duration::from_secs(10),
         &format!("Activate {model}"),
-        || last_activate(s) == model,
+        || {
+            s.pc.strata_job.lock().unwrap().as_ref().is_some_and(|j| {
+                j.state == StrataJobState::Running && j.model.as_deref() == Some(model)
+            })
+        },
     )
     .await;
 }

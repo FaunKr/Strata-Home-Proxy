@@ -48,9 +48,10 @@ the real commit, the checkout with the commit's tests), about 2 minutes
 outside the cache. `tools/code-bench/prepare_repo_task.py` and a task's
 `repo.json` select it (`bench=true`).
 
-The workflow `PR text` (`pr-text.yml`) checks a PR's body and commit
-messages for Claude session links on every push and every edit of the body;
-one short job, apart from CI so a body edit does not start the whole run.
+The `changes` job also checks a PR's commit messages for Claude session
+links (`scripts/pr-text.sh`), at no extra job. The body is checked by the
+workflow `PR text` (`pr-text.yml`) when the PR opens and on each edit: one
+short job (1 minute), so fixing the body does not start the whole CI.
 
 The `publish` job never runs twice at the same time and ends after 30 minutes.
 A newer push to `main` waits until the running one is finished; that way no

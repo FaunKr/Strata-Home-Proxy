@@ -4,7 +4,9 @@
 # also when tooling appends one on its own.
 # Usage: <text> | scripts/check-session-links.sh
 set -euo pipefail
-if found=$(grep -nE 'claude\.ai/code/(session_|project/)|^Claude-Session:' -); then
+# Any claude.ai/code/... or claude.ai/project/... path; the bare product link
+# claude.ai/code (the attribution footer of comments) passes.
+if found=$(grep -niE 'claude\.ai/(code|project)/|^[[:space:]>]*Claude-Session:' -); then
   echo "Claude session or thread links, remove them:" >&2
   echo "$found" >&2
   exit 1

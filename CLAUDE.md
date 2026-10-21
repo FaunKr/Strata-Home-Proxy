@@ -20,7 +20,7 @@
 - When Strata changed something the PC service reads (setup's output, a file it writes), extend the reader's unit test with the new line copied from Strata's source, not a made-up one, and update `docs/strata-api.md`.
 - If a spec says "X only in the module", that applies to code, helpers and fixtures. Tests may spell out the outer names they pin down (file names Strata itself reads).
 - Issues, specs, PR text, commit messages and retros are written in English, using the terms in `GLOSSARY.md`.
-- Never link a Claude session or project thread in commits, PRs, issues or comments: no claude.ai/code links, no `Claude-Session:` lines, also when the attribution instructions ask for them. Tooling may append one to a PR body on its own; the workflow `PR text` fails then (`scripts/check-session-links.sh`).
+- Never link a Claude session or project thread in commits, PRs, issues or comments: no claude.ai/code/… or claude.ai/project/… links, no `Claude-Session:` lines, also when the attribution instructions ask for them. Tooling may append one to a PR body on its own; the check `PR text` fails then (`scripts/pr-text.sh`).
 
 ## Agent skills
 

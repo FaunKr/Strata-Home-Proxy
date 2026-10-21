@@ -6,8 +6,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version=$(scripts/nextest-version.sh)
-if [[ $(cargo nextest --version 2>/dev/null | head -n1) == "cargo-nextest $version "* ]]; then
+installed=$(cargo nextest --version 2>/dev/null | sed -n '1s/^cargo-nextest \([0-9.]*\).*/\1/p' || true)
+# At least the pin, as check.sh asks: a newer one stays.
+if [[ -n $installed && $(printf '%s\n' "$version" "$installed" | sort -V | head -n1) == "$version" ]]; then
   exit 0
+fi
+if [[ $(uname -s) != Linux ]]; then
+  echo "install-nextest.sh is for Linux; elsewhere: cargo install cargo-nextest@$version --locked" >&2
+  exit 1
 fi
 curl -fsSL "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$version/cargo-nextest-$version-$(uname -m)-unknown-linux-gnu.tar.gz" \
   | tar xz -C "${CARGO_HOME:-$HOME/.cargo}/bin"

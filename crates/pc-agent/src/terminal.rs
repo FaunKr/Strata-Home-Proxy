@@ -19,6 +19,8 @@ const CURRENT: [&str; 2] = ["terminal", "current"];
 /// The Strata folder with the run configs, beside the engines, where
 /// Strata's desktop app keeps them too.
 const INSTALL: &str = "install";
+/// The `strata` command in the Terminal's own files.
+const PROGRAM: [&str; 2] = ["bin", "strata.cmd"];
 
 /// The Strata Terminal in its folder (`strata_home`).
 #[derive(Clone, Debug)]
@@ -44,7 +46,14 @@ impl Terminal {
 
     /// The `strata` command.
     pub fn program(&self) -> PathBuf {
-        self.root().join("bin").join("strata.cmd")
+        Self::program_in(&self.root())
+    }
+
+    /// The `strata` command among the Terminal's own files in `root`.
+    pub fn program_in(root: &Path) -> PathBuf {
+        PROGRAM
+            .iter()
+            .fold(root.to_path_buf(), |p, part| p.join(part))
     }
 
     pub fn is_installed(&self) -> bool {
@@ -67,11 +76,7 @@ impl Terminal {
     /// What makes up a running Strata: every program from the Terminal's
     /// folder (its Python) and the engines beside it.
     pub fn processes(&self) -> Vec<String> {
-        let mut entry = self.home.display().to_string();
-        if !crate::platform::is_folder(&entry) {
-            entry.push(std::path::MAIN_SEPARATOR);
-        }
-        vec![entry]
+        vec![crate::platform::folder_entry(&self.home)]
     }
 
     /// Strata's install script from `installer`, into this folder. It
@@ -152,6 +157,22 @@ impl Terminal {
     pub fn served_config(args: &[String]) -> Option<PathBuf> {
         let at = args.iter().position(|a| a == "--profile")?;
         args.get(at + 1).map(PathBuf::from)
+    }
+
+    /// Writes the Terminal's own files as `install.ps1` leaves them, empty,
+    /// with `version` in `VERSION`; for tests.
+    pub fn fake_install(&self, version: &str) {
+        let root = self.root();
+        for (file, text) in [
+            (root.join("strata.py"), ""),
+            (root.join("setup.py"), ""),
+            (root.join("python").join("python.exe"), ""),
+            (self.program(), "@echo off"),
+        ] {
+            std::fs::create_dir_all(file.parent().expect("a file in a folder")).unwrap();
+            std::fs::write(file, text).unwrap();
+        }
+        std::fs::write(root.join("VERSION"), format!("{version}\n")).unwrap();
     }
 
     fn install_env(&self) -> (String, String) {
@@ -272,6 +293,19 @@ mod tests {
         assert_eq!(args[0], "serve");
         assert_eq!(Terminal::served_config(&args).as_deref(), Some(config));
         assert_eq!(Terminal::served_config(&["--native".into()]), None);
+    }
+
+    #[test]
+    fn the_version_is_the_version_file_s_line() {
+        let home = std::env::temp_dir().join(format!("terminal-version-{}", std::process::id()));
+        let terminal = Terminal::new(&home);
+        assert_eq!(terminal.version(), None);
+        terminal.fake_install("0.2.2");
+        assert!(terminal.is_installed());
+        assert_eq!(terminal.version().as_deref(), Some("0.2.2"));
+        std::fs::write(terminal.root().join("VERSION"), " \n").unwrap();
+        assert_eq!(terminal.version(), None);
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

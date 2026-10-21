@@ -72,6 +72,15 @@ pub enum Kind {
     Source,
 }
 
+impl From<Kind> for strata_pc_protocol::StrataInstall {
+    fn from(kind: Kind) -> Self {
+        match kind {
+            Kind::Terminal => Self::Terminal,
+            Kind::Source => Self::Source,
+        }
+    }
+}
+
 /// A model's config as read, with its Chat settings. Change it with the
 /// setters and give it to [`Installation::save`]; keep a clone to roll back.
 #[derive(Clone, Debug, PartialEq)]
@@ -128,7 +137,7 @@ impl Installation {
     pub fn is_set_up(&self) -> bool {
         match self.kind {
             Kind::Source => self.code.join("setup.py").is_file(),
-            Kind::Terminal => self.code.join("bin").join("strata.cmd").is_file(),
+            Kind::Terminal => Terminal::program_in(&self.code).is_file(),
         }
     }
 
@@ -330,11 +339,11 @@ impl Installation {
         self.dir.join(format!("run-{}.bat", lower(id)))
     }
 
-    /// The model a start with `start_script` and `args` starts, as its
-    /// config file names it: the run config `strata serve` serves, or the
+    /// The model a start with `start_script` and `args` starts, by its run
+    /// config's file name: the run config `strata serve` serves, or the
     /// model's own start script. A script that is no model's own
-    /// (`START-HERE.bat` starts the model used last) gives the config Strata
-    /// touched last, as Strata picks it.
+    /// (`START-HERE.bat` starts the model used last) gives the run config
+    /// Strata touched last, as Strata picks it.
     pub fn active_model(&self, start_script: &Path, args: &[String]) -> Option<String> {
         let models = self.models();
         if let Some(config) = Terminal::served_config(args) {
@@ -738,13 +747,7 @@ pub mod testing {
         /// The Strata Terminal's files as its install script leaves them in
         /// `home`, at this version.
         pub fn terminal(home: &Path, data_dir: &Path, version: &str) -> Self {
-            let terminal = Terminal::new(home);
-            let root = terminal.root();
-            for file in ["strata.py", "setup.py", "python/python.exe"] {
-                write(root.join(file), "");
-            }
-            write(terminal.program(), "@echo off");
-            write(root.join("VERSION"), &format!("{version}\n"));
+            Terminal::new(home).fake_install(version);
             Self::terminal_at(home, data_dir)
         }
 

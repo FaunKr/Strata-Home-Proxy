@@ -201,3 +201,69 @@ async fn update_benchmark_and_comparison_are_not_offered_yet() {
     }
     assert!(s.fake.ran.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn the_speed_projection_takes_the_terminal_s_own_vector() {
+    let s = setup("terminal-esp").await;
+    let leaves = installed(&s);
+    leaves.speed_projection_vector();
+    let vector = format!("{}:1.0", leaves.vector().display());
+    assert!(
+        leaves
+            .vector()
+            .starts_with(Terminal::of(&s.agent.cfg).root())
+    );
+    let done = job(
+        &s,
+        json!({"kind": "set_speed_projection", "model": "coder-IQ1_M", "on": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let args = leaves.installation().model("coder-iq1_m").unwrap().fields()["args"].clone();
+    let args: Vec<_> = args
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a.as_str().unwrap())
+        .collect();
+    assert!(
+        args.windows(2)
+            .any(|w| w == ["--control-vector-scaled", vector.as_str()]),
+        "{args:?}"
+    );
+    assert_eq!(
+        model(&get(&s, "/strata").await, "coder-IQ1_M")["speed_projection"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn a_new_key_lands_in_the_served_run_config() {
+    let s = setup("terminal-key").await;
+    let leaves = installed(&s);
+    let done = job(
+        &s,
+        json!({"kind": "set_key", "api_key": "proxy-key-0123456789"}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let key = leaves.installation().model("iq3_xxs").unwrap().fields()["api_key"].clone();
+    assert_ne!(key, "key-0123456789abcdef");
+    assert_ne!(key, "proxy-key-0123456789");
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+    let (_, args) = s.fake.started.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        Terminal::served_config(&args),
+        Some(leaves.installation().config_path("iq3_xxs"))
+    );
+}
+
+#[tokio::test]
+async fn gaming_mode_stops_every_program_from_the_terminal_s_folder() {
+    let s = setup("terminal-gaming").await;
+    installed(&s);
+    let (code, answer) = post(&s, "/gaming", json!({"enabled": true})).await;
+    assert_eq!(code, 200, "{answer}");
+    let stopped = s.fake.stopped.lock().unwrap().clone().unwrap();
+    assert_eq!(stopped, Terminal::of(&s.agent.cfg).processes());
+}

@@ -29,8 +29,8 @@ use crate::{
 };
 pub use strata_pc_protocol::{
     ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, StrataBenchmark, StrataFamily,
-    StrataInfo, StrataInstall, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState,
-    StrataModel, StrataReport, StrataSize,
+    StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState, StrataModel,
+    StrataReport, StrataSize,
 };
 
 /// The last benchmark run, as older services kept it alone.
@@ -306,7 +306,7 @@ fn installed_model(install: &Installation, model: &str) -> Result<String, Refusa
 /// The model the managed start starts, in the catalog's letter case: the
 /// run config `strata serve` serves, or the model's start script. Without
 /// a model's own start script (`START-HERE.bat` starts the model used
-/// last), the config Strata touched last, as Strata picks it. Without any
+/// last), the run config Strata touched last, as Strata picks it. Without any
 /// start (after the one-line setup) none: the service starts no model, and
 /// activating one sets the start.
 fn active_model(agent: &Agent) -> Option<String> {
@@ -429,7 +429,7 @@ fn managed_start(agent: &Agent, install: &Installation, id: &str) -> Managed {
         Kind::Source => Managed {
             strata_start: Some(install.run_script(id)),
             strata_args: Vec::new(),
-            strata_processes: Some(vec![folder_entry(&agent.cfg.strata_dir)]),
+            strata_processes: Some(vec![crate::platform::folder_entry(&agent.cfg.strata_dir)]),
         },
     }
 }
@@ -497,7 +497,7 @@ async fn update(job: &JobContext) -> Result<Option<String>, Step> {
         program: git,
         args: vec!["pull".into(), "--ff-only".into()],
         dir: Some(dir.clone()),
-        env: Vec::new(),
+        ..Default::default()
     };
     job.command(pull, false).await?;
     agent.strata().wait_idle(job).await?;
@@ -506,7 +506,7 @@ async fn update(job: &JobContext) -> Result<Option<String>, Step> {
         program: dir.join("START-HERE.bat"),
         args: vec!["--update".into()],
         dir: Some(dir),
-        env: Vec::new(),
+        ..Default::default()
     };
     let updated = job.command(spec, true).await;
     if updated.is_ok() {
@@ -551,7 +551,7 @@ async fn measure(job: &JobContext, id: &str) -> Result<StrataBenchmark, Step> {
         program: dir.join("BENCH.bat"),
         args: vec!["--config".into(), config.display().to_string()],
         dir: Some(dir.clone()),
-        env: Vec::new(),
+        ..Default::default()
     };
     job.command(spec, false).await?;
     let reading = job.bench();
@@ -897,7 +897,7 @@ async fn incoming_commits(agent: &Agent) -> Option<Option<Incoming>> {
             program: git.clone(),
             args: args.iter().map(|a| a.to_string()).collect(),
             dir: Some(dir.clone()),
-            env: Vec::new(),
+            ..Default::default()
         };
         async move {
             let (code, lines) = output(agent, &spec).await?;
@@ -1016,7 +1016,7 @@ async fn setup(
                 program: dir.join("START-HERE.bat"),
                 args,
                 dir: Some(dir.clone()),
-                env: Vec::new(),
+                ..Default::default()
             }
         }
     };
@@ -1047,7 +1047,7 @@ async fn git(job: &JobContext) -> Result<PathBuf, Step> {
         .map(String::from)
         .to_vec(),
         dir: None,
-        env: Vec::new(),
+        ..Default::default()
     };
     job.command(winget, false).await.map_err(|e| match e {
         Step::Failed(e) => Step::Failed(format!(
@@ -1083,7 +1083,7 @@ async fn find_git(agent: &Agent) -> Option<PathBuf> {
             program: candidate.clone(),
             args: vec!["--version".into()],
             dir: None,
-            env: Vec::new(),
+            ..Default::default()
         };
         if output(agent, &version)
             .await
@@ -1107,14 +1107,6 @@ async fn output(agent: &Agent, spec: &CommandSpec) -> Option<(i32, Vec<String>)>
 }
 
 /// The folder as a `strata_processes` entry.
-fn folder_entry(dir: &Path) -> String {
-    let mut entry = dir.display().to_string();
-    if !crate::platform::is_folder(&entry) {
-        entry.push(std::path::MAIN_SEPARATOR);
-    }
-    entry
-}
-
 fn kind_text(kind: StrataJobKind) -> &'static str {
     match kind {
         StrataJobKind::Install => "Setup",
@@ -1160,13 +1152,13 @@ pub fn view(agent: &Agent) -> StrataReport {
         })
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
-    let (kind, version) = match install.kind() {
-        Kind::Terminal => (StrataInstall::Terminal, Terminal::of(cfg).version()),
-        Kind::Source => (StrataInstall::Source, git_commit(dir)),
+    let version = match install.kind() {
+        Kind::Terminal => Terminal::of(cfg).version(),
+        Kind::Source => git_commit(dir),
     };
     let info = StrataInfo {
         installed: install.is_set_up(),
-        install: install.is_set_up().then_some(kind),
+        install: install.is_set_up().then_some(install.kind().into()),
         version,
         update_available: agent.updates.available(),
         models,

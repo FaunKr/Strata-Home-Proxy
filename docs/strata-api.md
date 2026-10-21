@@ -36,7 +36,10 @@ Move the pin above only after comparing the code, not only the commit subjects: 
 | `setup.py`: `step`, `fail`, download and check lines | the PC service's setup output reader | the job's step and progress |
 | `serve/prometheus.py` | `crates/nas-proxy/tests/fixtures/strata-metrics-*.prom` | the Overview |
 | `serve/server.py`: `do_GET`, `_authorized`, `/health`, `MODEL_CARD_SAMPLING`, `sampling_defaults_from_config` | `strata_client.rs`, `crates/pc-agent/src/sampling.rs` | the proxy, the sampling the PC service writes |
-| `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_bench.py` | `crates/pc-agent/src/strata.rs` | install, update and benchmark jobs |
+| `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_bench.py` | `crates/pc-agent/src/strata.rs` | install, update and benchmark jobs on a Strata folder from source |
+| `packaging/install.ps1`, `packaging/package_terminal.py` (the Terminal's files, `STRATA_DATA_DIR`) | `crates/pc-agent/src/terminal.rs` (`root`, `program`, `version`, `install`) | the install job, `install` and `version` in `GET /strata` |
+| `strata_cli/update_cmd.py` (`run`), `update_engine` in `strata_control/updater.py` | `terminal.rs` (`engine_installed`, its tests) | the install job's engine step |
+| `strata_cli/serve_cmd.py`, setup's install mode (`STRATA_CONTROL_INSTALL`), `STRATA_INSTALL_DIR` | `terminal.rs` (`serve_args`, `setup`, `command`) | the start of Strata, `install` and `add_model` on the Terminal |
 
 ## API key
 

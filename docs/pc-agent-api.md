@@ -283,10 +283,13 @@ like Strata, takes one that is not valid JSON as empty. `sampling` is
 leaves the field out.
 
 `config` is the model's run config as JSON text, laid out as Strata writes
-it, for the optimization prompt: without `api_key` anywhere in it, and with
-every string that holds a path (`exe`, the GGUF in `args`, `cwd`,
-`tokenizer`, `log`, `lib_dirs`, the `vision` block) cut to its last part,
-so neither the key nor the Windows user name leaves the PC. Missing if the
+it, for the optimization prompt: without any field whose name ends in
+`key`, `token`, `secret` or `password` (`api_key` among them), and with every
+absolute or Windows path (`exe`, the GGUF in `args`, `cwd`, `tokenizer`,
+`log`, `lib_dirs`, the `vision` block) cut to its last part; an option keeps
+its name (`--x=D:\a\b.bin` gives `--x=b.bin`), a user's own folder gives `~`,
+and other text such as a URL stays. So neither a key nor the Windows user
+name leaves the PC. Missing if the
 config cannot be read. `chat_settings` is the model's Chat settings file
 (`strata-<id>.shared-settings.json`) as JSON text, cut the same way, and
 missing without the file or if it is not valid JSON. An older PC service

@@ -623,37 +623,75 @@ fn flag_of(group: &[Value]) -> &str {
         .unwrap_or("")
 }
 
-/// Setup writes lower-case file names whatever the catalog's case.
+/// `fields` as JSON text without secrets and with every path cut to its
+/// last part, laid out as Strata writes it.
 fn shareable_text(fields: &ConfigFields) -> String {
-    match shareable(&Value::Object(fields.clone())) {
-        Value::Object(fields) => config_text(&fields),
-        _ => unreachable!("an object stays an object"),
-    }
+    config_text(&shareable_fields(fields))
 }
 
-/// `value` without any `api_key` and with every string that holds a path
-/// cut to its last part: setup writes absolute paths (`exe`, the GGUF in
-/// `args`, `cwd`, `tokenizer`, `log`, `lib_dirs`, `vision`).
+/// `fields` without any field whose name says it holds a secret (`api_key`,
+/// a token, a password), with paths cut ([`shareable`]).
+fn shareable_fields(fields: &ConfigFields) -> ConfigFields {
+    fields
+        .iter()
+        .filter(|(key, _)| !is_secret(key))
+        .map(|(key, value)| (key.clone(), shareable(value)))
+        .collect()
+}
+
+fn is_secret(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    ["key", "token", "secret", "password"]
+        .iter()
+        .any(|end| key.ends_with(end))
+}
+
+/// `value` with secrets left out and each path cut to its last part: setup
+/// writes absolute paths (`exe`, the GGUF in `args`, `cwd`, `tokenizer`,
+/// `log`, `lib_dirs`, `vision`). An option keeps its name
+/// (`--x=D:\a\b.bin` → `--x=b.bin`); other text, a URL among it, stays.
 fn shareable(value: &Value) -> Value {
     match value {
-        Value::Object(fields) => Value::Object(
-            fields
-                .iter()
-                .filter(|(key, _)| key.as_str() != "api_key")
-                .map(|(key, value)| (key.clone(), shareable(value)))
-                .collect(),
-        ),
+        Value::Object(fields) => Value::Object(shareable_fields(fields)),
         Value::Array(items) => Value::Array(items.iter().map(shareable).collect()),
-        Value::String(text) if text.contains(['/', '\\']) => Value::String(
-            text.rsplit(['/', '\\'])
-                .find(|part| !part.is_empty())
-                .unwrap_or_default()
-                .to_string(),
-        ),
+        Value::String(text) => Value::String(match text.split_once('=') {
+            Some((option, path)) if option.starts_with('-') && is_path(path) => {
+                format!("{option}={}", last_part(path))
+            }
+            _ if is_path(text) => last_part(text),
+            _ => text.clone(),
+        }),
         other => other.clone(),
     }
 }
 
+/// An absolute or Windows path: `C:\…`, `C:/…`, `\\server\…`, `/…`, or
+/// anything with a backslash.
+fn is_path(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    drive || text.starts_with('/') || text.contains('\\')
+}
+
+/// A path's last part; a user's own folder (`C:\Users\<name>`) gives `~`,
+/// so the name stays on the PC.
+fn last_part(path: &str) -> String {
+    let parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    let Some(last) = parts.last() else {
+        return String::new();
+    };
+    let user_folder = parts.len() >= 2 && parts[parts.len() - 2].eq_ignore_ascii_case("users");
+    if user_folder {
+        "~".into()
+    } else {
+        (*last).to_string()
+    }
+}
+
+/// Setup writes lower-case file names whatever the catalog's case.
 fn lower(id: &str) -> String {
     id.to_lowercase()
 }
@@ -996,6 +1034,33 @@ mod tests {
         assert_eq!(config["vision"]["max_tokens"], 1024);
         assert_eq!(config["port"], 8080);
         assert_eq!(config["model_name"], "qwen3.8-flash-next-iq3_xxs");
+    }
+
+    #[test]
+    fn only_paths_are_cut_and_no_secret_or_user_name_stays() {
+        let fields: ConfigFields = serde_json::from_value(json!({
+            "cwd": "C:\\Users\\Faun\\",
+            "args": ["--kv-dir=D:\\x\\cache", "--prefill", "auto"],
+            "url": "http://pc:8080/v1",
+            "system_prompt": "Answer briefly and/or in German",
+            "telemetry_read_key": "secret-1",
+            "hf_token": "secret-2",
+            "max_tokens": 4096,
+            "top_k": 20
+        }))
+        .unwrap();
+        let cut = shareable_fields(&fields);
+        assert_eq!(
+            Value::Object(cut),
+            json!({
+                "cwd": "~",
+                "args": ["--kv-dir=cache", "--prefill", "auto"],
+                "url": "http://pc:8080/v1",
+                "system_prompt": "Answer briefly and/or in German",
+                "max_tokens": 4096,
+                "top_k": 20
+            })
+        );
     }
 
     #[test]

@@ -413,6 +413,17 @@ pub fn client() -> reqwest::Client {
     reqwest::Client::new()
 }
 
+/// Waits up to 5 s until `check` holds; panics naming `what` otherwise.
+pub async fn eventually(what: &str, check: impl Fn() -> bool) {
+    for _ in 0..100 {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{what} did not happen");
+}
+
 pub async fn sleep_answer(s: &Setup) -> (u16, Value) {
     let resp = client()
         .post(format!("{}/sleep", s.url))

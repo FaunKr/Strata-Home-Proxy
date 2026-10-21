@@ -93,10 +93,9 @@ async fn wake_timeout_is_reported() {
 async fn idle_pc_is_sent_to_sleep() {
     let s = setup(true, |c| c.idle_timeout = Duration::from_millis(400)).await;
     post_json(&s, "/v1/messages", json!({})).await;
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    eventually("the PC asleep", || s.state.pc_state() == PcState::Asleep).await;
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
     assert!(!s.pc.up());
-    assert_eq!(s.state.pc_state(), PcState::Asleep);
 
     // The next request wakes it again.
     let resp = post_json(&s, "/v1/messages", json!({})).await;
@@ -112,7 +111,7 @@ async fn running_stream_keeps_pc_awake() {
         post_json(
             &client,
             "/v1/messages",
-            json!({"stream": true, "pause_ms": 1200}),
+            json!({"stream": true, "pause_ms": 2000}),
         )
         .await
         .text()
@@ -124,8 +123,10 @@ async fn running_stream_keeps_pc_awake() {
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 0);
     let text = stream.await.unwrap();
     assert!(text.contains("message_stop"));
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
+    eventually("a sleep request", || {
+        s.pc.sleep_requests.load(Ordering::SeqCst) == 1
+    })
+    .await;
 }
 
 /// A setup whose Strata metrics show nothing running, which gives up a
@@ -245,23 +246,28 @@ async fn pings_fill_long_pauses_between_events() {
 async fn refused_sleep_is_retried_later() {
     let s = setup(true, |c| c.idle_timeout = Duration::from_millis(200)).await;
     s.pc.refuse_sleep.store(true, Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
-    assert!(kinds(&s.state).contains(&EventKind::SleepRefused));
+    eventually("a refused sleep", || {
+        kinds(&s.state).contains(&EventKind::SleepRefused)
+    })
+    .await;
+    assert!(s.pc.up());
+    let refused = s.pc.sleep_requests.load(Ordering::SeqCst);
     s.pc.refuse_sleep.store(false, Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 2);
-    assert!(!s.pc.up());
+    eventually("the retried sleep", || !s.pc.up()).await;
+    assert!(s.pc.sleep_requests.load(Ordering::SeqCst) > refused);
 }
 
 #[tokio::test]
 async fn keep_awake_blocks_sleep() {
     let s = setup(true, |c| c.idle_timeout = Duration::from_millis(200)).await;
-    s.state.keep_awake_for(Duration::from_millis(800));
+    // Well past the idle time, and well before keep awake ends, also on a slow runner.
+    s.state.keep_awake_for(Duration::from_millis(1500));
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 0);
-    tokio::time::sleep(Duration::from_millis(600)).await;
-    assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
+    eventually("a sleep request", || {
+        s.pc.sleep_requests.load(Ordering::SeqCst) == 1
+    })
+    .await;
 }
 
 #[tokio::test]

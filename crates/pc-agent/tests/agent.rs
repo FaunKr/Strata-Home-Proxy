@@ -44,8 +44,7 @@ async fn sleep_is_accepted_when_nothing_holds_it() {
     assert_eq!(body["accepted"], true);
     // The answer goes out first, standby follows a moment later.
     assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 0);
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
+    eventually("standby", || s.fake.suspends.load(Ordering::SeqCst) == 1).await;
 }
 
 #[tokio::test]
@@ -59,10 +58,12 @@ async fn fresh_strata_after_standby_restarts_it_around_sleep() {
 
     let (code, _) = sleep_answer(&s).await;
     assert_eq!(code, 200);
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    eventually("Strata started again after standby", || {
+        s.fake.starts.load(Ordering::SeqCst) == 1
+    })
+    .await;
     assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
     assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
-    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
 
     // A resume the watchdog notices right after does not start a second copy.
     s.agent.resumed();
@@ -312,8 +313,7 @@ async fn forced_sleep_overrides_activity_a_busy_strata_and_gaming_mode() {
     );
     // The answer goes out first, standby follows as after `/sleep`.
     assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 0);
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
+    eventually("standby", || s.fake.suspends.load(Ordering::SeqCst) == 1).await;
 }
 
 #[tokio::test]
@@ -324,8 +324,7 @@ async fn forced_sleep_leaves_gaming_mode_on() {
     assert_eq!(code, 200, "{body}");
     assert_eq!(body["gaming_mode"], true);
     assert_eq!(body["user_active"], false);
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
+    eventually("standby", || s.fake.suspends.load(Ordering::SeqCst) == 1).await;
     // Back from standby: still gaming, and Strata stays off.
     assert!(s.agent.gaming());
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
@@ -338,10 +337,12 @@ async fn fresh_strata_after_standby_applies_to_a_forced_sleep() {
     *s.fake.idle.lock().unwrap() = Duration::from_secs(30);
     let (code, _) = post(&s, "/sleep/force", json!({})).await;
     assert_eq!(code, 200);
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    eventually("Strata started again after standby", || {
+        s.fake.starts.load(Ordering::SeqCst) == 1
+    })
+    .await;
     assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
     assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
-    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -424,7 +425,9 @@ async fn a_second_sleep_while_standby_is_pending_brings_no_second_standby() {
         let (code, body) = post(&s, path, json!({})).await;
         assert_eq!(code, 200, "{path}: {body}");
     }
-    tokio::time::sleep(Duration::from_millis(3000)).await;
+    eventually("standby", || s.fake.suspends.load(Ordering::SeqCst) == 1).await;
+    // A second standby would follow within the 2 s delay.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
     assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
 }
 

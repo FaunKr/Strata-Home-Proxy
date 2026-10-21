@@ -36,8 +36,10 @@ async fn shorter_idle_timeout_applies_at_once() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 0);
     s.state.settings.set("IDLE_TIMEOUT_SECS", "1").unwrap();
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
+    eventually("a sleep request", || {
+        s.pc.sleep_requests.load(Ordering::SeqCst) == 1
+    })
+    .await;
 }
 
 #[tokio::test]

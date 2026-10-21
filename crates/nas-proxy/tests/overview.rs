@@ -105,13 +105,10 @@ async fn asks_only_while_a_page_watches() {
 
     let mut live = Live::open(&b).await;
     live.until("PC awake", |v| v["pc"] == "Awake").await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(
-        s.state.overview.rounds() >= 3,
-        "{}",
-        s.state.overview.rounds()
-    );
-    assert!(s.pc.metrics_requests.load(Ordering::SeqCst) >= 3);
+    eventually("3 rounds while the page watches", || {
+        s.state.overview.rounds() >= 3 && s.pc.metrics_requests.load(Ordering::SeqCst) >= 3
+    })
+    .await;
 
     drop(live);
     tokio::time::sleep(Duration::from_millis(400)).await;
@@ -134,8 +131,7 @@ async fn the_stream_carries_the_last_7_days_summed_once_a_minute() {
         "{week}"
     );
     // Many ticks of the stream, one sum.
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-    assert!(s.state.overview.rounds() >= 3);
+    eventually("3 rounds", || s.state.overview.rounds() >= 3).await;
     assert_eq!(s.state.overview.weeks_summed(), 1);
 }
 

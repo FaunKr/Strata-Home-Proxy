@@ -203,6 +203,19 @@ async fn drive_load_fail(s: &Setup, model: &str) {
     });
 }
 
+/// Waits until the proxy asks for its `jobs`th job, activating `model` again
+/// after a run over all models, and ends that job. Ending it any earlier ends
+/// the previous job instead, and the run never finishes.
+async fn drive_back(s: &Setup, model: &str, jobs: usize) {
+    eventually_for(
+        Duration::from_secs(10),
+        "the active model brought back",
+        || s.pc.job_bodies.lock().unwrap().len() == jobs && last_activate(s) == model,
+    )
+    .await;
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+}
+
 fn has_key(s: &Setup) -> bool {
     has_key_state(&s.state)
 }
@@ -614,7 +627,7 @@ async fn a_model_that_does_not_load_gets_its_error_row_and_the_run_goes_on() {
     })
     .await;
     drive(&s, &runner, ids[2]).await;
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    drive_back(&s, ids[1], 4).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     let v = page(&mut b).await;
     let row = v["results"]
@@ -657,7 +670,7 @@ async fn a_model_that_does_not_load_keeps_its_earlier_result_with_the_error() {
     })
     .await;
     drive(&s, &runner, ids[2]).await;
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    drive_back(&s, ids[1], 4).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
 
     // One row for the model: its earlier result, with the failure on it.
@@ -1134,7 +1147,7 @@ async fn the_pc_counts_as_busy_for_a_whole_run_over_all_models() {
     drive(&s, &runner, ids[0]).await;
     drive(&s, &runner, ids[1]).await;
     assert!(s.state.in_flight() > 0, "not busy before the model is back");
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    drive_back(&s, ids[1], 3).await;
     eventually_for(Duration::from_secs(10), "idle after the run", || {
         s.state.in_flight() == 0
     })

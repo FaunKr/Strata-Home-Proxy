@@ -101,7 +101,7 @@ fi
 nextest_version=$(scripts/nextest-version.sh)
 installed=$(cargo nextest --version 2>/dev/null | sed -n '1s/^cargo-nextest \([0-9.]*\).*/\1/p' || true)
 if [[ $cargo == true ]] && [[ -z $installed || $(printf '%s\n' "$nextest_version" "$installed" | sort -V | head -n1) != "$nextest_version" ]]; then
-  echo "cargo-nextest ${installed:-missing}, needs $nextest_version: cargo install cargo-nextest@$nextest_version --locked" >&2
+  echo "cargo-nextest ${installed:-missing}, needs $nextest_version: scripts/install-nextest.sh (or cargo install cargo-nextest@$nextest_version --locked)" >&2
   exit 2
 fi
 # The integration tests are one binary per crate (autotests = false): a file
@@ -121,6 +121,8 @@ scripts/ci-select.test.sh
 # The repo is English: no umlauts in tracked files (scripts/language-allowlist).
 scripts/check-language.test.sh
 scripts/check-language.sh
+# No Claude session links in commits or PR bodies; CI checks the PR itself.
+scripts/check-session-links.test.sh
 if [[ $cargo == true ]]; then
   cargo clippy "${package_args[@]}" --all-targets -- -D warnings
 fi

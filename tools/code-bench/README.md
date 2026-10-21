@@ -58,6 +58,12 @@ takes the commit's test files as the hidden tests and counts the tests the
 commit added. The build fails unless the commit's own change passes all
 counted tests and breaks none, and the untouched checkout passes fewer.
 
+To check a repo task without Docker (a new one, or after changing
+`prepare_repo_task.py`): `python3 tools/code-bench/prepare_repo_task.py
+tools/code-bench/tasks/<name> . <empty folder>` in a clone that has the
+commit. It runs the same checks as the image build, with the local Rust
+toolchain, in about 2 minutes.
+
 A run copies the checkout into the task folder; opencode gets only
 `TASK.md`, which the proxy sends. Afterwards the runner records the diff
 against the checkout (what the agent committed included), lays the hidden

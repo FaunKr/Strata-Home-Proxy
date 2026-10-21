@@ -38,6 +38,13 @@ jobs:
       # The repo is English (GLOSSARY.md). Checked here and not in test, so a
       # docs-only pull request is checked too; it takes seconds.
       - run: scripts/check-language.sh
+      # No Claude session links in the PR's commits; its body is checked by
+      # pr-text.yml, so fixing the body needs no new CI run.
+      - if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: scripts/pr-text.sh commits
       - id: select
         env:
           GH_TOKEN: ${{ github.token }}

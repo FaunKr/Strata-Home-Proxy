@@ -1,0 +1,23 @@
+name: PR text
+# A PR's body, checked for Claude session or thread links when the PR opens
+# and on each edit (scripts/pr-text.sh); tooling may append such a link at
+# creation, and the fix is an edit. Commit messages: the changes job of
+# ci.yml. Apart from CI, so an edit does not start the whole run.
+on:
+  pull_request:
+    types: [opened, edited, reopened]
+concurrency:
+  group: pr-text-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  session-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: scripts/pr-text.sh body

@@ -9,7 +9,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -411,6 +411,15 @@ pub async fn setup_with(name: &str, tweak: impl FnOnce(&mut Config)) -> Setup {
 
 pub fn client() -> reqwest::Client {
     reqwest::Client::new()
+}
+
+/// Waits up to 5 s until `check` holds; panics naming `what` otherwise.
+pub async fn eventually(what: &str, check: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !check() {
+        assert!(Instant::now() < deadline, "{what} did not happen");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 pub async fn sleep_answer(s: &Setup) -> (u16, Value) {

@@ -3,7 +3,10 @@
 
 use crate::common;
 
-use std::{sync::atomic::Ordering, time::Duration};
+use std::{
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 use common::*;
 use serde_json::{Value, json};
@@ -105,17 +108,24 @@ async fn asks_only_while_a_page_watches() {
 
     let mut live = Live::open(&b).await;
     live.until("PC awake", |v| v["pc"] == "Awake").await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(
-        s.state.overview.rounds() >= 3,
-        "{}",
-        s.state.overview.rounds()
-    );
-    assert!(s.pc.metrics_requests.load(Ordering::SeqCst) >= 3);
+    eventually("3 rounds while the page watches", || {
+        s.state.overview.rounds() >= 3 && s.pc.metrics_requests.load(Ordering::SeqCst) >= 3
+    })
+    .await;
 
     drop(live);
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    let rounds = s.state.overview.rounds();
+    // A round that was under way may still finish: wait until none follows.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut rounds = s.state.overview.rounds();
+    loop {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let now = s.state.overview.rounds();
+        if now == rounds {
+            break;
+        }
+        assert!(Instant::now() < deadline, "rounds go on without a page");
+        rounds = now;
+    }
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(s.state.overview.rounds(), rounds);
 }
@@ -134,8 +144,7 @@ async fn the_stream_carries_the_last_7_days_summed_once_a_minute() {
         "{week}"
     );
     // Many ticks of the stream, one sum.
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-    assert!(s.state.overview.rounds() >= 3);
+    eventually("3 rounds", || s.state.overview.rounds() >= 3).await;
     assert_eq!(s.state.overview.weeks_summed(), 1);
 }
 

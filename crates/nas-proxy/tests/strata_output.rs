@@ -100,19 +100,19 @@ async fn gaming_mode_reaches_the_page_as_a_notice() {
 
 #[tokio::test]
 async fn an_open_page_does_not_keep_the_pc_awake() {
-    // Long enough that the page sees the PC awake first, also on a slow runner.
-    let s = setup(true, |c| c.idle_timeout = Duration::from_secs(2)).await;
+    let s = setup(true, |_| {}).await;
     *s.pc.strata_log.lock().unwrap() = vec![StrataOutputMessage::Line {
         text: "running".into(),
     }];
     let b = logged_in(&s.url).await;
     let mut live = Live::open_at(&b, STREAM).await;
     live.until("line", |m| m["text"] == "running").await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    while s.pc.sleep_requests.load(Ordering::SeqCst) == 0 {
-        assert!(tokio::time::Instant::now() < deadline, "no sleep request");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    // Only now that the page shows the PC awake does the idle time run out.
+    s.state.settings.set("IDLE_TIMEOUT_SECS", "1").unwrap();
+    eventually("a sleep request", || {
+        s.pc.sleep_requests.load(Ordering::SeqCst) > 0
+    })
+    .await;
 }
 
 #[tokio::test]

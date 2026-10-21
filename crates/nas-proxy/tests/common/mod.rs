@@ -9,7 +9,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -854,13 +854,11 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
 
 /// Waits up to 5 s until `check` holds; panics naming `what` otherwise.
 pub async fn eventually(what: &str, check: impl Fn() -> bool) {
-    for _ in 0..100 {
-        if check() {
-            return;
-        }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !check() {
+        assert!(Instant::now() < deadline, "{what} did not happen");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("{what} did not happen");
 }
 
 pub async fn post_json(s: &Setup, path: &str, body: Value) -> reqwest::Response {

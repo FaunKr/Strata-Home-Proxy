@@ -11,3 +11,7 @@ slow-timeout = { period = "30s", terminate-after = 2 }
 retries = 0
 # One run shows every failing test.
 fail-fast = false
+# Most of a test's time is waiting on short intervals, not CPU: 16 at once
+# (4x the CI runner's cores) took a full run from 80 s to 45 s and held 20
+# runs in a row; at 32, tests that raced the clock failed (#226).
+test-threads = 16

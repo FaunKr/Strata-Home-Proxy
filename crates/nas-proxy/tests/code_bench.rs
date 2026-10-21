@@ -169,13 +169,7 @@ async fn drive_end(s: &Setup, runner: &Runner, model: &str, end_run: Value) {
 /// Activates `model` through the simulated PC, ends its job, waits for its run
 /// to start, then ends that run.
 async fn drive_model(s: &Setup, runner: &Runner, model: &str, end_run: Value) {
-    for _ in 0..100 {
-        if last_activate(s) == model {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert_eq!(last_activate(s), model, "Activate {model} not asked for");
+    wait_for_activate(s, model).await;
     s.pc.update_job(|j| j.state = StrataJobState::Done);
     for _ in 0..100 {
         if last_run(runner) == model {
@@ -190,17 +184,30 @@ async fn drive_model(s: &Setup, runner: &Runner, model: &str, end_run: Value) {
 /// A model that does not load: its Activate ends with an error, so the run
 /// goes on without a run for it.
 async fn drive_load_fail(s: &Setup, model: &str) {
-    for _ in 0..100 {
-        if last_activate(s) == model {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert_eq!(last_activate(s), model, "Activate {model} not asked for");
+    wait_for_activate(s, model).await;
     s.pc.update_job(|j| {
         j.state = StrataJobState::Failed;
         j.error = Some("the model did not load".into());
     });
+}
+
+/// Waits until the job that activates `model` runs on the simulated PC. The
+/// PC notes the request before it swaps in the new job, so the request alone
+/// is not enough: ending the job then would end the previous one instead.
+async fn wait_for_activate(s: &Setup, model: &str) {
+    eventually_for(Duration::from_secs(10), "Activate {model}", || {
+        last_activate(s) == model
+            && s.pc.strata_job.lock().unwrap().as_ref().is_some_and(|j| {
+                j.state == StrataJobState::Running && j.model.as_deref() == Some(model)
+            })
+    })
+    .await;
+}
+
+/// Ends the job that activates `model` again after a run over all models.
+async fn drive_back(s: &Setup, model: &str) {
+    wait_for_activate(s, model).await;
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
 }
 
 fn has_key(s: &Setup) -> bool {
@@ -569,18 +576,7 @@ async fn a_run_over_all_models_goes_through_them_and_brings_the_active_one_back(
         drive(&s, &runner, id).await;
     }
     // The model active before the run (the second) is activated again.
-    for _ in 0..100 {
-        if last_activate(&s) == ids[1] {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert_eq!(
-        last_activate(&s),
-        ids[1],
-        "the active model is not brought back"
-    );
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    drive_back(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     // The models in order, then the one active before the run.
     let order: Vec<String> =
@@ -614,7 +610,7 @@ async fn a_model_that_does_not_load_gets_its_error_row_and_the_run_goes_on() {
     })
     .await;
     drive(&s, &runner, ids[2]).await;
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    drive_back(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     let v = page(&mut b).await;
     let row = v["results"]
@@ -657,7 +653,7 @@ async fn a_model_that_does_not_load_keeps_its_earlier_result_with_the_error() {
     })
     .await;
     drive(&s, &runner, ids[2]).await;
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    drive_back(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
 
     // One row for the model: its earlier result, with the failure on it.
@@ -1134,7 +1130,7 @@ async fn the_pc_counts_as_busy_for_a_whole_run_over_all_models() {
     drive(&s, &runner, ids[0]).await;
     drive(&s, &runner, ids[1]).await;
     assert!(s.state.in_flight() > 0, "not busy before the model is back");
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    drive_back(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "idle after the run", || {
         s.state.in_flight() == 0
     })

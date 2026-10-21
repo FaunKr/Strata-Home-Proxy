@@ -312,13 +312,15 @@ async fn power_and_price_are_saved_with_decimals_and_apply_at_once() {
 
 #[tokio::test]
 async fn saved_idle_timeout_brings_sleep_forward() {
-    use std::{sync::atomic::Ordering, time::Duration};
+    use std::sync::atomic::Ordering;
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     post_json(&s, "/v1/messages", serde_json::json!({})).await;
     assert_eq!(save(&mut b, "IDLE_TIMEOUT_SECS", "1").await.status(), 200);
-    tokio::time::sleep(Duration::from_millis(1300)).await;
-    assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
+    eventually("a sleep request", || {
+        s.pc.sleep_requests.load(Ordering::SeqCst) == 1
+    })
+    .await;
 }
 
 #[tokio::test]

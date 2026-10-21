@@ -524,7 +524,7 @@ def set_firewall():
                 "The code-bench container cannot set its firewall for the agent. "
                 "It needs the NET_ADMIN capability (cap_add in docker-compose.yml)."
             )
-    # No IPv6 for the agent: the ranges above are IPv4 only.
+    # No IPv6 for the agent: the rules above are IPv4 only.
     no_ipv6 = ["OUTPUT", "-m", "owner", "--uid-owner", str(user.pw_uid), "-j", "REJECT"]
     if not run_quietly(["ip6tables", "-w", "-C"] + no_ipv6):
         run_quietly(["ip6tables", "-w", "-A"] + no_ipv6)

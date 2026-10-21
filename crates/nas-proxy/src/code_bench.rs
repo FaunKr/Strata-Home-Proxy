@@ -22,7 +22,12 @@ use strata_pc_protocol::{StrataJobRequest, StrataJobState};
 use tokio::sync::watch;
 
 use crate::{
-    api_keys::KeyError, clock, events::EventKind, files::write_private, state::AppState, timeouts,
+    api_keys::KeyError,
+    clock,
+    events::EventKind,
+    files::write_private,
+    state::{ActivityGuard, AppState},
+    timeouts,
 };
 
 const RESULTS_FILE: &str = "code-bench.json";
@@ -526,14 +531,30 @@ pub async fn start_all(state: &Arc<AppState>) -> Result<(), String> {
     });
     let state = Arc::clone(state);
     let url = url.clone();
-    tokio::spawn(async move { run_all(&state, &url, &key).await });
+    tokio::spawn(async move {
+        // Other keys are held until the run ends, also if it panics.
+        let _holding = Holding(&state.code_bench.holding);
+        run_all(&state, &url, &key).await;
+    });
     Ok(())
+}
+
+/// Ends the hold of other keys when dropped.
+struct Holding<'a>(&'a watch::Sender<bool>);
+
+impl Drop for Holding<'_> {
+    fn drop(&mut self) {
+        self.0.send_replace(false);
+    }
 }
 
 /// Goes through the models in order, then brings back the one active before the
 /// run. A model that fails to load or whose run fails gets its error row and
 /// the run goes on; a Cancel stops it after the model that runs now.
 async fn run_all(state: &Arc<AppState>, url: &str, key: &str) {
+    // A person started it: the PC stays awake to its end, also while the
+    // tests run or a model loads and no request goes through.
+    let _active = ActivityGuard::new(state);
     let ids = {
         let all = state.code_bench.all.lock().unwrap();
         all.as_ref()
@@ -567,7 +588,6 @@ async fn run_all(state: &Arc<AppState>, url: &str, key: &str) {
     bring_back(state, &restore).await;
     *state.code_bench.all.lock().unwrap() = None;
     revoke_key(state);
-    state.code_bench.holding.send_replace(false);
     state.overview.refresh_now();
 }
 
@@ -594,6 +614,15 @@ async fn activate(state: &Arc<AppState>, model: &str) -> Result<(), String> {
     if state.ask_pc(&agent).await.is_none() {
         crate::strata::wake(state, WAKE_BY).await?;
     }
+    // A job still running, e.g. an Activate from before a proxy restart:
+    // the PC service takes no second one, so wait for its end first.
+    if agent
+        .strata_job()
+        .await
+        .is_some_and(|job| job.state == StrataJobState::Running)
+    {
+        let _ = job_end(state, &agent).await;
+    }
     let request = StrataJobRequest::Activate {
         model: model.to_string(),
     };
@@ -603,6 +632,11 @@ async fn activate(state: &Arc<AppState>, model: &str) -> Result<(), String> {
         EventKind::StrataJobStarted,
         Some(format!("Activate {model}")),
     );
+    job_end(state, &agent).await
+}
+
+/// Waits for the PC service's Strata job to end; whether it succeeded.
+async fn job_end(state: &AppState, agent: &crate::agent::AgentClient) -> Result<(), String> {
     let mut missed = 0;
     loop {
         let poll = *state.code_bench.poll.lock().unwrap();
@@ -710,6 +744,7 @@ pub fn resume(state: &Arc<AppState>) {
     let state = Arc::clone(state);
     tokio::spawn(async move {
         let _starting = Starting(&state.code_bench.starting);
+        let _active = ActivityGuard::new(&state);
         if let Some(run) = current(&state, &url).await
             && run.state == CodeBenchState::Running
         {
@@ -771,6 +806,8 @@ async fn active_model(state: &std::sync::Arc<AppState>) -> Result<String, String
 /// Asks the runner for the run until it ends, then revokes its key and keeps
 /// the result.
 async fn follow(state: &Arc<AppState>, url: &str) {
+    // The PC stays awake to the run's end, also while the tests run.
+    let _active = ActivityGuard::new(state);
     follow_run(state, url, false).await;
     revoke_key(state);
     state.overview.refresh_now();

@@ -1201,7 +1201,7 @@ fn CodeBenchCard() -> impl IntoView {
             Question {
                 title: "Benchmark all models?".into(),
                 text: format!(
-                    "{models} models, {tasks} tasks each, at most {} per model and {} in all. Requests of other clients wait until the run ends. The model active before the run comes back at the end.",
+                    "{models} models, {tasks} tasks each, at most {} per model and {} in all. Requests of other clients wait until the run ends, at most as long as for a wake-up, and then fail. The model active before the run comes back at the end.",
                     hours_text(minutes),
                     hours_text(models as u64 * minutes),
                 ),
@@ -1268,10 +1268,14 @@ fn CodeBenchCard() -> impl IntoView {
                                 });
                                 view! {
                                     <div class="job" role="status">
-                                        <p class="strong">{format!(
-                                            "Model {} of {} · task {} of {}",
-                                            a.model, a.models, a.task, a.tasks
-                                        )}</p>
+                                        <p class="strong">{if a.task == 0 {
+                                            format!("Model {} of {} · loading", a.model, a.models)
+                                        } else {
+                                            format!(
+                                                "Model {} of {} · task {} of {}",
+                                                a.model, a.models, a.task, a.tasks
+                                            )
+                                        }}</p>
                                         <p class="muted small">{format!(
                                             "The model active before the run, {}, comes back at the end.", a.restore
                                         )}</p>

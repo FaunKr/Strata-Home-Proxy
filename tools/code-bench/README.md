@@ -90,6 +90,7 @@ untrusted code. It does not reach:
 | the runner's API (cancelling or starting runs) | user `agent`, the firewall rejects the API port |
 | the NAS, the home network, the internet, the proxy's web UI | the firewall rejects everything but the relay, Docker's DNS and loopback; the relay forwards only `/v1/*` |
 | the repo task's real commit | no internet; the checkout has no history |
+| the repo task's hidden tests and counted list | `hidden/` and `task.json` are root's only (700/600) |
 | keys other than the run's | the proxy creates one key per run and revokes only that one |
 | files of the runner and of other tasks | user `agent` owns only its own task folder |
 | the scoring | hidden tests only after opencode, `python -I`, a process group of their own; writing without following symlinks (`O_NOFOLLOW`); marker only from stdout |
@@ -97,4 +98,7 @@ untrusted code. It does not reach:
 
 Known gap: the code under test runs in the test run's process and can print a
 marker itself on exit. That cannot be prevented in this process; the score is
-a measure, not a check against cheating.
+a measure, not a check against cheating. The same holds for the repo task,
+more so: the agent controls the build (`build.rs`, `.cargo/config.toml`, a
+`rustc-wrapper`) and could print passing test lines itself. The diff shows
+such a change; the score does not catch it.

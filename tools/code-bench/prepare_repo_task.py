@@ -12,10 +12,11 @@ test command. From the clone this writes <out>/repos/<name>/:
   task.json   the base commit, the command, the counted tests (those the
               commit added) and the tests that pass on the checkout
 
-The vendored crates go to <out>/vendor. Before writing task.json it checks
-the task itself: the commit's own change scores all counted tests and
-breaks none, the untouched checkout scores fewer. Otherwise it fails, and
-so does the image build.
+The vendored crates go to <out>/vendor. Then it checks the task with the
+runner's own scoring and real cargo: the commit's own change scores all
+counted tests and breaks none, the untouched checkout scores fewer.
+Otherwise it fails, and so does the image build. hidden/ and task.json are
+for root only, so the agent cannot read what scores it.
 """
 
 import json
@@ -23,8 +24,10 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runner  # noqa: E402
 from runner import GIT_ENV, cargo_results  # noqa: E402
 
 CARGO = os.environ.get("CARGO_BIN", "cargo")
@@ -130,26 +133,43 @@ def main(task_dir, clone, out):
     if failing or broken:
         sys.exit(f"{name}: the commit itself fails {failing + broken}:\n{output[-4000:]}")
 
-    # The untouched checkout with the commit's tests must not score full marks.
-    untouched = os.path.join(out, "untouched")
-    shutil.copytree(folder, untouched, symlinks=True)
-    try:
-        lay_over(clone, commit, paths, untouched)
-        results, _ = cargo_test(untouched, command)
-    finally:
-        shutil.rmtree(untouched)
-    passed = sum(1 for k in counted if results.get(k) == "ok")
-    if passed >= len(counted):
-        sys.exit(f"{name}: the untouched checkout already passes all {len(counted)} counted tests")
-
-    with open(os.path.join(root, "task.json"), "w", encoding="utf-8") as f:
+    task_file = os.path.join(root, "task.json")
+    with open(task_file, "w", encoding="utf-8") as f:
         json.dump(
             {"base": base, "command": command, "counted": counted, "passing_before": passing_before},
             f,
             indent=1,
         )
+
+    # The runner's own scoring, with real cargo: the commit's change scores
+    # full marks and breaks nothing, the untouched checkout scores less.
+    runner.REPO_TASKS_DIR = os.path.join(out, "repos")
+    full, _, output, broken = score(name, out, change)
+    if full != len(counted) or broken:
+        os.remove(task_file)
+        sys.exit(f"{name}: the runner scores the commit {full}/{len(counted)}, broken {broken}:\n{output}")
+    passed, _, _, _ = score(name, out, None)
+    if passed >= len(counted):
+        os.remove(task_file)
+        sys.exit(f"{name}: the untouched checkout already passes all {len(counted)} counted tests")
+
+    # Only the runner (root) reads what scores the agent's work.
+    os.chmod(os.path.join(root, "hidden"), 0o700)
+    os.chmod(task_file, 0o600)
     print(f"{name}: {len(counted)} counted tests ({passed} pass untouched), "
           f"{len(passing_before)} passing before, {len(paths)} hidden files")
+
+
+def score(name, out, change):
+    """runner.score_repo on a fresh copy of the checkout, `change` applied."""
+    folder = tempfile.mkdtemp(dir=out)
+    try:
+        runner.copy_checkout(name, folder)
+        if change is not None:
+            git(folder, "apply", "--whitespace=nowarn", "-", stdin=change)
+        return runner.score_repo(name, folder)
+    finally:
+        shutil.rmtree(folder)
 
 
 if __name__ == "__main__":

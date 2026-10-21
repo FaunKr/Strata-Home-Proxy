@@ -547,8 +547,11 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
             st.events.record(EventKind::GamingRejected, None);
             unavailable(flavor, &WakeError::Gaming)
         }
-        _ if streaming => wake_then_stream(st, guard, req, flavor, held),
-        _ => match wait_and_wake(&st, held).await {
+        // Held while ready, or asleep: wait for the run's end or the wake-up.
+        Readiness::Ready | Readiness::NeedsWake if streaming => {
+            wake_then_stream(st, guard, req, flavor, held)
+        }
+        Readiness::Ready | Readiness::NeedsWake => match wait_and_wake(&st, held).await {
             Ok(()) => forward(st, guard, req, flavor).await,
             Err(err) => {
                 if err == WakeError::Gaming {

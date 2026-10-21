@@ -881,10 +881,10 @@ async fn a_run_over_all_models_refuses_a_strata_job_started_by_hand() {
     b.call("code-bench-cancel", &[]).await;
 }
 
-#[tokio::test]
-async fn after_a_restart_mid_run_the_current_run_is_followed_and_the_model_brought_back() {
-    let ids = ["IQ3_XXS", "coder-IQ1_M"];
-    let dir = data_dir("code-bench-restart");
+/// A proxy with a runner and `ids` installed (the second active) that keeps
+/// its state in a DATA_DIR of its own, for restarts.
+async fn with_models_kept(ids: &[&str], name: &str) -> (Setup, Runner, std::path::PathBuf) {
+    let dir = data_dir(name);
     let runner = Runner::default();
     let addr = serve(
         Router::new()
@@ -908,6 +908,13 @@ async fn after_a_restart_mid_run_the_current_run_is_followed_and_the_model_broug
         .collect();
     *s.pc.strata_info.lock().unwrap() = Some(info);
     s.state.code_bench.set_poll(Duration::from_millis(20));
+    (s, runner, dir)
+}
+
+#[tokio::test]
+async fn after_a_restart_mid_run_the_current_run_is_followed_and_the_model_brought_back() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner, dir) = with_models_kept(&ids, "code-bench-restart").await;
 
     // The proxy is mid-run for the first model when it restarts: its key and the
     // model active before the run are in DATA_DIR, and the runner is working on
@@ -1086,21 +1093,23 @@ async fn a_held_request_answers_as_a_wake_timeout_when_its_time_runs_out() {
 }
 
 #[tokio::test]
-async fn a_single_run_and_a_restarted_proxy_hold_no_one() {
-    let ids = ["IQ3_XXS", "coder-IQ1_M"];
-    let (s, runner) = with_models(&ids).await;
+async fn a_single_run_holds_no_one() {
+    let (s, runner) = with_runner().await;
     let (other, _) = s.state.api_keys.create("laptop").unwrap();
     let mut b = logged_in(&s.url).await;
-    // A single run: other clients keep going.
     assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
     let resp = tokio::time::timeout(Duration::from_secs(5), chat_with(&s.url, &other))
         .await
         .expect("held by a single run");
     assert_eq!(resp.status(), 200);
-    drive_end(&s, &runner, ids[1], run(ids[1], "done")).await;
-    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+    drive_end(&s, &runner, "IQ3_XXS", run("IQ3_XXS", "done")).await;
+}
 
-    // A run over all models, then a restart in the middle: nothing is held.
+#[tokio::test]
+async fn a_proxy_restarted_during_a_run_over_all_models_holds_no_one() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let mut b = logged_in(&s.url).await;
     all_models_run_started(&s, &runner, &mut b).await;
     let fresh = restarted(&s);
     let (phone, _) = fresh.api_keys.create("phone").unwrap();
@@ -1109,4 +1118,66 @@ async fn a_single_run_and_a_restarted_proxy_hold_no_one() {
         .await
         .expect("held after a restart");
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn the_pc_counts_as_busy_for_a_whole_run_over_all_models() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    // Also while a model loads and no request goes through.
+    eventually_for(Duration::from_secs(10), "busy while loading", || {
+        s.state.in_flight() > 0
+    })
+    .await;
+    drive(&s, &runner, ids[0]).await;
+    drive(&s, &runner, ids[1]).await;
+    assert!(s.state.in_flight() > 0, "not busy before the model is back");
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    eventually_for(Duration::from_secs(10), "idle after the run", || {
+        s.state.in_flight() == 0
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_pc_counts_as_busy_for_a_whole_single_run() {
+    let (s, runner) = with_runner().await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    // The tests of the repo task run without a request going through.
+    eventually_for(Duration::from_secs(10), "busy during the run", || {
+        s.state.in_flight() > 0
+    })
+    .await;
+    drive_end(&s, &runner, "IQ3_XXS", run("IQ3_XXS", "done")).await;
+    eventually_for(Duration::from_secs(10), "idle after the run", || {
+        s.state.in_flight() == 0
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn after_a_restart_during_an_activate_the_model_is_brought_back_once_it_ends() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, _runner, dir) = with_models_kept(&ids, "code-bench-restart-activate").await;
+    // The proxy restarts while the first model loads: no run at the runner,
+    // and the PC service takes no second job before this one ends.
+    let (_, info) = s.state.api_keys.create(KEY_NAME).unwrap();
+    std::fs::write(dir.join("code-bench-key"), info.prefix).unwrap();
+    std::fs::write(dir.join("code-bench-restore"), ids[1]).unwrap();
+    *s.pc.strata_job.lock().unwrap() = Some(job(StrataJobKind::Activate, StrataJobState::Running));
+    let restarted = restarted(&s);
+    code_bench::resume(&restarted);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        s.pc.job_bodies.lock().unwrap().is_empty(),
+        "a second job while the first runs"
+    );
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    eventually_for(Duration::from_secs(10), "the model brought back", || {
+        last_activate(&s) == ids[1]
+    })
+    .await;
 }

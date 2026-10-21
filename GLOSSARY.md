@@ -121,3 +121,17 @@ _Avoid_: Strata API key, STRATA_API_KEY (an older setting of the proxy), token (
 **Strata output**:
 What a Strata started by the PC service writes to its console; the PC service keeps the last 500 lines, the web UI shows them live in the Strata area (tab *Output*). Not an event.
 _Avoid_: Strata log, log entry (except `strata-log` and `strata.log` in code and file names), Strata-Ausgabe
+
+## Code benchmark
+
+**Code benchmark**:
+The model solving fixed programming tasks with opencode in the code-bench container on the NAS, scored by hidden tests (Strata → Version & benchmark). Not the benchmark, which measures speed.
+_Avoid_: coding test, eval
+
+**Repo task**:
+A code benchmark task that is a real feature of this repo: the agent works in a checkout from before the feature, the feature's own tests score it.
+_Avoid_: Rust task (except as a title), real task
+
+**Run over all models**:
+What *Benchmark all models* starts: each installed model in turn solves the tasks; other keys' requests wait meanwhile, and the model active before comes back at the end.
+_Avoid_: batch run, all-models run

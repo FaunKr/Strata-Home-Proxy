@@ -23,6 +23,17 @@ pub enum StrataOutputMessage {
     },
 }
 
+/// A model's load lines: the Strata output of its latest load, from the
+/// start of a Strata the PC service started until `/health` answered or
+/// that Strata ended.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoadLines {
+    /// When the load ended, as Unix time.
+    pub at: u64,
+    /// At most the last 100 lines, oldest first.
+    pub lines: Vec<String>,
+}
+
 /// Why there is no output to follow, or `Running` when there is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

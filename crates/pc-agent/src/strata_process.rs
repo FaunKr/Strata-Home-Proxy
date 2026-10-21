@@ -146,7 +146,7 @@ impl<'a> StrataProcess<'a> {
             Err(e) => return failed(e.to_string()),
         };
         let output = Arc::clone(&agent.output);
-        let run_id = output.started();
+        let run_id = output.started(crate::strata::active_model(agent));
         // The page shows this output; the key must not reach it. A new key
         // comes with a restart, so the one of this start is enough.
         let key = agent.strata_key.key(&agent.cfg);

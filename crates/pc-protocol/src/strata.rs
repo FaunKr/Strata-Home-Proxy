@@ -115,6 +115,10 @@ pub struct StrataModel {
     /// way; `None` without the file, or from older services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_settings: Option<String>,
+    /// The output of its latest load; `None` before one was seen, or from
+    /// older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_lines: Option<crate::LoadLines>,
 }
 
 /// Which defaults the PC's Strata applies to a request without sampling

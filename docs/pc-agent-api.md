@@ -295,6 +295,15 @@ config cannot be read. `chat_settings` is the model's Chat settings file
 missing without the file or if it is not valid JSON. An older PC service
 leaves both out.
 
+`load_lines` is the model's latest load, for the optimization prompt: the
+Strata output from a start by the PC service until `/health` answered, or
+until that Strata ended if it never did, at most the last 100 finished lines
+(a progress bar's states are left out), with `at`, the Unix time the load
+ended. A later load of the same model replaces them; other models keep
+theirs. The PC service keeps them in `load-lines.json` in its state folder,
+so they survive its restart. Missing before a load of the model was seen,
+and from an older PC service.
+
 `benchmarks` holds the last run of each model: `decode_tps` (`chat decode
 tok/s`), `prompt_tps` (`4K prompt tok/s`, missing if the benchmark does not
 print the line), plus `context`, `speed_projection` and `version` (Strata commit)

@@ -15,6 +15,8 @@ use crate::{clock, state::AppState};
 
 const STRATA_REPO: &str = "https://github.com/Niko1221/Strata";
 const NOT_RUN: &str = "not run yet";
+/// The PC service keeps at most this many load lines per model.
+const LOAD_LINES: usize = 100;
 
 /// The prompt for installed `model`, from what the PC service reports now
 /// or reported last; never wakes the PC. `Err` says why there is none.
@@ -92,7 +94,7 @@ pub fn build(
             "\n### Run config\n\nThe model's `strata-<id>.json`, which Strata starts it with; \
              secrets are left out and paths are cut to file names.\n"
         );
-        json_block(out, config);
+        fenced(out, "json", config);
     }
     if let Some(chat) = &model.chat_settings {
         let ignored = model
@@ -108,7 +110,22 @@ pub fn build(
             out,
             "\n### Chat settings\n\nWhat Strata's web app keeps for this model; {effect}.\n"
         );
-        json_block(out, chat);
+        fenced(out, "json", chat);
+    }
+    let _ = writeln!(out, "\n### Load lines\n");
+    match model.load_lines.as_ref().filter(|l| !l.lines.is_empty()) {
+        Some(load) => {
+            let _ = writeln!(
+                out,
+                "Strata's output while it last loaded this model, until it answered \
+                 (at most the last {LOAD_LINES} lines), on {}:\n",
+                clock::full_text(load.at)
+            );
+            fenced(out, "text", &load.lines.join("\n"));
+        }
+        None => {
+            let _ = writeln!(out, "No load seen yet.");
+        }
     }
 
     let _ = writeln!(out, "\n## Benchmarks\n");
@@ -121,12 +138,12 @@ pub fn build(
     Ok(text)
 }
 
-/// `json` in a fence longer than any run of backticks in it, so text from
+/// `text` in a fence longer than any run of backticks in it, so text from
 /// the PC cannot end the block early.
-fn json_block(out: &mut String, json: &str) {
-    let longest = json.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+fn fenced(out: &mut String, lang: &str, text: &str) {
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat(longest.max(2) + 1);
-    let _ = writeln!(out, "{fence}json\n{}\n{fence}", json.trim_end());
+    let _ = writeln!(out, "{fence}{lang}\n{}\n{fence}", text.trim_end());
 }
 
 fn vram_line(out: &mut String, info: &StrataInfo) {

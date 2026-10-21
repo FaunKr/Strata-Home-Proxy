@@ -77,7 +77,15 @@
         ]
       },
       "config": "{\n \"exe\": \"strata.exe\",\n \"args\": [\n  \"--native\",\n  \"Qwen3.8-Flash-Next-IQ3_XXS.gguf\",\n  \"--max-context\",\n  \"65536\",\n  \"--prefill\",\n  \"auto\",\n  \"--mtp\",\n  \"2\"\n ],\n \"cwd\": \"current\",\n \"tokenizer\": \"tokenizer\",\n \"model_name\": \"qwen3.8-flash-next-iq3_xxs\",\n \"arch\": \"qwen35moe\",\n \"log\": \"strata-iq3_xxs.log\",\n \"lib_dirs\": [\n  \"engine\"\n ],\n \"port\": 8080,\n \"reasoning_loop_recovery\": \"recover\"\n}",
-      "chat_settings": "{\n \"temperature\": 0.6\n}"
+      "chat_settings": "{\n \"temperature\": 0.6\n}",
+      "load_lines": {
+        "at": 1760000000,
+        "lines": [
+          "strata.exe: loading Qwen3.8-Flash-Next-IQ3_XXS.gguf",
+          "experts on the GPU: 38 of 48",
+          "listening on 0.0.0.0:8080"
+        ]
+      }
     },
     {
       "id": "coder-IQ1_M",

@@ -23,7 +23,7 @@ mod strata;
 
 pub use job::{StrataJob, StrataJobKind, StrataJobRequest, StrataJobState};
 pub use machine::{CpuFacts, GpuFacts, MachineFacts, RamStick, WindowsFacts};
-pub use output::{StrataOutputMessage, StrataOutputNotice};
+pub use output::{LoadLines, StrataOutputMessage, StrataOutputNotice};
 pub use status::{
     Answer, Cpu, ForcedRestart, ForcedSleep, GamingRequest, Gpu, Hardware, PcStatus, Refused,
     StrataKey,

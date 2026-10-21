@@ -207,8 +207,15 @@ impl Agent {
         }
     }
 
+    /// Whether Strata answers `/health`; an answer ends the load whose
+    /// lines are being kept.
     pub(crate) async fn strata_healthy(&self) -> bool {
-        matches!(self.strata_get("/health").send().await, Ok(r) if r.status().is_success())
+        let healthy =
+            matches!(self.strata_get("/health").send().await, Ok(r) if r.status().is_success());
+        if healthy {
+            self.output.loaded();
+        }
+        healthy
     }
 
     /// True if Strata reports a slot at work. Strata builds without `/slots`

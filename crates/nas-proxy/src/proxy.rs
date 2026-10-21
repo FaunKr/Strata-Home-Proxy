@@ -398,9 +398,10 @@ fn wake_then_stream(
     guard: ActivityGuard,
     req: Incoming,
     flavor: Flavor,
+    held: bool,
 ) -> Response {
     let (tx, mut rx) = mpsc::channel::<Bytes>(16);
-    tokio::spawn(wake_and_pass_on(st, guard, req, flavor, tx));
+    tokio::spawn(wake_and_pass_on(st, guard, req, flavor, held, tx));
     let body = stream::poll_fn(move |cx| rx.poll_recv(cx)).map(Ok::<_, std::convert::Infallible>);
     let mut resp = Response::new(Body::from_stream(body));
     let headers = resp.headers_mut();
@@ -418,12 +419,13 @@ async fn wake_and_pass_on(
     guard: ActivityGuard,
     req: Incoming,
     flavor: Flavor,
+    held: bool,
     tx: mpsc::Sender<Bytes>,
 ) {
     if tx.send(flavor.ping()).await.is_err() {
         return;
     }
-    let wake = st.ensure_awake();
+    let wake = wait_and_wake(&st, held);
     tokio::pin!(wake);
     let woke = loop {
         tokio::select! {
@@ -497,12 +499,23 @@ async fn pass_on(st: &AppState, req: &Incoming, flavor: Flavor, tx: &mpsc::Sende
     }
 }
 
+/// A request held by a run over all models waits for its end first, as long
+/// as it would wait for the PC to wake and with the same answer when that
+/// runs out; then the PC is woken if need be.
+async fn wait_and_wake(st: &AppState, held: bool) -> Result<(), WakeError> {
+    if held && !st.code_bench.wait_for_end(st.cfg().wake_timeout).await {
+        return Err(WakeError::Timeout);
+    }
+    st.ensure_awake().await
+}
+
 pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
     let (parts, body) = req.into_parts();
     let flavor = Flavor::from_path(parts.uri.path());
-    if !client_keys(&parts.headers).any(|key| st.api_keys.check(key).is_some()) {
+    let Some(key) = client_keys(&parts.headers).find(|key| st.api_keys.check(key).is_some()) else {
         return unauthorized(flavor);
-    }
+    };
+    let held = st.code_bench.holds(key);
     if st.strata().is_none() {
         return not_configured(flavor);
     }
@@ -529,13 +542,16 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
         body,
     };
     match st.readiness().await {
-        Readiness::Ready => forward(st, guard, req, flavor).await,
+        Readiness::Ready if !held => forward(st, guard, req, flavor).await,
         Readiness::Gaming => {
             st.events.record(EventKind::GamingRejected, None);
             unavailable(flavor, &WakeError::Gaming)
         }
-        Readiness::NeedsWake if streaming => wake_then_stream(st, guard, req, flavor),
-        Readiness::NeedsWake => match st.ensure_awake().await {
+        // Held while ready, or asleep: wait for the run's end or the wake-up.
+        Readiness::Ready | Readiness::NeedsWake if streaming => {
+            wake_then_stream(st, guard, req, flavor, held)
+        }
+        Readiness::Ready | Readiness::NeedsWake => match wait_and_wake(&st, held).await {
             Ok(()) => forward(st, guard, req, flavor).await,
             Err(err) => {
                 if err == WakeError::Gaming {

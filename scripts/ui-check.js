@@ -14,7 +14,7 @@ const expected = {
   '/admin/pc/history': ['Awake and asleep', 'Last 7 days', 'Last 12 months', 'From', 'Energy', 'Saved', "today's price"],
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
-  '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', 'Decode 52.3 tok/s', 'Compare models', 'Total: 19/24 tests', 'Run code benchmark'],
+  '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', 'Decode 52.3 tok/s', 'Compare models', 'Total: 25/33 tests', 'Total: 3 of 4 tasks', 'A later run failed', 'Broken: 1 earlier test fails now', 'Run code benchmark', 'Benchmark all models', 'swift-IQ2_XS: model did not load'],
 };
 // After the areas, scripts/fake-pc.js moves upstream on and holds or refuses
 // the summary, so the Version tab shows the other two summary states.
@@ -180,6 +180,51 @@ async function forced(page, errors) {
   return findings;
 }
 
+// Drives "Benchmark all models" against scripts/fake-pc.js: the dialog, then a
+// run over all models with its progress. Returns the number of findings.
+async function codeBench(page, errors) {
+  const wait = { timeout: 15000 };
+  let findings = 0;
+  const sees = async text => page.getByText(text).first().waitFor(wait);
+  const step = async (name, shot, run) => {
+    errors.length = 0;
+    let issue = null;
+    try {
+      await run();
+    } catch (e) {
+      const lines = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n');
+      const shown = await page.locator('[role=status], [role=alert], dialog[open]').allInnerTexts().catch(() => []);
+      issue = [lines[0], lines.length > 1 ? lines.at(-1).trim() : null,
+        shown.length ? `page shows: ${shown.join(' / ')}` : null, ...errors.map(e => `JS error: ${e}`)]
+        .filter(Boolean).join('\n     ');
+    }
+    if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+    console.log(`${issue ? 'FAIL' : 'ok  '} desk code-benchmark ${name}${issue ? '\n     ' + issue : ''}`);
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/desk_code-benchmark-${shot}.jpg`, type: 'jpeg', quality: 60, fullPage: true });
+    }
+    if (issue) return 1;
+    return 0;
+  };
+
+  findings += await step('the dialog and a run over all models', 'all', async () => {
+    await page.goto(base + '/admin/strata/version', { waitUntil: 'domcontentloaded' });
+    // The model count comes from the Strata answer the area visit above left;
+    // give the card time to read it before opening the dialog.
+    await page.waitForTimeout(2000);
+    await page.getByRole('button', { name: 'Benchmark all models' }).click(wait);
+    const dialog = page.locator('dialog.confirm');
+    await dialog.getByText('3 models').waitFor(wait);
+    await dialog.getByText('4 tasks each').waitFor(wait);
+    await dialog.getByText('comes back at the end').waitFor(wait);
+    await dialog.getByRole('button', { name: 'Benchmark all models' }).click();
+    // The fake PC finishes the first Activate and the runner reports a task
+    // running, so the progress reaches the first task of the first model.
+    await sees('Model 1 of 3 · task 1 of 4');
+  });
+  return findings;
+}
+
 (async () => {
   const browser = await chromium.launch();
   let findings = 0;
@@ -212,6 +257,7 @@ async function forced(page, errors) {
       // The phone pass starts again from the first upstream and a written summary.
       await fetch(`${process.env.FAKE_PC}/fake/summary?mode=answer`, { method: 'POST' });
       findings += await forced(page, errors);
+      findings += await codeBench(page, errors);
     }
     await ctx.close();
   }

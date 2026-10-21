@@ -59,7 +59,101 @@
     },
     "test_output": "test_constant_time (hidden_test.Hidden.test_constant_time) ... FAIL\n\nFAILED (failures=2)",
     "error": "stopped after 30 min"
+   },
+   {
+    "name": "pc-force-endpoints",
+    "title": "Forced sleep and restart (Rust, this repo)",
+    "kind": "repo",
+    "state": "done",
+    "total_secs": 2950.0,
+    "steps": 64,
+    "input_tokens": 1820400,
+    "output_tokens": 21800,
+    "output_tps": 36.2,
+    "passed": 6,
+    "total": 9,
+    "timed_out": false,
+    "files": {},
+    "diff": "diff --git a/crates/pc-agent/src/server.rs b/crates/pc-agent/src/server.rs\n--- a/crates/pc-agent/src/server.rs\n+++ b/crates/pc-agent/src/server.rs\n@@ -88,6 +88,8 @@ pub fn router(state: AppState) -> Router {\n         .route(\"/sleep\", post(sleep))\n+        .route(\"/sleep/force\", post(sleep_force))\n+        .route(\"/strata/kill\", post(strata_kill))\n         .route(\"/status\", get(status))\n",
+    "broken": [
+     "server::sleep_is_refused_while_gaming"
+    ],
+    "test_output": "running 9 tests\ntest force::sleep_force_answers_forced ... ok\ntest force::kill_refused_while_updating ... FAILED\n\ntest result: FAILED. 6 passed; 3 failed",
+    "error": null
    }
   ]
+ },
+ {
+  "model": "coder-IQ1_M",
+  "state": "done",
+  "error": null,
+  "started": 1792313600,
+  "ended": 1792315700,
+  "tasks": [
+   {
+    "name": "roman",
+    "title": "Roman numerals",
+    "state": "done",
+    "total_secs": 212.4,
+    "steps": 9,
+    "input_tokens": 48210,
+    "output_tokens": 2380,
+    "output_tps": 41.3,
+    "passed": 8,
+    "total": 8,
+    "timed_out": false,
+    "files": {
+     "roman.py": "V=[(1000,\"M\"),(900,\"CM\"),(500,\"D\"),(400,\"CD\"),(100,\"C\"),(90,\"XC\"),(50,\"L\"),(40,\"XL\"),(10,\"X\"),(9,\"IX\"),(5,\"V\"),(4,\"IV\"),(1,\"I\")]\ndef to_roman(n):\n    if type(n) is not int or not 1<=n<=3999: raise ValueError(n)\n    out=\"\"\n    for v,s in V:\n        while n>=v: out+=s; n-=v\n    return out\n_T={to_roman(i):i for i in range(1,4000)}\ndef from_roman(s):\n    if not isinstance(s,str): raise ValueError(s)\n    try: return _T[s.upper()]\n    except KeyError: raise ValueError(s)\n"
+    },
+    "test_output": "test_round_trip (hidden_test.Hidden.test_round_trip) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.006s\n\nOK",
+    "error": null
+   },
+   {
+    "name": "csv-summary",
+    "title": "CSV summary",
+    "state": "done",
+    "total_secs": 488.0,
+    "steps": 17,
+    "input_tokens": 121400,
+    "output_tokens": 5120,
+    "output_tps": 39.8,
+    "passed": 4,
+    "total": 8,
+    "timed_out": false,
+    "files": {
+     "summary.py": "import csv\n\ndef summarize(path):\n    ...\n"
+    },
+    "test_output": "test_bad_rows_are_skipped (hidden_test.Hidden.test_bad_rows_are_skipped) ... FAIL\n\nFAILED (failures=3)",
+    "error": null
+   },
+   {
+    "name": "lru-cache",
+    "title": "LRU cache",
+    "state": "done",
+    "total_secs": 1800.0,
+    "steps": 41,
+    "input_tokens": 402000,
+    "output_tokens": 15800,
+    "output_tps": 40.1,
+    "passed": 6,
+    "total": 8,
+    "timed_out": true,
+    "files": {
+     "lru.py": "from collections import OrderedDict\nclass LRUCache:\n    def __init__(self,capacity):\n        if capacity<1: raise ValueError(capacity)\n        self._c=capacity; self._d=OrderedDict(); self._e=0\n    @property\n    def evictions(self): return self._e\n    def get(self,key,default=None):\n        if key not in self._d: return default\n        self._d.move_to_end(key); return self._d[key]\n    def put(self,key,value):\n        self._d[key]=value; self._d.move_to_end(key); self._trim()\n    def _trim(self):\n        while len(self._d)>self._c: self._d.popitem(last=False); self._e+=1\n    def resize(self,capacity):\n        if capacity<1: raise ValueError(capacity)\n        self._c=capacity; self._trim()\n    def __len__(self): return len(self._d)\n    def __contains__(self,k): return k in self._d\n    def keys(self): return list(self._d)\n"
+    },
+    "test_output": "test_constant_time (hidden_test.Hidden.test_constant_time) ... FAIL\n\nFAILED (failures=2)",
+    "error": "stopped after 30 min"
+   }
+  ],
+  "failed_later": "the model did not load",
+  "failed_at": 1792402700
+ },
+ {
+  "model": "swift-IQ2_XS",
+  "state": "failed",
+  "error": "model did not load",
+  "started": 1792403000,
+  "ended": 1792403100,
+  "tasks": []
  }
 ]

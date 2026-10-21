@@ -42,6 +42,12 @@ Reference values after #151:
 | PR that changes a workflow, Cargo.lock or scripts/ | everything except Windows | approx. 18 |
 | Push to `main` | changes, test (check only), publish, ci-ok | approx. 5–10 |
 
+The code-bench image's build also builds its repo task: it vendors the
+crates, prebuilds and runs the PC service's tests three times (the checkout,
+the real commit, the checkout with the commit's tests), about 2 minutes
+outside the cache. `tools/code-bench/prepare_repo_task.py` and a task's
+`repo.json` select it (`bench=true`).
+
 The `publish` job never runs twice at the same time and ends after 30 minutes.
 A newer push to `main` waits until the running one is finished; that way no
 older commit resets `:latest`.

@@ -1,8 +1,10 @@
 # Code benchmark
 
 The **Run code benchmark** button under Strata → Version & benchmark has the
-active model solve three fixed programming tasks. For this a second container,
-`code-bench`, runs on the NAS next to the proxy:
+active model solve four fixed programming tasks: three small Python tasks and
+a real feature of this repo in Rust (the *repo task*). **Benchmark all
+models** does the same for each installed model in turn. For this a second
+container, `code-bench`, runs on the NAS next to the proxy:
 
 - `runner.py` accepts a run from the proxy (`POST /runs`), lets `opencode run`
   work on each task in a fresh folder and afterwards checks what is left with
@@ -19,11 +21,12 @@ active model solve three fixed programming tasks. For this a second container,
   opencode and the hidden tests run as user `agent` in this container, not on
   the NAS. At start the runner (root) sets up a firewall for `agent` only:
   allowed are a relay in the runner (`RELAY_ADDR`, 127.0.0.1:8097) that
-  forwards only `/v1` to the proxy (`PROXY_URL`), not its web UI, plus
-  Docker's DNS and the internet; blocked are the proxy directly, loopback (the
-  runner's API), private, link-local and CGNAT networks, i.e. the NAS and the
-  home network, and IPv6. For this the container needs `NET_ADMIN`; without it
-  the runner refuses runs and the card names the reason.
+  forwards only `/v1` to the proxy (`PROXY_URL`), not its web UI, Docker's
+  DNS, and loopback except the runner's API port, so the tests' own servers
+  work. Everything else is rejected, the internet included: the repo is
+  public, so with internet the repo task could be solved by fetching the real
+  commit. For this the container needs `NET_ADMIN`; without it the runner
+  refuses runs and the card names the reason.
 - Before each run and on each request to `/health` the runner checks that it
   really is the proxy that answers under `PROXY_URL` (its login page, which
   never wakes the PC). If another service answers there, or none, it refuses
@@ -43,6 +46,37 @@ the same. The proxy sends the limit at the start (`timeout_secs`):
 `CODE_BENCH_TASK_TIMEOUT_SECS` under Strata → Timeouts, otherwise a suggestion
 from the slowest installed model in "Compare models".
 
+## The repo task
+
+`tasks/pc-force-endpoints` is the commit "PC service: forced sleep and forced
+Strata restart endpoints" (`repo.json`). At image build `prepare_repo_task.py`
+puts this repo as it was before the commit into
+`/opt/code-bench/repos/pc-force-endpoints/checkout` as one fresh commit
+without history, vendors the crates to `/opt/code-bench/vendor`, sets cargo
+offline and prebuilds the tests; the Rust toolchain sits in `/opt/rust`. It
+takes the commit's test files as the hidden tests and counts the tests the
+commit added. The build fails unless the commit's own change passes all
+counted tests and breaks none, and the untouched checkout passes fewer.
+
+A run copies the checkout into the task folder; opencode gets only
+`TASK.md`, which the proxy sends. Afterwards the runner records the diff
+against the checkout (what the agent committed included), lays the hidden
+test files over the folder and runs `cargo test`. The score is the counted
+tests that pass; tests that passed on the checkout and fail now are listed as
+broken. Code that does not build scores 0 with the compiler's output. cargo's
+home is the task's own (`target/cargo-home`), so nothing reaches the next run.
+The proxy gives this task twice the limit of the others.
+
+## Benchmark all models
+
+The proxy activates each installed model in turn (a Strata job, waking the PC
+if needed), runs the four tasks with one key for the whole run, and activates
+the model active before at the end or after a cancel. A model that fails
+keeps its earlier result with the failure noted; without one it gets an error
+row. While the run goes, requests with any other key wait until it ends, like
+a request waiting for the PC to wake, with the same time limit and answer. A
+single run holds no one, and a restarted proxy holds no one either.
+
 Tests: `python3 tools/code-bench/test_runner.py` (with a faked opencode;
 `scripts/check.sh` runs them).
 
@@ -53,8 +87,10 @@ untrusted code. It does not reach:
 
 | What | Protected by |
 | --- | --- |
-| the runner's API (cancelling or starting runs) | user `agent`, the firewall blocks loopback except the relay and port 53 of Docker's DNS (127.0.0.11) |
-| the NAS, the home network, the proxy's web UI | the firewall blocks private, link-local and CGNAT networks and IPv6; the relay forwards only `/v1/*` |
+| the runner's API (cancelling or starting runs) | user `agent`, the firewall rejects the API port |
+| the NAS, the home network, the internet, the proxy's web UI | the firewall rejects everything but the relay, Docker's DNS and loopback; the relay forwards only `/v1/*` |
+| the repo task's real commit | no internet; the checkout has no history |
+| the repo task's hidden tests and counted list | `hidden/` and `task.json` are root's only (700/600) |
 | keys other than the run's | the proxy creates one key per run and revokes only that one |
 | files of the runner and of other tasks | user `agent` owns only its own task folder |
 | the scoring | hidden tests only after opencode, `python -I`, a process group of their own; writing without following symlinks (`O_NOFOLLOW`); marker only from stdout |
@@ -62,4 +98,7 @@ untrusted code. It does not reach:
 
 Known gap: the code under test runs in the test run's process and can print a
 marker itself on exit. That cannot be prevented in this process; the score is
-a measure, not a check against cheating.
+a measure, not a check against cheating. The same holds for the repo task,
+more so: the agent controls the build (`build.rs`, `.cargo/config.toml`, a
+`rustc-wrapper`) and could print passing test lines itself. The diff shows
+such a change; the score does not catch it.

@@ -751,16 +751,31 @@ pub struct CodeBenchTask {
     /// opencode was stopped at the time limit.
     #[serde(default)]
     pub timed_out: bool,
-    /// The Python files the agent left, by path.
+    /// The Python files the agent left, by path (a `files` task).
     #[serde(default)]
     pub files: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub test_output: String,
     #[serde(default)]
     pub error: Option<String>,
+    /// `files` (its files and hidden tests sent along) or `repo` (a
+    /// checkout in the runner's image, scored by the feature's tests).
+    #[serde(default = "files_kind")]
+    pub kind: String,
+    /// A `repo` task: the agent's change against the checkout.
+    #[serde(default)]
+    pub diff: Option<String>,
+    /// A `repo` task: tests that passed on the checkout and fail after the
+    /// change, as `<test binary>::<test>`.
+    #[serde(default)]
+    pub broken: Vec<String>,
 }
 
-/// A run of the three tasks with one model.
+fn files_kind() -> String {
+    "files".into()
+}
+
+/// A run of the tasks with one model.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CodeBenchRun {
     pub model: String,
@@ -775,6 +790,38 @@ pub struct CodeBenchRun {
     /// Local time of the end, filled in by the proxy.
     #[serde(default)]
     pub at_text: String,
+    /// A later run of this model that failed (to load, or in the runner),
+    /// noted on the result it left standing: why, and when (Unix seconds).
+    #[serde(default)]
+    pub failed_later: Option<String>,
+    #[serde(default)]
+    pub failed_at: Option<u64>,
+    /// Local time of `failed_at`, filled in by the proxy.
+    #[serde(default)]
+    pub failed_at_text: String,
+}
+
+/// A task of the code benchmark, for the card: what a run holds.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodeBenchTaskInfo {
+    pub name: String,
+    pub title: String,
+    /// Its time limit in seconds.
+    pub limit_secs: u64,
+}
+
+/// The progress of a run that benchmarks all models: `Model {model} of
+/// {models} · task {task} of {tasks}`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodeBenchAll {
+    /// Models in the run (m), and the one being benchmarked now (n), 1-based.
+    pub models: usize,
+    pub model: usize,
+    /// Tasks per model (N) and the one being solved now (k), 1-based.
+    pub tasks: usize,
+    pub task: usize,
+    /// The model active before the run, activated again at the end.
+    pub restore: String,
 }
 
 /// The code benchmark card.
@@ -784,8 +831,19 @@ pub struct CodeBenchPage {
     pub problem: Option<String>,
     /// The running run, or the last one if it did not finish.
     pub run: Option<CodeBenchRun>,
-    /// Each model's last finished run.
+    /// Each model's last finished run. A model that failed without one gets
+    /// its error row; one with a result keeps it, the failure noted on it.
     pub results: Vec<CodeBenchRun>,
+    /// A run over all models, or the last one that did not finish.
+    pub all: Option<CodeBenchAll>,
+    /// How many models are installed, so the card knows a run over all needs
+    /// at least two.
+    #[serde(default)]
+    pub models: usize,
+    /// The tasks every run holds, with their limits, for the dialogs and
+    /// for results of older runs that lack some.
+    #[serde(default)]
+    pub tasks: Vec<CodeBenchTaskInfo>,
 }
 
 #[server(prefix = "/admin/api", endpoint = "code-bench")]
@@ -800,6 +858,14 @@ pub async fn get_code_bench() -> Result<CodeBenchPage, ServerFnError> {
 pub async fn start_code_bench() -> Result<(), ServerFnError> {
     require_login(false).await?;
     backend()?.start_code_bench().await.map_err(bad_request)
+}
+
+/// Runs the code benchmark for every installed model in turn; the model active
+/// before it comes back at the end.
+#[server(prefix = "/admin/api", endpoint = "code-bench-start-all")]
+pub async fn start_code_bench_all() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?.start_code_bench_all().await.map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "code-bench-cancel")]

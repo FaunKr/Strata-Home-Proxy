@@ -7,7 +7,8 @@ if sys.argv[1:] == ["--version"]:
     print("1.19.3")
     sys.exit(0)
 with open("fake-args.json", "w") as f:
-    json.dump({"args": sys.argv[1:], "config": json.load(open("opencode.json")), "uid": os.getuid()}, f)
+    json.dump({"args": sys.argv[1:], "config": json.load(open("opencode.json")), "uid": os.getuid(),
+               "cargo_home": os.environ.get("CARGO_HOME")}, f)
 mode = os.environ.get("FAKE_MODE", "")
 if mode == "background":
     # Like an agent's `server &`: a child that keeps opencode's output open.
@@ -41,3 +42,15 @@ if solution:
     name, text = solution.split("=", 1)
     with open(name, "w") as f:
         f.write(text)
+if mode == "cheat-tests":
+    # Tests of its own in the hidden tests' place, that pass whatever.
+    with open("tests/adder.rs", "w") as f:
+        f.write("// the feature's tests\n// and mine\n")
+if mode == "link-tests-dir":
+    # A link in a folder's place on the way to a hidden test file.
+    import shutil
+    shutil.rmtree("tests")
+    os.symlink(os.environ["FAKE_TARGET"], "tests")
+if mode == "commit":
+    import subprocess
+    subprocess.run(["git", "-c", "user.name=a", "-c", "user.email=a@a", "commit", "-qam", "mine"], check=True)

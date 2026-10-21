@@ -93,6 +93,18 @@ const strata = {
 const idleMetrics = 'vllm:num_requests_running{model_name="Qwen3-30B-A3B"} 0\nvllm:num_requests_waiting{model_name="Qwen3-30B-A3B"} 0\n';
 let pcState = 'awake';
 let summaryMode = 'answer';
+// A run over all models: the fake accepts an Activate job and finishes it, so
+// the card's progress can reach the first task of the first model; the runner
+// reports that run with its first task running.
+let strataJob = null;
+let runnerCurrent = null;
+const runFor = (model, state) => ({
+  id: 1, model, state, error: null,
+  started: Math.floor(Date.now() / 1000), ended: null,
+  tasks: [{ name: 'roman', title: 'Roman numerals', state: state === 'running' ? 'running' : 'done',
+    total_secs: 0, steps: 0, input_tokens: 0, output_tokens: 0, output_tps: null,
+    passed: 0, total: 8, timed_out: false, files: {}, test_output: '', error: null }],
+});
 let held = [];
 const summary = '- **Run setup again** after this update.\n- Long prompts are read faster.\n- A crash when an answer hits max_tokens in a tool call is fixed.';
 
@@ -136,8 +148,54 @@ http.createServer((req, res) => {
   }
   else if (req.url.startsWith('/health')) json({ status: 'ok', loaded: true, service: 'strata', model: 'Qwen3-30B-A3B', max_context: 32768, opencode: '1.19.3' });
   else if (req.url === '/strata') json(strata);
-  else if (req.url === '/strata/job') json(null);
+  else if (req.method === 'POST' && req.url === '/strata/jobs') {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      const body = raw ? JSON.parse(raw) : {};
+      strataJob = { id: 1, kind: 'activate', model: body.model ?? null, state: 'running',
+        lines: [], error: null, started: Math.floor(Date.now() / 1000), ended: null };
+      // A run over all models activates each model; end the job shortly after,
+      // so the proxy moves on to that model's run.
+      const job = strataJob;
+      setTimeout(() => {
+        if (strataJob === job) {
+          strataJob = { ...job, state: 'done', ended: Math.floor(Date.now() / 1000) };
+        }
+      }, 1500);
+      res.statusCode = 202;
+      json(job);
+    });
+  }
+  else if (req.url === '/strata/job') json(strataJob);
   else if (req.url.startsWith('/metrics')) res.end(idleMetrics);
+  // The code-bench runner for a run over all models: a run with its first task
+  // running, so the card's progress reaches task 1.
+  else if (req.method === 'POST' && req.url === '/runs') {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      const body = raw ? JSON.parse(raw) : {};
+      runnerCurrent = runFor(body.model || 'IQ3_XXS', 'running');
+      res.statusCode = 202;
+      json(runnerCurrent);
+    });
+  }
+  else if (req.url === '/runs/current') {
+    if (!runnerCurrent) {
+      res.statusCode = 404;
+      res.end();
+    } else json(runnerCurrent);
+  }
+  else if (req.method === 'POST' && req.url === '/runs/current/cancel') {
+    if (!runnerCurrent) {
+      res.statusCode = 409;
+      res.end();
+    } else {
+      runnerCurrent = { ...runnerCurrent, state: 'cancelled' };
+      json(runnerCurrent);
+    }
+  }
   else if (req.url.startsWith('/v1/chat/completions')) {
     req.resume();
     req.on('end', () => {

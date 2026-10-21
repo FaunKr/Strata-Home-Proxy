@@ -50,9 +50,11 @@ while IFS= read -r path; do
     # crate, so no crate needs a build for it.
     tools/local-agent | tools/local-agent/*) runners=true ;;
     # The code benchmark: the proxy embeds its tasks (include_str!), check.sh
-    # runs the runner's tests; its image holds only the runner.
+    # runs the runner's tests; its image holds the runner and the repo task,
+    # built from repo.json by prepare_repo_task.py.
+    tools/code-bench/tasks/*/repo.json) bench=true ;;
     tools/code-bench/tasks/*) packages+=(strata-nas-proxy) ;;
-    tools/code-bench/Dockerfile | tools/code-bench/runner.py) runners=true bench=true ;;
+    tools/code-bench/Dockerfile | tools/code-bench/runner.py | tools/code-bench/prepare_repo_task.py) runners=true bench=true ;;
     tools/code-bench | tools/code-bench/*) runners=true ;;
   esac
 done

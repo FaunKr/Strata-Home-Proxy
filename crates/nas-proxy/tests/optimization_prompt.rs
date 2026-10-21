@@ -7,7 +7,9 @@ use std::{sync::atomic::Ordering, time::Duration};
 
 use common::*;
 use serde_json::json;
-use strata_pc_protocol::Incoming;
+use strata_pc_protocol::{
+    Incoming, SamplingField, SamplingSource, SamplingSupport, StrataSampling,
+};
 
 async fn prompt(b: &mut Browser, model: &str) -> String {
     let resp = b
@@ -29,8 +31,9 @@ async fn carries_the_model_and_the_task() {
         "RAM: 64.0 GB",
         "IQ3_XXS",
         "81.0 GB",
-        "user_args",
-        "sampling",
+        "ready-to-paste `user_args` list and `sampling` block",
+        "most tokens per second",
+        "one reason for each change",
     ] {
         assert!(text.contains(part), "{part} missing:\n{text}");
     }
@@ -149,6 +152,8 @@ async fn leaves_out_paths_keys_and_the_git_remote() {
         s.key.as_str(),
         "10:20:30",
         "10-20-30",
+        // Free disk space is a live reading.
+        "500.0",
     ] {
         assert!(!text.contains(secret), "{secret} in:\n{text}");
     }
@@ -181,4 +186,64 @@ async fn works_after_a_restart_while_the_pc_sleeps() {
     let text = prompt(&mut b, "IQ3_XXS").await;
     assert!(text.contains("RAM: 64.0 GB"), "{text}");
     assert!(text.contains("This data was read on"), "{text}");
+}
+
+#[tokio::test]
+async fn a_failed_last_run_is_no_not_run_yet() {
+    let dir = data_dir("prompt-failed-runs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let runs = json!([
+        {"model": "IQ3_XXS", "state": "failed", "error": "model did not load",
+         "started": 1_760_000_000u64, "tasks": []}
+    ]);
+    std::fs::write(dir.join("code-bench.json"), runs.to_string()).unwrap();
+    let s = setup(true, |c| c.data_dir = Some(dir.clone())).await;
+    let mut report = strata_info(true);
+    let mut run = benchmark("IQ3_XXS", "");
+    run.error = Some("Strata did not answer".into());
+    report.info.benchmarks = vec![run];
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert!(
+        text.contains("- Speed benchmark: the last run on "),
+        "{text}"
+    );
+    assert!(text.contains("failed: Strata did not answer"), "{text}");
+    assert!(
+        text.contains("- Code benchmark: the last run on "),
+        "{text}"
+    );
+    assert!(text.contains("failed: model did not load"), "{text}");
+}
+
+#[tokio::test]
+async fn shows_family_context_and_greedy_sampling() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    let model = &mut report.info.models[0];
+    model.context = Some(65536);
+    model.loop_recovery = Some("recover".into());
+    model.sampling = Some(StrataSampling {
+        support: SamplingSupport::Config,
+        thinking: vec![SamplingField {
+            name: "temperature".into(),
+            value: 0.6,
+            source: SamplingSource::Config,
+        }],
+        instruct: vec![],
+    });
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    for line in [
+        "- Family: Qwen3.8-Flash-Next (qwen)",
+        "- Context: 65536 tokens",
+        "- Loop recovery: recover",
+        "- Sampling with thinking: temperature 0.6 (config)",
+        "- Sampling without thinking: greedy",
+        "- VRAM: not reported",
+    ] {
+        assert!(text.contains(line), "{line} missing:\n{text}");
+    }
 }

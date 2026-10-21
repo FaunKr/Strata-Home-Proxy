@@ -32,29 +32,29 @@ pub async fn prompt(state: &Arc<AppState>, model: &str) -> Result<String, String
     build(&info, model, &state.code_bench.results(), read_at)
 }
 
-/// The prompt from `info`; `read_at` is when it was read, if not just now.
+/// The prompt for installed model `id` from `info`; `read_at` is when it was read, if not just now.
 pub fn build(
     info: &StrataInfo,
-    model: &str,
+    id: &str,
     code_bench: &[CodeBenchRun],
     read_at: Option<u64>,
 ) -> Result<String, String> {
-    let m = info
+    let model = info
         .models
         .iter()
-        .find(|m| m.id == model)
-        .ok_or_else(|| format!("{model} is not installed."))?;
-    let mut out = String::new();
-    let o = &mut out;
+        .find(|m| m.id == id)
+        .ok_or_else(|| format!("{id} is not installed."))?;
+    let mut text = String::new();
+    let out = &mut text;
     let _ = writeln!(
-        o,
+        out,
         "I run a local LLM with Strata ({STRATA_REPO}), an inference engine of its own, \
          not llama.cpp or llama-server. Help me make the model below as fast as possible \
          on my PC without making its answers worse."
     );
-    let _ = writeln!(o);
+    let _ = writeln!(out);
     let _ = writeln!(
-        o,
+        out,
         "Suggest changes to the model's engine options (`args`, `user_args`) and to its \
          `sampling` block that give the most tokens per second on this hardware. Give one \
          reason for each change. Suggest only options this Strata version has, and say when \
@@ -62,85 +62,92 @@ pub fn build(
          list and `sampling` block."
     );
     if let Some(at) = read_at {
-        let _ = writeln!(o);
+        let _ = writeln!(out);
         let _ = writeln!(
-            o,
-            "This data was read on {}; the PC has been asleep since.",
+            out,
+            "This data was read on {}; the PC service has not answered since.",
             clock::full_text(at)
         );
     }
 
-    let _ = writeln!(o, "\n## PC\n");
-    let _ = writeln!(o, "- RAM: {:.1} GB", info.ram_gb);
+    let _ = writeln!(out, "\n## PC\n");
+    let _ = writeln!(out, "- RAM: {:.1} GB", info.ram_gb);
     match info.vram_gb {
         Some(vram) => {
-            let _ = writeln!(o, "- VRAM: {vram:.1} GB (the graphics card with the most)");
+            let _ = writeln!(
+                out,
+                "- VRAM: {vram:.1} GB (the graphics card with the most)"
+            );
         }
         None => {
-            let _ = writeln!(o, "- VRAM: not reported");
+            let _ = writeln!(out, "- VRAM: not reported");
         }
     }
 
-    let _ = writeln!(o, "\n## Strata\n");
+    let _ = writeln!(out, "\n## Strata\n");
     let version = info.version.as_deref().unwrap_or("unknown");
-    let _ = writeln!(o, "- Version: commit {version} of {STRATA_REPO}");
+    let _ = writeln!(out, "- Version: {version}");
 
-    let _ = writeln!(o, "\n## Model {}\n", m.id);
-    model_lines(o, info, m);
+    let _ = writeln!(out, "\n## Model {}\n", model.id);
+    model_lines(out, info, model);
 
-    let _ = writeln!(o, "\n## Benchmarks\n");
-    let _ = writeln!(o, "- Speed benchmark: {}", speed_text(info, &m.id));
+    let _ = writeln!(out, "\n## Benchmarks\n");
+    let _ = writeln!(out, "- Speed benchmark: {}", speed_text(info, &model.id));
     let _ = writeln!(
-        o,
+        out,
         "- Code benchmark: {}",
-        code_bench_text(code_bench, &m.id)
+        code_bench_text(code_bench, &model.id)
     );
-    Ok(out)
+    Ok(text)
 }
 
-fn model_lines(o: &mut String, info: &StrataInfo, m: &StrataModel) {
-    if let Some(family) = &m.family {
+fn model_lines(out: &mut String, info: &StrataInfo, model: &StrataModel) {
+    if let Some(family) = &model.family {
         match info.families.iter().find(|f| &f.id == family) {
             Some(f) => {
-                let _ = writeln!(o, "- Family: {} ({family})", f.title);
+                let _ = writeln!(out, "- Family: {} ({family})", f.title);
             }
             None => {
-                let _ = writeln!(o, "- Family: {family}");
+                let _ = writeln!(out, "- Family: {family}");
             }
         }
     }
-    if let Some(size) = &m.size {
-        let _ = writeln!(o, "- Quantization: {size}");
+    if let Some(size) = &model.size {
+        let _ = writeln!(out, "- Quantization: {size}");
     }
-    let _ = writeln!(o, "- Model files: {:.1} GB", m.disk_bytes as f64 / 1e9);
-    let _ = writeln!(o, "- Active: {}", if m.active { "yes" } else { "no" });
-    if let Some(context) = m.context {
-        let _ = writeln!(o, "- Context: {context} tokens (`--max-context`)");
+    let _ = writeln!(
+        out,
+        "- Model files: {:.1} GB",
+        model.disk_bytes as f64 / 1e9
+    );
+    let _ = writeln!(out, "- Active: {}", if model.active { "yes" } else { "no" });
+    if let Some(context) = model.context {
+        let _ = writeln!(out, "- Context: {context} tokens (`--max-context`)");
     }
-    if let Some(on) = m.speed_projection {
+    if let Some(on) = model.speed_projection {
         let _ = writeln!(
-            o,
+            out,
             "- Experimental speed projection (a control vector): {}",
             if on { "on" } else { "off" }
         );
     }
-    if let Some(recovery) = &m.loop_recovery {
-        let _ = writeln!(o, "- Loop recovery: {recovery}");
+    if let Some(recovery) = &model.loop_recovery {
+        let _ = writeln!(out, "- Loop recovery: {recovery}");
     }
-    if let Some(sampling) = &m.sampling {
+    if let Some(sampling) = &model.sampling {
         if sampling.support == SamplingSupport::None {
             let _ = writeln!(
-                o,
+                out,
                 "- Sampling: this Strata version ignores sampling defaults and decodes greedily"
             );
         } else {
             let _ = writeln!(
-                o,
+                out,
                 "- Sampling with thinking: {}",
                 fields_text(&sampling.thinking)
             );
             let _ = writeln!(
-                o,
+                out,
                 "- Sampling without thinking: {}",
                 fields_text(&sampling.instruct)
             );
@@ -207,19 +214,25 @@ fn bench_text(b: &StrataBenchmark) -> String {
     text
 }
 
-/// The model's last finished code benchmark run: hidden tests passed.
+/// The model's last code benchmark run: hidden tests passed, or why it
+/// gave none.
 fn code_bench_text(runs: &[CodeBenchRun], model: &str) -> String {
-    let Some(run) = runs
-        .iter()
-        .find(|r| r.model == model && r.state == CodeBenchState::Done)
-    else {
+    let Some(run) = runs.iter().find(|r| r.model == model) else {
         return NOT_RUN.into();
     };
+    let when = clock::full_text(run.ended.unwrap_or(run.started));
+    if run.state != CodeBenchState::Done {
+        let why = run.error.as_deref().unwrap_or("no reason given");
+        return format!("the last run on {when} failed: {why}");
+    }
     let passed: u32 = run.tasks.iter().map(|t| t.passed).sum();
     let total: u32 = run.tasks.iter().map(|t| t.total).sum();
-    let when = clock::full_text(run.ended.unwrap_or(run.started));
-    format!(
+    let mut text = format!(
         "{passed} of {total} hidden tests passed over {} programming tasks with opencode, run on {when}",
         run.tasks.len()
-    )
+    );
+    if let Some(why) = &run.failed_later {
+        let _ = write!(text, "; a later run failed: {why}");
+    }
+    text
 }

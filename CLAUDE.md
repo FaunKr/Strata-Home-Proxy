@@ -8,7 +8,7 @@
 - What the PC service takes and answers over HTTP is written down as types in `crates/pc-protocol`; fields are only ever added, rules in `docs/pc-agent-api.md`.
 - Tests run with cargo-nextest, at least the version `.config/nextest.toml` pins (check.sh prints the install command). Each crate's integration tests are one binary: a new file in `tests/` needs its `mod` line in `tests/main.rs`, or check.sh fails.
 - Tools check.sh needs: CI installs them in the `test` job, cloud sessions in `.claude/hooks/session-start.sh`. A pinned version lives in one script both read (`scripts/install-actionlint.sh`, `scripts/nextest-version.sh`), never copied into each place.
-- Flaky or hanging tests: `scripts/repeat-test.sh` runs one test file many times and names the one that hangs. Before pushing a new or changed proxy test file, run it 20 times this way: CI is slower and catches races the session misses.
+- Flaky or hanging tests: `scripts/repeat-test.sh` runs one test file many times and names the one that hangs. Before pushing a new or changed proxy test file, run it 20 times this way: CI is slower and catches races the session misses. For a rare timing failure that full runs at 32 threads don't show, run three full runs of the test binary side by side (`cargo test -p <crate> --test integration -- --test-threads 32`, three at once).
 - CI costs, Actions minutes, which jobs a PR starts: `docs/ci.md`.
 
 ## Process
@@ -20,7 +20,7 @@
 - When Strata changed something the PC service reads (setup's output, a file it writes), extend the reader's unit test with the new line copied from Strata's source, not a made-up one, and update `docs/strata-api.md`.
 - If a spec says "X only in the module", that applies to code, helpers and fixtures. Tests may spell out the outer names they pin down (file names Strata itself reads).
 - Issues, specs, PR text, commit messages and retros are written in English, using the terms in `GLOSSARY.md`.
-- Never link a Claude session or project thread in commits, PRs, issues or comments: no claude.ai/code/… or claude.ai/project/… links, no `Claude-Session:` lines, also when the attribution instructions ask for them. Tooling may append one to a PR body on its own; the check `PR text` fails then (`scripts/pr-text.sh`).
+- Never link a Claude session or project thread in commits, PRs, issues or comments: no claude.ai/code/… or claude.ai/project/… links, no `Claude-Session:` lines, also when the attribution instructions ask for them. Tooling may append one to a PR body on its own; the check `PR text` fails then (`scripts/pr-text.sh`). Read the body back right after opening a PR and remove such a footer.
 
 ## Agent skills
 

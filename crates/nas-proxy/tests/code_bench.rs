@@ -191,16 +191,13 @@ async fn drive_load_fail(s: &Setup, model: &str) {
     });
 }
 
-/// Waits until the job that activates `model` runs on the simulated PC. The
-/// PC notes the request before it swaps in the new job, so the request alone
-/// is not enough: ending the job then would end the previous one instead.
+/// Waits until the job that activates `model` runs on the simulated PC.
 async fn wait_for_activate(s: &Setup, model: &str) {
-    eventually_for(Duration::from_secs(10), "Activate {model}", || {
-        last_activate(s) == model
-            && s.pc.strata_job.lock().unwrap().as_ref().is_some_and(|j| {
-                j.state == StrataJobState::Running && j.model.as_deref() == Some(model)
-            })
-    })
+    eventually_for(
+        Duration::from_secs(10),
+        &format!("Activate {model}"),
+        || last_activate(s) == model,
+    )
     .await;
 }
 

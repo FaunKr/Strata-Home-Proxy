@@ -215,12 +215,12 @@ async function codeBench(page, errors) {
     await page.getByRole('button', { name: 'Benchmark all models' }).click(wait);
     const dialog = page.locator('dialog.confirm');
     await dialog.getByText('3 models').waitFor(wait);
-    await dialog.getByText('3 tasks each').waitFor(wait);
+    await dialog.getByText('4 tasks each').waitFor(wait);
     await dialog.getByText('comes back at the end').waitFor(wait);
     await dialog.getByRole('button', { name: 'Benchmark all models' }).click();
     // The fake PC finishes the first Activate and the runner reports a task
     // running, so the progress reaches the first task of the first model.
-    await sees('Model 1 of 3 · task 1 of 3');
+    await sees('Model 1 of 3 · task 1 of 4');
   });
   return findings;
 }

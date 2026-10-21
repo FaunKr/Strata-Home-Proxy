@@ -19,6 +19,7 @@ use strata_admin_ui::api::{
     CodeBenchAll, CodeBenchPage, CodeBenchRun, CodeBenchState, CodeBenchTaskInfo,
 };
 use strata_pc_protocol::{StrataJobRequest, StrataJobState};
+use tokio::sync::watch;
 
 use crate::{
     api_keys::KeyError, clock, events::EventKind, files::write_private, state::AppState, timeouts,
@@ -144,6 +145,9 @@ pub struct CodeBench {
     restore: Mutex<Option<String>>,
     /// How long the proxy waits between asks of the runner.
     poll: Mutex<Duration>,
+    /// A run over all models holds the requests of other keys: true while
+    /// it goes. Not kept over a restart, so a restarted proxy holds no one.
+    holding: watch::Sender<bool>,
 }
 
 impl CodeBench {
@@ -173,7 +177,29 @@ impl CodeBench {
             cancelled: AtomicBool::new(false),
             restore: Mutex::new(restore),
             poll: Mutex::new(POLL),
+            holding: watch::Sender::new(false),
         }
+    }
+
+    /// Whether a request with `raw_key` waits: a run over all models goes and
+    /// the key is not the run's own.
+    pub fn holds(&self, raw_key: &str) -> bool {
+        *self.holding.borrow()
+            && !self
+                .key
+                .lock()
+                .unwrap()
+                .as_deref()
+                .is_some_and(|prefix| raw_key.starts_with(prefix))
+    }
+
+    /// Waits until the run over all models ends, at most `limit`; whether it
+    /// ended.
+    pub async fn wait_for_end(&self, limit: Duration) -> bool {
+        let mut ended = self.holding.subscribe();
+        tokio::time::timeout(limit, ended.wait_for(|holding| !*holding))
+            .await
+            .is_ok_and(|r| r.is_ok())
     }
 
     /// Shortens the wait between asks of the runner, so a test need not sit
@@ -487,6 +513,7 @@ pub async fn start_all(state: &Arc<AppState>) -> Result<(), String> {
     let key = new_key(state)?;
     state.code_bench.set_restore(&restore);
     state.code_bench.cancelled.store(false, Ordering::SeqCst);
+    state.code_bench.holding.send_replace(true);
     *state.code_bench.all.lock().unwrap() = Some(All {
         api: CodeBenchAll {
             models: ids.len(),
@@ -540,6 +567,7 @@ async fn run_all(state: &Arc<AppState>, url: &str, key: &str) {
     bring_back(state, &restore).await;
     *state.code_bench.all.lock().unwrap() = None;
     revoke_key(state);
+    state.code_bench.holding.send_replace(false);
     state.overview.refresh_now();
 }
 

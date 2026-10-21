@@ -6,7 +6,7 @@ import os, sys, time
 
 lib = open("src/lib.txt").read() if os.path.exists("src/lib.txt") else ""
 with open("fake-cargo-args.txt", "w") as f:
-    f.write(" ".join(sys.argv[1:]) + f"\nuid={os.getuid()}\n")
+    f.write(" ".join(sys.argv[1:]) + f"\nuid={os.getuid()}\ncargo_home={os.environ.get('CARGO_HOME')}\n")
 if "hang" in lib:
     time.sleep(600)
 if "broken" in lib:

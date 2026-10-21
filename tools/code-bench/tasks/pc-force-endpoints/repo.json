@@ -1,0 +1,4 @@
+{
+ "commit": "5732419d8ecfade460ae1e253f7f97db21c00472",
+ "command": ["test", "--offline", "--no-fail-fast", "-p", "strata-pc-agent", "-p", "strata-pc-protocol"]
+}

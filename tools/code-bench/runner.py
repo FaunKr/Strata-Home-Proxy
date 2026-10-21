@@ -17,7 +17,8 @@ cargo's test run scores the tests the feature added.
   GET  /runs/current         the running or last run, 404 before the first
   POST /runs/current/cancel  ends the running task's opencode and the run
 
-Only the standard library, so the image needs Python and opencode alone.
+Only the standard library: the image needs Python and opencode, and git and
+the Rust toolchain for the repo task.
 """
 
 import http.client
@@ -320,7 +321,8 @@ class Run:
                 write(folder, path, text)
             write(folder, "opencode.json", json.dumps(config(self.model, self.api_key)))
             give_to_agent(folder)
-            stats, secs, timed_out, error = self.opencode(i, folder, spec["timeout"])
+            env = repo_env(folder) if spec["kind"] == "repo" else {}
+            stats, secs, timed_out, error = self.opencode(i, folder, spec["timeout"], env)
             if self.cancelled:
                 self.update(i, state="cancelled")
                 return
@@ -350,7 +352,7 @@ class Run:
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
-    def opencode(self, i, folder, timeout):
+    def opencode(self, i, folder, timeout, task_env):
         """Lets opencode work on the task; its stats, the time, whether it
         ran out of time, and why it ended otherwise."""
         env = agent_env(
@@ -360,6 +362,7 @@ class Run:
                 OPENCODE_DISABLE_AUTOUPDATE="1",
                 # No internet for the agent: nothing to download them from.
                 OPENCODE_DISABLE_LSP_DOWNLOAD="1",
+                **task_env,
             )
         )
         env.pop("OPENCODE_CONFIG", None)
@@ -690,6 +693,13 @@ def copy_checkout(repo, folder):
     subprocess.run(["cp", "-a", source + "/.", folder], check=True, capture_output=True, timeout=600)
 
 
+def repo_env(folder):
+    """cargo's settings for a repo task: a CARGO_HOME of the task's own in its
+    target folder (ignored by git, gone with the folder), so nothing an agent
+    leaves there reaches the next run."""
+    return {"CARGO_HOME": os.path.join(folder, "target", "cargo-home"), "CARGO_TERM_COLOR": "never"}
+
+
 def run_as_agent(args, folder, timeout, env=None):
     """Runs a command in the task folder as the agent, in a process group of
     its own; its output, its exit code (None when it ran out of time)."""
@@ -797,7 +807,7 @@ def score_repo(repo, folder):
             write(folder, path, text)
     except OSError as e:
         return 0, len(counted), f"The hidden tests could not be put in place: {e}", []
-    output, code = run_as_agent([CARGO] + task["command"], folder, REPO_TEST_TIMEOUT, {"CARGO_TERM_COLOR": "never"})
+    output, code = run_as_agent([CARGO] + task["command"], folder, REPO_TEST_TIMEOUT, repo_env(folder))
     results = cargo_results(output)
     if code is None:
         output += f"\nThe tests took longer than {limit_text(REPO_TEST_TIMEOUT)}."

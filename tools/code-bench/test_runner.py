@@ -488,6 +488,8 @@ class RunnerTest(unittest.TestCase):
             result = original(repo, folder)
             seen["args"] = Path(folder, "fake-cargo-args.txt").read_text()
             seen["prebuilt"] = Path(folder, "target", "built").read_text()
+            seen["opencode"] = json.loads(Path(folder, "fake-args.json").read_text())
+            seen["folder"] = folder
             return result
 
         runner.score_repo = keep
@@ -497,6 +499,10 @@ class RunnerTest(unittest.TestCase):
             runner.score_repo = original
         self.assertTrue(seen["args"].startswith("test --offline"), seen)
         self.assertEqual(seen["prebuilt"], "prebuilt\n")
+        # cargo's home is the task's own, for opencode and the scoring alike.
+        home = os.path.join(seen["folder"], "target", "cargo-home")
+        self.assertIn(f"cargo_home={home}\n", seen["args"])
+        self.assertEqual(seen["opencode"]["cargo_home"], home)
 
     def test_a_repo_task_works_on_a_fresh_copy_of_its_checkout(self):
         os.environ["FAKE_SOLUTION"] = "src/lib.txt=adds subtracts\n"

@@ -997,3 +997,116 @@ async fn a_runner_that_stops_answering_gives_the_model_its_error_row_and_the_run
     .await;
     drive(&s, &runner, ids[2]).await;
 }
+
+// --- Other clients wait during a run over all models ---
+
+/// A chat request with `key`, as any client sends one.
+async fn chat_with(url: &str, key: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{url}/v1/chat/completions"))
+        .bearer_auth(key)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+}
+
+/// Starts a run over all models and drives it until the first model's run
+/// started; the run's key.
+async fn all_models_run_started(s: &Setup, runner: &Runner, b: &mut Browser) -> String {
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    eventually_for(Duration::from_secs(10), "first Activate", || {
+        !s.pc.job_bodies.lock().unwrap().is_empty()
+    })
+    .await;
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    eventually_for(Duration::from_secs(10), "first run", || {
+        !runner.started.lock().unwrap().is_empty()
+    })
+    .await;
+    let body = runner.started.lock().unwrap().first().cloned().unwrap();
+    body["api_key"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn other_keys_wait_for_a_run_over_all_models_and_its_own_key_passes() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let (other, _) = s.state.api_keys.create("laptop").unwrap();
+    let mut b = logged_in(&s.url).await;
+    let run_key = all_models_run_started(&s, &runner, &mut b).await;
+
+    // The run's own key passes at once.
+    assert_eq!(chat_with(&s.url, &run_key).await.status(), 200);
+    // Another key's request waits.
+    let url = s.url.clone();
+    let waiting = tokio::spawn(async move { chat_with(&url, &other).await.status() });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!waiting.is_finished(), "another key's request went through");
+
+    drive_end(&s, &runner, ids[0], run(ids[0], "done")).await;
+    drive(&s, &runner, ids[1]).await;
+    // Still held while the active model is brought back.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!waiting.is_finished(), "released before the run ended");
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    let status = tokio::time::timeout(Duration::from_secs(10), waiting)
+        .await
+        .expect("still held after the run ended")
+        .unwrap();
+    assert_eq!(status, 200);
+}
+
+#[tokio::test]
+async fn a_held_request_answers_as_a_wake_timeout_when_its_time_runs_out() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let (other, _) = s.state.api_keys.create("laptop").unwrap();
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(
+        save_settings(&mut b, &[("WAKE_TIMEOUT_SECS", "1")])
+            .await
+            .status(),
+        200
+    );
+    all_models_run_started(&s, &runner, &mut b).await;
+    let started = std::time::Instant::now();
+    let resp = chat_with(&s.url, &other).await;
+    assert!(started.elapsed() >= Duration::from_secs(1));
+    assert_eq!(resp.status(), 504);
+    assert_eq!(resp.headers()["x-strata-proxy-status"], "wake_timeout");
+    let body: Value = resp.json().await.unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("did not wake in time"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_single_run_and_a_restarted_proxy_hold_no_one() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let (other, _) = s.state.api_keys.create("laptop").unwrap();
+    let mut b = logged_in(&s.url).await;
+    // A single run: other clients keep going.
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    let resp = tokio::time::timeout(Duration::from_secs(5), chat_with(&s.url, &other))
+        .await
+        .expect("held by a single run");
+    assert_eq!(resp.status(), 200);
+    drive_end(&s, &runner, ids[1], run(ids[1], "done")).await;
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+
+    // A run over all models, then a restart in the middle: nothing is held.
+    all_models_run_started(&s, &runner, &mut b).await;
+    let fresh = restarted(&s);
+    let (phone, _) = fresh.api_keys.create("phone").unwrap();
+    let url = serve_proxy(fresh).await;
+    let resp = tokio::time::timeout(Duration::from_secs(5), chat_with(&url, &phone))
+        .await
+        .expect("held after a restart");
+    assert_eq!(resp.status(), 200);
+}

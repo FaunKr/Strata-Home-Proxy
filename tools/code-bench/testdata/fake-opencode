@@ -7,7 +7,8 @@ if sys.argv[1:] == ["--version"]:
     print("1.19.3")
     sys.exit(0)
 with open("fake-args.json", "w") as f:
-    json.dump({"args": sys.argv[1:], "config": json.load(open("opencode.json")), "uid": os.getuid()}, f)
+    json.dump({"args": sys.argv[1:], "config": json.load(open("opencode.json")), "uid": os.getuid(),
+               "cargo_home": os.environ.get("CARGO_HOME")}, f)
 mode = os.environ.get("FAKE_MODE", "")
 if mode == "background":
     # Like an agent's `server &`: a child that keeps opencode's output open.

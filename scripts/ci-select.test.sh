@@ -51,6 +51,8 @@ expect "test=true packages= cargo=false image=false bench=false ui=false" tools/
 expect "test=true packages= cargo=false image=false bench=true ui=false" tools/code-bench/runner.py
 expect "test=true packages= cargo=false image=false bench=true ui=false" tools/code-bench/Dockerfile
 expect "test=true packages= cargo=false image=false bench=false ui=false" tools/code-bench/test_runner.py
+expect "test=true packages= cargo=false image=false bench=true ui=false" tools/code-bench/prepare_repo_task.py
+expect "test=false packages= cargo=false image=false bench=true ui=false" tools/code-bench/tasks/pc-force-endpoints/repo.json
 expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=false" tools/code-bench/tasks/roman/TASK.md
 # A runner change next to a crate change: check.sh gets the crate and runs the
 # runners' tests anyway.

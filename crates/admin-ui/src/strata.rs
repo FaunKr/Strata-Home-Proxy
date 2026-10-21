@@ -9,11 +9,11 @@ use strata_pc_protocol::MAX_SWITCHED_CONTEXT;
 use crate::{
     api::{
         CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
-        ForceRestartStrata, ForcedRestart, GenerateUpdateSummary, PcView, SamplingField,
-        SamplingSource, SamplingSupport, StartCodeBench, StartCodeBenchAll, StartStrataJob,
-        StrataBenchmark, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
-        StrataPage, StrataSampling, StrataSize, StrataUpdate, UpdateSummary, error_text,
-        get_code_bench, get_strata,
+        CodeBenchTaskInfo, ForceRestartStrata, ForcedRestart, GenerateUpdateSummary, PcView,
+        SamplingField, SamplingSource, SamplingSupport, StartCodeBench, StartCodeBenchAll,
+        StartStrataJob, StrataBenchmark, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
+        StrataModel, StrataPage, StrataSampling, StrataSize, StrataUpdate, UpdateSummary,
+        error_text, get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
     labels::{STRATA_CONNECTION, STRATA_TIMEOUTS, TOO_OLD_FOR_KEY, strata_badge, strata_job_label},
@@ -1180,13 +1180,13 @@ fn CodeBenchCard() -> impl IntoView {
         });
     }
     let confirm = expect_context::<Confirm>();
-    let run = move |minutes: u64| {
+    let run = move |tasks: usize, minutes: u64| {
         confirm.ask(
             Question {
                 title: "Run the code benchmark?".into(),
                 text: format!(
-                    "The active model solves {} Python tasks with opencode, up to {} minutes each. The PC wakes with the first request; other requests keep working meanwhile.",
-                    CODE_BENCH_TASKS, minutes
+                    "The active model solves {tasks} tasks with opencode, at most {} in all. The PC wakes with the first request; other requests keep working meanwhile.",
+                    hours_text(minutes)
                 ),
                 confirm: "Run code benchmark",
                 danger: false,
@@ -1196,13 +1196,14 @@ fn CodeBenchCard() -> impl IntoView {
             },
         );
     };
-    let run_all = move |models: usize, minutes: u64| {
+    let run_all = move |models: usize, tasks: usize, minutes: u64| {
         confirm.ask(
             Question {
                 title: "Benchmark all models?".into(),
                 text: format!(
-                    "{models} models, {CODE_BENCH_TASKS} tasks each, up to {minutes} minutes per task: at most {} hours in all. The model active before the run comes back at the end.",
-                    (models as u64 * CODE_BENCH_TASKS as u64 * minutes).div_ceil(60),
+                    "{models} models, {tasks} tasks each, at most {} per model and {} in all. Requests of other clients wait until the run ends. The model active before the run comes back at the end.",
+                    hours_text(minutes),
+                    hours_text(models as u64 * minutes),
                 ),
                 confirm: "Benchmark all models",
                 danger: false,
@@ -1216,7 +1217,7 @@ fn CodeBenchCard() -> impl IntoView {
         <section class="card">
             <h2>"Code benchmark"</h2>
             <p class="muted small">
-                "The active model solves three Python tasks with opencode in the code-bench container on the NAS. Hidden tests score what it leaves."
+                "The active model solves three Python tasks and a real feature of this repo in Rust with opencode in the code-bench container on the NAS. Hidden tests score what it leaves."
             </p>
             {action_error(start.value())}
             {action_error(start_all.value())}
@@ -1290,12 +1291,20 @@ fn CodeBenchCard() -> impl IntoView {
                             } else {
                                 results
                                     .into_iter()
-                                    .map(|r| view! { <CodeBenchResult run=r /> })
+                                    .map(|r| view! { <CodeBenchResult run=r tasks=p.tasks.clone() /> })
                                     .collect_view()
                                     .into_any()
                             };
                             let models = p.models;
-                            let minutes = p.task_minutes.max(1);
+                            let tasks = p.tasks.len();
+                            // The limits of one model's run, all tasks running out of time.
+                            let minutes = p
+                                .tasks
+                                .iter()
+                                .map(|t| t.limit_secs)
+                                .sum::<u64>()
+                                .div_ceil(60)
+                                .max(1);
                             view! {
                                 {problem}
                                 {progress}
@@ -1308,7 +1317,7 @@ fn CodeBenchCard() -> impl IntoView {
                                         disabled=move || {
                                             blocked || running.get() || start.pending().get()
                                         }
-                                        on:click=move |_| run(minutes)
+                                        on:click=move |_| run(tasks, minutes)
                                     >
                                         "Run code benchmark"
                                     </button>
@@ -1321,7 +1330,7 @@ fn CodeBenchCard() -> impl IntoView {
                                                 || start_all.pending().get()
                                                 || models < 2
                                         }
-                                        on:click=move |_| run_all(models, minutes)
+                                        on:click=move |_| run_all(models, tasks, minutes)
                                     >
                                         "Benchmark all models"
                                     </button>
@@ -1336,7 +1345,14 @@ fn CodeBenchCard() -> impl IntoView {
     }
 }
 
-const CODE_BENCH_TASKS: usize = 3;
+/// `90` → `1:30 h`, `45` → `45 min`.
+fn hours_text(minutes: u64) -> String {
+    if minutes < 60 {
+        format!("{minutes} min")
+    } else {
+        format!("{}:{:02} h", minutes / 60, minutes % 60)
+    }
+}
 
 /// Hidden tests passed and seconds in total.
 fn run_totals(run: &CodeBenchRun) -> (u32, f64) {
@@ -1436,9 +1452,10 @@ fn CodeBenchCurrent(
     }
 }
 
-/// A model's last finished run: the total, then each task.
+/// A model's last finished run: the total, then each task. A run from
+/// before a task was added lacks it: its row shows "–" and the total says so.
 #[component]
-fn CodeBenchResult(run: CodeBenchRun) -> impl IntoView {
+fn CodeBenchResult(run: CodeBenchRun, tasks: Vec<CodeBenchTaskInfo>) -> impl IntoView {
     let (passed, secs) = run_totals(&run);
     let total: u32 = run.tasks.iter().map(|t| t.total).sum();
     let output: u64 = run.tasks.iter().map(|t| t.output_tokens).sum();
@@ -1456,9 +1473,39 @@ fn CodeBenchResult(run: CodeBenchRun) -> impl IntoView {
     if model_secs > 0.0 {
         summary.push(tps((output as f64 / model_secs * 10.0).round() / 10.0));
     }
+    let missing: Vec<CodeBenchTaskInfo> = tasks
+        .into_iter()
+        .filter(|t| !run.tasks.iter().any(|r| r.name == t.name))
+        .collect();
+    if !missing.is_empty() {
+        summary.insert(
+            0,
+            format!(
+                "{} of {} tasks",
+                run.tasks.len(),
+                run.tasks.len() + missing.len()
+            ),
+        );
+    }
     // An error row has no tasks, so no totals either.
     let totals = (!run.tasks.is_empty())
         .then(|| view! { <p>{format!("Total: {}", summary.join(" · "))}</p> });
+    let missing = (!run.tasks.is_empty()).then(|| {
+        missing
+            .into_iter()
+            .map(|t| {
+                view! {
+                    <li>
+                        <div class="grow">
+                            <p class="strong">{t.title}</p>
+                            <p class="muted small">"Not part of this run."</p>
+                        </div>
+                        <span class="badge">"–"</span>
+                    </li>
+                }
+            })
+            .collect_view()
+    });
     let tasks = run
         .tasks
         .into_iter()
@@ -1468,13 +1515,22 @@ fn CodeBenchResult(run: CodeBenchRun) -> impl IntoView {
         .error
         .clone()
         .map(|e| view! { <p class="error">{format!("{}: {e}", run.model)}</p> });
+    // A later run that failed left this result standing.
+    let failed_later = run.failed_later.clone().map(|e| {
+        view! {
+            <p class="error small">
+                {format!("A later run failed ({}): {e}", run.failed_at_text)}
+            </p>
+        }
+    });
     view! {
         <div class="bench-run">
             <h3>{run.model.clone()}</h3>
             {failed}
+            {failed_later}
             {totals}
             <p class="muted small">{run.at_text.clone()}</p>
-            <ul class="list">{tasks}</ul>
+            <ul class="list">{tasks}{missing}</ul>
         </div>
     }
 }
@@ -1515,20 +1571,49 @@ fn CodeBenchTaskRow(task: CodeBenchTask) -> impl IntoView {
             }
         })
         .collect_view();
-    let no_files = task
-        .files
-        .is_empty()
+    let repo = task.kind == "repo";
+    let no_files = (task.files.is_empty() && !repo)
         .then(|| view! { <p class="hint">"The agent left no Python file."</p> });
+    let diff = repo.then(
+        || match task.diff.clone().filter(|d| !d.trim().is_empty()) {
+            Some(diff) => view! {
+                <p class="small strong">"Change against the checkout"</p>
+                <pre class="lines">{diff}</pre>
+            }
+            .into_any(),
+            None => view! { <p class="hint">"The agent changed nothing."</p> }.into_any(),
+        },
+    );
+    // Tests that passed before the change and fail after it.
+    let broken = (!task.broken.is_empty()).then(|| {
+        view! {
+            <p class="error small">
+                {match task.broken.len() {
+                    1 => "Broken: 1 earlier test fails now".to_string(),
+                    n => format!("Broken: {n} earlier tests fail now"),
+                }}
+            </p>
+        }
+    });
+    let broken_list = (!task.broken.is_empty()).then(|| {
+        view! {
+            <p class="small strong">"Broken tests"</p>
+            <pre class="lines">{task.broken.join("\n")}</pre>
+        }
+    });
     view! {
         <li>
             <div class="grow">
                 <p class="strong">{task.title.clone()}</p>
                 <p class="muted small">{figures.join(" · ")}</p>
                 {task.error.clone().map(|e| view! { <p class="error small">{e}</p> })}
+                {broken}
                 <details class="advanced">
                     <summary>"Code and test output"</summary>
                     {files}
                     {no_files}
+                    {diff}
+                    {broken_list}
                     <p class="small strong">"Hidden tests"</p>
                     <pre class="lines">{task.test_output.clone()}</pre>
                 </details>

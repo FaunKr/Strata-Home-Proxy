@@ -1,5 +1,7 @@
-//! The code benchmark: the active model solves three fixed tasks with
-//! opencode in the container `code-bench` (tools/code-bench). The proxy
+//! The code benchmark: the active model solves four fixed tasks with
+//! opencode in the container `code-bench` (tools/code-bench): three Python
+//! tasks, and a real feature of this repo on a checkout in the runner's
+//! image. The proxy
 //! hands the runner a key of its own for the run, which goes through the
 //! proxy like any client's requests, and keeps each model's last result.
 
@@ -13,7 +15,9 @@ use std::{
 };
 
 use serde_json::json;
-use strata_admin_ui::api::{CodeBenchAll, CodeBenchPage, CodeBenchRun, CodeBenchState};
+use strata_admin_ui::api::{
+    CodeBenchAll, CodeBenchPage, CodeBenchRun, CodeBenchState, CodeBenchTaskInfo,
+};
 use strata_pc_protocol::{StrataJobRequest, StrataJobState};
 
 use crate::{
@@ -36,39 +40,82 @@ const LOST_AFTER: u32 = 30;
 const NO_URL: &str =
     "No code benchmark is set up. Set its address (CODE_BENCH_URL) under Strata → Connection.";
 
-/// A task as the runner takes it: the files opencode sees, and the hidden
-/// tests that score it afterwards.
+/// A task as the runner takes it: the brief opencode reads, and how it is
+/// scored.
 struct Task {
     name: &'static str,
     title: &'static str,
+    /// TASK.md, the brief.
     task: &'static str,
-    example: &'static str,
-    hidden: &'static str,
+    kind: Kind,
+    /// Its time limit, in multiples of the per-task limit.
+    limit_factor: u32,
 }
 
-const TASKS: [Task; 3] = [
+enum Kind {
+    /// Python: the example tests opencode sees, the hidden ones that score.
+    Files {
+        example: &'static str,
+        hidden: &'static str,
+    },
+    /// A checkout in the runner's image (tools/code-bench/prepare_repo_task.py),
+    /// scored there by the feature's own tests.
+    Repo,
+}
+
+const TASKS: [Task; 4] = [
     Task {
         name: "roman",
         title: "Roman numerals",
         task: include_str!("../../../tools/code-bench/tasks/roman/TASK.md"),
-        example: include_str!("../../../tools/code-bench/tasks/roman/example_test.py"),
-        hidden: include_str!("../../../tools/code-bench/tasks/roman/hidden_test.py"),
+        kind: Kind::Files {
+            example: include_str!("../../../tools/code-bench/tasks/roman/example_test.py"),
+            hidden: include_str!("../../../tools/code-bench/tasks/roman/hidden_test.py"),
+        },
+        limit_factor: 1,
     },
     Task {
         name: "csv-summary",
         title: "CSV summary",
         task: include_str!("../../../tools/code-bench/tasks/csv-summary/TASK.md"),
-        example: include_str!("../../../tools/code-bench/tasks/csv-summary/example_test.py"),
-        hidden: include_str!("../../../tools/code-bench/tasks/csv-summary/hidden_test.py"),
+        kind: Kind::Files {
+            example: include_str!("../../../tools/code-bench/tasks/csv-summary/example_test.py"),
+            hidden: include_str!("../../../tools/code-bench/tasks/csv-summary/hidden_test.py"),
+        },
+        limit_factor: 1,
     },
     Task {
         name: "lru-cache",
         title: "LRU cache",
         task: include_str!("../../../tools/code-bench/tasks/lru-cache/TASK.md"),
-        example: include_str!("../../../tools/code-bench/tasks/lru-cache/example_test.py"),
-        hidden: include_str!("../../../tools/code-bench/tasks/lru-cache/hidden_test.py"),
+        kind: Kind::Files {
+            example: include_str!("../../../tools/code-bench/tasks/lru-cache/example_test.py"),
+            hidden: include_str!("../../../tools/code-bench/tasks/lru-cache/hidden_test.py"),
+        },
+        limit_factor: 1,
+    },
+    // A change in Rust in a large codebase takes a local model far longer.
+    Task {
+        name: "pc-force-endpoints",
+        title: "Forced sleep and restart (Rust, this repo)",
+        task: include_str!("../../../tools/code-bench/tasks/pc-force-endpoints/TASK.md"),
+        kind: Kind::Repo,
+        limit_factor: 2,
     },
 ];
+
+/// The tasks with their limits now.
+fn task_infos(state: &AppState) -> Vec<CodeBenchTaskInfo> {
+    let base = timeouts::code_bench_task(state).as_secs();
+    TASKS
+        .iter()
+        .map(|t| CodeBenchTaskInfo {
+            name: t.name.into(),
+            title: t.title.into(),
+            limit_secs: base * u64::from(t.limit_factor),
+        })
+        .collect()
+}
 
 /// Where a run over all models stands: the models in order, the one being
 /// benchmarked now and the task being solved, for the card's progress.
@@ -81,7 +128,7 @@ struct All {
 pub struct CodeBench {
     /// The running run, or the last one that did not finish.
     run: Mutex<Option<CodeBenchRun>>,
-    /// Each model's last finished run; a model that failed gets its error row.
+    /// Each model's last finished run, or its error row when it has none.
     results: Mutex<Vec<CodeBenchRun>>,
     /// A start is on its way to the runner.
     starting: AtomicBool,
@@ -164,25 +211,52 @@ impl CodeBench {
         let mut results = self.results.lock().unwrap();
         results.retain(|r| r.model != run.model);
         results.push(run);
+        self.save(&results);
+    }
+
+    fn save(&self, results: &[CodeBenchRun]) {
         if let Some(dir) = &self.dir {
-            let bytes = serde_json::to_vec_pretty(&*results).expect("results serialize");
+            let bytes = serde_json::to_vec_pretty(results).expect("results serialize");
             if let Err(e) = write_private(dir, RESULTS_FILE, &bytes) {
                 tracing::error!("{RESULTS_FILE} not saved: {e}");
             }
         }
     }
 
-    /// A model that failed to load or whose run failed: its error row.
-    fn add_row(&self, model: &str, error: &str) {
-        self.keep(CodeBenchRun {
-            model: model.to_string(),
-            state: CodeBenchState::Failed,
-            error: Some(error.to_string()),
-            started: clock::unix_now(),
-            ended: Some(clock::unix_now()),
-            tasks: vec![],
-            at_text: String::new(),
-        });
+    /// A model that failed to load or whose run failed in a run over all
+    /// models. A result it has stays, the failure noted on it: a load that
+    /// fails once does not undo a run of hours. Without one, it gets its
+    /// error row.
+    fn note_failure(&self, model: &str, error: &str) {
+        let now = clock::unix_now();
+        let mut results = self.results.lock().unwrap();
+        if let Some(kept) = results
+            .iter_mut()
+            .find(|r| r.model == model && !r.tasks.is_empty())
+        {
+            kept.failed_later = Some(error.to_string());
+            kept.failed_at = Some(now);
+        } else {
+            results.retain(|r| r.model != model);
+            results.push(CodeBenchRun {
+                model: model.to_string(),
+                state: CodeBenchState::Failed,
+                error: Some(error.to_string()),
+                started: now,
+                ended: Some(now),
+                tasks: vec![],
+                at_text: String::new(),
+                failed_later: None,
+                failed_at: None,
+                failed_at_text: String::new(),
+            });
+        }
+        self.save(&results);
+    }
+
+    /// Each model's kept result, as the page shows them unsorted.
+    pub fn results(&self) -> Vec<CodeBenchRun> {
+        self.results.lock().unwrap().clone()
     }
 
     /// The model active before a run over all models, kept for a restart.
@@ -217,24 +291,6 @@ impl CodeBench {
             all.api.task = task;
         }
     }
-
-    /// Whether a model's result is kept, for a test that waits for one.
-    pub fn has_result(&self, model: &str) -> bool {
-        self.results
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|r| r.model == model && !r.tasks.is_empty())
-    }
-
-    /// Whether a model's error row is there, for a test that waits for one.
-    pub fn error_row_for(&self, model: &str) -> bool {
-        self.results
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|r| r.model == model && r.error.is_some())
-    }
 }
 
 pub async fn page(state: &AppState) -> CodeBenchPage {
@@ -246,9 +302,11 @@ pub async fn page(state: &AppState) -> CodeBenchPage {
     };
     let with_time = |mut run: CodeBenchRun| {
         run.at_text = clock::local_text(run.ended.unwrap_or(run.started));
+        run.failed_at_text = run.failed_at.map(clock::local_text).unwrap_or_default();
         run
     };
-    // Sorted by hidden tests passed, then by the time the run took.
+    // Sorted by hidden tests passed, then by the time the run took; error
+    // rows, which have neither, last.
     let mut results = state
         .code_bench
         .results
@@ -261,7 +319,11 @@ pub async fn page(state: &AppState) -> CodeBenchPage {
     results.sort_by(|a, b| {
         let passed = |r: &CodeBenchRun| r.tasks.iter().map(|t| t.passed).sum::<u32>();
         let secs = |r: &CodeBenchRun| r.tasks.iter().filter_map(|t| t.total_secs).sum::<f64>();
-        passed(b).cmp(&passed(a)).then(secs(a).total_cmp(&secs(b)))
+        a.tasks
+            .is_empty()
+            .cmp(&b.tasks.is_empty())
+            .then(passed(b).cmp(&passed(a)))
+            .then(secs(a).total_cmp(&secs(b)))
     });
     let models = state
         .strata
@@ -274,7 +336,7 @@ pub async fn page(state: &AppState) -> CodeBenchPage {
         results,
         all: state.code_bench.all_progress(),
         models,
-        task_minutes: timeouts::code_bench_task(state).as_secs().div_ceil(60),
+        tasks: task_infos(state),
     }
 }
 
@@ -464,14 +526,14 @@ async fn run_all(state: &Arc<AppState>, url: &str, key: &str) {
             all.api.task = 0;
         }
         if let Err(e) = activate(state, id).await {
-            state.code_bench.add_row(id, &e);
+            state.code_bench.note_failure(id, &e);
             continue;
         }
         if state.code_bench.cancelled.load(Ordering::SeqCst) {
             break;
         }
         if let Err(e) = run_model(state, url, id, key).await {
-            state.code_bench.add_row(id, &e);
+            state.code_bench.note_failure(id, &e);
             continue;
         }
     }
@@ -547,22 +609,36 @@ async fn post_run(
     model: &str,
     key: &str,
 ) -> Result<CodeBenchRun, String> {
+    let base = timeouts::code_bench_task(state).as_secs();
     let tasks: Vec<_> = TASKS
         .iter()
         .map(|t| {
-            json!({
+            let mut task = json!({
                 "name": t.name,
                 "title": t.title,
-                "files": {"TASK.md": t.task, "example_test.py": t.example},
-                "hidden_test": t.hidden,
-            })
+                "timeout_secs": base * u64::from(t.limit_factor),
+            });
+            match t.kind {
+                Kind::Files { example, hidden } => {
+                    task["files"] = json!({"TASK.md": t.task, "example_test.py": example});
+                    task["hidden_test"] = json!(hidden);
+                }
+                Kind::Repo => {
+                    task["kind"] = json!("repo");
+                    // The runner's checkout of the same name.
+                    task["repo"] = json!(t.name);
+                    task["files"] = json!({"TASK.md": t.task});
+                }
+            }
+            task
         })
         .collect();
     let body = json!({
         "model": model,
         "api_key": key,
         "tasks": tasks,
-        "timeout_secs": timeouts::code_bench_task(state).as_secs(),
+        // The default for a task without its own; older runners know only it.
+        "timeout_secs": base,
     });
     let resp = state
         .probe_client()
@@ -694,7 +770,9 @@ async fn follow_run(state: &Arc<AppState>, url: &str, in_all: bool) {
                 })
             };
             if in_all && let Some(run) = lost {
-                state.code_bench.keep(run);
+                state
+                    .code_bench
+                    .note_failure(&run.model, run.error.as_deref().unwrap_or_default());
             }
             break;
         };
@@ -719,7 +797,8 @@ async fn follow_run(state: &Arc<AppState>, url: &str, in_all: bool) {
             }
             CodeBenchState::Cancelled | CodeBenchState::Failed => {
                 if in_all && run.state == CodeBenchState::Failed {
-                    state.code_bench.keep(run.clone());
+                    let why = run.error.clone().unwrap_or_else(|| "the run failed".into());
+                    state.code_bench.note_failure(&run.model, &why);
                 }
                 *state.code_bench.run.lock().unwrap() = Some(run);
                 break;

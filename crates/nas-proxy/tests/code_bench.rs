@@ -161,7 +161,7 @@ async fn drive(s: &Setup, runner: &Runner, model: &str) {
 async fn drive_end(s: &Setup, runner: &Runner, model: &str, end_run: Value) {
     *runner.current.lock().unwrap() = Some(end_run);
     eventually_for(Duration::from_secs(10), "result for {model}", || {
-        s.state.code_bench.has_result(model)
+        has_result(&s.state.code_bench, model)
     })
     .await;
 }
@@ -209,6 +209,22 @@ fn has_key(s: &Setup) -> bool {
 
 fn has_key_state(state: &Arc<AppState>) -> bool {
     state.api_keys.list().iter().any(|k| k.name == KEY_NAME)
+}
+
+/// Whether `model` keeps a result with tasks.
+fn has_result(bench: &code_bench::CodeBench, model: &str) -> bool {
+    bench
+        .results()
+        .iter()
+        .any(|r| r.model == model && !r.tasks.is_empty())
+}
+
+/// Whether `model` has only its error row: a failure and no tasks.
+fn error_row_for(bench: &code_bench::CodeBench, model: &str) -> bool {
+    bench
+        .results()
+        .iter()
+        .any(|r| r.model == model && r.tasks.is_empty() && r.error.is_some())
 }
 
 async fn page(b: &mut Browser) -> Value {
@@ -262,14 +278,31 @@ async fn a_run_gets_the_tasks_the_active_model_and_a_key_of_its_own() {
     assert_eq!(body["model"], "IQ3_XXS");
     // The suggestion at the assumed speeds: no model has a benchmark.
     assert_eq!(body["timeout_secs"], 3360);
-    let names: Vec<&str> = body["tasks"]
-        .as_array()
-        .unwrap()
+    let tasks = body["tasks"].as_array().unwrap();
+    let names: Vec<&str> = tasks.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        ["roman", "csv-summary", "lru-cache", "pc-force-endpoints"]
+    );
+    // The Rust task in the repo checkout gets twice the time of the others.
+    let limits: Vec<u64> = tasks
         .iter()
-        .map(|t| t["name"].as_str().unwrap())
+        .map(|t| t["timeout_secs"].as_u64().unwrap())
         .collect();
-    assert_eq!(names, ["roman", "csv-summary", "lru-cache"]);
-    for t in body["tasks"].as_array().unwrap() {
+    assert_eq!(limits, [3360, 3360, 3360, 6720]);
+    let repo = &tasks[3];
+    assert_eq!(repo["kind"], "repo", "{repo}");
+    assert_eq!(repo["repo"], "pc-force-endpoints", "{repo}");
+    assert!(
+        repo["files"]["TASK.md"]
+            .as_str()
+            .unwrap()
+            .contains("/sleep/force"),
+        "{repo}"
+    );
+    assert_eq!(repo["files"].as_object().unwrap().len(), 1, "{repo}");
+    assert!(repo.get("hidden_test").is_none(), "{repo}");
+    for t in &tasks[..3] {
         assert!(t["files"]["TASK.md"].as_str().unwrap().len() > 100, "{t}");
         assert!(t["files"]["example_test.py"].is_string(), "{t}");
         // The hidden tests are not among the files opencode sees.
@@ -310,9 +343,42 @@ async fn a_finished_run_is_kept_per_model_and_its_key_revoked() {
     assert!(!result["at_text"].as_str().unwrap().is_empty());
     let html = b.page("/admin/strata/version").await;
     assert!(html.contains("Code benchmark"), "{html}");
-    assert!(html.contains("Total: 13/24 tests"), "{html}");
+    // The runner's result has three of the four tasks: the fourth is named missing.
+    assert!(html.contains("Total: 3 of 4 tasks · 13/24 tests"), "{html}");
+    assert!(html.contains("Not part of this run."), "{html}");
     assert!(html.contains("8/8"), "{html}");
     assert!(html.contains("def to_roman(n): ..."), "{html}");
+}
+
+#[tokio::test]
+async fn a_repo_task_shows_its_change_and_the_tests_it_broke() {
+    let (s, runner) = with_runner().await;
+    let mut b = logged_in(&s.url).await;
+    b.call("code-bench-start", &[]).await;
+    let mut end = run("IQ3_XXS", "done");
+    let mut repo = task("pc-force-endpoints", 3);
+    repo["title"] = json!("Forced sleep and restart (Rust, this repo)");
+    repo["kind"] = json!("repo");
+    repo["files"] = json!({});
+    repo["diff"] = json!("diff --git a/crates/pc-agent/src/lib.rs b/crates/pc-agent/src/lib.rs");
+    repo["broken"] = json!(["pc_agent::status_reports_gaming"]);
+    end["tasks"].as_array_mut().unwrap().push(repo);
+    drive_end(&s, &runner, "IQ3_XXS", end).await;
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("Total: 16/32 tests"), "{html}");
+    assert!(html.contains("Change against the checkout"), "{html}");
+    assert!(
+        html.contains("diff --git a/crates/pc-agent/src/lib.rs"),
+        "{html}"
+    );
+    assert!(html.contains("Broken: 1 earlier test fails now"), "{html}");
+    assert!(html.contains("pc_agent::status_reports_gaming"), "{html}");
+    // No hint about a missing Python file for the Rust task.
+    assert_eq!(
+        html.matches("The agent left no Python file.").count(),
+        0,
+        "{html}"
+    );
 }
 
 #[tokio::test]
@@ -526,7 +592,7 @@ async fn a_run_over_all_models_goes_through_them_and_brings_the_active_one_back(
             .collect();
     assert_eq!(order, vec![ids[0], ids[1], ids[2], ids[1]]);
     for id in ids {
-        assert!(s.state.code_bench.has_result(id), "no result for {id}");
+        assert!(has_result(&s.state.code_bench, id), "no result for {id}");
     }
     // One key for the whole run, gone at the end.
     assert!(!has_key(&s));
@@ -544,7 +610,7 @@ async fn a_model_that_does_not_load_gets_its_error_row_and_the_run_goes_on() {
     drive_load_fail(&s, ids[1]).await;
     // The error row for the model that did not load.
     eventually_for(Duration::from_secs(10), "error row", || {
-        s.state.code_bench.error_row_for(ids[1])
+        error_row_for(&s.state.code_bench, ids[1])
     })
     .await;
     drive(&s, &runner, ids[2]).await;
@@ -562,6 +628,62 @@ async fn a_model_that_does_not_load_gets_its_error_row_and_the_run_goes_on() {
         row["error"].as_str().unwrap().contains("did not load"),
         "{row}"
     );
+    // The error row comes after the results with tests.
+    assert_eq!(
+        v["results"].as_array().unwrap().last().unwrap()["model"],
+        ids[1]
+    );
+}
+
+#[tokio::test]
+async fn a_model_that_does_not_load_keeps_its_earlier_result_with_the_error() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M", "swift-IQ2_XS"];
+    let (s, runner) = with_models(&ids).await;
+    let mut b = logged_in(&s.url).await;
+    // A single run of the active model first.
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    drive_end(&s, &runner, ids[1], run(ids[1], "done")).await;
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    drive(&s, &runner, ids[0]).await;
+    drive_load_fail(&s, ids[1]).await;
+    eventually_for(Duration::from_secs(10), "failure noted", || {
+        s.state
+            .code_bench
+            .results()
+            .iter()
+            .any(|r| r.model == ids[1] && r.failed_later.is_some())
+    })
+    .await;
+    drive(&s, &runner, ids[2]).await;
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+
+    // One row for the model: its earlier result, with the failure on it.
+    let v = page(&mut b).await;
+    let rows: Vec<&Value> = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["model"] == ids[1])
+        .collect();
+    assert_eq!(rows.len(), 1, "{v}");
+    assert_eq!(rows[0]["state"], "done", "{v}");
+    assert_eq!(rows[0]["tasks"][0]["passed"], 8, "{v}");
+    assert!(
+        rows[0]["failed_later"]
+            .as_str()
+            .unwrap()
+            .contains("did not load"),
+        "{v}"
+    );
+    assert!(
+        !rows[0]["failed_at_text"].as_str().unwrap().is_empty(),
+        "{v}"
+    );
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("A later run failed ("), "{html}");
 }
 
 #[tokio::test]
@@ -597,15 +719,15 @@ async fn cancelling_a_run_over_all_models_keeps_finished_results_and_stops_the_r
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     // Only the finished model keeps a result; the third model never runs.
     assert!(
-        s.state.code_bench.has_result(ids[0]),
+        has_result(&s.state.code_bench, ids[0]),
         "the finished result is gone"
     );
     assert!(
-        !s.state.code_bench.has_result(ids[2]),
+        !has_result(&s.state.code_bench, ids[2]),
         "a stopped model has a result"
     );
     assert!(
-        !s.state.code_bench.error_row_for(ids[2]),
+        !error_row_for(&s.state.code_bench, ids[2]),
         "a stopped model got a row"
     );
     let order: Vec<String> =
@@ -825,11 +947,11 @@ async fn after_a_restart_mid_run_the_current_run_is_followed_and_the_model_broug
     })
     .await;
     assert!(
-        restarted.code_bench.has_result(ids[0]),
+        has_result(&restarted.code_bench, ids[0]),
         "the followed run's result is gone"
     );
     assert!(
-        !restarted.code_bench.has_result(ids[1]),
+        !has_result(&restarted.code_bench, ids[1]),
         "a remaining model was resumed"
     );
     let order: Vec<String> =
@@ -870,7 +992,7 @@ async fn a_runner_that_stops_answering_gives_the_model_its_error_row_and_the_run
     eventually_for(
         Duration::from_secs(10),
         "error row for the second model",
-        || s.state.code_bench.error_row_for(ids[1]),
+        || error_row_for(&s.state.code_bench, ids[1]),
     )
     .await;
     drive(&s, &runner, ids[2]).await;

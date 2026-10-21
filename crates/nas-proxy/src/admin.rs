@@ -307,6 +307,11 @@ impl Backend for UiBackend {
         async move { crate::code_bench::start(&state).await }.boxed()
     }
 
+    fn start_code_bench_all(&self) -> BoxFuture<'static, Result<(), String>> {
+        let state = Arc::clone(&self.0);
+        async move { crate::code_bench::start_all(&state).await }.boxed()
+    }
+
     fn cancel_code_bench(&self) -> BoxFuture<'static, Result<(), String>> {
         let state = Arc::clone(&self.0);
         async move { crate::code_bench::cancel(&state).await }.boxed()

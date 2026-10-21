@@ -96,6 +96,9 @@ pub trait Backend: Send + Sync + 'static {
     fn code_bench(&self) -> BoxFuture<'static, CodeBenchPage>;
     /// Starts a code benchmark of the active model; a message if it cannot.
     fn start_code_bench(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// Runs the code benchmark for every installed model in turn; a message if
+    /// it cannot start now.
+    fn start_code_bench_all(&self) -> BoxFuture<'static, Result<(), String>>;
     fn cancel_code_bench(&self) -> BoxFuture<'static, Result<(), String>>;
     /// A new one-time code and the command with it, for the PC to reach the
     /// NAS at `host` (as the browser did); a message if that is not usable.

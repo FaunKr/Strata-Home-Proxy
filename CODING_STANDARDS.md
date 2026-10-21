@@ -59,7 +59,17 @@ Questions already decided: `docs/adr/`.
   after a proxy start or a wake-up, a request can reach the PC or Strata
   before the status poll ran. What the request decides (a message, a retry)
   comes from state the request path itself keeps up to date, like the Strata
-  key held. A test for it sends the request before any status is noted.
+  key held. A test for it sends the request before any status is noted. A
+  retry after a refusal compares with what the request went out with (the
+  key it used), not with what is held now: a status check may have changed
+  that while the request was out.
+- **A test that counts calls the proxy's loops make too** (key fetches,
+  status calls) starts with those loops quiet, e.g. `idle_check` of an
+  hour, or counts only calls the loops can't make. Otherwise the count
+  depends on when a loop runs.
+- **An assertion on a text prints the text** (`assert!(text.contains(…),
+  "{text}")`): a rare failure is often seen once, and the message is all
+  that is left of it.
 - **Waits a test would have to sit through are configurable.** A limit
   or retry interval that behaviour depends on comes from `Config` (like
   `idle_timeout`) or through a setter for tests (like `Monitor::set_poll`,

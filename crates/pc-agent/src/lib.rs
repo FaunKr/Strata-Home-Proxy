@@ -18,6 +18,7 @@ pub mod sampling;
 pub mod strata;
 mod strata_key;
 pub mod strata_process;
+pub mod terminal;
 pub mod update;
 
 use std::{sync::Arc, time::Duration};

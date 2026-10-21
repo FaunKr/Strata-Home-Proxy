@@ -1,5 +1,5 @@
-//! Strata management through the service's HTTP interface, with fake git,
-//! winget and setup.
+//! Strata management through the service's HTTP interface, with a fake
+//! install script, a fake Strata Terminal and a fake setup.
 
 use crate::common;
 
@@ -14,30 +14,43 @@ fn lines(lines: &[&str]) -> Vec<String> {
     lines.iter().map(|l| l.to_string()).collect()
 }
 
-/// Git clones a Strata folder; setup sets up IQ3_XXS.
+/// What `strata update --output json` prints for the engine's `status`
+/// (`strata_cli/update_cmd.py`, `run`, Strata 011c9e6).
+fn engine_answer(status: &str) -> String {
+    format!(
+        r#"{{"schema_version": 1, "ok": true, "feed": {{"source": "f", "sequence": 41, "channel": "stable", "key_id": "k"}}, "results": [{{"component": "engine", "status": "{status}", "installed_before": null, "changed": true, "note": "The feed has no engine package for this PC.", "reasons": ["hip gfx1030: no package"]}}], "exit_code": 0}}"#
+    )
+}
+
+/// The install script puts the Strata Terminal in place, its update brings
+/// the engine and setup in its install mode sets up IQ3_XXS.
 fn installable(s: &Setup) {
-    let strata = s.agent.cfg.strata_dir.clone();
+    let terminal = s.agent.cfg.strata_home.join("terminal").join("current");
+    let install = s.agent.cfg.strata_home.join("install");
     let data = s.agent.cfg.strata_data_dir.clone();
     s.fake.command(
-        "git",
+        "powershell",
         FakeCommand {
+            lines: lines(&["Strata Terminal installer", "Installed. Run: strata launch"]),
             creates: vec![
-                (strata.join("setup.py"), String::new()),
-                (strata.join("START-HERE.bat"), String::new()),
-                (
-                    strata.join(".git").join("HEAD"),
-                    "ref: refs/heads/main\n".into(),
-                ),
-                (
-                    strata.join(".git").join("refs").join("heads").join("main"),
-                    "477ac13ffffffffffffffffffffffffffffffff\n".into(),
-                ),
+                (terminal.join("bin").join("strata.cmd"), "@echo off".into()),
+                (terminal.join("strata.py"), String::new()),
+                (terminal.join("setup.py"), String::new()),
+                (terminal.join("python").join("python.exe"), String::new()),
+                (terminal.join("VERSION"), "0.2.2\n".into()),
             ],
             ..FakeCommand::default()
         },
     );
     s.fake.command(
-        "START-HERE.bat",
+        "strata.cmd update",
+        FakeCommand {
+            lines: vec![engine_answer("updated")],
+            ..FakeCommand::default()
+        },
+    );
+    s.fake.command(
+        "python",
         FakeCommand {
             lines: lines(&[
                 "=== Step 1: Checking this PC ===",
@@ -46,10 +59,9 @@ fn installable(s: &Setup) {
             ]),
             creates: vec![
                 (
-                    strata.join("strata-iq3_xxs.json"),
-                    json!({"exe": "strata.exe", "args": ["--native"]}).to_string(),
+                    install.join("strata-iq3_xxs.json"),
+                    json!({"exe": "component:strata-engine", "args": ["--native"]}).to_string(),
                 ),
-                (strata.join("run-iq3_xxs.bat"), String::new()),
                 (
                     data.join("models").join("IQ3_XXS").join("a.gguf"),
                     "0123456789".into(),
@@ -62,6 +74,13 @@ fn installable(s: &Setup) {
 
 fn install() -> Value {
     json!({"kind": "install", "family": "qwen", "size": "IQ3_XXS", "context": 65536, "api_key": KEY})
+}
+
+fn env<'a>(spec: &'a CommandSpec, name: &str) -> Option<&'a str> {
+    spec.env
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.as_str())
 }
 
 #[tokio::test]
@@ -79,7 +98,7 @@ async fn values_outside_the_catalog_are_refused() {
 }
 
 #[tokio::test]
-async fn install_runs_setup_with_the_fixed_values_and_starts_strata() {
+async fn install_sets_up_the_strata_terminal_and_serves_the_new_model() {
     let s = setup("strata-install").await;
     installable(&s);
     let (code, job) = post(&s, "/strata/jobs", install()).await;
@@ -87,21 +106,43 @@ async fn install_runs_setup_with_the_fixed_values_and_starts_strata() {
     assert!(!job.to_string().contains(KEY), "{job}");
     let job = finished(&s).await;
     assert_eq!(job["state"], "done", "{job}");
+    let cfg = &s.agent.cfg;
+    let home = cfg.strata_home.display().to_string();
+    let install = cfg.strata_home.join("install");
 
-    let clone = &s.fake.runs_of("git")[1];
+    // Strata's own install script, into the service's folder; no Git.
+    let script = &s.fake.runs_of("powershell")[0];
     assert_eq!(
-        clone.args,
-        [
-            "clone",
-            "https://example.org/Strata.git",
-            &s.agent.cfg.strata_dir.display().to_string()
-        ]
+        script.args.last().unwrap(),
+        "irm 'https://example.org/install.ps1' | iex"
     );
-    let setup = &s.fake.runs_of("START-HERE.bat")[0];
-    let data = s.agent.cfg.strata_data_dir.display().to_string();
+    assert_eq!(env(script, "STRATA_DATA_DIR"), Some(home.as_str()));
+    assert!(s.fake.runs_of("git").is_empty());
+    assert!(s.fake.runs_of("winget").is_empty());
+
+    // The engine from the Terminal's update, for the service's run configs.
+    let terminal = cfg.strata_home.join("terminal").join("current");
+    let update = &s.fake.runs_of("strata.cmd")[0];
+    assert_eq!(update.program, terminal.join("bin").join("strata.cmd"));
+    assert_eq!(update.args, ["update", "--no-control", "--output", "json"]);
+    assert_eq!(
+        env(update, "STRATA_INSTALL_DIR"),
+        Some(install.display().to_string().as_str())
+    );
+
+    // Setup in its install mode, with the fixed values.
+    let setup = &s.fake.runs_of("python")[0];
+    assert_eq!(setup.program, terminal.join("python").join("python.exe"));
+    assert_eq!(env(setup, "STRATA_CONTROL_INSTALL"), Some("1"));
+    assert_eq!(
+        env(setup, "STRATA_INSTALL_DIR"),
+        Some(install.display().to_string().as_str())
+    );
+    let data = cfg.strata_data_dir.display().to_string();
     assert_eq!(
         setup.args,
         [
+            terminal.join("setup.py").display().to_string().as_str(),
             "--yes",
             "--no-start",
             "--no-browser",
@@ -124,13 +165,30 @@ async fn install_runs_setup_with_the_fixed_values_and_starts_strata() {
         ]
     );
 
-    // From now on the service starts the new model, with a key of its own
-    // and not the proxy's.
-    let (program, _) = s.fake.started.lock().unwrap().clone().unwrap();
-    assert_eq!(program, s.agent.cfg.strata_dir.join("run-iq3_xxs.bat"));
+    // From now on the service serves the new model's run config, with a
+    // key of its own and not the proxy's.
+    let config = install.join("strata-iq3_xxs.json");
+    let (program, args) = s.fake.started.lock().unwrap().clone().unwrap();
+    assert_eq!(program, terminal.join("bin").join("strata.cmd"));
+    assert_eq!(
+        args,
+        [
+            "serve",
+            "--profile",
+            &config.display().to_string(),
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080"
+        ]
+    );
     let stopped = s.fake.stopped.lock().unwrap().clone().unwrap();
     assert_eq!(stopped, ["llama-server.exe"], "the old Strata ends first");
-    let key = read_config(&s, "iq3_xxs")["api_key"]
+    let key = terminal_folder(&s)
+        .installation()
+        .model("iq3_xxs")
+        .unwrap()
+        .fields()["api_key"]
         .as_str()
         .unwrap()
         .to_string();
@@ -140,18 +198,100 @@ async fn install_runs_setup_with_the_fixed_values_and_starts_strata() {
         s.fake.health_auth.lock().unwrap().as_deref(),
         Some(format!("Bearer {key}").as_str())
     );
+    // Stopping ends every program of the Terminal's folder.
     s.agent.set_gaming(true);
     let stopped = s.fake.stopped.lock().unwrap().clone().unwrap();
     assert_eq!(stopped.len(), 1);
-    assert!(stopped[0].starts_with(&s.agent.cfg.strata_dir.display().to_string()));
+    assert!(stopped[0].starts_with(&home), "{stopped:?}");
+    assert!(stopped[0].ends_with(['/', '\\']), "{stopped:?}");
 
     let view = get(&s, "/strata").await;
     assert_eq!(view["installed"], true);
-    assert_eq!(view["version"], "477ac13");
+    assert_eq!(view["install"], "terminal");
+    assert_eq!(view["version"], "0.2.2");
     assert_eq!(view["models"][0]["id"], "IQ3_XXS");
     assert_eq!(view["models"][0]["active"], true);
     assert_eq!(view["models"][0]["disk_bytes"], 10);
     assert!(!view.to_string().contains(KEY));
+}
+
+#[tokio::test]
+async fn without_an_engine_for_this_pc_nothing_is_downloaded() {
+    let s = setup("strata-no-engine").await;
+    installable(&s);
+    s.fake.command(
+        "strata.cmd update",
+        FakeCommand {
+            lines: vec![engine_answer("none-for-this-pc")],
+            ..FakeCommand::default()
+        },
+    );
+    post(&s, "/strata/jobs", install()).await;
+    let job = finished(&s).await;
+    assert_eq!(job["state"], "failed", "{job}");
+    assert_eq!(
+        job["error"],
+        "The feed has no engine package for this PC. (hip gfx1030: no package)"
+    );
+    assert!(s.fake.runs_of("python").is_empty(), "no model download");
+    assert!(s.fake.started.lock().unwrap().is_none(), "no start");
+}
+
+#[tokio::test]
+async fn a_failed_install_script_fails_the_job_with_its_lines() {
+    let s = setup("strata-script-fails").await;
+    installable(&s);
+    s.fake.command(
+        "powershell",
+        FakeCommand {
+            lines: lines(&[
+                "Strata Terminal installer",
+                "strata installer: the download failed (timeout).",
+            ]),
+            exit: Some(1),
+            ..FakeCommand::default()
+        },
+    );
+    post(&s, "/strata/jobs", install()).await;
+    let job = finished(&s).await;
+    assert_eq!(job["state"], "failed", "{job}");
+    assert!(
+        job["error"]
+            .as_str()
+            .unwrap()
+            .contains("powershell ended with code 1"),
+        "{job}"
+    );
+    assert!(job.to_string().contains("the download failed"), "{job}");
+    assert!(s.fake.runs_of("strata.cmd").is_empty());
+}
+
+#[tokio::test]
+async fn an_installed_terminal_is_not_installed_again() {
+    let s = setup("strata-terminal-there").await;
+    installable(&s);
+    SetupLeaves::terminal(
+        &s.agent.cfg.strata_home,
+        &s.agent.cfg.strata_data_dir,
+        "0.2.2",
+    );
+    post(&s, "/strata/jobs", install()).await;
+    assert_eq!(finished(&s).await["state"], "done");
+    assert!(s.fake.runs_of("powershell").is_empty());
+    assert_eq!(s.fake.runs_of("strata.cmd").len(), 1, "the engine still");
+}
+
+#[tokio::test]
+async fn a_strata_folder_from_source_keeps_its_own_setup() {
+    let s = setup("strata-source-install").await;
+    let cfg = &s.agent.cfg;
+    SetupLeaves::new(&cfg.strata_dir, &cfg.strata_data_dir, "0123456789abcdef");
+    post(&s, "/strata/jobs", install()).await;
+    finished(&s).await;
+    assert_eq!(s.fake.runs_of("START-HERE.bat").len(), 1);
+    assert!(s.fake.runs_of("powershell").is_empty());
+    assert!(s.fake.runs_of("python").is_empty());
+    assert_eq!(get(&s, "/strata").await["install"], "source");
 }
 
 #[tokio::test]
@@ -161,7 +301,8 @@ async fn install_sets_loop_recovery_in_the_new_config() {
     let (code, job) = post(&s, "/strata/jobs", install()).await;
     assert_eq!(code, 202, "{job}");
     assert_eq!(finished(&s).await["state"], "done");
-    let cfg = read_config(&s, "iq3_xxs");
+    let model = terminal_folder(&s).installation().model("iq3_xxs").unwrap();
+    let cfg = Value::Object(model.fields().clone());
     assert_eq!(cfg["reasoning_loop_recovery"], "recover", "{cfg}");
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
 }
@@ -176,7 +317,7 @@ async fn install_turns_the_experimental_speed_projection_on_or_off() {
         let (code, job) = post(&s, "/strata/jobs", body).await;
         assert_eq!(code, 202, "{job}");
         assert_eq!(finished(&s).await["state"], "done");
-        let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+        let args = &s.fake.runs_of("python")[0].args;
         assert!(
             args.ends_with(&["--experimental-speed-projection".into(), value.into()]),
             "{args:?}"
@@ -199,24 +340,11 @@ async fn the_speed_projection_is_refused_for_other_families() {
 }
 
 #[tokio::test]
-async fn missing_git_is_installed_with_winget() {
-    let s = setup("strata-git").await;
-    installable(&s);
-    s.fake.git_missing.store(true, Ordering::SeqCst);
-    post(&s, "/strata/jobs", install()).await;
-    assert_eq!(finished(&s).await["state"], "done");
-    let winget = s.fake.runs_of("winget");
-    assert_eq!(winget.len(), 1);
-    assert!(winget[0].args.contains(&"Git.Git".to_string()));
-    assert!(s.fake.runs_of("git").iter().any(|c| c.args[0] == "clone"));
-}
-
-#[tokio::test]
 async fn a_second_job_is_refused_while_one_runs() {
     let s = setup("strata-second").await;
     installable(&s);
     s.fake.command(
-        "START-HERE.bat",
+        "python",
         FakeCommand {
             hang: true,
             ..FakeCommand::default()
@@ -224,7 +352,7 @@ async fn a_second_job_is_refused_while_one_runs() {
     );
     assert_eq!(post(&s, "/strata/jobs", install()).await.0, 202);
     job_until(&s, "setup running", |_| {
-        !s.fake.runs_of("START-HERE.bat").is_empty()
+        !s.fake.runs_of("python").is_empty()
     })
     .await;
     let (code, answer) = post(&s, "/strata/jobs", install()).await;
@@ -243,7 +371,7 @@ async fn a_running_job_keeps_the_pc_awake_and_the_watchdog_away() {
     let s = setup("strata-awake").await;
     installable(&s);
     s.fake.command(
-        "START-HERE.bat",
+        "python",
         FakeCommand {
             hang: true,
             ..FakeCommand::default()
@@ -251,7 +379,7 @@ async fn a_running_job_keeps_the_pc_awake_and_the_watchdog_away() {
     );
     post(&s, "/strata/jobs", install()).await;
     job_until(&s, "setup running", |_| {
-        !s.fake.runs_of("START-HERE.bat").is_empty()
+        !s.fake.runs_of("python").is_empty()
     })
     .await;
 
@@ -301,7 +429,7 @@ async fn a_failed_setup_shows_its_error_and_last_lines() {
     let s = setup("strata-fail").await;
     installable(&s);
     s.fake.command(
-        "START-HERE.bat",
+        "python",
         FakeCommand {
             lines: lines(&[
                 "=== Step 2: Python packages ===",
@@ -319,7 +447,9 @@ async fn a_failed_setup_shows_its_error_and_last_lines() {
         job["error"].as_str().unwrap().contains("pip failed"),
         "{job}"
     );
-    assert_eq!(job["lines"].as_array().unwrap().len(), 3);
+    // Setup's lines come last, after the install script's and the engine's.
+    let shown = job["lines"].as_array().unwrap();
+    assert_eq!(shown[shown.len() - 3], "=== Step 2: Python packages ===");
     assert!(
         s.fake.started.lock().unwrap().is_none(),
         "no start after a failure"
@@ -477,7 +607,7 @@ async fn gyro_installs_through_setup_like_any_family() {
     let (code, answer) = post(&s, "/strata/jobs", body).await;
     assert_eq!(code, 202, "{answer}");
     finished(&s).await;
-    let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+    let args = &s.fake.runs_of("python")[0].args;
     assert!(
         args.windows(4)
             .any(|w| w == ["--family", "gyro", "--model", "Gyro-S"]),
@@ -499,7 +629,7 @@ async fn progress_comes_from_setups_output() {
     let s = setup("strata-progress").await;
     installable(&s);
     s.fake.command(
-        "START-HERE.bat",
+        "python",
         FakeCommand {
             lines: lines(&[
                 "=== Step 4: Downloading the model ===",
@@ -521,7 +651,7 @@ async fn cancel_ends_the_running_command() {
     let s = setup("strata-cancel").await;
     installable(&s);
     s.fake.command(
-        "START-HERE.bat",
+        "python",
         FakeCommand {
             hang: true,
             ..FakeCommand::default()
@@ -529,7 +659,7 @@ async fn cancel_ends_the_running_command() {
     );
     post(&s, "/strata/jobs", install()).await;
     job_until(&s, "setup running", |_| {
-        !s.fake.runs_of("START-HERE.bat").is_empty()
+        !s.fake.runs_of("python").is_empty()
     })
     .await;
     let (code, _) = post(&s, "/strata/job/cancel", json!({})).await;
@@ -545,7 +675,7 @@ async fn a_job_running_at_a_restart_is_interrupted() {
     let s = setup("strata-restart").await;
     installable(&s);
     s.fake.command(
-        "START-HERE.bat",
+        "python",
         FakeCommand {
             hang: true,
             ..FakeCommand::default()
@@ -553,7 +683,7 @@ async fn a_job_running_at_a_restart_is_interrupted() {
     );
     post(&s, "/strata/jobs", install()).await;
     job_until(&s, "setup running", |_| {
-        !s.fake.runs_of("START-HERE.bat").is_empty()
+        !s.fake.runs_of("python").is_empty()
     })
     .await;
     let again = s.restarted();
@@ -578,7 +708,7 @@ async fn gaming_on_cancels_a_running_job() {
     let s = setup("strata-gaming-cancel").await;
     installable(&s);
     s.fake.command(
-        "START-HERE.bat",
+        "python",
         FakeCommand {
             hang: true,
             ..FakeCommand::default()
@@ -586,7 +716,7 @@ async fn gaming_on_cancels_a_running_job() {
     );
     post(&s, "/strata/jobs", install()).await;
     job_until(&s, "setup running", |_| {
-        !s.fake.runs_of("START-HERE.bat").is_empty()
+        !s.fake.runs_of("python").is_empty()
     })
     .await;
     s.agent.set_gaming(true);
@@ -605,17 +735,14 @@ async fn gaming_on_cancels_a_running_job() {
 async fn hanging_install(s: &Setup) {
     installable(s);
     s.fake.command(
-        "START-HERE.bat",
+        "python",
         FakeCommand {
             hang: true,
             ..FakeCommand::default()
         },
     );
     post(s, "/strata/jobs", install()).await;
-    job_until(s, "setup running", |_| {
-        !s.fake.runs_of("START-HERE.bat").is_empty()
-    })
-    .await;
+    job_until(s, "setup running", |_| !s.fake.runs_of("python").is_empty()).await;
 }
 
 #[tokio::test]
@@ -652,7 +779,7 @@ async fn forced_restart_kills_strata_once_the_cancelled_job_has_ended() {
 async fn stuck_install(s: &Setup) {
     installable(s);
     s.fake.command(
-        "START-HERE.bat",
+        "python",
         FakeCommand {
             hang: true,
             ignores_cancel: true,
@@ -660,10 +787,7 @@ async fn stuck_install(s: &Setup) {
         },
     );
     post(s, "/strata/jobs", install()).await;
-    job_until(s, "setup running", |_| {
-        !s.fake.runs_of("START-HERE.bat").is_empty()
-    })
-    .await;
+    job_until(s, "setup running", |_| !s.fake.runs_of("python").is_empty()).await;
 }
 
 #[tokio::test]
@@ -693,7 +817,7 @@ async fn forced_restart_starts_no_strata_against_a_job_begun_during_its_pause() 
     let s = setup_with("strata-force-restart-job", |c| c.stop_settle_ms = 2000).await;
     installable(&s);
     s.fake.command(
-        "START-HERE.bat",
+        "python",
         FakeCommand {
             hang: true,
             ..FakeCommand::default()

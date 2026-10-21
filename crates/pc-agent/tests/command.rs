@@ -10,6 +10,7 @@ fn sh(script: &str) -> CommandSpec {
         program: "sh".into(),
         args: vec!["-c".into(), script.into()],
         dir: None,
+        ..Default::default()
     }
 }
 

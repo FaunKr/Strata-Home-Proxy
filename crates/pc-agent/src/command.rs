@@ -10,12 +10,14 @@ use tokio::{
 };
 
 /// What to run.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommandSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
     /// Working directory; the service's own if `None`.
     pub dir: Option<PathBuf>,
+    /// Environment variables on top of the service's own.
+    pub env: Vec<(String, String)>,
 }
 
 /// Ends a running command and the programs it started.
@@ -80,6 +82,7 @@ pub fn spawn(spec: &CommandSpec) -> Result<Running> {
     if let Some(dir) = &spec.dir {
         cmd.current_dir(dir);
     }
+    cmd.envs(spec.env.iter().map(|(k, v)| (k, v)));
     // Python holds its output back when it goes to a pipe; then the lines
     // would come in batches instead of live.
     cmd.env("PYTHONUNBUFFERED", "1");

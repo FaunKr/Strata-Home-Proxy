@@ -346,6 +346,7 @@ fn strata_command(program: &Path, args: &[String]) -> Result<CommandSpec> {
         program: program.to_path_buf(),
         args: args.to_vec(),
         dir: dir.map(Path::to_path_buf),
+        ..Default::default()
     })
 }
 
@@ -359,6 +360,15 @@ pub(crate) use imp::hidden;
 /// Whether an entry of `strata_processes` names a folder rather than a program.
 pub fn is_folder(entry: &str) -> bool {
     entry.ends_with(['\\', '/'])
+}
+
+/// The `strata_processes` entry for every program from `dir`.
+pub fn folder_entry(dir: &Path) -> String {
+    let mut entry = dir.display().to_string();
+    if !is_folder(&entry) {
+        entry.push(std::path::MAIN_SEPARATOR);
+    }
+    entry
 }
 
 /// Asks Windows which adapter holds `local` and reads its MAC address.

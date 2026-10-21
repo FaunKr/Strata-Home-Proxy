@@ -31,7 +31,11 @@ impl StrataReport {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StrataInfo {
     pub installed: bool,
-    /// Short commit of the Strata folder.
+    /// How Strata is installed; `None` before it is and from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<StrataInstall>,
+    /// The Strata Terminal's version, or the short commit of a Strata
+    /// folder from source.
     #[serde(default)]
     pub version: Option<String>,
     /// Whether Strata's source has newer commits; `None` until known.
@@ -63,6 +67,16 @@ pub struct StrataInfo {
     pub benchmarks: Vec<StrataBenchmark>,
     #[serde(default)]
     pub job: Option<StrataJob>,
+}
+
+/// How Strata is installed on the PC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrataInstall {
+    /// The Strata Terminal, from Strata's install script.
+    Terminal,
+    /// An older Strata folder from source (a Git clone).
+    Source,
 }
 
 /// An installed model.

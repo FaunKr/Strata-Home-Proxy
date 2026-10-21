@@ -8,6 +8,7 @@ pub mod config;
 pub mod hardware;
 pub mod install;
 pub mod job;
+pub mod machine;
 pub mod managed;
 pub mod output;
 pub mod platform;

@@ -7,7 +7,8 @@ use std::{fmt::Write, sync::Arc};
 
 use strata_admin_ui::api::{CodeBenchRun, CodeBenchState};
 use strata_pc_protocol::{
-    SamplingField, SamplingSource, SamplingSupport, StrataBenchmark, StrataInfo, StrataModel,
+    MachineFacts, SamplingField, SamplingSource, SamplingSupport, StrataBenchmark, StrataInfo,
+    StrataModel,
 };
 
 use crate::{clock, state::AppState};
@@ -71,16 +72,11 @@ pub fn build(
     }
 
     let _ = writeln!(out, "\n## PC\n");
-    let _ = writeln!(out, "- RAM: {:.1} GB", info.ram_gb);
-    match info.vram_gb {
-        Some(vram) => {
-            let _ = writeln!(
-                out,
-                "- VRAM: {vram:.1} GB (the graphics card with the most)"
-            );
-        }
+    match &info.machine {
+        Some(machine) => machine_lines(out, info, machine),
         None => {
-            let _ = writeln!(out, "- VRAM: not reported");
+            let _ = writeln!(out, "- RAM: {:.1} GB", info.ram_gb);
+            vram_line(out, info);
         }
     }
 
@@ -99,6 +95,141 @@ pub fn build(
         code_bench_text(code_bench, &model.id)
     );
     Ok(text)
+}
+
+fn vram_line(out: &mut String, info: &StrataInfo) {
+    match info.vram_gb {
+        Some(vram) => {
+            let _ = writeln!(
+                out,
+                "- VRAM: {vram:.1} GB (the graphics card with the most)"
+            );
+        }
+        None => {
+            let _ = writeln!(out, "- VRAM: not reported");
+        }
+    }
+}
+
+/// What the PC is; a fact the PC service could not read is left out.
+fn machine_lines(out: &mut String, info: &StrataInfo, machine: &MachineFacts) {
+    let windows = [
+        machine.windows.edition.clone(),
+        machine.windows.version.clone(),
+        machine.windows.build.as_ref().map(|b| format!("build {b}")),
+    ];
+    let windows = joined(&windows, " ");
+    if !windows.is_empty() {
+        let _ = writeln!(out, "- OS: {windows}");
+    }
+
+    let cpu = &machine.cpu;
+    let mut cpu_parts = vec![
+        cpu.cores.map(|c| format!("{c} cores")),
+        cpu.threads.map(|t| format!("{t} threads")),
+        cpu.max_mhz.map(|m| format!("up to {m} MHz")),
+    ];
+    if let Some(on) = cpu.avx2 {
+        cpu_parts.push(Some(format!("AVX2 {}", yes_no(on))));
+    }
+    if let Some(on) = cpu.avx512 {
+        cpu_parts.push(Some(format!("AVX-512 {}", yes_no(on))));
+    }
+    let details = joined(&cpu_parts, ", ");
+    match (&cpu.name, details.is_empty()) {
+        (Some(name), true) => {
+            let _ = writeln!(out, "- CPU: {name}");
+        }
+        (Some(name), false) => {
+            let _ = writeln!(out, "- CPU: {name} ({details})");
+        }
+        (None, false) => {
+            let _ = writeln!(out, "- CPU: {details}");
+        }
+        (None, true) => {}
+    }
+
+    let total = machine
+        .ram_total_bytes
+        .map(|b| format!("{:.0} GB", gb(b)))
+        .unwrap_or_else(|| format!("{:.1} GB", info.ram_gb));
+    let mut ram = format!("- RAM: {total}");
+    if !machine.ram_sticks.is_empty() {
+        let filled = machine.ram_sticks.len();
+        let _ = match machine.ram_slots {
+            Some(slots) => write!(ram, ", {filled} of {slots} slots filled"),
+            None => write!(ram, ", {filled} sticks"),
+        };
+    }
+    let _ = writeln!(out, "{ram}");
+    for stick in &machine.ram_sticks {
+        let parts = [
+            stick.size_bytes.map(|b| format!("{:.0} GB", gb(b))),
+            stick.kind.clone(),
+            stick.rated_mts.map(|m| format!("rated {m} MT/s")),
+            stick.configured_mts.map(|m| format!("running at {m} MT/s")),
+        ];
+        let stick = joined(&parts, ", ");
+        if !stick.is_empty() {
+            let _ = writeln!(out, "  - Stick: {stick}");
+        }
+    }
+
+    if machine.gpus.is_empty() {
+        vram_line(out, info);
+    }
+    for gpu in &machine.gpus {
+        let pcie = match (gpu.pcie_max_gen, gpu.pcie_max_lanes) {
+            (Some(g), Some(l)) => {
+                let mut text = format!("PCIe gen {g} x{l}");
+                if let (Some(now_g), Some(now_l)) = (gpu.pcie_gen, gpu.pcie_lanes) {
+                    let _ = write!(text, " (now gen {now_g} x{now_l})");
+                }
+                Some(text)
+            }
+            _ => None,
+        };
+        let parts = [
+            gpu.vram_bytes.map(|b| format!("{:.1} GB VRAM", gb(b))),
+            gpu.driver_version.as_ref().map(|d| format!("driver {d}")),
+            pcie,
+        ];
+        let details = joined(&parts, ", ");
+        let name = gpu.name.as_deref().unwrap_or("unknown");
+        if details.is_empty() {
+            let _ = writeln!(out, "- Graphics card: {name}");
+        } else {
+            let _ = writeln!(out, "- Graphics card: {name} ({details})");
+        }
+    }
+
+    if let Some(drive) = &machine.model_drive {
+        let kind = match drive.as_str() {
+            "nvme" => "NVMe SSD",
+            "ssd" => "SSD",
+            "hdd" => "hard disk",
+            other => other,
+        };
+        let _ = writeln!(out, "- Drive with the models: {kind}");
+    }
+}
+
+/// Bytes in GB as Windows counts them (2^30), so a 32 GB stick reads 32.
+fn gb(bytes: u64) -> f64 {
+    bytes as f64 / (1u64 << 30) as f64
+}
+
+fn yes_no(on: bool) -> &'static str {
+    if on { "yes" } else { "no" }
+}
+
+fn joined(parts: &[Option<String>], sep: &str) -> String {
+    parts
+        .iter()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(sep)
 }
 
 fn model_lines(out: &mut String, info: &StrataInfo, model: &StrataModel) {

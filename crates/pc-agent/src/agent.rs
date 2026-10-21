@@ -35,6 +35,7 @@ use tokio::sync::broadcast;
 use crate::{
     config::{Config, format_mac, parse_mac},
     job::Jobs,
+    machine::MachineFacts,
     managed::Managed,
     output::{StrataOutput, StrataOutputMessage, StrataOutputNotice},
     platform::Platform,
@@ -94,6 +95,8 @@ pub struct Agent {
     pub(crate) output: Arc<StrataOutput>,
     /// A new one comes with every start of Strata.
     pub(crate) strata_key: StrataKey,
+    /// What the PC is, read with the first `GET /strata`.
+    machine: std::sync::OnceLock<MachineFacts>,
 }
 
 struct Watchdog {
@@ -146,11 +149,19 @@ impl Agent {
             standby_pending: AtomicBool::new(false),
             output,
             strata_key: StrataKey::new(),
+            machine: std::sync::OnceLock::new(),
         })
     }
 
     pub(crate) fn platform(&self) -> &dyn Platform {
         self.platform.as_ref()
+    }
+
+    /// What the PC is; read once, it does not change while the service runs.
+    pub(crate) fn machine(&self) -> MachineFacts {
+        self.machine
+            .get_or_init(|| self.platform.machine(&self.cfg.strata_data_dir))
+            .clone()
     }
 
     /// Strata's process: every start and stop goes through it.

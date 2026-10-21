@@ -1,9 +1,13 @@
-//! Hardware readings in `/status`, read through the fake platform.
+//! Hardware readings in `/status` and the machine facts in `/strata`, read
+//! through the fake platform.
 
 use crate::common;
 
+use std::sync::atomic::Ordering;
+
 use common::*;
 use serde_json::{Value, json};
+use strata_pc_agent::machine::{CpuFacts, GpuFacts, MachineFacts, RamStick, WindowsFacts};
 
 async fn status_json(s: &Setup) -> Value {
     client()
@@ -117,4 +121,53 @@ fn windows_reads_cpu_and_ram() {
     let total = cpu.ram_total_bytes.expect("RAM total");
     let used = cpu.ram_used_bytes.expect("RAM belegt");
     assert!(0 < used && used <= total, "RAM {used} of {total}");
+}
+
+#[tokio::test]
+async fn strata_reports_the_machine_facts_read_once() {
+    let s = setup("machine-facts").await;
+    *s.fake.machine.lock().unwrap() = MachineFacts {
+        ram_sticks: vec![RamStick {
+            size_bytes: Some(32 << 30),
+            kind: Some("DDR5".into()),
+            rated_mts: Some(6000),
+            configured_mts: Some(4800),
+        }],
+        ram_slots: Some(4),
+        ram_total_bytes: Some(32 << 30),
+        gpus: vec![GpuFacts {
+            name: Some("NVIDIA GeForce RTX 4090".into()),
+            vram_bytes: Some(24 << 30),
+            driver_version: Some("32.0.15.6094".into()),
+            pcie_max_gen: Some(4),
+            pcie_max_lanes: Some(16),
+            pcie_gen: Some(1),
+            pcie_lanes: Some(16),
+        }],
+        cpu: CpuFacts {
+            name: Some("AMD Ryzen 9 7950X 16-Core Processor".into()),
+            cores: Some(16),
+            threads: Some(32),
+            max_mhz: Some(4501),
+            avx2: Some(true),
+            avx512: Some(true),
+        },
+        windows: WindowsFacts {
+            edition: Some("Windows 11 Pro".into()),
+            version: Some("24H2".into()),
+            build: Some("26100.4652".into()),
+        },
+        model_drive: Some("nvme".into()),
+    };
+    let first = get(&s, "/strata").await;
+    get(&s, "/strata").await;
+    let machine = &first["machine"];
+    assert_eq!(machine["ram_slots"], 4);
+    assert_eq!(machine["ram_sticks"][0]["kind"], "DDR5");
+    assert_eq!(machine["gpus"][0]["name"], "NVIDIA GeForce RTX 4090");
+    assert_eq!(machine["gpus"][0]["pcie_max_gen"], 4);
+    assert_eq!(machine["cpu"]["threads"], 32);
+    assert_eq!(machine["windows"]["build"], "26100.4652");
+    assert_eq!(machine["model_drive"], "nvme");
+    assert_eq!(s.fake.machine_reads.load(Ordering::SeqCst), 1);
 }

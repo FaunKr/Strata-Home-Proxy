@@ -118,7 +118,9 @@ async fn running_stream_keeps_pc_awake() {
         .await
         .unwrap()
     });
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    eventually("the stream in flight", || s.state.in_flight() == 1).await;
+    // Past the idle time, while the stream still runs.
+    tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(s.state.in_flight(), 1);
     assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 0);
     let text = stream.await.unwrap();
@@ -244,17 +246,22 @@ async fn pings_fill_long_pauses_between_events() {
 
 #[tokio::test]
 async fn refused_sleep_is_retried_later() {
-    let s = setup(true, |c| c.idle_timeout = Duration::from_millis(200)).await;
+    let s = setup(true, |c| {
+        c.idle_timeout = Duration::from_millis(200);
+        c.sleep_retry = Duration::from_secs(1);
+    })
+    .await;
     s.pc.refuse_sleep.store(true, Ordering::SeqCst);
     eventually("a refused sleep", || {
         kinds(&s.state).contains(&EventKind::SleepRefused)
     })
     .await;
+    // Not asked again right away, only after the retry time.
     assert!(s.pc.up());
-    let refused = s.pc.sleep_requests.load(Ordering::SeqCst);
+    assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 1);
     s.pc.refuse_sleep.store(false, Ordering::SeqCst);
     eventually("the retried sleep", || !s.pc.up()).await;
-    assert!(s.pc.sleep_requests.load(Ordering::SeqCst) > refused);
+    assert_eq!(s.pc.sleep_requests.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

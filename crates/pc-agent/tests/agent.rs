@@ -325,7 +325,9 @@ async fn forced_sleep_leaves_gaming_mode_on() {
     assert_eq!(body["gaming_mode"], true);
     assert_eq!(body["user_active"], false);
     eventually("standby", || s.fake.suspends.load(Ordering::SeqCst) == 1).await;
-    // Back from standby: still gaming, and Strata stays off.
+    // Back from standby: still gaming, and Strata stays off. A start would
+    // follow the standby at once; the wait gives it time to show.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(s.agent.gaming());
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
     assert!(s.restarted().gaming());
@@ -426,8 +428,9 @@ async fn a_second_sleep_while_standby_is_pending_brings_no_second_standby() {
         assert_eq!(code, 200, "{path}: {body}");
     }
     eventually("standby", || s.fake.suspends.load(Ordering::SeqCst) == 1).await;
-    // A second standby would follow within the 2 s delay.
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    // A second sleep would have started its own 2 s delay with the first
+    // request, so its standby would follow the first one at once.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
 }
 

@@ -180,6 +180,37 @@ async function forced(page, errors) {
   return findings;
 }
 
+// Opens the optimization prompt of the first installed model: the dialog
+// with the text and Copy. Returns the number of findings.
+async function optimizationPrompt(page, errors, name) {
+  const wait = { timeout: 15000 };
+  errors.length = 0;
+  let issue = null;
+  try {
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'Optimization prompt' }).first().click(wait);
+    const dialog = page.locator('dialog[open]');
+    const text = dialog.locator('textarea');
+    await text.waitFor(wait);
+    const value = await text.inputValue();
+    for (const part of ['I run a local LLM with Strata', '## PC', '## Benchmarks']) {
+      if (!value.includes(part)) throw new Error(`prompt lacks "${part}"`);
+    }
+    await dialog.getByRole('button', { name: 'Copy' }).click();
+    await dialog.getByText(/Copied|copy it with Ctrl\+C/).first().waitFor(wait);
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/${name}_optimization-prompt.jpg`, type: 'jpeg', quality: 60 });
+    }
+    await dialog.getByRole('button', { name: 'Close' }).click();
+    await page.locator('dialog[open]').waitFor({ state: 'detached', ...wait });
+  } catch (e) {
+    issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
+  }
+  if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+  console.log(`${issue ? 'FAIL' : 'ok  '} ${name} optimization prompt${issue ? '\n     ' + issue : ''}`);
+  return issue ? 1 : 0;
+}
+
 // Drives "Benchmark all models" against scripts/fake-pc.js: the dialog, then a
 // run over all models with its progress. Returns the number of findings.
 async function codeBench(page, errors) {
@@ -246,6 +277,7 @@ async function codeBench(page, errors) {
     for (const area of areas) {
       findings += await check(page, errors, name, area, expected[area] ?? [], area.replace(/\//g, '_'));
     }
+    findings += await optimizationPrompt(page, errors, name);
     if (name === 'desk') {
       for (const [state, mode, texts] of summaryStates) {
         const upstream = state.padEnd(40, '0');

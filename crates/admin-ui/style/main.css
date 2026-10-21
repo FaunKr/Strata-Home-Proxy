@@ -253,6 +253,13 @@ button.full { width: 100%; }
   color: var(--text);
 }
 
+textarea.code.text {
+  display: block;
+  width: 100%;
+  white-space: pre-wrap;
+  resize: vertical;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -440,6 +447,7 @@ dialog.confirm {
 dialog.confirm::backdrop { background: rgba(14, 10, 22, 0.55); }
 dialog.confirm h2 { font-size: 1.15rem; margin-bottom: 8px; }
 dialog.confirm .actions { justify-content: flex-end; margin-top: 24px; }
+dialog.confirm.wide { max-width: 760px; }
 
 /* --- History: one bar per day, filled by the hours of each state --- */
 

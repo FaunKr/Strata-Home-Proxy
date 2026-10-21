@@ -713,6 +713,16 @@ pub async fn cancel_strata_job() -> Result<(), ServerFnError> {
     backend()?.cancel_strata_job().await.map_err(bad_request)
 }
 
+/// The optimization prompt for an installed model; never wakes the PC.
+#[server(prefix = "/admin/api", endpoint = "strata-optimization-prompt")]
+pub async fn get_optimization_prompt(model: String) -> Result<String, ServerFnError> {
+    require_login(false).await?;
+    backend()?
+        .optimization_prompt(model)
+        .await
+        .map_err(bad_request)
+}
+
 // --- The code benchmark, run by the container code-bench on the NAS ---
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

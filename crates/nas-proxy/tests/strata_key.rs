@@ -86,13 +86,8 @@ async fn a_key_fetched_by_a_status_check_while_the_request_is_out_still_sends_it
     let url = s.url.clone();
     let key = s.key.clone();
     let request = tokio::spawn(async move {
-        reqwest::Client::new()
-            .post(format!("{url}/v1/chat/completions"))
-            .bearer_auth(key)
-            .json(&json!({}))
-            .send()
+        post_json_to(&url, &key, "/v1/chat/completions", json!({}))
             .await
-            .unwrap()
             .status()
     });
     eventually("the request reached Strata", || {

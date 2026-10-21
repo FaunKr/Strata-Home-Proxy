@@ -875,9 +875,14 @@ pub async fn eventually(what: &str, check: impl Fn() -> bool) {
 }
 
 pub async fn post_json(s: &Setup, path: &str, body: Value) -> reqwest::Response {
+    post_json_to(&s.url, &s.key, path, body).await
+}
+
+/// `post_json` without the setup, e.g. for a request in a task of its own.
+pub async fn post_json_to(url: &str, key: &str, path: &str, body: Value) -> reqwest::Response {
     reqwest::Client::new()
-        .post(format!("{}{path}", s.url))
-        .bearer_auth(&s.key)
+        .post(format!("{url}{path}"))
+        .bearer_auth(key)
         .json(&body)
         .send()
         .await

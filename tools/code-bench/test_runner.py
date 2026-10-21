@@ -22,6 +22,8 @@ os.chmod(os.environ["WORK_DIR"], 0o755)
 _bin = tempfile.mkdtemp()
 os.chmod(_bin, 0o755)
 os.environ["OPENCODE_BIN"] = shutil.copy(HERE / "testdata" / "fake-opencode", _bin)
+os.environ["CARGO_BIN"] = shutil.copy(HERE / "testdata" / "fake-cargo", _bin)
+os.environ["REPO_TASKS_DIR"] = tempfile.mkdtemp()
 sys.path.insert(0, str(HERE))
 import runner  # noqa: E402
 
@@ -36,6 +38,37 @@ TASK = {
         "    def test_zero(self):\n        self.assertEqual(double(0), 0)\n"
     ),
 }
+
+
+def make_repo_task(name="adder"):
+    """A repo task as prepare_repo_task.py leaves it, for the fake cargo: a
+    checkout with one commit, the feature's test file and the test lists."""
+    root = Path(os.environ["REPO_TASKS_DIR"], name)
+    checkout = root / "checkout"
+    (checkout / "src").mkdir(parents=True)
+    (checkout / "tests").mkdir()
+    (checkout / "src" / "lib.txt").write_text("base\n")
+    (checkout / ".gitignore").write_text("/target\n")
+    (checkout / "target").mkdir()
+    (checkout / "target" / "built").write_text("prebuilt\n")
+    git = ["git", "-C", str(checkout), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(git + ["init", "-q"], check=True)
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["commit", "-q", "-m", "snapshot"], check=True)
+    base = subprocess.run(git + ["rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    (root / "hidden" / "tests").mkdir(parents=True)
+    (root / "hidden" / "tests" / "adder.rs").write_text("// the feature's tests\n")
+    (root / "task.json").write_text(json.dumps({
+        "base": base,
+        "command": ["test", "--offline"],
+        "counted": ["adder_tests::adds", "adder_tests::subtracts"],
+        "passing_before": ["adder::old", "adder::other_old", "doc-adder::src/lib.rs - add (line 3)"],
+    }))
+    return checkout
+
+
+REPO_CHECKOUT = make_repo_task()
+REPO_TASK = {"name": "adder", "title": "Adder", "kind": "repo", "repo": "adder", "files": {"TASK.md": "Add adds and subtracts.\n"}}
 
 
 def fake_server(status, body):
@@ -135,29 +168,28 @@ class RunnerTest(unittest.TestCase):
             runner.PROXY_URL = proxy_url
         self.assertIn("does not answer", problem)
 
-    def test_the_firewall_lets_the_agent_reach_the_proxy_and_the_internet_only(self):
-        rules = [" ".join(r) for r in runner.firewall_rules(1001, "127.0.0.1", 8097)]
+    def test_the_firewall_lets_the_agent_reach_the_relay_dns_and_loopback_only(self):
+        rules = [" ".join(r) for r in runner.firewall_rules(1001, "127.0.0.1", 8097, 8096)]
         chain = runner.FIREWALL_CHAIN
         allow_relay = f"iptables -w -A {chain} -d 127.0.0.1 -p tcp --dport 8097 -j ACCEPT"
-        self.assertIn(allow_relay, rules)
-        # The relay before the loopback range that includes it.
-        block_loopback = f"iptables -w -A {chain} -d 127.0.0.0/8 -j REJECT"
-        self.assertLess(rules.index(allow_relay), rules.index(block_loopback))
-        for net in ["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]:
-            self.assertIn(f"iptables -w -A {chain} -d {net} -j REJECT", rules)
+        block_api = f"iptables -w -A {chain} -p tcp --dport 8096 -j REJECT"
+        allow_lo = f"iptables -w -A {chain} -o lo -j ACCEPT"
+        block_rest = f"iptables -w -A {chain} -j REJECT"
+        # In this order: the API's port before loopback, everything else last.
+        self.assertLess(rules.index(allow_relay), rules.index(block_api))
+        self.assertLess(rules.index(block_api), rules.index(allow_lo))
+        self.assertLess(rules.index(allow_lo), rules.index(block_rest))
         self.assertEqual(rules[-1], f"iptables -w -A OUTPUT -m owner --uid-owner 1001 -j {chain}")
         # Docker's DNS on its port only.
         self.assertEqual([r for r in rules if runner.DOCKER_DNS in r], [
             f"iptables -w -A {chain} -d {runner.DOCKER_DNS} -p {p} --dport 53 -j ACCEPT" for p in ("udp", "tcp")
         ])
-        # Nothing rejects all: the internet stays open.
-        self.assertFalse([r for r in rules if r.endswith("-j REJECT") and " -d " not in r])
 
     @unittest.skipUnless(
-        os.geteuid() == 0 and shutil.which("unshare") and shutil.which("iptables"),
-        "needs root, unshare and iptables for a network namespace",
+        os.geteuid() == 0 and shutil.which("unshare") and shutil.which("iptables") and shutil.which("ip"),
+        "needs root, unshare, iptables and ip for a network namespace",
     )
-    def test_the_firewall_keeps_the_agent_to_the_relay_on_loopback(self):
+    def test_the_firewall_keeps_the_agent_off_the_api_and_the_outside(self):
         out = subprocess.run(
             ["unshare", "--net", sys.executable, "-I", str(HERE / "testdata" / "firewall-probe.py")],
             capture_output=True,
@@ -167,7 +199,17 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(
             json.loads(out.stdout),
-            {"problem": None, "agent_relay": True, "agent_other": False, "root_other": True},
+            {
+                "problem": None,
+                "agent_relay": True,
+                # Loopback is open to the agent, for a task's own servers;
+                # the runner's API is not.
+                "agent_other": True,
+                "agent_api": False,
+                "agent_own_server": True,
+                "agent_outside_rejected": True,
+                "root_other": True,
+            },
         )
 
     def test_links_the_agent_leaves_are_not_followed(self):
@@ -247,6 +289,28 @@ class RunnerTest(unittest.TestCase):
             runner.AGENT_USER, runner.score = None, original
         self.assertEqual(seen["uid"], nobody.pw_uid)
         self.assertEqual(run["tasks"][0]["passed"], 2, run)
+
+    @unittest.skipUnless(os.geteuid() == 0, "needs root to switch users")
+    def test_a_repo_task_runs_cargo_and_git_as_the_agent(self):
+        import pwd
+        nobody = pwd.getpwnam("nobody")
+        seen = {}
+        original = runner.score_repo
+
+        def keep(repo, folder):
+            result = original(repo, folder)
+            seen["cargo"] = Path(folder, "fake-cargo-args.txt").read_text()
+            return result
+
+        os.environ["FAKE_SOLUTION"] = "src/lib.txt=adds subtracts\n"
+        runner.AGENT_USER, runner.score_repo = "nobody", keep
+        try:
+            task = self.run_tasks([REPO_TASK])["tasks"][0]
+        finally:
+            runner.AGENT_USER, runner.score_repo = None, original
+        self.assertIn(f"uid={nobody.pw_uid}", seen["cargo"])
+        self.assertEqual(task["passed"], 2, task)
+        self.assertIn("+adds subtracts", task["diff"])
 
     def test_the_prompt_asks_for_intermediate_state(self):
         seen = {}
@@ -393,6 +457,121 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(self.call("POST", "/runs", {"model": "m"})[0], 400)
         self.assertEqual(
             self.call("POST", "/runs", {"model": "a/b", "api_key": "k", "tasks": [TASK]})[0], 400
+        )
+
+    def test_each_task_keeps_its_own_time_limit(self):
+        os.environ["FAKE_MODE"] = "hang"
+        run = self.run_tasks([dict(TASK, timeout_secs=1), dict(TASK, name="two", timeout_secs=2)], timeout=60)
+        self.assertEqual([t["error"] for t in run["tasks"]], ["stopped after 1 s", "stopped after 2 s"])
+
+    def test_a_task_without_a_limit_of_its_own_gets_the_runs(self):
+        os.environ["FAKE_MODE"] = "hang"
+        run = self.run_tasks([TASK], timeout=1)
+        self.assertEqual(run["tasks"][0]["error"], "stopped after 1 s")
+
+    def test_a_repo_task_is_scored_by_the_features_counted_tests(self):
+        os.environ["FAKE_SOLUTION"] = "src/lib.txt=adds\n"
+        task = self.run_tasks([REPO_TASK])["tasks"][0]
+        self.assertEqual((task["kind"], task["passed"], task["total"]), ("repo", 1, 2), task)
+        self.assertEqual(task["broken"], [])
+        self.assertEqual(task["files"], {})
+        self.assertIn("test adds ... ok", task["test_output"])
+        self.assertIn("test subtracts ... FAILED", task["test_output"])
+        # Passed tests that don't count stay out of the output.
+        self.assertNotIn("other_old", task["test_output"])
+
+    def test_cargo_runs_offline_in_the_copy(self):
+        seen = {}
+        original = runner.score_repo
+
+        def keep(repo, folder):
+            result = original(repo, folder)
+            seen["args"] = Path(folder, "fake-cargo-args.txt").read_text()
+            seen["prebuilt"] = Path(folder, "target", "built").read_text()
+            return result
+
+        runner.score_repo = keep
+        try:
+            self.run_tasks([REPO_TASK])
+        finally:
+            runner.score_repo = original
+        self.assertTrue(seen["args"].startswith("test --offline"), seen)
+        self.assertEqual(seen["prebuilt"], "prebuilt\n")
+
+    def test_a_repo_task_works_on_a_fresh_copy_of_its_checkout(self):
+        os.environ["FAKE_SOLUTION"] = "src/lib.txt=adds subtracts\n"
+        first = self.run_tasks([REPO_TASK])["tasks"][0]
+        self.assertEqual(first["passed"], 2, first)
+        self.assertEqual((REPO_CHECKOUT / "src" / "lib.txt").read_text(), "base\n")
+        self.assertFalse((REPO_CHECKOUT / "tests" / "adder.rs").exists())
+        os.environ.pop("FAKE_SOLUTION")
+        second = self.run_tasks([REPO_TASK])["tasks"][0]
+        self.assertEqual(second["passed"], 0, second)
+
+    def test_the_hidden_tests_replace_what_the_agent_wrote_in_their_place(self):
+        os.environ["FAKE_MODE"] = "cheat-tests"
+        os.environ["FAKE_SOLUTION"] = "src/lib.txt=adds subtracts\n"
+        task = self.run_tasks([REPO_TASK])["tasks"][0]
+        self.assertEqual(task["passed"], 2, task)
+
+    def test_a_link_on_the_way_to_a_hidden_test_is_not_followed(self):
+        outside = Path(os.environ["WORK_DIR"], "outside-dir")
+        outside.mkdir(exist_ok=True)
+        os.environ["FAKE_MODE"], os.environ["FAKE_TARGET"] = "link-tests-dir", str(outside)
+        try:
+            task = self.run_tasks([REPO_TASK])["tasks"][0]
+        finally:
+            os.environ.pop("FAKE_TARGET")
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertEqual(task["total"], 2, task)
+
+    def test_tests_that_passed_before_and_fail_now_are_broken(self):
+        os.environ["FAKE_SOLUTION"] = "src/lib.txt=adds subtracts break-old\n"
+        task = self.run_tasks([REPO_TASK])["tasks"][0]
+        self.assertEqual(task["passed"], 2, task)
+        self.assertEqual(task["broken"], ["adder::old"])
+
+    def test_a_repo_task_that_does_not_build_scores_nothing_and_shows_why(self):
+        os.environ["FAKE_SOLUTION"] = "src/lib.txt=broken\n"
+        task = self.run_tasks([REPO_TASK])["tasks"][0]
+        self.assertEqual((task["passed"], task["total"]), (0, 2), task)
+        self.assertIn("cannot find value", task["test_output"])
+        self.assertEqual(task["broken"], [])
+
+    def test_the_repo_tests_have_their_own_limit(self):
+        os.environ["FAKE_SOLUTION"] = "src/lib.txt=hang\n"
+        limit, runner.REPO_TEST_TIMEOUT = runner.REPO_TEST_TIMEOUT, 1
+        try:
+            task = self.run_tasks([REPO_TASK])["tasks"][0]
+        finally:
+            runner.REPO_TEST_TIMEOUT = limit
+        self.assertEqual((task["passed"], task["total"]), (0, 2), task)
+        self.assertIn("longer than 1 s", task["test_output"])
+
+    def test_the_diff_shows_the_change_without_the_hidden_tests_or_the_notes(self):
+        os.environ["FAKE_MODE"] = "notes"
+        os.environ["FAKE_SOLUTION"] = "src/lib.txt=adds\n"
+        diff = self.run_tasks([REPO_TASK])["tasks"][0]["diff"]
+        self.assertIn("-base", diff)
+        self.assertIn("+adds", diff)
+        changed = {l.split(" b/", 1)[1] for l in diff.splitlines() if l.startswith("diff --git ")}
+        # fake-args.json is the fake opencode's own record.
+        self.assertEqual(changed - {"fake-args.json"}, {"src/lib.txt"})
+
+    def test_the_diff_includes_what_the_agent_committed(self):
+        os.environ["FAKE_MODE"] = "commit"
+        os.environ["FAKE_SOLUTION"] = "src/lib.txt=adds\n"
+        diff = self.run_tasks([REPO_TASK])["tasks"][0]["diff"]
+        self.assertIn("+adds", diff)
+
+    def test_an_unknown_repo_task_is_refused(self):
+        for repo in ("missing", "../adder", ".hidden"):
+            code, answer = self.call(
+                "POST", "/runs", {"model": "m", "api_key": "k", "tasks": [dict(REPO_TASK, repo=repo)]}
+            )
+            self.assertEqual(code, 400, repo)
+        self.assertEqual(
+            self.call("POST", "/runs", {"model": "m", "api_key": "k", "tasks": [dict(TASK, kind="other")]})[0], 400
         )
 
     def test_the_real_tasks_pass_with_reference_solutions(self):

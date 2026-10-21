@@ -61,21 +61,11 @@ MAX_DIFF_BYTES = 128 * 1024
 NOT_IN_DIFF = ("TASK.md", "NOTES.md", "opencode.json")
 SCORE_MARK = "CODEBENCH_SCORE "
 # The user opencode and the hidden tests run as. Set in the image: the agent
-# then reaches neither the runner's API nor the NAS or the home network
-# (see firewall_rules). Unset, e.g. in the tests, they run as the runner.
+# then reaches only the relay to the proxy's /v1 and its own loopback
+# servers (see firewall_rules). Unset, e.g. in the tests, they run as the
+# runner.
 AGENT_USER = os.environ.get("AGENT_USER") or None
 FIREWALL_CHAIN = "CODEBENCH_AGENT"
-# What the agent must not reach: loopback (the runner's API), private,
-# link-local and CGNAT ranges (the NAS and the home network).
-BLOCKED_NETS = [
-    "127.0.0.0/8",
-    "10.0.0.0/8",
-    "172.16.0.0/12",
-    "192.168.0.0/16",
-    "169.254.0.0/16",
-    "100.64.0.0/10",
-    "0.0.0.0/8",
-]
 # Where opencode reaches the proxy: a relay in the runner that passes on the
 # OpenAI endpoint (/v1) only, so the agent cannot reach the proxy's web UI.
 RELAY_ADDR = os.environ.get("RELAY_ADDR", "127.0.0.1:8097")
@@ -364,7 +354,13 @@ class Run:
         """Lets opencode work on the task; its stats, the time, whether it
         ran out of time, and why it ended otherwise."""
         env = agent_env(
-            dict(os.environ, OPENCODE_DISABLE_MODELS_FETCH="1", OPENCODE_DISABLE_AUTOUPDATE="1")
+            dict(
+                os.environ,
+                OPENCODE_DISABLE_MODELS_FETCH="1",
+                OPENCODE_DISABLE_AUTOUPDATE="1",
+                # No internet for the agent: nothing to download them from.
+                OPENCODE_DISABLE_LSP_DOWNLOAD="1",
+            )
         )
         env.pop("OPENCODE_CONFIG", None)
         # opencode takes its project folder, and so its opencode.json, from PWD.
@@ -475,22 +471,26 @@ def give_to_agent(folder):
             os.chown(os.path.join(root, name), user.pw_uid, user.pw_gid, follow_symlinks=False)
 
 
-def firewall_rules(uid, relay_ip, relay_port):
-    """iptables commands that keep the agent's connections off the runner's
-    API, the proxy, the NAS and the home network, apart from the relay to
-    the proxy's /v1; the internet stays open."""
+def firewall_rules(uid, relay_ip, relay_port, api_port):
+    """iptables commands that let the agent reach the relay to the proxy's
+    /v1, Docker's DNS and servers on loopback (a task's own tests start
+    them), and nothing else: not the runner's API, the proxy, the NAS, the
+    home network or the internet, from which a public task's solution could
+    be fetched."""
     chain = ["iptables", "-w"]
-    rules = [
+    return [
         chain + ["-N", FIREWALL_CHAIN],
         chain + ["-F", FIREWALL_CHAIN],
         chain + ["-A", FIREWALL_CHAIN, "-d", DOCKER_DNS, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
         chain + ["-A", FIREWALL_CHAIN, "-d", DOCKER_DNS, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
         chain + ["-A", FIREWALL_CHAIN, "-d", relay_ip, "-p", "tcp", "--dport", str(relay_port), "-j", "ACCEPT"],
+        # The runner's API listens on every address, the container's own
+        # included, which loopback carries too.
+        chain + ["-A", FIREWALL_CHAIN, "-p", "tcp", "--dport", str(api_port), "-j", "REJECT"],
+        chain + ["-A", FIREWALL_CHAIN, "-o", "lo", "-j", "ACCEPT"],
+        chain + ["-A", FIREWALL_CHAIN, "-j", "REJECT"],
+        chain + ["-A", "OUTPUT", "-m", "owner", "--uid-owner", str(uid), "-j", FIREWALL_CHAIN],
     ]
-    for net in BLOCKED_NETS:
-        rules.append(chain + ["-A", FIREWALL_CHAIN, "-d", net, "-j", "REJECT"])
-    rules.append(chain + ["-A", "OUTPUT", "-m", "owner", "--uid-owner", str(uid), "-j", FIREWALL_CHAIN])
-    return rules
 
 
 def relay_address():
@@ -509,7 +509,8 @@ def set_firewall():
         ipaddress.ip_address(relay_ip)
     except (OSError, ValueError) as e:
         return f"The relay address in RELAY_ADDR ({RELAY_ADDR}) does not resolve: {e}"
-    for rule in firewall_rules(user.pw_uid, relay_ip, relay_port):
+    api_port = int(LISTEN.rpartition(":")[2])
+    for rule in firewall_rules(user.pw_uid, relay_ip, relay_port, api_port):
         # A restarted container may have the chain already.
         if rule[2] == "-N" and run_quietly(rule[:2] + ["-L", FIREWALL_CHAIN]):
             continue

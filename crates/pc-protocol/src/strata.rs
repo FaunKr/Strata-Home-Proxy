@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::StrataJob;
+use crate::{MachineFacts, StrataJob};
 
 /// The longest context `set_context` takes: the model's trained length,
 /// which needs no rope scaling. Longer ones only Setup sets up.
@@ -56,6 +56,9 @@ pub struct StrataInfo {
     #[serde(default)]
     pub disk_free_gb: Option<f64>,
     pub data_dir: String,
+    /// What the PC is; missing from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<MachineFacts>,
     /// The last successful run, for proxies that know only one.
     #[serde(default)]
     pub benchmark: Option<StrataBenchmark>,

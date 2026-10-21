@@ -26,6 +26,7 @@ pub use strata_pc_agent::{
     command::{CommandSpec, Running},
     hardware::{Cpu, Gpu, Hardware},
     install::testing::SetupLeaves,
+    machine::MachineFacts,
     platform::Platform,
 };
 use tokio::{net::TcpListener, sync::mpsc, sync::oneshot};
@@ -93,6 +94,9 @@ pub struct Fake {
     pub exits: AtomicUsize,
     /// What reading the hardware gives.
     pub hardware: Mutex<Hardware>,
+    /// What reading the machine facts gives, and how often it was read.
+    pub machine: Mutex<MachineFacts>,
+    pub machine_reads: AtomicUsize,
     /// A started Strata prints the key of this config where its lines say
     /// `{key}`, as it reads the config at its start.
     pub key_config: Mutex<Option<PathBuf>>,
@@ -288,6 +292,10 @@ impl Platform for FakePlatform {
     }
     fn hardware(&self) -> Hardware {
         self.0.hardware.lock().unwrap().clone()
+    }
+    fn machine(&self, _data_dir: &Path) -> MachineFacts {
+        self.0.machine_reads.fetch_add(1, Ordering::SeqCst);
+        self.0.machine.lock().unwrap().clone()
     }
 }
 

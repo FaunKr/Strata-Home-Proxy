@@ -1145,6 +1145,8 @@ pub fn view(agent: &Agent) -> StrataReport {
                 context: model.context(),
                 loop_recovery: Some(model.loop_recovery().into()),
                 sampling: support.map(|support| model.sampling(support)),
+                config: model.shareable_config(),
+                chat_settings: model.shareable_chat(),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,

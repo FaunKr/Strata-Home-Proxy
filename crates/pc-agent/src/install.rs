@@ -516,6 +516,19 @@ impl Model {
         }
     }
 
+    /// The config to show outside the PC: without `api_key` and with every
+    /// path cut to its file name, so neither the key nor the Windows user
+    /// name leaves the PC; laid out as Strata writes it. `None` for a config
+    /// that could not be read.
+    pub fn shareable_config(&self) -> Option<String> {
+        (!self.fields.is_empty()).then(|| shareable_text(&self.fields))
+    }
+
+    /// The Chat settings, cut like the config; `None` without them.
+    pub fn shareable_chat(&self) -> Option<String> {
+        self.chat.as_ref().map(shareable_text)
+    }
+
     /// The sampling its config and Chat settings give it with this Strata.
     pub fn sampling(&self, support: SamplingSupport) -> StrataSampling {
         sampling::effective(support, &self.fields, self.chat.as_ref())
@@ -608,6 +621,74 @@ fn flag_of(group: &[Value]) -> &str {
         .and_then(Value::as_str)
         .filter(|a| a.starts_with("--"))
         .unwrap_or("")
+}
+
+/// `fields` as JSON text without secrets and with every path cut to its
+/// last part, laid out as Strata writes it.
+fn shareable_text(fields: &ConfigFields) -> String {
+    config_text(&shareable_fields(fields))
+}
+
+/// `fields` without any field whose name says it holds a secret (`api_key`,
+/// a token, a password), with paths cut ([`shareable`]).
+fn shareable_fields(fields: &ConfigFields) -> ConfigFields {
+    fields
+        .iter()
+        .filter(|(key, _)| !is_secret(key))
+        .map(|(key, value)| (key.clone(), shareable(value)))
+        .collect()
+}
+
+fn is_secret(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    ["key", "token", "secret", "password"]
+        .iter()
+        .any(|end| key.ends_with(end))
+}
+
+/// `value` with secrets left out and each path cut to its last part: setup
+/// writes absolute paths (`exe`, the GGUF in `args`, `cwd`, `tokenizer`,
+/// `log`, `lib_dirs`, `vision`). An option keeps its name
+/// (`--x=D:\a\b.bin` → `--x=b.bin`); other text, a URL among it, stays.
+fn shareable(value: &Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(shareable_fields(fields)),
+        Value::Array(items) => Value::Array(items.iter().map(shareable).collect()),
+        Value::String(text) => Value::String(match text.split_once('=') {
+            Some((option, path)) if option.starts_with('-') && is_path(path) => {
+                format!("{option}={}", last_part(path))
+            }
+            _ if is_path(text) => last_part(text),
+            _ => text.clone(),
+        }),
+        other => other.clone(),
+    }
+}
+
+/// An absolute or Windows path: `C:\…`, `C:/…`, `\\server\…`, `/…`, or
+/// anything with a backslash.
+fn is_path(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    drive || text.starts_with('/') || text.contains('\\')
+}
+
+/// A path's last part; a user's own folder (`C:\Users\<name>`) gives `~`,
+/// so the name stays on the PC.
+fn last_part(path: &str) -> String {
+    let parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    let Some(last) = parts.last() else {
+        return String::new();
+    };
+    let user_folder = parts.len() >= 2 && parts[parts.len() - 2].eq_ignore_ascii_case("users");
+    if user_folder {
+        "~".into()
+    } else {
+        (*last).to_string()
+    }
 }
 
 /// Setup writes lower-case file names whatever the catalog's case.
@@ -890,6 +971,112 @@ mod tests {
         let server = s.installation().dir.join("serve").join("server.py");
         std::fs::create_dir_all(server.parent().unwrap()).unwrap();
         std::fs::write(server, text).unwrap();
+    }
+
+    /// A run config as setup writes it (`setup.py` at 011c9e6, step 7:
+    /// `cfg = {"exe": engine_exe(eng), "args": args, "cwd": str(ROOT), …}`),
+    /// with the paths of a PC whose Windows user is `Faun`.
+    const SETUP_CONFIG: &str = r#"{
+ "exe": "C:\\Users\\Faun\\AppData\\Local\\Strata\\terminal\\current\\engine\\strata.exe",
+ "args": [
+  "--native",
+  "D:\\Strata-data\\models\\IQ3_XXS\\Qwen3.8-Flash-Next-IQ3_XXS.gguf",
+  "--max-context",
+  "65536",
+  "--prefill",
+  "auto",
+  "--mtp",
+  "2",
+  "--pool-workers",
+  "12"
+ ],
+ "cwd": "C:\\Users\\Faun\\AppData\\Local\\Strata\\terminal\\current",
+ "tokenizer": "D:\\Strata-data\\packs\\iq3_xxs\\tokenizer",
+ "model_name": "qwen3.8-flash-next-iq3_xxs",
+ "arch": "qwen35moe",
+ "log": "C:\\Users\\Faun\\AppData\\Local\\Strata\\install\\strata-iq3_xxs.log",
+ "lib_dirs": [
+  "C:\\Users\\Faun\\AppData\\Local\\Strata\\terminal\\current\\engine"
+ ],
+ "port": 8080,
+ "host": "0.0.0.0",
+ "api_key": "key-0123456789abcdef",
+ "vision": {
+  "exe": "C:\\Users\\Faun\\AppData\\Local\\Strata\\terminal\\current\\engine\\strata-vision.exe",
+  "mmproj": "D:\\Strata-data\\models\\IQ3_XXS\\mmproj.gguf",
+  "model": "D:\\Strata-data\\models\\IQ3_XXS\\Qwen3.8-Flash-Next-IQ3_XXS.gguf",
+  "gpu": true,
+  "max_tokens": 1024
+ }
+}"#;
+
+    #[test]
+    fn the_shareable_config_has_no_key_and_no_folders() {
+        let f = Folders::new("shareable");
+        let s = f.setup();
+        s.config_text("IQ3_XXS", SETUP_CONFIG);
+        let text = s
+            .installation()
+            .read_model("IQ3_XXS")
+            .shareable_config()
+            .unwrap();
+        let config: Value = serde_json::from_str(&text).unwrap();
+        assert!(!text.contains("api_key"), "{text}");
+        assert!(!text.contains("key-0123456789abcdef"), "{text}");
+        assert!(!text.contains("Faun"), "{text}");
+        assert!(!text.contains('\\') && !text.contains('/'), "{text}");
+        assert_eq!(config["exe"], "strata.exe");
+        assert_eq!(config["args"][1], "Qwen3.8-Flash-Next-IQ3_XXS.gguf");
+        assert_eq!(config["args"][3], "65536");
+        assert_eq!(config["cwd"], "current");
+        assert_eq!(config["lib_dirs"][0], "engine");
+        assert_eq!(config["vision"]["mmproj"], "mmproj.gguf");
+        assert_eq!(config["vision"]["max_tokens"], 1024);
+        assert_eq!(config["port"], 8080);
+        assert_eq!(config["model_name"], "qwen3.8-flash-next-iq3_xxs");
+    }
+
+    #[test]
+    fn only_paths_are_cut_and_no_secret_or_user_name_stays() {
+        let fields: ConfigFields = serde_json::from_value(json!({
+            "cwd": "C:\\Users\\Faun\\",
+            "args": ["--kv-dir=D:\\x\\cache", "--prefill", "auto"],
+            "url": "http://pc:8080/v1",
+            "system_prompt": "Answer briefly and/or in German",
+            "telemetry_read_key": "secret-1",
+            "hf_token": "secret-2",
+            "max_tokens": 4096,
+            "top_k": 20
+        }))
+        .unwrap();
+        let cut = shareable_fields(&fields);
+        assert_eq!(
+            Value::Object(cut),
+            json!({
+                "cwd": "~",
+                "args": ["--kv-dir=cache", "--prefill", "auto"],
+                "url": "http://pc:8080/v1",
+                "system_prompt": "Answer briefly and/or in German",
+                "max_tokens": 4096,
+                "top_k": 20
+            })
+        );
+    }
+
+    #[test]
+    fn chat_settings_are_shared_only_when_there_are_some() {
+        let f = Folders::new("shareable-chat");
+        let s = f.setup();
+        s.config_text("IQ3_XXS", SETUP_CONFIG);
+        s.config_text("swift-IQ2_XS", SETUP_CONFIG);
+        s.chat_settings("IQ3_XXS", r#"{"temperature": 0.6, "top_k": 20}"#);
+        let install = s.installation();
+        let chat = install.read_model("IQ3_XXS").shareable_chat().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&chat).unwrap(),
+            json!({"temperature": 0.6, "top_k": 20})
+        );
+        assert_eq!(install.read_model("swift-IQ2_XS").shareable_chat(), None);
     }
 
     #[test]

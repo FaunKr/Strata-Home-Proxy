@@ -106,6 +106,15 @@ pub struct StrataModel {
     /// version cannot be read, or from older services.
     #[serde(default)]
     pub sampling: Option<StrataSampling>,
+    /// Its run config as JSON text, laid out as Strata writes it, without
+    /// `api_key` and with every path cut to its file name; `None` if it
+    /// cannot be read, or from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
+    /// Its Chat settings from Strata's web app as JSON text, cut the same
+    /// way; `None` without the file, or from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_settings: Option<String>,
 }
 
 /// Which defaults the PC's Strata applies to a request without sampling

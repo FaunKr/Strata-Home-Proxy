@@ -86,6 +86,30 @@ pub fn build(
 
     let _ = writeln!(out, "\n## Model {}\n", model.id);
     model_lines(out, info, model);
+    if let Some(config) = &model.config {
+        let _ = writeln!(
+            out,
+            "\n### Run config\n\nThe model's `strata-<id>.json`, which Strata starts it with; \
+             secrets are left out and paths are cut to file names.\n"
+        );
+        json_block(out, config);
+    }
+    if let Some(chat) = &model.chat_settings {
+        let ignored = model
+            .sampling
+            .as_ref()
+            .is_some_and(|s| s.support == SamplingSupport::None);
+        let effect = if ignored {
+            "this Strata version ignores their sampling and decodes greedily"
+        } else {
+            "their temperature, top_p and top_k count over the run config's sampling"
+        };
+        let _ = writeln!(
+            out,
+            "\n### Chat settings\n\nWhat Strata's web app keeps for this model; {effect}.\n"
+        );
+        json_block(out, chat);
+    }
 
     let _ = writeln!(out, "\n## Benchmarks\n");
     let _ = writeln!(out, "- Speed benchmark: {}", speed_text(info, &model.id));
@@ -95,6 +119,14 @@ pub fn build(
         code_bench_text(code_bench, &model.id)
     );
     Ok(text)
+}
+
+/// `json` in a fence longer than any run of backticks in it, so text from
+/// the PC cannot end the block early.
+fn json_block(out: &mut String, json: &str) {
+    let longest = json.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    let _ = writeln!(out, "{fence}json\n{}\n{fence}", json.trim_end());
 }
 
 fn vram_line(out: &mut String, info: &StrataInfo) {

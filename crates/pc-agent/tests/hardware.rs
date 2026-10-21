@@ -134,7 +134,6 @@ async fn strata_reports_the_machine_facts_read_once() {
             configured_mts: Some(4800),
         }],
         ram_slots: Some(4),
-        ram_total_bytes: Some(32 << 30),
         gpus: vec![GpuFacts {
             name: Some("NVIDIA GeForce RTX 4090".into()),
             vram_bytes: Some(24 << 30),
@@ -148,7 +147,7 @@ async fn strata_reports_the_machine_facts_read_once() {
             name: Some("AMD Ryzen 9 7950X 16-Core Processor".into()),
             cores: Some(16),
             threads: Some(32),
-            max_mhz: Some(4501),
+            base_mhz: Some(4501),
             avx2: Some(true),
             avx512: Some(true),
         },
@@ -169,5 +168,13 @@ async fn strata_reports_the_machine_facts_read_once() {
     assert_eq!(machine["cpu"]["threads"], 32);
     assert_eq!(machine["windows"]["build"], "26100.4652");
     assert_eq!(machine["model_drive"], "nvme");
+    assert_eq!(s.fake.machine_reads.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn facts_without_a_graphics_card_are_not_read_on_every_request() {
+    let s = setup("machine-facts-incomplete").await;
+    get(&s, "/strata").await;
+    get(&s, "/strata").await;
     assert_eq!(s.fake.machine_reads.load(Ordering::SeqCst), 1);
 }

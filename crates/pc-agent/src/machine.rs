@@ -11,23 +11,15 @@ pub fn read(data_dir: &std::path::Path) -> MachineFacts {
     let (ram_sticks, ram_slots) = windows::smbios()
         .map(|table| memory_devices(&table))
         .unwrap_or_default();
-    let ram_total_bytes = ram_sticks
-        .iter()
-        .map(|s| s.size_bytes)
-        .sum::<Option<u64>>()
-        .filter(|total| *total > 0);
     MachineFacts {
         ram_sticks,
         ram_slots,
-        ram_total_bytes,
         gpus: windows::gpus(),
         cpu: CpuFacts {
             name: cpu_name(),
             cores: windows::cores(),
-            threads: std::thread::available_parallelism()
-                .ok()
-                .map(|n| n.get() as u32),
-            max_mhz: windows::max_mhz(),
+            threads: windows::threads(),
+            base_mhz: windows::base_mhz(),
             avx2: avx2(),
             avx512: avx512(),
         },
@@ -197,12 +189,9 @@ mod windows {
 
     use windows_sys::{
         Wdk::Graphics::Direct3D::{
-            D3DKMT_ADAPTERADDRESS, D3DKMT_ADAPTERINFO, D3DKMT_ADAPTERREGISTRYINFO,
-            D3DKMT_CLOSEADAPTER, D3DKMT_ENUMADAPTERS2, D3DKMT_QUERYADAPTERINFO,
-            D3DKMT_SEGMENTSIZEINFO, D3DKMT_UMD_DRIVER_VERSION, D3DKMTCloseAdapter,
-            D3DKMTEnumAdapters2, D3DKMTQueryAdapterInfo, KMTQAITYPE_ADAPTERADDRESS,
-            KMTQAITYPE_ADAPTERREGISTRYINFO, KMTQAITYPE_GETSEGMENTSIZE,
-            KMTQAITYPE_UMD_DRIVER_VERSION, KMTQUERYADAPTERINFOTYPE,
+            D3DKMT_ADAPTERADDRESS, D3DKMT_ADAPTERREGISTRYINFO, D3DKMT_SEGMENTSIZEINFO,
+            D3DKMT_UMD_DRIVER_VERSION, KMTQAITYPE_ADAPTERADDRESS, KMTQAITYPE_ADAPTERREGISTRYINFO,
+            KMTQAITYPE_GETSEGMENTSIZE, KMTQAITYPE_UMD_DRIVER_VERSION,
         },
         Win32::{
             Devices::{
@@ -215,8 +204,8 @@ mod windows {
             },
             Foundation::{CloseHandle, DEVPROPKEY, ERROR_SUCCESS, INVALID_HANDLE_VALUE, MAX_PATH},
             Storage::FileSystem::{
-                BusTypeNvme, CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, GetVolumePathNameW,
-                OPEN_EXISTING,
+                BusTypeNvme, CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE,
+                GetVolumeNameForVolumeMountPointW, GetVolumePathNameW, OPEN_EXISTING,
             },
             System::{
                 IO::DeviceIoControl,
@@ -233,11 +222,13 @@ mod windows {
                     GetLogicalProcessorInformationEx, GetSystemFirmwareTable, RSMB,
                     RelationProcessorCore, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
                 },
+                Threading::{ALL_PROCESSOR_GROUPS, GetActiveProcessorCount},
             },
         },
     };
 
     use super::*;
+    use crate::d3dkmt::{query, with_adapters};
 
     /// The PCI Express link properties (devpkey.h), not in the crate's
     /// device property module.
@@ -318,9 +309,17 @@ mod windows {
         (cores > 0).then_some(cores)
     }
 
-    /// The highest clock of any logical processor.
-    pub fn max_mhz() -> Option<u32> {
-        let n = std::thread::available_parallelism().ok()?.get();
+    /// Logical processors in every processor group, whatever this
+    /// process's affinity.
+    pub fn threads() -> Option<u32> {
+        // SAFETY: no arguments besides the group selector.
+        let n = unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) };
+        (n > 0).then_some(n)
+    }
+
+    /// The base clock: Windows' `MaxMhz` is the rated clock, not the boost.
+    pub fn base_mhz() -> Option<u32> {
+        let n = threads()? as usize;
         let mut info: Vec<PROCESSOR_POWER_INFORMATION> = (0..n)
             .map(|_| PROCESSOR_POWER_INFORMATION {
                 Number: 0,
@@ -408,9 +407,22 @@ mod windows {
         if unsafe { GetVolumePathNameW(path.as_ptr(), root.as_mut_ptr(), MAX_PATH) } == 0 {
             return None;
         }
-        // `C:\` → `\\.\C:`
-        let letter = from_wide(&root)?;
-        let device = wide(&format!(r"\\.\{}", letter.trim_end_matches('\\')));
+        // `C:\` or a folder a volume is mounted into → `\\?\Volume{…}\`;
+        // without the last backslash it opens the volume itself.
+        let mut volume = [0u16; 64];
+        // SAFETY: `root` is NUL-terminated; `volume` holds 64 characters.
+        if unsafe {
+            GetVolumeNameForVolumeMountPointW(
+                root.as_ptr(),
+                volume.as_mut_ptr(),
+                volume.len() as u32,
+            )
+        } == 0
+        {
+            return None;
+        }
+        let volume = from_wide(&volume)?;
+        let device = wide(volume.trim_end_matches('\\'));
         // SAFETY: `device` is NUL-terminated; no access is asked, only queries.
         let handle = unsafe {
             CreateFileW(
@@ -467,93 +479,63 @@ mod windows {
         super::drive_kind(nvme, seek_penalty)
     }
 
-    /// Asks the adapter for `kind`, written into `out`.
-    ///
-    /// # Safety
-    /// `handle` is an open adapter and `T` the structure `kind` fills.
-    unsafe fn query<T>(handle: u32, kind: KMTQUERYADAPTERINFOTYPE, out: &mut T) -> bool {
-        let mut q = D3DKMT_QUERYADAPTERINFO {
-            hAdapter: handle,
-            Type: kind,
-            pPrivateDriverData: (out as *mut T).cast(),
-            PrivateDriverDataSize: size_of::<T>() as u32,
-        };
-        // SAFETY: `out` is valid for `size_of::<T>()` bytes; the rest is the caller's.
-        unsafe { D3DKMTQueryAdapterInfo(&mut q) == 0 }
-    }
-
     /// Every adapter with VRAM of its own, the most first, with its PCIe
     /// link from the device it sits on.
     pub fn gpus() -> Vec<GpuFacts> {
-        let mut list = D3DKMT_ENUMADAPTERS2 {
-            NumAdapters: 0,
-            pAdapters: std::ptr::null_mut(),
-        };
-        // SAFETY: a null list asks for the count only.
-        if unsafe { D3DKMTEnumAdapters2(&mut list) } != 0 {
-            return Vec::new();
-        }
-        let mut adapters = vec![D3DKMT_ADAPTERINFO::default(); list.NumAdapters as usize];
-        list.pAdapters = adapters.as_mut_ptr();
-        // SAFETY: `adapters` holds NumAdapters entries.
-        if unsafe { D3DKMTEnumAdapters2(&mut list) } != 0 {
-            return Vec::new();
-        }
-        adapters.truncate(list.NumAdapters as usize);
         let links = pci_links();
-        let mut gpus = Vec::new();
-        for info in &adapters {
-            let h = info.hAdapter;
-            let mut size = D3DKMT_SEGMENTSIZEINFO::default();
-            // SAFETY: the handle comes from the enumeration above.
-            if !unsafe { query(h, KMTQAITYPE_GETSEGMENTSIZE, &mut size) }
-                || size.DedicatedVideoMemorySize == 0
-            {
-                continue;
-            }
-            let mut registry = D3DKMT_ADAPTERREGISTRYINFO::default();
-            // SAFETY: as above.
-            let name = unsafe { query(h, KMTQAITYPE_ADAPTERREGISTRYINFO, &mut registry) }
-                .then(|| from_wide(&registry.AdapterString))
-                .flatten();
-            let mut version = D3DKMT_UMD_DRIVER_VERSION { DriverVersion: 0 };
-            // SAFETY: as above.
-            let driver_version = (unsafe { query(h, KMTQAITYPE_UMD_DRIVER_VERSION, &mut version) }
-                && version.DriverVersion != 0)
-                .then(|| driver_version(version.DriverVersion));
-            let mut address = D3DKMT_ADAPTERADDRESS {
-                BusNumber: 0,
-                DeviceNumber: 0,
-                FunctionNumber: 0,
-            };
-            // SAFETY: as above.
-            let link = unsafe { query(h, KMTQAITYPE_ADAPTERADDRESS, &mut address) }
-                .then(|| {
-                    links.iter().find(|l| {
-                        l.bus == address.BusNumber
-                            && l.address == (address.DeviceNumber << 16 | address.FunctionNumber)
-                    })
-                })
-                .flatten();
-            gpus.push(GpuFacts {
-                name,
-                vram_bytes: Some(size.DedicatedVideoMemorySize),
-                driver_version,
-                pcie_max_gen: link.and_then(|l| l.max_gen),
-                pcie_max_lanes: link.and_then(|l| l.max_lanes),
-                pcie_gen: link.and_then(|l| l.generation),
-                pcie_lanes: link.and_then(|l| l.lanes),
-            });
-        }
-        for info in &adapters {
-            let close = D3DKMT_CLOSEADAPTER {
-                hAdapter: info.hAdapter,
-            };
-            // SAFETY: each handle from the enumeration is closed once.
-            unsafe { D3DKMTCloseAdapter(&close) };
-        }
+        let mut gpus = with_adapters(|adapters| {
+            adapters
+                .iter()
+                .filter_map(|info| gpu(info.hAdapter, &links))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
         gpus.sort_by_key(|g| std::cmp::Reverse(g.vram_bytes));
         gpus
+    }
+
+    /// One adapter's facts; `None` without VRAM of its own.
+    fn gpu(h: u32, links: &[Link]) -> Option<GpuFacts> {
+        let mut size = D3DKMT_SEGMENTSIZEINFO::default();
+        // SAFETY: the handle comes from the enumeration and is open.
+        if !unsafe { query(h, KMTQAITYPE_GETSEGMENTSIZE, &mut size) }
+            || size.DedicatedVideoMemorySize == 0
+        {
+            return None;
+        }
+        let mut registry = D3DKMT_ADAPTERREGISTRYINFO::default();
+        // SAFETY: as above.
+        let name = unsafe { query(h, KMTQAITYPE_ADAPTERREGISTRYINFO, &mut registry) }
+            .then(|| from_wide(&registry.AdapterString))
+            .flatten();
+        let mut version = D3DKMT_UMD_DRIVER_VERSION { DriverVersion: 0 };
+        // SAFETY: as above.
+        let driver_version = (unsafe { query(h, KMTQAITYPE_UMD_DRIVER_VERSION, &mut version) }
+            && version.DriverVersion != 0)
+            .then(|| driver_version(version.DriverVersion));
+        let mut address = D3DKMT_ADAPTERADDRESS {
+            BusNumber: 0,
+            DeviceNumber: 0,
+            FunctionNumber: 0,
+        };
+        // SAFETY: as above.
+        let link = unsafe { query(h, KMTQAITYPE_ADAPTERADDRESS, &mut address) }
+            .then(|| {
+                links.iter().find(|l| {
+                    l.bus == address.BusNumber
+                        && l.address == (address.DeviceNumber << 16 | address.FunctionNumber)
+                })
+            })
+            .flatten();
+        Some(GpuFacts {
+            name,
+            vram_bytes: Some(size.DedicatedVideoMemorySize),
+            driver_version,
+            pcie_max_gen: link.and_then(|l| l.max_gen),
+            pcie_max_lanes: link.and_then(|l| l.max_lanes),
+            pcie_gen: link.and_then(|l| l.generation),
+            pcie_lanes: link.and_then(|l| l.lanes),
+        })
     }
 
     /// A display device's place on the bus and its PCIe link.

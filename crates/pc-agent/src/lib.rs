@@ -5,6 +5,8 @@ pub mod agent;
 pub mod catalog;
 pub mod command;
 pub mod config;
+#[cfg(windows)]
+mod d3dkmt;
 pub mod hardware;
 pub mod install;
 pub mod job;

@@ -259,7 +259,6 @@ fn machine() -> MachineFacts {
     MachineFacts {
         ram_sticks: vec![stick.clone(), stick],
         ram_slots: Some(4),
-        ram_total_bytes: Some(64 << 30),
         gpus: vec![GpuFacts {
             name: Some("NVIDIA GeForce RTX 4080".into()),
             vram_bytes: Some(16 << 30),
@@ -273,7 +272,7 @@ fn machine() -> MachineFacts {
             name: Some("AMD Ryzen 9 7950X 16-Core Processor".into()),
             cores: Some(16),
             threads: Some(32),
-            max_mhz: Some(4501),
+            base_mhz: Some(4501),
             avx2: Some(true),
             avx512: Some(true),
         },
@@ -296,10 +295,10 @@ async fn carries_what_the_pc_is() {
     let text = prompt(&mut b, "IQ3_XXS").await;
     for line in [
         "- OS: Windows 11 Pro 24H2 build 26100.4652\n",
-        "- CPU: AMD Ryzen 9 7950X 16-Core Processor (16 cores, 32 threads, up to 4501 MHz, AVX2 yes, AVX-512 yes)\n",
+        "- CPU: AMD Ryzen 9 7950X 16-Core Processor (16 cores, 32 threads, 4501 MHz base clock, AVX2 yes, AVX-512 yes)\n",
         "- RAM: 64 GB, 2 of 4 slots filled\n",
         "  - Stick: 32 GB, DDR5, rated 6000 MT/s, running at 4800 MT/s\n",
-        "- Graphics card: NVIDIA GeForce RTX 4080 (16.0 GB VRAM, driver 32.0.15.6094, PCIe gen 4 x16 (now gen 1 x16))\n",
+        "- Graphics card: NVIDIA GeForce RTX 4080 (16.0 GB VRAM, driver 32.0.15.6094, PCIe gen 4 x16, gen 1 x16 when read; an idle card lowers its link)\n",
         "- Drive with the models: NVMe SSD\n",
     ] {
         assert!(text.contains(line), "{line} missing:\n{text}");

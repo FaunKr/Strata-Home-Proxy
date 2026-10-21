@@ -13,8 +13,6 @@ pub struct MachineFacts {
     /// RAM slots on the board, filled or not.
     #[serde(default)]
     pub ram_slots: Option<u32>,
-    #[serde(default)]
-    pub ram_total_bytes: Option<u64>,
     /// Every graphics card with VRAM of its own, the most VRAM first.
     #[serde(default)]
     pub gpus: Vec<GpuFacts>,
@@ -54,7 +52,8 @@ pub struct GpuFacts {
     /// As Windows shows it, e.g. `32.0.15.6094`.
     #[serde(default)]
     pub driver_version: Option<String>,
-    /// The PCIe generation and lanes the card and slot can do together.
+    /// The PCIe generation and lanes the card can do; a slower slot shows
+    /// only in the link now.
     #[serde(default)]
     pub pcie_max_gen: Option<u8>,
     #[serde(default)]
@@ -74,9 +73,9 @@ pub struct CpuFacts {
     pub cores: Option<u32>,
     #[serde(default)]
     pub threads: Option<u32>,
-    /// The highest clock Windows reports, in MHz.
+    /// The base clock in MHz, as Windows reports it; not the boost clock.
     #[serde(default)]
-    pub max_mhz: Option<u32>,
+    pub base_mhz: Option<u32>,
     #[serde(default)]
     pub avx2: Option<bool>,
     #[serde(default)]

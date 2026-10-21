@@ -287,16 +287,20 @@ successful run, for proxies that only know one. An older PC service
 leaves out `benchmarks`.
 
 `machine` (`MachineFacts`) says what the PC is, for the optimization prompt.
-The PC service reads it once after it starts and keeps it:
+The PC service reads it with the first `GET /strata` and keeps it; a read
+without a graphics card or the drive (a driver not ready yet after boot) is
+read again after 10 minutes:
 - `ram_sticks`: one entry per filled slot with `size_bytes`, `kind` (e.g.
   `DDR5`), `rated_mts` and `configured_mts` (the speed it runs at), from the
-  SMBIOS memory devices; `ram_slots` counts all slots, `ram_total_bytes` the
-  RAM Windows sees.
+  SMBIOS memory devices; `ram_slots` counts all slots.
 - `gpus`: every card with VRAM of its own, the most first: `name`,
   `vram_bytes`, `driver_version` as Windows shows it, and the PCIe link the
-  card and slot can do (`pcie_max_gen`, `pcie_max_lanes`) and has now
-  (`pcie_gen`, `pcie_lanes`; an idle card often runs a lower generation).
-- `cpu`: `name`, `cores`, `threads`, `max_mhz`, `avx2`, `avx512`.
+  card can do (`pcie_max_gen`, `pcie_max_lanes`) and has now (`pcie_gen`,
+  `pcie_lanes`). A slower slot shows only in the link now, and so does an idle
+  card, which runs a lower generation. Cards are matched to their link by bus,
+  device and function; a second PCI segment is not told apart.
+- `cpu`: `name`, `cores`, `threads` (over all processor groups), `base_mhz`
+  (Windows' rated clock, not the boost), `avx2`, `avx512`.
 - `windows`: `edition` (e.g. `Windows 11 Pro`), `version` (`24H2`), `build`
   (`26100.4652`).
 - `model_drive`: the drive holding the Strata data folder, `nvme`, `ssd` or

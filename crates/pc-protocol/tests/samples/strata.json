@@ -179,7 +179,6 @@
       }
     ],
     "ram_slots": 4,
-    "ram_total_bytes": 68719476736,
     "gpus": [
       {
         "name": "NVIDIA GeForce RTX 4080",
@@ -195,7 +194,7 @@
       "name": "AMD Ryzen 9 7950X 16-Core Processor",
       "cores": 16,
       "threads": 32,
-      "max_mhz": 4501,
+      "base_mhz": 4501,
       "avx2": true,
       "avx512": true
     },

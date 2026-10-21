@@ -56,6 +56,10 @@ const STRATA_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 /// How long a looked-up MAC address is reused before asking the system again.
 const MAC_CACHE: Duration = Duration::from_secs(600);
 
+/// How long machine facts without a graphics card or the drive are kept
+/// before they are read again: right after boot the driver may not be ready.
+const MACHINE_RETRY: Duration = Duration::from_secs(600);
+
 /// A looked-up MAC address (or none found) and when it was looked up.
 type CachedMac = (Option<[u8; 6]>, Instant);
 
@@ -95,8 +99,9 @@ pub struct Agent {
     pub(crate) output: Arc<StrataOutput>,
     /// A new one comes with every start of Strata.
     pub(crate) strata_key: StrataKey,
-    /// What the PC is, read with the first `GET /strata`.
-    machine: std::sync::OnceLock<MachineFacts>,
+    /// What the PC is, read with the first `GET /strata`; with when to read
+    /// it again if it lacks a graphics card or the drive.
+    machine: Mutex<Option<(MachineFacts, Option<Instant>)>>,
 }
 
 struct Watchdog {
@@ -149,7 +154,7 @@ impl Agent {
             standby_pending: AtomicBool::new(false),
             output,
             strata_key: StrataKey::new(),
-            machine: std::sync::OnceLock::new(),
+            machine: Mutex::new(None),
         })
     }
 
@@ -157,11 +162,21 @@ impl Agent {
         self.platform.as_ref()
     }
 
-    /// What the PC is; read once, it does not change while the service runs.
+    /// What the PC is: it does not change while the service runs, so a
+    /// complete read is kept; one without a graphics card or the drive is
+    /// read again after `MACHINE_RETRY`.
     pub(crate) fn machine(&self) -> MachineFacts {
-        self.machine
-            .get_or_init(|| self.platform.machine(&self.cfg.strata_data_dir))
-            .clone()
+        let mut kept = self.machine.lock().unwrap();
+        if let Some((facts, again)) = kept.as_ref()
+            && again.is_none_or(|at| Instant::now() < at)
+        {
+            return facts.clone();
+        }
+        let facts = self.platform.machine(&self.cfg.strata_data_dir);
+        let complete = !facts.gpus.is_empty() && facts.model_drive.is_some();
+        let again = (!complete).then(|| Instant::now() + MACHINE_RETRY);
+        *kept = Some((facts.clone(), again));
+        facts
     }
 
     /// Strata's process: every start and stop goes through it.

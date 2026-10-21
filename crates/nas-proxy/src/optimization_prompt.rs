@@ -127,7 +127,7 @@ fn machine_lines(out: &mut String, info: &StrataInfo, machine: &MachineFacts) {
     let mut cpu_parts = vec![
         cpu.cores.map(|c| format!("{c} cores")),
         cpu.threads.map(|t| format!("{t} threads")),
-        cpu.max_mhz.map(|m| format!("up to {m} MHz")),
+        cpu.base_mhz.map(|m| format!("{m} MHz base clock")),
     ];
     if let Some(on) = cpu.avx2 {
         cpu_parts.push(Some(format!("AVX2 {}", yes_no(on))));
@@ -149,8 +149,13 @@ fn machine_lines(out: &mut String, info: &StrataInfo, machine: &MachineFacts) {
         (None, true) => {}
     }
 
+    // The sticks' sum when each size is known, else what Windows sees.
     let total = machine
-        .ram_total_bytes
+        .ram_sticks
+        .iter()
+        .map(|s| s.size_bytes)
+        .sum::<Option<u64>>()
+        .filter(|total| *total > 0)
         .map(|b| format!("{:.0} GB", gb(b)))
         .unwrap_or_else(|| format!("{:.1} GB", info.ram_gb));
     let mut ram = format!("- RAM: {total}");
@@ -183,7 +188,10 @@ fn machine_lines(out: &mut String, info: &StrataInfo, machine: &MachineFacts) {
             (Some(g), Some(l)) => {
                 let mut text = format!("PCIe gen {g} x{l}");
                 if let (Some(now_g), Some(now_l)) = (gpu.pcie_gen, gpu.pcie_lanes) {
-                    let _ = write!(text, " (now gen {now_g} x{now_l})");
+                    let _ = write!(
+                        text,
+                        ", gen {now_g} x{now_l} when read; an idle card lowers its link"
+                    );
                 }
                 Some(text)
             }

@@ -1,0 +1,23 @@
+name: PR text
+# No Claude session or thread links in a PR's body or commit messages
+# (scripts/check-session-links.sh). Its own workflow, so editing the body
+# re-runs only this check, not the whole CI.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  session-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.body // ""'
+            gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" --jq '.[].commit.message'
+          } | scripts/check-session-links.sh

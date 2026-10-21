@@ -59,10 +59,10 @@ Questions already decided: `docs/adr/`.
   after a proxy start or a wake-up, a request can reach the PC or Strata
   before the status poll ran. What the request decides (a message, a retry)
   comes from state the request path itself keeps up to date, like the Strata
-  key held. A test for it sends the request before any status is noted. A
-  retry after a refusal compares with what the request went out with (the
-  key it used), not with what is held now: a status check may have changed
-  that while the request was out.
+  key the request went out with. A test for it sends the request before any
+  status is noted. A retry after a refusal compares the newly fetched key
+  with the key the request used, not with the key held now: a status poll
+  may have changed that while the request was out.
 - **A test that counts calls the proxy's loops make too** (key fetches,
   status calls) starts with those loops quiet, e.g. `idle_check` of an
   hour, or counts only calls the loops can't make. Otherwise the count

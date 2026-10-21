@@ -8,7 +8,8 @@ use std::{sync::atomic::Ordering, time::Duration};
 use common::*;
 use serde_json::json;
 use strata_pc_protocol::{
-    Incoming, SamplingField, SamplingSource, SamplingSupport, StrataSampling,
+    CpuFacts, GpuFacts, Incoming, MachineFacts, RamStick, SamplingField, SamplingSource,
+    SamplingSupport, StrataSampling, WindowsFacts,
 };
 
 async fn prompt(b: &mut Browser, model: &str) -> String {
@@ -245,5 +246,89 @@ async fn shows_family_context_and_greedy_sampling() {
         "- VRAM: not reported",
     ] {
         assert!(text.contains(line), "{line} missing:\n{text}");
+    }
+}
+
+fn machine() -> MachineFacts {
+    let stick = RamStick {
+        size_bytes: Some(32 << 30),
+        kind: Some("DDR5".into()),
+        rated_mts: Some(6000),
+        configured_mts: Some(4800),
+    };
+    MachineFacts {
+        ram_sticks: vec![stick.clone(), stick],
+        ram_slots: Some(4),
+        gpus: vec![GpuFacts {
+            name: Some("NVIDIA GeForce RTX 4080".into()),
+            vram_bytes: Some(16 << 30),
+            driver_version: Some("32.0.15.6094".into()),
+            pcie_max_gen: Some(4),
+            pcie_max_lanes: Some(16),
+            pcie_gen: Some(1),
+            pcie_lanes: Some(16),
+        }],
+        cpu: CpuFacts {
+            name: Some("AMD Ryzen 9 7950X 16-Core Processor".into()),
+            cores: Some(16),
+            threads: Some(32),
+            base_mhz: Some(4501),
+            avx2: Some(true),
+            avx512: Some(true),
+        },
+        windows: WindowsFacts {
+            edition: Some("Windows 11 Pro".into()),
+            version: Some("24H2".into()),
+            build: Some("26100.4652".into()),
+        },
+        model_drive: Some("nvme".into()),
+    }
+}
+
+#[tokio::test]
+async fn carries_what_the_pc_is() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.machine = Some(machine());
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    for line in [
+        "- OS: Windows 11 Pro 24H2 build 26100.4652\n",
+        "- CPU: AMD Ryzen 9 7950X 16-Core Processor (16 cores, 32 threads, 4501 MHz base clock, AVX2 yes, AVX-512 yes)\n",
+        "- RAM: 64 GB, 2 of 4 slots filled\n",
+        "  - Stick: 32 GB, DDR5, rated 6000 MT/s, running at 4800 MT/s\n",
+        "- Graphics card: NVIDIA GeForce RTX 4080 (16.0 GB VRAM, driver 32.0.15.6094, PCIe gen 4 x16, gen 1 x16 when read; an idle card lowers its link)\n",
+        "- Drive with the models: NVMe SSD\n",
+    ] {
+        assert!(text.contains(line), "{line} missing:\n{text}");
+    }
+    assert_eq!(text.matches("  - Stick:").count(), 2, "{text}");
+    assert!(!text.contains("VRAM: not reported"), "{text}");
+}
+
+#[tokio::test]
+async fn leaves_out_what_the_pc_service_could_not_read() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.machine = Some(MachineFacts {
+        cpu: CpuFacts {
+            name: Some("Intel Core i7".into()),
+            ..CpuFacts::default()
+        },
+        gpus: vec![GpuFacts {
+            name: Some("Radeon".into()),
+            ..GpuFacts::default()
+        }],
+        ..MachineFacts::default()
+    });
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert!(text.contains("- CPU: Intel Core i7\n"), "{text}");
+    assert!(text.contains("- RAM: 64.0 GB\n"), "{text}");
+    assert!(text.contains("- Graphics card: Radeon\n"), "{text}");
+    for gone in ["- OS:", "Stick", "Drive with the models", "PCIe", "driver"] {
+        assert!(!text.contains(gone), "{gone} shown:\n{text}");
     }
 }

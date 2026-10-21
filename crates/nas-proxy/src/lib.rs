@@ -12,6 +12,7 @@ pub mod files;
 pub mod forced;
 pub mod history;
 pub mod lifecycle;
+pub mod optimization_prompt;
 pub mod overview;
 pub mod pc_setup;
 pub mod plug;

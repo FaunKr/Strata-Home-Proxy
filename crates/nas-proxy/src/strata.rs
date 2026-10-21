@@ -133,6 +133,11 @@ impl StrataState {
         self.last.lock().unwrap().as_ref().map(|l| l.info.clone())
     }
 
+    /// When the kept answer came, in Unix seconds.
+    pub fn last_at(&self) -> Option<u64> {
+        self.last.lock().unwrap().as_ref().map(|l| l.at)
+    }
+
     /// The last answer with its benchmark times, and the local time it came.
     fn shown_last(&self) -> Option<(StrataInfo, String)> {
         let last = self.last.lock().unwrap().clone()?;

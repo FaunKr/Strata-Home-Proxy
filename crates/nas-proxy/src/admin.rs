@@ -292,6 +292,11 @@ impl Backend for UiBackend {
         async move { crate::strata::cancel(&state).await }.boxed()
     }
 
+    fn optimization_prompt(&self, model: String) -> BoxFuture<'static, Result<String, String>> {
+        let state = Arc::clone(&self.0);
+        async move { crate::optimization_prompt::prompt(&state, &model).await }.boxed()
+    }
+
     fn generate_update_summary(&self) -> BoxFuture<'static, Result<(), String>> {
         let state = Arc::clone(&self.0);
         async move { crate::update_summary::generate(&state, BY_UI).await }.boxed()

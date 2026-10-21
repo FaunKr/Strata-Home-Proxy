@@ -89,6 +89,9 @@ pub trait Backend: Send + Sync + 'static {
     /// it refuses.
     fn start_strata_job(&self, form: StrataJobForm) -> BoxFuture<'static, Result<(), String>>;
     fn cancel_strata_job(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// The optimization prompt for an installed model, never waking the PC;
+    /// why not if there is none.
+    fn optimization_prompt(&self, model: String) -> BoxFuture<'static, Result<String, String>>;
     /// Has Strata write the update summary now, waking the PC first; why
     /// not if it cannot start.
     fn generate_update_summary(&self) -> BoxFuture<'static, Result<(), String>>;

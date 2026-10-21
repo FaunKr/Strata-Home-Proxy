@@ -26,6 +26,11 @@ fn zoned(ts: u64) -> Zoned {
     ts.to_zoned(TimeZone::system())
 }
 
+/// `2026-10-17 14:03 CEST`, unambiguous for a reader elsewhere.
+pub fn full_text(ts: u64) -> String {
+    zoned(ts).strftime("%Y-%m-%d %H:%M %Z").to_string()
+}
+
 /// `17.10.2026`.
 pub fn local_date(ts: u64) -> String {
     zoned(ts).strftime("%d.%m.%Y").to_string()

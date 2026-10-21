@@ -229,16 +229,24 @@ struct Incoming {
 /// service may have started it with a new one the proxy has not fetched yet:
 /// the request goes once more with the new key.
 async fn send_upstream(st: &AppState, req: &Incoming) -> Result<reqwest::Response, String> {
-    let resp = send_once(st, req).await?;
-    if resp.status() != StatusCode::UNAUTHORIZED || !crate::strata_key::refresh(st).await {
+    let used = st.strata_key.key();
+    let resp = send_once(st, req, used.as_deref()).await?;
+    if resp.status() != StatusCode::UNAUTHORIZED {
         return Ok(resp);
     }
-    send_once(st, req).await
+    match crate::strata_key::refresh(st, used.as_deref()).await {
+        Some(key) => send_once(st, req, Some(&key)).await,
+        None => Ok(resp),
+    }
 }
 
-async fn send_once(st: &AppState, req: &Incoming) -> Result<reqwest::Response, String> {
+async fn send_once(
+    st: &AppState,
+    req: &Incoming,
+    key: Option<&str>,
+) -> Result<reqwest::Response, String> {
     // Checked before forwarding; only fails if the address was unset since.
-    let strata = st.strata().ok_or("STRATA_URL is not set")?;
+    let strata = st.strata_with(key).ok_or("STRATA_URL is not set")?;
     strata
         .forward(
             req.method.clone(),

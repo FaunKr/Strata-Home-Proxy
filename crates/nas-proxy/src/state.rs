@@ -202,13 +202,13 @@ impl AppState {
     /// Strata at the current address with the current key; `None` without
     /// an address.
     pub fn strata(&self) -> Option<StrataClient> {
+        self.strata_with(self.strata_key.key().as_deref())
+    }
+
+    /// Strata at the current address with `key`; `None` without an address.
+    pub fn strata_with(&self, key: Option<&str>) -> Option<StrataClient> {
         let cfg = self.cfg();
-        StrataClient::new(
-            &cfg,
-            self.strata_key.key().as_deref(),
-            self.probe(&cfg),
-            self.upstream.clone(),
-        )
+        StrataClient::new(&cfg, key, self.probe(&cfg), self.upstream.clone())
     }
 
     /// Client for the PC service with the current address and token.

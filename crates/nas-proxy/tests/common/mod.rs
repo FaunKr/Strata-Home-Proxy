@@ -59,6 +59,9 @@ pub struct FakePc {
     /// refuses.
     pub reported_key: Mutex<Option<String>>,
     pub key_requests: AtomicUsize,
+    /// Strata holds the next chat request here, after noting its
+    /// credentials and before checking its key, until notified.
+    pub hold_chat: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// Strata's process runs but does not answer yet (starting).
     pub starting: AtomicBool,
     /// Strata answers, but its model is not in memory (`"loaded": false`).
@@ -303,6 +306,10 @@ pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Val
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     *pc.api_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
+    let hold = pc.hold_chat.lock().unwrap().take();
+    if let Some(hold) = hold {
+        hold.notified().await;
+    }
     if let Some(key) = pc.strata_key.lock().unwrap().clone()
         && SeenCredentials::of(&headers).authorization != Some(format!("Bearer {key}"))
     {

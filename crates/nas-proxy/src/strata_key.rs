@@ -55,24 +55,24 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
     }
 }
 
-/// Asks the PC service for the key again, after Strata refused the one held;
-/// true if it brought another key than the one held, or the first.
-pub async fn refresh(state: &AppState) -> bool {
-    fetch(state, &state.agent()).await
+/// Asks the PC service for the key again, after Strata refused `used`, the
+/// key the request went out with; gives the key to send it once more with,
+/// if that is another one. A status check may have fetched it meanwhile, so
+/// the key held now says nothing about the refused request.
+pub async fn refresh(state: &AppState, used: Option<&str>) -> Option<String> {
+    fetch(state, &state.agent())
+        .await
+        .filter(|key| Some(key.as_str()) != used)
 }
 
-async fn fetch(state: &AppState, agent: &AgentClient) -> bool {
-    let Some(key) = agent.strata_key().await else {
-        return false;
-    };
+/// Fetches the key and takes it over; gives it, `None` if the PC service
+/// knows none.
+async fn fetch(state: &AppState, agent: &AgentClient) -> Option<String> {
+    let key = agent.strata_key().await?;
     let new = key.api_key.clone();
-    match state.strata_key.take(key) {
-        Some(old) if old == new => false,
-        // The first key after a start of the proxy is no change.
-        None => true,
-        Some(_) => {
-            state.events.record(EventKind::StrataKeyChanged, None);
-            true
-        }
+    // The first key after a start of the proxy is no change.
+    if state.strata_key.take(key).is_some_and(|old| old != new) {
+        state.events.record(EventKind::StrataKeyChanged, None);
     }
+    Some(new)
 }

@@ -3,7 +3,10 @@
 
 use crate::common;
 
-use std::sync::atomic::Ordering;
+use std::{
+    sync::{Arc, atomic::Ordering},
+    time::Duration,
+};
 
 use common::*;
 use serde_json::json;
@@ -16,6 +19,12 @@ fn bearer(key: &str) -> Option<String> {
 /// The proxy asks the PC service for its status, as its loops do.
 async fn noted(s: &Setup) {
     s.state.ask_pc(&s.state.agent()).await.unwrap();
+}
+
+/// A setup whose idle loop never runs: only the test asks for the status,
+/// so it can count the proxy's key fetches.
+async fn quiet() -> Setup {
+    setup(true, |c| c.idle_check = Duration::from_secs(3600)).await
 }
 
 #[tokio::test]
@@ -32,7 +41,7 @@ async fn strata_gets_the_key_of_the_pc_service_instead_of_the_clients() {
 
 #[tokio::test]
 async fn a_new_generation_brings_the_new_key() {
-    let s = setup(true, |_| {}).await;
+    let s = quiet().await;
     s.pc.set_strata_key("first-key");
     noted(&s).await;
     noted(&s).await;
@@ -54,7 +63,7 @@ async fn a_new_generation_brings_the_new_key() {
 
 #[tokio::test]
 async fn a_refused_key_is_fetched_again_and_the_request_sent_once_more() {
-    let s = setup(true, |_| {}).await;
+    let s = quiet().await;
     s.pc.set_strata_key("first-key");
     noted(&s).await;
     // Strata started again with a new key the proxy has not seen yet.
@@ -63,6 +72,40 @@ async fn a_refused_key_is_fetched_again_and_the_request_sent_once_more() {
     assert_eq!(resp.status(), 200);
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 1);
     assert_eq!(s.pc.key_requests.load(Ordering::SeqCst), 2);
+    let seen = s.pc.api_auth.lock().unwrap().clone().unwrap();
+    assert_eq!(seen.authorization, bearer("second-key"));
+}
+
+#[tokio::test]
+async fn a_key_fetched_by_a_status_check_while_the_request_is_out_still_sends_it_once_more() {
+    let s = setup(true, |_| {}).await;
+    s.pc.set_strata_key("first-key");
+    noted(&s).await;
+    let hold = Arc::new(tokio::sync::Notify::new());
+    *s.pc.hold_chat.lock().unwrap() = Some(hold.clone());
+    let url = s.url.clone();
+    let key = s.key.clone();
+    let request = tokio::spawn(async move {
+        post_json_to(&url, &key, "/v1/chat/completions", json!({}))
+            .await
+            .status()
+    });
+    eventually("the request reached Strata", || {
+        s.pc.api_auth
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.authorization.clone())
+            == Some(bearer("first-key"))
+    })
+    .await;
+    // Strata starts again with a new key, and a status check fetches it
+    // before Strata answers the request with the old one.
+    s.pc.set_strata_key("second-key");
+    noted(&s).await;
+    hold.notify_one();
+    assert_eq!(request.await.unwrap(), 200);
+    assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 1);
     let seen = s.pc.api_auth.lock().unwrap().clone().unwrap();
     assert_eq!(seen.authorization, bearer("second-key"));
 }
@@ -80,7 +123,7 @@ async fn right_after_a_start_of_the_proxy_a_refused_request_fetches_the_first_ke
 
 #[tokio::test]
 async fn a_key_strata_refuses_still_reaches_the_client_as_its_refusal() {
-    let s = setup(true, |_| {}).await;
+    let s = quiet().await;
     s.pc.set_strata_key("right-key");
     *s.pc.reported_key.lock().unwrap() = Some("wrong-key".into());
     let resp = post_json(&s, "/v1/messages", json!({})).await;

@@ -99,12 +99,16 @@ async fn forced_restart_reaches_the_pc_service_and_strata_loads() {
 
 #[tokio::test]
 async fn forced_restart_is_refused_in_gaming_mode() {
-    let s = setup(true, |_| {}).await;
+    // A status answer that misses the probe timeout counts as a sleeping
+    // PC, as Strata does not answer in gaming mode; under load the test's
+    // 500 ms can run out (#259).
+    let s = setup(true, |c| c.probe_timeout = Duration::from_secs(5)).await;
     s.pc.gaming.store(true, Ordering::SeqCst);
     let mut b = logged_in(&s.url).await;
     let resp = b.call("strata-force-restart", &[]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("Gaming mode is on"));
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("Gaming mode is on"), "{text}");
     assert!(!kinds(&s.state).contains(&EventKind::ForcedStrataRestart));
 }
 

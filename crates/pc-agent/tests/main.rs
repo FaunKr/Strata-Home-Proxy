@@ -6,6 +6,7 @@ mod common;
 mod agent;
 mod command;
 mod hardware;
+mod load_lines;
 mod managed_values;
 mod model_configs;
 mod strata;

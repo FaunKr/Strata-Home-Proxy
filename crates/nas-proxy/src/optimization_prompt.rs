@@ -7,8 +7,8 @@ use std::{fmt::Write, sync::Arc};
 
 use strata_admin_ui::api::{CodeBenchRun, CodeBenchState};
 use strata_pc_protocol::{
-    MachineFacts, SamplingField, SamplingSource, SamplingSupport, StrataBenchmark, StrataInfo,
-    StrataModel,
+    LOAD_LINES, MachineFacts, SamplingField, SamplingSource, SamplingSupport, StrataBenchmark,
+    StrataInfo, StrataModel,
 };
 
 use crate::{clock, state::AppState};
@@ -92,7 +92,7 @@ pub fn build(
             "\n### Run config\n\nThe model's `strata-<id>.json`, which Strata starts it with; \
              secrets are left out and paths are cut to file names.\n"
         );
-        json_block(out, config);
+        fenced(out, "json", config);
     }
     if let Some(chat) = &model.chat_settings {
         let ignored = model
@@ -108,7 +108,31 @@ pub fn build(
             out,
             "\n### Chat settings\n\nWhat Strata's web app keeps for this model; {effect}.\n"
         );
-        json_block(out, chat);
+        fenced(out, "json", chat);
+    }
+    let _ = writeln!(out, "\n### Load lines\n");
+    match &model.load_lines {
+        Some(load) => {
+            let when = clock::full_text(load.at);
+            let end = if load.answered {
+                "until it answered"
+            } else {
+                "until it ended without answering, so this load failed"
+            };
+            if load.lines.is_empty() {
+                let _ = writeln!(out, "The last load, on {when}, printed no lines ({end}).");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "Strata's output while it last loaded this model, on {when}, {end} \
+                     (at most the last {LOAD_LINES} lines):\n"
+                );
+                fenced(out, "text", &load.lines.join("\n"));
+            }
+        }
+        None => {
+            let _ = writeln!(out, "No load seen yet.");
+        }
     }
 
     let _ = writeln!(out, "\n## Benchmarks\n");
@@ -121,12 +145,12 @@ pub fn build(
     Ok(text)
 }
 
-/// `json` in a fence longer than any run of backticks in it, so text from
+/// `text` in a fence longer than any run of backticks in it, so text from
 /// the PC cannot end the block early.
-fn json_block(out: &mut String, json: &str) {
-    let longest = json.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+fn fenced(out: &mut String, lang: &str, text: &str) {
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat(longest.max(2) + 1);
-    let _ = writeln!(out, "{fence}json\n{}\n{fence}", json.trim_end());
+    let _ = writeln!(out, "{fence}{lang}\n{}\n{fence}", text.trim_end());
 }
 
 fn vram_line(out: &mut String, info: &StrataInfo) {

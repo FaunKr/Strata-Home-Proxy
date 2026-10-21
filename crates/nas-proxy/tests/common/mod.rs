@@ -549,6 +549,7 @@ pub fn model(id: &str, family: Option<&str>, disk_bytes: u64, active: bool) -> S
         sampling: None,
         config: None,
         chat_settings: None,
+        load_lines: None,
     }
 }
 

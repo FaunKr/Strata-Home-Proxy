@@ -61,6 +61,9 @@ pub enum Applied {
     RolledBack,
 }
 
+/// How often a loading Strata is asked whether it answers.
+const LOAD_CHECK: Duration = Duration::from_millis(500);
+
 /// Strata's process on this PC, as the agent starts and stops it.
 pub struct StrataProcess<'a> {
     agent: &'a Agent,
@@ -146,7 +149,7 @@ impl<'a> StrataProcess<'a> {
             Err(e) => return failed(e.to_string()),
         };
         let output = Arc::clone(&agent.output);
-        let run_id = output.started();
+        let run_id = output.started(crate::strata::active_model(agent));
         // The page shows this output; the key must not reach it. A new key
         // comes with a restart, so the one of this start is enough.
         let key = agent.strata_key.key(&agent.cfg);
@@ -159,6 +162,23 @@ impl<'a> StrataProcess<'a> {
             }
             output.ended(run_id);
         });
+        // The load lines end when this Strata answers, asked with its own
+        // key, so neither an earlier Strata nor one started by hand ends them.
+        let health = agent.strata_get("/health");
+        let output = Arc::clone(&agent.output);
+        tokio::spawn(async move {
+            while output.loading(run_id) {
+                let answered = match health.try_clone() {
+                    Some(req) => matches!(req.send().await, Ok(r) if r.status().is_success()),
+                    None => false,
+                };
+                if answered {
+                    output.loaded(run_id);
+                    break;
+                }
+                tokio::time::sleep(LOAD_CHECK).await;
+            }
+        });
         true
     }
 
@@ -167,6 +187,7 @@ impl<'a> StrataProcess<'a> {
     pub fn stop(&self) -> bool {
         let agent = self.agent;
         agent.times.0.lock().unwrap().stop = Some(Instant::now());
+        agent.output.stopping();
         tracing::info!("Stopping Strata");
         let managed = agent.managed();
         let processes = managed.processes(&agent.cfg);

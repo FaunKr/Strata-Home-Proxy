@@ -309,7 +309,7 @@ fn installed_model(install: &Installation, model: &str) -> Result<String, Refusa
 /// last), the run config Strata touched last, as Strata picks it. Without any
 /// start (after the one-line setup) none: the service starts no model, and
 /// activating one sets the start.
-fn active_model(agent: &Agent) -> Option<String> {
+pub(crate) fn active_model(agent: &Agent) -> Option<String> {
     let managed = agent.managed();
     let (script, args) = managed.start(&agent.cfg)?;
     let id = Installation::of(&agent.cfg).active_model(script, args)?;
@@ -480,9 +480,12 @@ async fn delete(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
     job.step("Deleting files");
     let install = Installation::of(&job.agent().cfg);
     let id = id.to_string();
-    tokio::task::spawn_blocking(move || install.remove(&id))
+    let model = id.clone();
+    tokio::task::spawn_blocking(move || install.remove(&model))
         .await
         .map_err(|e| Step::Failed(e.to_string()))??;
+    let id = catalog::by_id(&id).map_or(id, Size::id);
+    job.agent().output.forget_load(&id);
     Ok(None)
 }
 
@@ -1147,6 +1150,7 @@ pub fn view(agent: &Agent) -> StrataReport {
                 sampling: support.map(|support| model.sampling(support)),
                 config: model.shareable_config(),
                 chat_settings: model.shareable_chat(),
+                load_lines: agent.output.load_lines(&id),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,

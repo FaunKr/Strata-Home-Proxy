@@ -199,7 +199,7 @@ impl Agent {
         self.gaming.load(Ordering::SeqCst)
     }
 
-    fn strata_get(&self, path: &str) -> reqwest::RequestBuilder {
+    pub(crate) fn strata_get(&self, path: &str) -> reqwest::RequestBuilder {
         let req = self.http.get(format!("{}{path}", self.cfg.strata_url));
         match self.strata_key.key(&self.cfg) {
             Some(key) => req.bearer_auth(key),

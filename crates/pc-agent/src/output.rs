@@ -1,9 +1,10 @@
 //! The Strata output: what a Strata started by the service writes to its
 //! console. The last lines stay in memory for `GET /strata-log`, the lines of
-//! the current run also in `strata.log` next to the service's own log.
+//! the current run also in `strata.log` next to the service's own log. The
+//! lines of each model's latest load stay in `load-lines.json` there.
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fs::File,
     io::Write,
     path::PathBuf,
@@ -11,12 +12,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub use strata_pc_protocol::{StrataOutputMessage, StrataOutputNotice};
+pub use strata_pc_protocol::{LOAD_LINES, LoadLines, StrataOutputMessage, StrataOutputNotice};
 use tokio::sync::broadcast;
 
 /// Lines kept in memory, separators included.
 pub const KEPT: usize = 500;
 const LOG_FILE: &str = "strata.log";
+const LOADS_FILE: &str = "load-lines.json";
 
 enum Entry {
     Started(u64),
@@ -41,16 +43,34 @@ struct Inner {
     /// The output of the current run is still open.
     reading: bool,
     file: Option<File>,
+    /// The model the current run loads and its lines so far, until
+    /// `/health` answers or the run ends.
+    load: Option<(String, VecDeque<String>)>,
+    /// Each model's latest load, as in `load-lines.json`.
+    loads: BTreeMap<String, LoadLines>,
 }
 
 pub struct StrataOutput {
     inner: Mutex<Inner>,
     tx: broadcast::Sender<StrataOutputMessage>,
     file: PathBuf,
+    loads_file: PathBuf,
+    /// Writes of `load-lines.json` one after the other, outside `inner`.
+    saving: Mutex<()>,
 }
 
 impl StrataOutput {
     pub fn new(state_dir: PathBuf) -> Self {
+        let loads_file = state_dir.join(LOADS_FILE);
+        // Missing before the first load; a broken file counts as none.
+        let loads = std::fs::read_to_string(&loads_file)
+            .ok()
+            .and_then(|text| {
+                serde_json::from_str(&text)
+                    .inspect_err(|e| tracing::warn!("{} not read: {e}", loads_file.display()))
+                    .ok()
+            })
+            .unwrap_or_default();
         Self {
             inner: Mutex::new(Inner {
                 entries: VecDeque::new(),
@@ -58,27 +78,37 @@ impl StrataOutput {
                 run: 0,
                 reading: false,
                 file: None,
+                load: None,
+                loads,
             }),
             tx: broadcast::channel(4 * KEPT).0,
             file: state_dir.join(LOG_FILE),
+            loads_file,
+            saving: Mutex::new(()),
         }
     }
 
-    /// Strata was started: a separator, and `strata.log` begins anew. The
-    /// returned run goes with each of its lines.
-    pub fn started(&self) -> u64 {
-        let at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
+    /// Strata was started, loading `model` if it is known: a separator, and
+    /// `strata.log` begins anew. The returned run goes with each of its lines.
+    pub fn started(&self, model: Option<String>) -> u64 {
+        let at = now();
         let mut inner = self.inner.lock().unwrap();
         inner.run += 1;
         inner.reading = true;
         inner.replaceable = false;
+        // A load still open never came up: kept as one that did not answer.
+        let saved = end_load(&mut inner, false);
+        inner.load = model.map(|model| (model, VecDeque::new()));
         inner.file = File::create(&self.file)
             .inspect_err(|e| tracing::warn!("{} cannot be created: {e}", self.file.display()))
             .ok();
         self.add(&mut inner, Entry::Started(at));
-        inner.run
+        let run = inner.run;
+        drop(inner);
+        if saved {
+            self.save();
+        }
+        run
     }
 
     /// A line of `run` as the command reader hands it: ending in `\r` if a
@@ -104,9 +134,18 @@ impl StrataOutput {
             self.add(&mut inner, Entry::Line(text.clone()));
         }
         inner.replaceable = rewritten;
-        // Only finished lines go to the file; a progress bar's states would fill it.
-        if !rewritten
-            && let Some(file) = inner.file.as_mut()
+        // Only finished lines go to the file and the load lines; a progress
+        // bar's states would fill them.
+        if rewritten {
+            return;
+        }
+        if let Some((_, lines)) = inner.load.as_mut() {
+            if lines.len() == LOAD_LINES {
+                lines.pop_front();
+            }
+            lines.push_back(text.clone());
+        }
+        if let Some(file) = inner.file.as_mut()
             && let Err(e) = writeln!(file, "{text}")
         {
             tracing::warn!("{LOG_FILE} not written: {e}");
@@ -114,11 +153,66 @@ impl StrataOutput {
         }
     }
 
-    /// The output of `run` closed: that Strata ended.
+    /// The output of `run` closed: that Strata ended, and a load still open
+    /// with it, as one that did not answer.
     pub fn ended(&self, run: u64) {
-        let mut inner = self.inner.lock().unwrap();
-        if inner.run == run {
+        let saved = {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.run != run {
+                return;
+            }
             inner.reading = false;
+            end_load(&mut inner, false)
+        };
+        if saved {
+            self.save();
+        }
+    }
+
+    /// `run` answers `/health`: its load is over.
+    pub fn loaded(&self, run: u64) {
+        let saved = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.run == run && end_load(&mut inner, true)
+        };
+        if saved {
+            self.save();
+        }
+    }
+
+    /// Whether the load of `run` is still open.
+    pub fn loading(&self, run: u64) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner.run == run && inner.load.is_some()
+    }
+
+    /// The service stops Strata: a load still open is cut short by it and
+    /// says nothing about the model, so the model keeps its earlier lines.
+    pub fn stopping(&self) {
+        self.inner.lock().unwrap().load = None;
+    }
+
+    /// `model` was deleted: its load lines go with it.
+    pub fn forget_load(&self, model: &str) {
+        let removed = self.inner.lock().unwrap().loads.remove(model).is_some();
+        if removed {
+            self.save();
+        }
+    }
+
+    /// The lines of `model`'s latest load, if one was seen.
+    pub fn load_lines(&self, model: &str) -> Option<LoadLines> {
+        self.inner.lock().unwrap().loads.get(model).cloned()
+    }
+
+    /// Writes the kept loads to `load-lines.json`, without holding up the
+    /// output while the disk is slow.
+    fn save(&self) {
+        let _one_at_a_time = self.saving.lock().unwrap();
+        let text =
+            serde_json::to_string(&self.inner.lock().unwrap().loads).expect("load lines serialize");
+        if let Err(e) = crate::write_replacing(&self.loads_file, &text) {
+            tracing::warn!("{} not written: {e}", self.loads_file.display());
         }
     }
 
@@ -163,6 +257,26 @@ impl StrataOutput {
         }
         inner.entries.push_back(entry);
     }
+}
+
+/// Keeps the open load as its model's latest; whether there was one.
+fn end_load(inner: &mut Inner, answered: bool) -> bool {
+    let Some((model, lines)) = inner.load.take() else {
+        return false;
+    };
+    let load = LoadLines {
+        at: now(),
+        lines: lines.into(),
+        answered,
+    };
+    inner.loads.insert(model, load);
+    true
+}
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// The text without colour codes and other control characters.

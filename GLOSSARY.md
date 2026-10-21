@@ -72,6 +72,10 @@ _Avoid_: Nachlauf
 What the PC service reports about load, temperature, memory and fans of the graphics card and CPU; the Overview shows them.
 _Avoid_: stats, telemetry, Hardwarewerte
 
+**Load lines**:
+A model's Strata output from a start by the PC service until Strata answers `/health`: at most the last 100 lines of its latest load, kept on the PC across restarts of the PC service. The optimization prompt shows them.
+_Avoid_: startup log, boot log
+
 **Machine facts**:
 What the PC is, as the PC service reads it on the first request and keeps it: each RAM stick, each graphics card with VRAM, driver and PCIe link, the CPU, Windows and the kind of drive that holds the models. The optimization prompt shows them; unlike hardware readings they do not change while the PC runs.
 _Avoid_: specs, system info, hardware info

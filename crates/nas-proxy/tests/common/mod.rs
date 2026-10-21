@@ -604,7 +604,13 @@ pub async fn agent_start_job(State(pc): State<Pc>, Json(body): Json<Value>) -> R
     if !pc.up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    pc.job_bodies.lock().unwrap().push(body.clone());
+    let response = start_job(&pc, body.clone());
+    // Noted last: a test that sees the request also sees the job it started.
+    pc.job_bodies.lock().unwrap().push(body);
+    response
+}
+
+fn start_job(pc: &Pc, body: Value) -> Response {
     // The PC service takes only what the protocol says.
     let request: StrataJobRequest = match serde_json::from_value(body) {
         Ok(request) => request,

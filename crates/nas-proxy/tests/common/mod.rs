@@ -500,6 +500,7 @@ pub async fn agent_strata_kill(State(pc): State<Pc>) -> Response {
 pub fn strata_info(installed: bool) -> StrataReport {
     let info = StrataInfo {
         installed,
+        install: None,
         version: installed.then(|| "477ac13".into()),
         update_available: None,
         models: if installed {

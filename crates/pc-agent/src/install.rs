@@ -1,14 +1,22 @@
-//! The Strata folder as setup leaves it: model configs (`strata-<id>.json`),
+//! The Strata folder as setup leaves it: run configs (`strata-<id>.json`),
 //! their Chat settings, start scripts and logs, and each model's files in the
 //! Strata data folder. Everything here knows file names, letter case, the
 //! config format Strata writes and the engine flags the service changes;
 //! callers deal in model ids and [`Model`] values.
+//!
+//! Strata comes in two layouts. The Strata Terminal keeps its own files
+//! (`serve`, `data`) in its folder and the run configs in a Strata folder
+//! beside it ([`crate::terminal`]); an older Strata folder from source (a
+//! Git clone) holds both. The run configs have the same format in both.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::sampling::{self, SamplingSupport, StrataSampling};
+use crate::{
+    sampling::{self, SamplingSupport, StrataSampling},
+    terminal::Terminal,
+};
 
 /// The engine flag setup writes the context with.
 const CONTEXT_FLAG: &str = "--max-context";
@@ -47,8 +55,30 @@ type ConfigFields = serde_json::Map<String, Value>;
 /// The Strata folder and the data folder its models live in.
 #[derive(Clone, Debug)]
 pub struct Installation {
+    /// The run configs, their Chat settings, start scripts and logs.
     dir: PathBuf,
+    /// Strata's own files: `setup.py`, `serve`, `data`.
+    code: PathBuf,
     data: PathBuf,
+    kind: Kind,
+}
+
+/// Which layout Strata has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// The Strata Terminal.
+    Terminal,
+    /// An older Strata folder from source.
+    Source,
+}
+
+impl From<Kind> for strata_pc_protocol::StrataInstall {
+    fn from(kind: Kind) -> Self {
+        match kind {
+            Kind::Terminal => Self::Terminal,
+            Kind::Source => Self::Source,
+        }
+    }
 }
 
 /// A model's config as read, with its Chat settings. Change it with the
@@ -62,20 +92,53 @@ pub struct Model {
 }
 
 impl Installation {
+    /// A Strata folder from source.
     pub fn new(strata_dir: impl Into<PathBuf>, data_dir: impl Into<PathBuf>) -> Self {
+        let dir = strata_dir.into();
         Self {
-            dir: strata_dir.into(),
+            code: dir.clone(),
+            dir,
             data: data_dir.into(),
+            kind: Kind::Source,
         }
     }
 
-    pub fn of(cfg: &crate::Config) -> Self {
-        Self::new(&cfg.strata_dir, &cfg.strata_data_dir)
+    /// The Strata Terminal's layout.
+    pub fn terminal(terminal: &Terminal, data_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            dir: terminal.install_dir(),
+            code: terminal.root(),
+            data: data_dir.into(),
+            kind: Kind::Terminal,
+        }
     }
 
-    /// Whether setup has run here.
+    /// The service's Strata: the Strata Terminal, unless an older Strata
+    /// folder is in use and the Terminal has no run configs yet. A PC
+    /// without Strata gets the Terminal.
+    pub fn of(cfg: &crate::Config) -> Self {
+        let terminal = Self::terminal(&Terminal::of(cfg), &cfg.strata_data_dir);
+        let source = Self::new(&cfg.strata_dir, &cfg.strata_data_dir);
+        let in_use = |install: &Self| {
+            install.code.join("setup.py").is_file() || !install.models().is_empty()
+        };
+        if in_use(&source) && terminal.models().is_empty() {
+            source
+        } else {
+            terminal
+        }
+    }
+
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// Whether Strata is installed here: setup's folder, or the Terminal.
     pub fn is_set_up(&self) -> bool {
-        self.dir.join("setup.py").is_file()
+        match self.kind {
+            Kind::Source => self.code.join("setup.py").is_file(),
+            Kind::Terminal => Terminal::program_in(&self.code).is_file(),
+        }
     }
 
     /// The ids of the model configs, as their file names spell them.
@@ -219,7 +282,7 @@ impl Installation {
 
     /// Which sampling defaults this Strata applies; `None` while unknown.
     pub fn support(&self) -> Option<SamplingSupport> {
-        sampling::support_of(&self.dir)
+        sampling::support_of(&self.code)
     }
 
     /// Deletes what setup left for a model (`id` as the catalog spells it):
@@ -276,15 +339,28 @@ impl Installation {
         self.dir.join(format!("run-{}.bat", lower(id)))
     }
 
-    /// The model `start_script` starts, as its config file names it. A script
-    /// that is no model's own (`START-HERE.bat` starts the model used last)
-    /// gives the config Strata touched last, as Strata picks it.
-    pub fn active_model(&self, start_script: &Path) -> Option<String> {
+    /// The model a start with `start_script` and `args` starts, by its run
+    /// config's file name: the run config `strata serve` serves, or the
+    /// model's own start script. A script that is no model's own
+    /// (`START-HERE.bat` starts the model used last) gives the run config
+    /// Strata touched last, as Strata picks it.
+    pub fn active_model(&self, start_script: &Path, args: &[String]) -> Option<String> {
+        let models = self.models();
+        if let Some(config) = Terminal::served_config(args) {
+            let name = config.file_name()?.to_string_lossy().to_lowercase();
+            return models
+                .iter()
+                .find(|id| {
+                    self.config_path(id)
+                        .file_name()
+                        .is_some_and(|n| *n == *name)
+                })
+                .cloned();
+        }
         let script = start_script
             .file_name()
             .map(|n| n.to_string_lossy().to_lowercase())
             .unwrap_or_default();
-        let models = self.models();
         models
             .iter()
             .find(|id| {
@@ -330,7 +406,7 @@ impl Installation {
     fn vector_path(&self) -> PathBuf {
         PROJECTION_VECTOR
             .iter()
-            .fold(self.dir.clone(), |p, part| p.join(part))
+            .fold(self.code.clone(), |p, part| p.join(part))
     }
 }
 
@@ -648,6 +724,7 @@ pub mod testing {
     use serde_json::Value;
 
     use super::{ConfigFields, Installation, config_text};
+    use crate::terminal::Terminal;
 
     /// Writes setup's files into a Strata folder and its data folder.
     pub struct SetupLeaves {
@@ -665,6 +742,20 @@ pub mod testing {
             write(strata_dir.join("setup.py"), "");
             write(strata_dir.join(".git").join("HEAD"), &format!("{commit}\n"));
             Self::at(strata_dir, data_dir)
+        }
+
+        /// The Strata Terminal's files as its install script leaves them in
+        /// `home`, at this version.
+        pub fn terminal(home: &Path, data_dir: &Path, version: &str) -> Self {
+            Terminal::new(home).fake_install(version);
+            Self::terminal_at(home, data_dir)
+        }
+
+        /// The Strata Terminal's folders as they are, to add to or look at.
+        pub fn terminal_at(home: &Path, data_dir: &Path) -> Self {
+            Self {
+                install: Installation::terminal(&Terminal::new(home), data_dir),
+            }
         }
 
         /// The folders as they are, to add to or look at.
@@ -1156,13 +1247,20 @@ mod tests {
         let install = s.installation();
         let script = install.run_script("CODER-IQ1_M");
         assert_eq!(
-            install.active_model(&script).as_deref(),
+            install.active_model(&script, &[]).as_deref(),
             Some("coder-iq1_m")
         );
         let start_here = install.dir.join("START-HERE.bat");
         assert_eq!(
-            install.active_model(&start_here).as_deref(),
+            install.active_model(&start_here, &[]).as_deref(),
             Some("iq3_xxs")
+        );
+        let served = Terminal::serve_args(&install.config_path("CODER-IQ1_M"), "0.0.0.0", "8080");
+        assert_eq!(
+            install
+                .active_model(Path::new("strata.cmd"), &served)
+                .as_deref(),
+            Some("coder-iq1_m")
         );
     }
 

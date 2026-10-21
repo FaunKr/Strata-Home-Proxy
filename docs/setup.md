@@ -68,7 +68,8 @@ If it does not work: check the BIOS items from step 1 and *Energy Efficient Ethe
 ## 5. Strata
 
 Easy way, once proxy and PC service are running: web UI, area
-**Strata**. The button wakes the PC, fetches Strata, sets it up with the
+**Strata**. The button wakes the PC, installs the Strata Terminal with
+Strata's own `install.ps1` and the engine for the PC, sets it up with the
 recommended model and enters the Strata key in Strata and the proxy.
 The recommendation follows Strata's own setup: from 60 GB RAM `IQ3_XXS`, from 44 GB
 `Q2_0`, from 28 GB `coder-IQ1_M`; context 64K for a 16 GB card. The skill
@@ -79,8 +80,8 @@ The recommendation follows Strata's own setup: from 60 GB RAM `IQ3_XXS`, from 44
 - [ ] `curl http://<PC-IP>:8080/health` from the NAS returns `200`
 - [ ] Standby test: put the PC to sleep, wake it, then query `/health` once more. If Strata no longer answers afterwards, note it (that is what the watchdog in the PC service is meant for)
 
-By hand it goes like this: `START-HERE.bat` with `--host 0.0.0.0`, port
-**8080** and **API key**, then enter the key in the web UI under *Strata → Connection*.
+By hand it goes like this: install the Strata Terminal (`irm https://github.com/Niko1221/Strata/releases/latest/download/install.ps1 | iex`),
+then `strata launch` with `--host 0.0.0.0`, port **8080** and an **API key**, then enter the key in the web UI under *Strata → Connection*.
 
 ## 6. Firewall on the PC
 

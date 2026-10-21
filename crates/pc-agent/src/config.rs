@@ -85,13 +85,22 @@ pub struct Config {
     /// where updates of this program come from.
     #[serde(default)]
     pub nas_url: Option<String>,
-    /// Where Strata is fetched from when the web UI sets it up. Fixed here,
-    /// never taken from a request.
+    /// Where an older Strata folder was fetched from with Git; its updates
+    /// still pull from there. Fixed here, never taken from a request.
     #[serde(default = "default_strata_repo")]
     pub strata_repo: String,
-    /// Strata's folder for a setup from the web UI.
+    /// The Strata folder of an older setup from source (a Git clone); a new
+    /// setup from the web UI installs the Strata Terminal instead.
     #[serde(default = "default_strata_dir")]
     pub strata_dir: PathBuf,
+    /// Strata's install script for the Strata Terminal. Fixed here, never
+    /// taken from a request.
+    #[serde(default = "default_strata_installer")]
+    pub strata_installer: String,
+    /// Where the install script puts the Strata Terminal, its engines and
+    /// the run configs (its `STRATA_DATA_DIR`).
+    #[serde(default = "default_strata_home")]
+    pub strata_home: PathBuf,
     /// Where the setup puts the model files (60–190 GB each).
     #[serde(default = "default_strata_data_dir")]
     pub strata_data_dir: PathBuf,
@@ -129,6 +138,16 @@ fn default_update_stop_wait() -> u64 {
 }
 fn default_strata_repo() -> String {
     "https://github.com/Niko1221/Strata.git".into()
+}
+fn default_strata_installer() -> String {
+    "https://github.com/Niko1221/Strata/releases/latest/download/install.ps1".into()
+}
+/// `%LOCALAPPDATA%\Strata`, the install script's own default.
+fn default_strata_home() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA").map_or_else(
+        || PathBuf::from(r"C:\Strata-Terminal"),
+        |d| PathBuf::from(d).join("Strata"),
+    )
 }
 fn default_strata_dir() -> PathBuf {
     PathBuf::from(r"C:\Strata")

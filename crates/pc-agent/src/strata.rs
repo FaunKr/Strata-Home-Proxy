@@ -6,6 +6,9 @@
 //! Each job is a short script: it works through its [`JobContext`] (steps,
 //! cancel, waiting, commands, cleanup) and starts and stops Strata only
 //! through [`crate::strata_process`].
+//!
+//! A new setup installs the Strata Terminal ([`crate::terminal`]); a PC
+//! with an older Strata folder from source keeps it and its jobs.
 
 use std::{
     future::Future,
@@ -18,10 +21,11 @@ use crate::{
     agent::Agent,
     catalog::{self, Size},
     command::CommandSpec,
-    install::{Installation, Model},
+    install::{Installation, Kind, Model},
     job::{JobContext, POLL, Step, unix_now},
     managed::Managed,
     strata_process::Applied,
+    terminal::{self, Terminal},
 };
 pub use strata_pc_protocol::{
     ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, StrataBenchmark, StrataFamily,
@@ -216,6 +220,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         }
         StrataJobRequest::Update => {
             strata_installed(&install)?;
+            from_source(&install, "Updating")?;
             if !dir.join(".git").exists() {
                 return Err(Refusal::Conflict(format!(
                     "{} is no Git clone and can only be updated by hand",
@@ -226,6 +231,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         }
         StrataJobRequest::Benchmark => {
             strata_installed(&install)?;
+            from_source(&install, "The benchmark")?;
             let id = active_model(agent).ok_or_else(|| {
                 Refusal::Conflict("No active model known; activate a model first".into())
             })?;
@@ -253,6 +259,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         }
         StrataJobRequest::CompareModels => {
             strata_installed(&install)?;
+            from_source(&install, "Comparing models")?;
             let active = active_model(agent).ok_or_else(|| {
                 Refusal::Conflict("No active model known; activate a model first".into())
             })?;
@@ -275,6 +282,16 @@ fn strata_installed(install: &Installation) -> Result<(), Refusal> {
     }
 }
 
+/// Refuses what the web UI does only for a Strata folder from source yet.
+fn from_source(install: &Installation, what: &str) -> Result<(), Refusal> {
+    match install.kind() {
+        Kind::Source => Ok(()),
+        Kind::Terminal => Err(Refusal::Conflict(format!(
+            "{what} from the web UI is not there yet for the Strata Terminal"
+        ))),
+    }
+}
+
 /// The catalog id of an installed model, in the catalog's letter case.
 fn installed_model(install: &Installation, model: &str) -> Result<String, Refusal> {
     let id = catalog::by_id(model)
@@ -286,15 +303,16 @@ fn installed_model(install: &Installation, model: &str) -> Result<String, Refusa
     Ok(id)
 }
 
-/// The model the managed start script starts, in the catalog's letter case.
-/// Without a model's own start script (`START-HERE.bat` starts the model
-/// used last), the config Strata touched last, as Strata picks it. Without
-/// any start script (after the one-line setup) none: the service starts no
-/// model, and activating one sets the script.
+/// The model the managed start starts, in the catalog's letter case: the
+/// run config `strata serve` serves, or the model's start script. Without
+/// a model's own start script (`START-HERE.bat` starts the model used
+/// last), the run config Strata touched last, as Strata picks it. Without any
+/// start (after the one-line setup) none: the service starts no model, and
+/// activating one sets the start.
 fn active_model(agent: &Agent) -> Option<String> {
     let managed = agent.managed();
-    let (script, _) = managed.start(&agent.cfg)?;
-    let id = Installation::of(&agent.cfg).active_model(script)?;
+    let (script, args) = managed.start(&agent.cfg)?;
+    let id = Installation::of(&agent.cfg).active_model(script, args)?;
     Some(catalog::by_id(&id).map_or(id, Size::id))
 }
 
@@ -347,28 +365,9 @@ async fn install(
     speed_projection: bool,
 ) -> Result<Option<String>, Step> {
     let agent = job.agent();
-    let dir = agent.cfg.strata_dir.clone();
     let strata = Installation::of(&agent.cfg);
-    if !strata.is_set_up() {
-        if dir.read_dir().is_ok_and(|mut d| d.next().is_some()) {
-            return Err(format!(
-                "{} is not empty but no Strata folder; empty it or change strata_dir",
-                dir.display()
-            )
-            .into());
-        }
-        let git = git(job).await?;
-        job.step("Fetching Strata");
-        let clone = CommandSpec {
-            program: git,
-            args: vec![
-                "clone".into(),
-                agent.cfg.strata_repo.clone(),
-                dir.display().to_string(),
-            ],
-            dir: None,
-        };
-        job.command(clone, false).await?;
+    if strata.kind() == Kind::Terminal {
+        install_terminal(job).await?;
     }
     // Setup writes a key only if one is known; the start below makes the
     // one Strata runs with.
@@ -378,16 +377,61 @@ async fn install(
     // with the managed ones.
     agent.strata().stop();
     manage(agent).await;
-    let managed = Managed {
-        strata_start: Some(strata.run_script(&size.id())),
-        strata_args: Vec::new(),
-        strata_processes: Some(vec![folder_entry(&dir)]),
-    };
     agent
-        .set_managed(managed)
+        .set_managed(managed_start(agent, &strata, &size.id()))
         .map_err(|e| Step::Failed(e.to_string()))?;
     agent.strata().start_again().await;
     Ok(None)
+}
+
+/// The Strata Terminal with Strata's install script unless it is there,
+/// then the engine for this PC. Fails with Strata's reason when the feed
+/// has no engine for this PC, before any model download.
+async fn install_terminal(job: &JobContext) -> Result<(), Step> {
+    let agent = job.agent();
+    let terminal = Terminal::of(&agent.cfg);
+    if !terminal.is_installed() {
+        job.step("Installing the Strata Terminal");
+        job.command(terminal.install(&agent.cfg.strata_installer), false)
+            .await?;
+        if !terminal.is_installed() {
+            return Err(format!(
+                "The install script ended, but the Strata Terminal is not in {}",
+                terminal.root().display()
+            )
+            .into());
+        }
+    }
+    job.step("Installing the engine for this PC");
+    let (ran, output) = job.command_output(terminal.install_engine()).await;
+    if let Err(Step::Cancelled) = ran {
+        return Err(Step::Cancelled);
+    }
+    terminal::engine_installed(&output).map_err(Step::Failed)
+}
+
+/// What starts model `id` from now on, and what makes up the running
+/// Strata: `strata serve` with its run config, or its start script.
+fn managed_start(agent: &Agent, install: &Installation, id: &str) -> Managed {
+    match install.kind() {
+        Kind::Terminal => {
+            let terminal = Terminal::of(&agent.cfg);
+            Managed {
+                strata_start: Some(terminal.program()),
+                strata_args: Terminal::serve_args(
+                    &install.config_path(id),
+                    STRATA_HOST,
+                    STRATA_PORT,
+                ),
+                strata_processes: Some(terminal.processes()),
+            }
+        }
+        Kind::Source => Managed {
+            strata_start: Some(install.run_script(id)),
+            strata_args: Vec::new(),
+            strata_processes: Some(vec![crate::platform::folder_entry(&agent.cfg.strata_dir)]),
+        },
+    }
 }
 
 async fn add_model(
@@ -412,13 +456,17 @@ async fn activate(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
     agent.strata().wait_idle(job).await?;
     job.step("Starting Strata with the new model");
     agent.strata().stop();
-    let dir = &agent.cfg.strata_dir;
+    let Managed {
+        strata_start,
+        strata_args,
+        strata_processes,
+    } = managed_start(agent, &Installation::of(&agent.cfg), id);
     let mut managed = agent.managed();
-    managed.strata_start = Some(Installation::of(&agent.cfg).run_script(id));
-    managed.strata_args = Vec::new();
+    managed.strata_start = strata_start;
+    managed.strata_args = strata_args;
     managed
         .strata_processes
-        .get_or_insert_with(|| vec![folder_entry(dir)]);
+        .get_or_insert_with(|| strata_processes.unwrap_or_default());
     let saved = agent
         .set_managed(managed)
         .map_err(|e| Step::Failed(e.to_string()));
@@ -449,6 +497,7 @@ async fn update(job: &JobContext) -> Result<Option<String>, Step> {
         program: git,
         args: vec!["pull".into(), "--ff-only".into()],
         dir: Some(dir.clone()),
+        ..Default::default()
     };
     job.command(pull, false).await?;
     agent.strata().wait_idle(job).await?;
@@ -457,6 +506,7 @@ async fn update(job: &JobContext) -> Result<Option<String>, Step> {
         program: dir.join("START-HERE.bat"),
         args: vec!["--update".into()],
         dir: Some(dir),
+        ..Default::default()
     };
     let updated = job.command(spec, true).await;
     if updated.is_ok() {
@@ -501,6 +551,7 @@ async fn measure(job: &JobContext, id: &str) -> Result<StrataBenchmark, Step> {
         program: dir.join("BENCH.bat"),
         args: vec!["--config".into(), config.display().to_string()],
         dir: Some(dir.clone()),
+        ..Default::default()
     };
     job.command(spec, false).await?;
     let reading = job.bench();
@@ -846,6 +897,7 @@ async fn incoming_commits(agent: &Agent) -> Option<Option<Incoming>> {
             program: git.clone(),
             args: args.iter().map(|a| a.to_string()).collect(),
             dir: Some(dir.clone()),
+            ..Default::default()
         };
         async move {
             let (code, lines) = output(agent, &spec).await?;
@@ -923,9 +975,9 @@ async fn setup(
     speed_projection: bool,
 ) -> Result<(), Step> {
     let agent = job.agent();
-    let dir = &agent.cfg.strata_dir;
+    let install = Installation::of(&agent.cfg);
     let mut args: Vec<String> = vec!["--yes".into(), "--no-start".into(), "--no-browser".into()];
-    if !Installation::of(&agent.cfg).models().is_empty() {
+    if !install.models().is_empty() {
         args.push("--setup".into());
     }
     args.extend(
@@ -956,10 +1008,17 @@ async fn setup(
         let value = if speed_projection { "on" } else { "off" };
         args.extend(["--experimental-speed-projection".into(), value.into()]);
     }
-    let spec = CommandSpec {
-        program: dir.join("START-HERE.bat"),
-        args,
-        dir: Some(dir.clone()),
+    let spec = match install.kind() {
+        Kind::Terminal => Terminal::of(&agent.cfg).setup(args),
+        Kind::Source => {
+            let dir = &agent.cfg.strata_dir;
+            CommandSpec {
+                program: dir.join("START-HERE.bat"),
+                args,
+                dir: Some(dir.clone()),
+                ..Default::default()
+            }
+        }
     };
     job.command(spec, true).await
 }
@@ -988,6 +1047,7 @@ async fn git(job: &JobContext) -> Result<PathBuf, Step> {
         .map(String::from)
         .to_vec(),
         dir: None,
+        ..Default::default()
     };
     job.command(winget, false).await.map_err(|e| match e {
         Step::Failed(e) => Step::Failed(format!(
@@ -1023,6 +1083,7 @@ async fn find_git(agent: &Agent) -> Option<PathBuf> {
             program: candidate.clone(),
             args: vec!["--version".into()],
             dir: None,
+            ..Default::default()
         };
         if output(agent, &version)
             .await
@@ -1046,14 +1107,6 @@ async fn output(agent: &Agent, spec: &CommandSpec) -> Option<(i32, Vec<String>)>
 }
 
 /// The folder as a `strata_processes` entry.
-fn folder_entry(dir: &Path) -> String {
-    let mut entry = dir.display().to_string();
-    if !crate::platform::is_folder(&entry) {
-        entry.push(std::path::MAIN_SEPARATOR);
-    }
-    entry
-}
-
 fn kind_text(kind: StrataJobKind) -> &'static str {
     match kind {
         StrataJobKind::Install => "Setup",
@@ -1099,9 +1152,14 @@ pub fn view(agent: &Agent) -> StrataReport {
         })
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
+    let version = match install.kind() {
+        Kind::Terminal => Terminal::of(cfg).version(),
+        Kind::Source => git_commit(dir),
+    };
     let info = StrataInfo {
         installed: install.is_set_up(),
-        version: git_commit(dir),
+        install: install.is_set_up().then_some(install.kind().into()),
+        version,
         update_available: agent.updates.available(),
         models,
         families: catalog::FAMILIES

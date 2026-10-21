@@ -16,11 +16,13 @@
 //! PC service test checks that they show every field it sends.
 
 mod job;
+mod machine;
 mod output;
 mod status;
 mod strata;
 
 pub use job::{StrataJob, StrataJobKind, StrataJobRequest, StrataJobState};
+pub use machine::{CpuFacts, GpuFacts, MachineFacts, RamStick, WindowsFacts};
 pub use output::{StrataOutputMessage, StrataOutputNotice};
 pub use status::{
     Answer, Cpu, ForcedRestart, ForcedSleep, GamingRequest, Gpu, Hardware, PcStatus, Refused,

@@ -2,20 +2,21 @@
 //! for the models, the output, version and benchmark, and the connection.
 //! A job's progress comes live with the overview stream.
 
-use leptos::prelude::*;
+use leptos::{html::Dialog, prelude::*};
 use leptos_router::components::{A, Outlet};
 use strata_pc_protocol::MAX_SWITCHED_CONTEXT;
 
 use crate::{
     api::{
         CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
-        CodeBenchTaskInfo, ForceRestartStrata, ForcedRestart, GenerateUpdateSummary, PcView,
-        SamplingField, SamplingSource, SamplingSupport, StartCodeBench, StartCodeBenchAll,
-        StartStrataJob, StrataBenchmark, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
-        StrataModel, StrataPage, StrataSampling, StrataSize, StrataUpdate, UpdateSummary,
-        error_text, get_code_bench, get_strata,
+        CodeBenchTaskInfo, ForceRestartStrata, ForcedRestart, GenerateUpdateSummary,
+        GetOptimizationPrompt, PcView, SamplingField, SamplingSource, SamplingSupport,
+        StartCodeBench, StartCodeBenchAll, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob,
+        StrataJobKind, StrataJobState, StrataModel, StrataPage, StrataSampling, StrataSize,
+        StrataUpdate, UpdateSummary, error_text, get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
+    copy::CopyText,
     labels::{STRATA_CONNECTION, STRATA_TIMEOUTS, TOO_OLD_FOR_KEY, strata_badge, strata_job_label},
     overview::{Live, strata_sentence},
     settings::SettingsSections,
@@ -940,8 +941,69 @@ fn ModelRow(
             <p class="muted small">{meta}</p>
             {sampling}
             {switch}
-            <div class="model-actions">{activate}{projection}{delete}</div>
+            <div class="model-actions">
+                {activate}{projection}<OptimizationPrompt model=model.id.clone() />{delete}
+            </div>
         </li>
+    }
+}
+
+/// The optimization prompt of one model: a button, and a dialog with the
+/// text and *Copy*. Asked for when opened, so it is never older than the
+/// proxy's data; works while a job runs and while the PC sleeps.
+#[component]
+fn OptimizationPrompt(model: String) -> impl IntoView {
+    let dialog = NodeRef::<Dialog>::new();
+    let fetch = ServerAction::<GetOptimizationPrompt>::new();
+    let title_id = format!("prompt-title-{model}");
+    let labelled_by = title_id.clone();
+    let text_id = format!("prompt-{model}");
+    let title = format!("Optimization prompt for {model}");
+    let open = move |_| {
+        fetch.dispatch(GetOptimizationPrompt {
+            model: model.clone(),
+        });
+        if let Some(d) = dialog.get() {
+            let _ = d.show_modal();
+        }
+    };
+    let body = move || {
+        if fetch.pending().get() {
+            return view! { <p class="hint">"Loading …"</p> }.into_any();
+        }
+        match fetch.value().get() {
+            None => ().into_any(),
+            Some(Ok(text)) => {
+                view! { <CopyText id=text_id.clone() label="Prompt" text /> }.into_any()
+            }
+            Some(Err(e)) => view! { <p class="error" role="alert">{error_text(&e)}</p> }.into_any(),
+        }
+    };
+    view! {
+        <button type="button" class="secondary" on:click=open>
+            "Optimization prompt"
+        </button>
+        <dialog class="confirm wide" node_ref=dialog aria-labelledby=labelled_by>
+            <h2 id=title_id>{title}</h2>
+            <p class="muted">
+                "Paste it into an AI chat to get faster settings for this model on your PC. "
+                "It holds no keys, paths or addresses."
+            </p>
+            {body}
+            <div class="actions">
+                <button
+                    type="button"
+                    class="secondary"
+                    on:click=move |_| {
+                        if let Some(d) = dialog.get() {
+                            d.close();
+                        }
+                    }
+                >
+                    "Close"
+                </button>
+            </div>
+        </dialog>
     }
 }
 

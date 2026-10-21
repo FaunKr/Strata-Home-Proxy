@@ -163,6 +163,48 @@
   "vram_gb": 16.0,
   "disk_free_gb": 500.0,
   "data_dir": "C:\\Strata-data",
+  "machine": {
+    "ram_sticks": [
+      {
+        "size_bytes": 34359738368,
+        "kind": "DDR5",
+        "rated_mts": 6000,
+        "configured_mts": 4800
+      },
+      {
+        "size_bytes": 34359738368,
+        "kind": "DDR5",
+        "rated_mts": 6000,
+        "configured_mts": 4800
+      }
+    ],
+    "ram_slots": 4,
+    "gpus": [
+      {
+        "name": "NVIDIA GeForce RTX 4080",
+        "vram_bytes": 17171480576,
+        "driver_version": "32.0.15.6094",
+        "pcie_max_gen": 4,
+        "pcie_max_lanes": 16,
+        "pcie_gen": 1,
+        "pcie_lanes": 16
+      }
+    ],
+    "cpu": {
+      "name": "AMD Ryzen 9 7950X 16-Core Processor",
+      "cores": 16,
+      "threads": 32,
+      "base_mhz": 4501,
+      "avx2": true,
+      "avx512": true
+    },
+    "windows": {
+      "edition": "Windows 11 Pro",
+      "version": "24H2",
+      "build": "26100.4652"
+    },
+    "model_drive": "nvme"
+  },
   "benchmark": {
     "model": "IQ3_XXS",
     "result": "38.5 Token/s",

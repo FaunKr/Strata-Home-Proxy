@@ -64,6 +64,10 @@ _Avoid_: Nachlauf
 What the PC service reports about load, temperature, memory and fans of the graphics card and CPU; the Overview shows them.
 _Avoid_: stats, telemetry, Hardwarewerte
 
+**Machine facts**:
+What the PC is, as the PC service reads it on the first request and keeps it: each RAM stick, each graphics card with VRAM, driver and PCIe link, the CPU, Windows and the kind of drive that holds the models. The optimization prompt shows them; unlike hardware readings they do not change while the PC runs.
+_Avoid_: specs, system info, hardware info
+
 **Power plug**:
 The Shelly plug the PC is plugged into. The proxy asks it only when it is set up (`SHELLY_URL`): for the Overview and once a minute for the history (`PLUG_SAMPLE_SECS`). It has no influence on waking and sleeping.
 _Avoid_: Shelly, smart plug, Messsteckdose
@@ -121,6 +125,10 @@ _Avoid_: Strata API key, STRATA_API_KEY (an older setting of the proxy), token (
 **Strata output**:
 What a Strata started by the PC service writes to its console; the PC service keeps the last 500 lines, the web UI shows them live in the Strata area (tab *Output*). Not an event.
 _Avoid_: Strata log, log entry (except `strata-log` and `strata.log` in code and file names), Strata-Ausgabe
+
+**Optimization prompt**:
+The English text per installed model that the web UI's *Optimization prompt* button shows for pasting into an AI chat: the PC, Strata's version, the model and its benchmarks, with the request for faster settings. The proxy builds it from the PC service's last report; it never holds a path, the MAC address, a key or the Git remote.
+_Avoid_: tuning prompt, export, Optimierungsprompt
 
 ## Code benchmark
 

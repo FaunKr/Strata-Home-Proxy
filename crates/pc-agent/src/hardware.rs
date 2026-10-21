@@ -29,10 +29,8 @@ mod windows {
     use windows_sys::{
         Wdk::Graphics::Direct3D::{
             D3DKMT_ADAPTER_PERFDATA, D3DKMT_ADAPTER_PERFDATACAPS, D3DKMT_ADAPTERINFO,
-            D3DKMT_CLOSEADAPTER, D3DKMT_ENUMADAPTERS2, D3DKMT_QUERYADAPTERINFO,
-            D3DKMT_SEGMENTSIZEINFO, D3DKMTCloseAdapter, D3DKMTEnumAdapters2,
-            D3DKMTQueryAdapterInfo, KMTQAITYPE_ADAPTERPERFDATA, KMTQAITYPE_ADAPTERPERFDATA_CAPS,
-            KMTQAITYPE_GETSEGMENTSIZE, KMTQUERYADAPTERINFOTYPE,
+            D3DKMT_SEGMENTSIZEINFO, KMTQAITYPE_ADAPTERPERFDATA, KMTQAITYPE_ADAPTERPERFDATA_CAPS,
+            KMTQAITYPE_GETSEGMENTSIZE,
         },
         Win32::{
             Foundation::{FILETIME, LUID},
@@ -50,6 +48,7 @@ mod windows {
     };
 
     use super::*;
+    use crate::d3dkmt::{query, with_adapters};
 
     /// Shorter than the proxy's round of 5 s, so a sample is never older.
     const SAMPLE: Duration = Duration::from_secs(2);
@@ -193,51 +192,31 @@ mod windows {
     /// The adapter with the most dedicated VRAM; an integrated chip has
     /// little or none.
     fn biggest_adapter() -> Option<Adapter> {
-        let mut list = D3DKMT_ENUMADAPTERS2 {
-            NumAdapters: 0,
-            pAdapters: std::ptr::null_mut(),
-        };
-        // SAFETY: a null list asks for the count only.
-        if unsafe { D3DKMTEnumAdapters2(&mut list) } != 0 {
-            return None;
-        }
-        let mut adapters = vec![D3DKMT_ADAPTERINFO::default(); list.NumAdapters as usize];
-        list.pAdapters = adapters.as_mut_ptr();
-        // SAFETY: `adapters` holds NumAdapters entries.
-        if unsafe { D3DKMTEnumAdapters2(&mut list) } != 0 {
-            return None;
-        }
-        adapters.truncate(list.NumAdapters as usize);
-        let mut biggest: Option<(&D3DKMT_ADAPTERINFO, u64)> = None;
-        for info in &adapters {
-            let mut size = D3DKMT_SEGMENTSIZEINFO::default();
-            // SAFETY: the handle comes from the enumeration above.
-            if unsafe { query(info.hAdapter, KMTQAITYPE_GETSEGMENTSIZE, &mut size) }
-                && size.DedicatedVideoMemorySize > 0
-                && biggest.is_none_or(|(_, vram)| size.DedicatedVideoMemorySize > vram)
-            {
-                biggest = Some((info, size.DedicatedVideoMemorySize));
+        with_adapters(|adapters| {
+            let mut biggest: Option<(&D3DKMT_ADAPTERINFO, u64)> = None;
+            for info in adapters {
+                let mut size = D3DKMT_SEGMENTSIZEINFO::default();
+                // SAFETY: the handle comes from the enumeration.
+                if unsafe { query(info.hAdapter, KMTQAITYPE_GETSEGMENTSIZE, &mut size) }
+                    && size.DedicatedVideoMemorySize > 0
+                    && biggest.is_none_or(|(_, vram)| size.DedicatedVideoMemorySize > vram)
+                {
+                    biggest = Some((info, size.DedicatedVideoMemorySize));
+                }
             }
-        }
-        let biggest = biggest.map(|(info, vram_total)| {
-            // SAFETY: the handle is still open.
-            let (temp_c, fan_rpm, power_pct) = unsafe { perf(info.hAdapter) };
-            Adapter {
-                luid: info.AdapterLuid,
-                vram_total,
-                temp_c,
-                fan_rpm,
-                power_pct,
-            }
-        });
-        for info in &adapters {
-            let close = D3DKMT_CLOSEADAPTER {
-                hAdapter: info.hAdapter,
-            };
-            // SAFETY: each handle from the enumeration is closed once.
-            unsafe { D3DKMTCloseAdapter(&close) };
-        }
-        biggest
+            biggest.map(|(info, vram_total)| {
+                // SAFETY: the handle is still open.
+                let (temp_c, fan_rpm, power_pct) = unsafe { perf(info.hAdapter) };
+                Adapter {
+                    luid: info.AdapterLuid,
+                    vram_total,
+                    temp_c,
+                    fan_rpm,
+                    power_pct,
+                }
+            })
+        })
+        .flatten()
     }
 
     /// Temperature, fan and power, from the data Task Manager shows. The
@@ -263,21 +242,6 @@ mod windows {
             // Tenths of a percent of the power limit.
             (data.Power > 0).then(|| data.Power as f32 / 10.0),
         )
-    }
-
-    /// Asks the adapter for `kind`, written into `out`.
-    ///
-    /// # Safety
-    /// `handle` is an open adapter and `T` the structure `kind` fills.
-    unsafe fn query<T>(handle: u32, kind: KMTQUERYADAPTERINFOTYPE, out: &mut T) -> bool {
-        let mut q = D3DKMT_QUERYADAPTERINFO {
-            hAdapter: handle,
-            Type: kind,
-            pPrivateDriverData: (out as *mut T).cast(),
-            PrivateDriverDataSize: size_of::<T>() as u32,
-        };
-        // SAFETY: `out` is valid for `size_of::<T>()` bytes; the rest is the caller's.
-        unsafe { D3DKMTQueryAdapterInfo(&mut q) == 0 }
     }
 
     /// The performance counters for GPU load and VRAM in use, by their

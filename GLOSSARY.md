@@ -10,9 +10,17 @@ The glossary terms are the words the web UI shows. The _Avoid_ lists apply to do
 Strata's own LLM engine on the PC (Niko1221/Strata) with an OpenAI- and Anthropic-compatible API. Not llama-server, even though some endpoints carry its names.
 _Avoid_: llama-server, llama.cpp, model server
 
+**Strata Terminal**:
+Strata's `strata` command, which Strata's own `install.ps1` puts into `strata_home` (by default `%LOCALAPPDATA%\Strata`). A new setup from the web UI installs it, and the PC service runs Strata as `strata serve`. In the PC service, only `terminal::Terminal` knows where it lives and how it is called.
+_Avoid_: CLI, Strata CLI, strata.exe (except in code and file names)
+
 **Strata folder**:
-The folder on the PC that setup installs Strata into (`strata_dir`): model configs `strata-<id>.json` with their chat settings, start scripts and logs. The model files themselves live in the Strata data folder (`strata_data_dir`). In the PC service, only `install::Installation` knows how setup names a model's files.
+The folder on the PC with the run configs and their chat settings and logs: `install` in `strata_home` for the Strata Terminal. An older setup from source has a Git clone in `strata_dir` instead, which also holds Strata's code and start scripts (the *old Strata folder*). The model files themselves live in the Strata data folder (`strata_data_dir`). In the PC service, only `install::Installation` knows how setup names a model's files.
 _Avoid_: Strata directory, install folder, Strata-Ordner
+
+**Run config**:
+A model's `strata-<id>.json` in the Strata folder, as setup writes it: the engine, its flags, the Strata key and the chat defaults. `strata serve` starts Strata with one. Older text says *model config*.
+_Avoid_: launch config, profile (Strata's own profiles are something else)
 
 **PC service**:
 The small program on the PC that reports state, gaming mode and user activity to the proxy and triggers standby on request. In code and file names it is `pc-agent`.

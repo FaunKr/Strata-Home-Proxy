@@ -236,7 +236,11 @@ Response: `StrataReport`, that is `StrataInfo` and `update` next to it. What
 is installed, Strata's catalog with a recommendation for the PC's RAM and
 VRAM (setup's memory tiers, see [strata-api.md](strata-api.md)),
 free space, last benchmark and the running or last job.
-Never contains the Strata key. Along the way it asks Git at most once per
+Never contains the Strata key. `install` says how Strata is installed:
+`terminal` (the Strata Terminal in `strata_home`) or `source` (a Strata folder
+from source in `strata_dir`); missing when Strata is not installed and from an
+older PC service. `version` is the Terminal's version or the folder's short
+commit. Along the way it asks Git at most once per
 hour whether there is a newer Strata version (`update_available`).
 
 If commits are incoming, `update` (`Incoming`) says what they bring; without
@@ -311,13 +315,13 @@ little space, deleting the active model).
 
 | `kind` | Fields | What happens |
 | --- | --- | --- |
-| `install` | `family`, `size`, `context`, `api_key`, optional `experimental_speed_projection` | Git (via winget, if needed), `git clone`, setup without questions, starts Strata |
-| `add_model` | `family`, `size`, `context`, optional `api_key` and `experimental_speed_projection` | setup with `--setup` and the key Strata runs with, the active model stays active |
-| `activate` | `model` | waits until Strata is not handling a request, restarts with the other start script |
+| `install` | `family`, `size`, `context`, `api_key`, optional `experimental_speed_projection` | the Strata Terminal with Strata's `install.ps1` (if it is not there yet), the engine for this PC with `strata update`, setup without questions in its install mode, then serves the model with `strata serve`; a Strata folder from source keeps its own setup (`START-HERE.bat`) |
+| `add_model` | `family`, `size`, `context`, optional `api_key` and `experimental_speed_projection` | setup with `--setup` (for the Strata Terminal in its install mode) and the key Strata runs with, the active model stays active |
+| `activate` | `model` | waits until Strata is not handling a request, restarts with the other run config (`strata serve --profile`) or start script |
 | `delete` | `model` | deletes this model's model folder, pack, configuration, start script and log |
-| `update` | – | `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts |
-| `benchmark` | – | `BENCH.bat --config <active model>`, keeps tokens/s with model and date |
-| `compare_models` | – | `benchmark` for each installed model in turn, each as it is set up; activates each model for this and at the end (also after cancelling) the previously active one again |
+| `update` | – | `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts; `409` for the Strata Terminal for now |
+| `benchmark` | – | `BENCH.bat --config <active model>`, keeps tokens/s with model and date; `409` for the Strata Terminal for now |
+| `compare_models` | – | `benchmark` for each installed model in turn, each as it is set up; activates each model for this and at the end (also after cancelling) the previously active one again; `409` for the Strata Terminal for now |
 | `set_key` | `api_key` | waits until Strata is not handling a request and restarts it, which brings a new key |
 | `set_speed_projection` | `model`, `on` | turns speed projection on or off in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |

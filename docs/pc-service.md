@@ -100,8 +100,11 @@ Strata crashes because of it, the restarted service starts it again.
 ## Managed values
 
 If the service sets up Strata itself (*Strata* area of the web UI),
-it stores the start script and Strata folder in
-`strata-managed.json` next to the TOML. These values take precedence over `strata_start`,
+it stores what starts Strata and what belongs to it in
+`strata-managed.json` next to the TOML. For the Strata Terminal that is
+`strata.cmd` with `serve --profile <run config> --host 0.0.0.0 --port 8080` and
+the folder `strata_home` (default `%LOCALAPPDATA%\Strata`); for a Strata folder
+from source, its start script and the folder `strata_dir`. These values take precedence over `strata_start`,
 `strata_args` and `strata_processes` from the TOML; the TOML
 itself stays unchanged. Without this file the TOML applies as before. Anyone who
 wants to set up by hand again deletes the file and restarts the service.

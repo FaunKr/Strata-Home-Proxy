@@ -28,6 +28,6 @@ pub use status::{
 };
 pub use strata::{
     ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, SamplingField, SamplingSource,
-    SamplingSupport, StrataBenchmark, StrataFamily, StrataInfo, StrataModel, StrataReport,
-    StrataSampling, StrataSize,
+    SamplingSupport, StrataBenchmark, StrataFamily, StrataInfo, StrataInstall, StrataModel,
+    StrataReport, StrataSampling, StrataSize,
 };

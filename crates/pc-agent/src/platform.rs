@@ -340,6 +340,7 @@ fn strata_command(program: &Path, args: &[String]) -> Result<CommandSpec> {
         program: program.to_path_buf(),
         args: args.to_vec(),
         dir: dir.map(Path::to_path_buf),
+        env: Vec::new(),
     })
 }
 

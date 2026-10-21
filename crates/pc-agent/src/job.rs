@@ -293,6 +293,26 @@ impl JobContext {
     /// when `progress` is set and the benchmark's speeds, and ends it on
     /// cancel.
     pub(crate) async fn command(&self, spec: CommandSpec, progress: bool) -> Result<(), Step> {
+        self.run_command(spec, progress, None).await
+    }
+
+    /// Like [`command`](Self::command) without setup's progress, and gives
+    /// every line of the output too, also after a failure.
+    pub(crate) async fn command_output(
+        &self,
+        spec: CommandSpec,
+    ) -> (Result<(), Step>, Vec<String>) {
+        let mut output = Vec::new();
+        let ran = self.run_command(spec, false, Some(&mut output)).await;
+        (ran, output)
+    }
+
+    async fn run_command(
+        &self,
+        spec: CommandSpec,
+        progress: bool,
+        mut output: Option<&mut Vec<String>>,
+    ) -> Result<(), Step> {
         let mut run = self
             .agent
             .platform()
@@ -311,6 +331,9 @@ impl JobContext {
             return Err(Step::Cancelled);
         }
         while let Some(line) = run.next_line().await {
+            if let Some(output) = output.as_mut() {
+                output.push(line.clone());
+            }
             let step_changed = self.with(|inner| {
                 let JobsInner {
                     current,

@@ -90,6 +90,16 @@ This endpoint returns llama-server names (`llamacpp:*`, `Service.prometheus`, li
 
 The proxy uses none of them. The PC service polls `/slots` (see [pc-agent-api.md](pc-agent-api.md)).
 
+## Strata Terminal (for the PC service's Strata jobs)
+
+Checked at commit [`011c9e6`](https://github.com/Niko1221/Strata/tree/011c9e6) (2026-10-21), only for the points below; the pin at the top stays until the rest of this page is compared. Sources: `install.ps1`, `strata_cli/` (`update_cmd.py`, `serve_cmd.py`, `launch_cmd.py`), `setup.py`.
+
+- **Install:** `install.ps1` from the latest release (`https://github.com/Niko1221/Strata/releases/latest/download/install.ps1`) checks the archive's SHA-256 against the signed feed and unpacks it into `$STRATA_DATA_DIR\terminal\<version>`, with the junction `terminal\current` to it. `STRATA_DATA_DIR` defaults to `%LOCALAPPDATA%\Strata`; the PC service sets it to `strata_home`. In `terminal\current`: `bin\strata.cmd`, `python\python.exe`, `setup.py`, `serve\`, `data\` (with the speed projection's control vector) and `VERSION`. `crates/pc-agent/src/terminal.rs` knows these names.
+- **Run configs:** the Terminal looks for them in `STRATA_INSTALL_DIR`, else in the installs remembered in `settings.json` (an old Strata folder from source among them). The PC service sets `STRATA_INSTALL_DIR` to `<strata_home>\install` for every call. The files there are the same `strata-<id>.json` as in a Strata folder from source; the model files go to `--data-dir` as before.
+- **Engine:** `strata update --no-control --output json` installs the engine for this PC from the signed feed and leaves the Terminal as it is. Its answer is the last line that is a JSON object: `results[]` with `component: "engine"` and `status` `updated`, `current`, `none-for-this-pc` (with `note` and `reasons`) or `failed` (with `error`), or `{"ok": false, "error": {"code", "message"}}`. `terminal.rs` (`engine_installed`) reads it; its tests hold real answers.
+- **Model install:** setup in its install mode, as `strata launch` and Strata's desktop app call it: `python\python.exe setup.py --yes --no-start --no-browser …` with `STRATA_CONTROL_INSTALL=1`. It skips the engine fetch, the Python packages and the start, and prints the usual setup output (below).
+- **Serving:** `strata serve --profile <run config> --host … --port …` serves in the foreground. It has no key option; the key is the run config's `api_key`. Stop it via the folder `strata_home`: its Python starts the engine.
+
 ## Setup and files (for the PC service's Strata jobs)
 
 Sources: `setup.py`, `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_bench.py`.
@@ -112,5 +122,5 @@ Sources: `setup.py`, `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_
 - **Context:** setup writes `--context` as `--max-context <tokens>` into `args` and reads it back that way (`choices_from_config`). Above 262144 (the trained length), `--rope-scaling yarn --rope-scale <context / 262144>` is added. From the context, setup also derives KV streaming (`--kv-resident`), parallel slots and the calibration key; the PC service's context switch leaves these as they are.
 - **Active model:** `run-<id>.bat` starts `serve/server.py`, which starts `strata.exe` and restarts it when it dies; so stop it via the folder. Without its own start script, `START-HERE.bat` starts the configuration that was used last (the most recent modification time, because a start touches it).
 - **Setup's recommendation** (`MEMORY_TIERS`, since aa82a886): by RAM and VRAM together, from 62 GB `IQ3_S`, from 46 GB `IQ3_XXS`, from 38 GB `swift-IQ2_XS`; below that the older rules (Gyro-S, or `coder-IQ1_M`). `catalog.rs` (`recommend`) mirrors the tiers, with the biggest card's VRAM; below them it keeps `coder-IQ1_M` from 28 GB of RAM. Gyro is never recommended. Context 64K with 14–20 GB VRAM; the skill `local-agent` needs more (see `tools/local-agent/README.md`).
-- **Update** like `UPDATE.bat`: `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped (otherwise the engine is not replaced). Model files stay.
+- **Update** (Strata folder from source) like `UPDATE.bat`: `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped (otherwise the engine is not replaced). Model files stay.
 - **Benchmark:** `BENCH.bat --config <strata-<id>.json>` uses a running Strata, otherwise it starts one itself. The result is the line `  chat decode tok/s   38.50   (37.10 - 39.20, n=3)` of the table at the end. More lines follow after it.

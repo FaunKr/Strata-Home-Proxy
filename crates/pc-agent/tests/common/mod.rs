@@ -69,7 +69,8 @@ pub struct Fake {
     /// What the last stop was told to end.
     pub stopped: Mutex<Option<Vec<String>>>,
     /// Fake commands by program name without `.exe` (`git`, `START-HERE.bat`);
-    /// `git <subcommand>` answers that subcommand only, ahead of `git`.
+    /// `git <subcommand>` answers that subcommand only, ahead of `git`, and
+    /// so for any program (`strata.cmd update`).
     pub commands: Mutex<HashMap<String, FakeCommand>>,
     /// Every command run, in order.
     pub ran: Mutex<Vec<CommandSpec>>,
@@ -255,8 +256,7 @@ impl Platform for FakePlatform {
         if name == "winget" {
             fake.git_missing.store(false, Ordering::SeqCst);
         }
-        if name == "git"
-            && let Some(sub) = spec.args.first().map(|a| format!("git {a}"))
+        if let Some(sub) = spec.args.first().map(|a| format!("{name} {a}"))
             && fake.commands.lock().unwrap().contains_key(&sub)
         {
             return Ok(self.fake_run(&sub));
@@ -372,6 +372,8 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         nas_url: None,
         strata_repo: "https://example.org/Strata.git".into(),
         strata_dir: dir.join("Strata"),
+        strata_installer: "https://example.org/install.ps1".into(),
+        strata_home: dir.join("StrataTerminal"),
         strata_data_dir: dir.join("Strata-data"),
     }
 }
@@ -478,6 +480,11 @@ pub async fn finished(s: &Setup) -> Value {
 /// The service's Strata folder, to add to or look at.
 pub fn strata_folder(s: &Setup) -> SetupLeaves {
     SetupLeaves::at(&s.agent.cfg.strata_dir, &s.agent.cfg.strata_data_dir)
+}
+
+/// The service's Strata Terminal and its run configs, to add to or look at.
+pub fn terminal_folder(s: &Setup) -> SetupLeaves {
+    SetupLeaves::terminal_at(&s.agent.cfg.strata_home, &s.agent.cfg.strata_data_dir)
 }
 
 /// A model config's fields, read through the service's own module.

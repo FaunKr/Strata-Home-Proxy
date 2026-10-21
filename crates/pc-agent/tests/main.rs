@@ -12,4 +12,5 @@ mod strata;
 mod strata_models;
 mod strata_output;
 mod strata_process;
+mod strata_terminal;
 mod update;

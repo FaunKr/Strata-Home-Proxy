@@ -17,7 +17,12 @@ strata_url = "http://127.0.0.1:8080"
 # The Strata key is not set here: the service makes a new one at every start
 # of Strata and writes it into Strata's model configurations.
 
-# What starts Strata, and with which arguments.
+# Where the service installs the Strata Terminal (Strata's strata command)
+# and keeps the run configs. Usually left out: %LOCALAPPDATA%\Strata.
+#strata_home = 'C:\Users\me\AppData\Local\Strata'
+
+# What starts Strata, and with which arguments. Setting Strata up from the web
+# UI stores its own values in strata-managed.json, which win over these.
 strata_start = 'C:\Strata\START-HERE.bat'
 strata_args = []
 

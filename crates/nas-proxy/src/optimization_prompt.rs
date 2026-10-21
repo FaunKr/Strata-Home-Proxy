@@ -86,6 +86,22 @@ pub fn build(
 
     let _ = writeln!(out, "\n## Model {}\n", model.id);
     model_lines(out, info, model);
+    if let Some(config) = &model.config {
+        let _ = writeln!(
+            out,
+            "\n### Run config\n\nThe model's `strata-<id>.json`, which Strata starts it with; \
+             the key is left out and paths are cut to file names.\n\n```json\n{}\n```",
+            config.trim_end()
+        );
+    }
+    if let Some(chat) = &model.chat_settings {
+        let _ = writeln!(
+            out,
+            "\n### Chat settings\n\nWhat Strata's web app keeps for this model; its temperature, \
+             top_p and top_k count over the run config's sampling.\n\n```json\n{}\n```",
+            chat.trim_end()
+        );
+    }
 
     let _ = writeln!(out, "\n## Benchmarks\n");
     let _ = writeln!(out, "- Speed benchmark: {}", speed_text(info, &model.id));

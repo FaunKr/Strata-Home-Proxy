@@ -423,3 +423,31 @@ async fn chat_settings_show_as_overriding_and_stay_untouched() {
     );
     assert_eq!(strata_folder(&s).chat_text("iq3_xxs"), chat);
 }
+
+// --- #263 the cut-down config and Chat settings for the optimization prompt ---
+
+#[tokio::test]
+async fn the_page_gets_each_config_without_key_or_folders_and_its_chat_settings() {
+    let s = setup("configs-shareable").await;
+    installed(&s);
+    let mut cfg = read_config(&s, "iq3_xxs");
+    cfg["exe"] = json!(r"C:\Users\Faun\AppData\Local\Strata\terminal\current\engine\strata.exe");
+    cfg["args"] = json!(["--native", r"D:\Strata-data\models\IQ3_XXS\model.gguf"]);
+    strata_folder(&s).config("iq3_xxs", cfg);
+    strata_folder(&s).chat_settings("iq3_xxs", r#"{"temperature": 0.3}"#);
+    let view = get(&s, "/strata").await;
+    let qwen = model(&view, "IQ3_XXS");
+    let config: Value = serde_json::from_str(qwen["config"].as_str().unwrap()).unwrap();
+    assert_eq!(config["exe"], "strata.exe");
+    assert_eq!(config["args"], json!(["--native", "model.gguf"]));
+    assert_eq!(config["arch"], "qwen4exp");
+    assert!(config.get("api_key").is_none(), "{config}");
+    assert!(!view.to_string().contains("key-0123456789abcdef"), "{view}");
+    assert!(!view.to_string().contains("Faun"), "{view}");
+    let chat: Value = serde_json::from_str(qwen["chat_settings"].as_str().unwrap()).unwrap();
+    assert_eq!(chat, json!({"temperature": 0.3}));
+    assert!(
+        model(&view, "qwen36-Q8_0").get("chat_settings").is_none(),
+        "{view}"
+    );
+}

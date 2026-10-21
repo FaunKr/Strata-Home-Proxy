@@ -332,3 +332,33 @@ async fn leaves_out_what_the_pc_service_could_not_read() {
         assert!(!text.contains(gone), "{gone} shown:\n{text}");
     }
 }
+
+#[tokio::test]
+async fn carries_the_run_config_and_the_chat_settings() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    let config = "{\n \"exe\": \"strata.exe\",\n \"args\": [\n  \"--native\",\n  \"model.gguf\"\n ],\n \"port\": 8080\n}";
+    report.info.models[0].config = Some(config.into());
+    report.info.models[0].chat_settings = Some("{\n \"temperature\": 0.6\n}".into());
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert!(text.contains(&format!("```json\n{config}\n```")), "{text}");
+    assert!(
+        text.contains("### Chat settings\n\nWhat Strata's web app keeps"),
+        "{text}"
+    );
+    assert!(text.contains("\"temperature\": 0.6"), "{text}");
+}
+
+#[tokio::test]
+async fn leaves_out_the_chat_settings_without_the_file() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.models[0].config = Some("{\n \"exe\": \"strata.exe\"\n}".into());
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert!(text.contains("### Run config"), "{text}");
+    assert!(!text.contains("### Chat settings"), "{text}");
+}

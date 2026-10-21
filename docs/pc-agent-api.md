@@ -282,6 +282,16 @@ like Strata, takes one that is not valid JSON as empty. `sampling` is
 `null` as long as `serve/server.py` is not readable. An older PC service
 leaves the field out.
 
+`config` is the model's run config as JSON text, laid out as Strata writes
+it, for the optimization prompt: without `api_key` anywhere in it, and with
+every string that holds a path (`exe`, the GGUF in `args`, `cwd`,
+`tokenizer`, `log`, `lib_dirs`, the `vision` block) cut to its last part,
+so neither the key nor the Windows user name leaves the PC. Missing if the
+config cannot be read. `chat_settings` is the model's Chat settings file
+(`strata-<id>.shared-settings.json`) as JSON text, cut the same way, and
+missing without the file or if it is not valid JSON. An older PC service
+leaves both out.
+
 `benchmarks` holds the last run of each model: `decode_tps` (`chat decode
 tok/s`), `prompt_tps` (`4K prompt tok/s`, missing if the benchmark does not
 print the line), plus `context`, `speed_projection` and `version` (Strata commit)

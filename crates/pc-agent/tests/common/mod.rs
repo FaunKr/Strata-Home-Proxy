@@ -385,6 +385,7 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         strata_dir: dir.join("Strata"),
         strata_installer: "https://example.org/install.ps1".into(),
         strata_home: dir.join("StrataTerminal"),
+        strata_components: dir.join("StrataTerminal").join("components"),
         strata_data_dir: dir.join("Strata-data"),
     }
 }

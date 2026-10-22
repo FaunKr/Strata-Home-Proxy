@@ -1718,9 +1718,8 @@ fn Benchmarks(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl
     let terminal = info.install == Some(StrataInstall::Terminal);
     let comparable =
         move |row: &StrataBenchmark| !terminal || row.tool == Some(BenchTool::StrataBench);
-    let older = rows
-        .iter()
-        .any(|r| r.decode_tps.is_some() && !comparable(r));
+    let marked = move |row: &StrataBenchmark| row.decode_tps.is_some() && !comparable(row);
+    let older = rows.iter().any(marked);
     let fastest = rows
         .iter()
         .find(|r| comparable(r))
@@ -1736,7 +1735,7 @@ fn Benchmarks(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl
                 let is_fastest = fastest.as_deref() == Some(row.model.as_str());
                 let can_activate =
                     !is_active && row.decode_tps.is_some() && installed.contains(&row.model);
-                let older = row.decode_tps.is_some() && !comparable(&row);
+                let older = marked(&row);
                 view! { <BenchRow row is_active is_fastest can_activate older actions blocked /> }
             })
             .collect_view();

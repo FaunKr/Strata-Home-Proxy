@@ -101,6 +101,11 @@ pub struct Config {
     /// the run configs (its `STRATA_DATA_DIR`).
     #[serde(default = "default_strata_home")]
     pub strata_home: PathBuf,
+    /// Where `strata update` keeps the engines and newer Terminal files:
+    /// the folder Strata picks itself, which `strata serve` reads too.
+    /// Usually left out.
+    #[serde(default = "default_strata_components")]
+    pub strata_components: PathBuf,
     /// Where the setup puts the model files (60–190 GB each).
     #[serde(default = "default_strata_data_dir")]
     pub strata_data_dir: PathBuf,
@@ -137,7 +142,7 @@ fn default_update_stop_wait() -> u64 {
     10
 }
 fn default_strata_repo() -> String {
-    "https://github.com/Niko1221/Strata.git".into()
+    format!("{}.git", crate::releases::REPOSITORY)
 }
 fn default_strata_installer() -> String {
     "https://github.com/Niko1221/Strata/releases/latest/download/install.ps1".into()
@@ -148,6 +153,14 @@ fn default_strata_home() -> PathBuf {
         || PathBuf::from(r"C:\Strata-Terminal"),
         |d| PathBuf::from(d).join("Strata"),
     )
+}
+/// Strata's own rule (`components_dir` in strata_control/engine_component.py):
+/// `STRATA_COMPONENTS_DIR`, else `%LOCALAPPDATA%\Strata\components`.
+fn default_strata_components() -> PathBuf {
+    if let Some(dir) = std::env::var_os("STRATA_COMPONENTS_DIR") {
+        return PathBuf::from(dir);
+    }
+    default_strata_home().join("components")
 }
 fn default_strata_dir() -> PathBuf {
     PathBuf::from(r"C:\Strata")

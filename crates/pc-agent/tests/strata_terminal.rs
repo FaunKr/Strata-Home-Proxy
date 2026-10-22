@@ -296,6 +296,9 @@ async fn an_update_runs_strata_update_with_strata_stopped() {
     let view = get(&s, "/strata").await;
     assert_eq!(view["version"], "0.2.3 (build 0.1.45)");
     assert_eq!(view["update_available"], false);
+    // The same version after a restart, so a kept update summary stays.
+    let again = strata_pc_agent::strata::view(&s.restarted());
+    assert_eq!(again.info.version.as_deref(), Some("0.2.3 (build 0.1.45)"));
 }
 
 #[tokio::test]

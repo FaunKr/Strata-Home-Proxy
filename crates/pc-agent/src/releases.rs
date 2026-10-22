@@ -13,7 +13,7 @@ pub const REPOSITORY: &str = "https://github.com/Niko1221/Strata";
 const API: &str = "https://api.github.com/repos/Niko1221/Strata";
 
 /// Most commits the page carries.
-const MAX_COMMITS: usize = 200;
+pub const MAX_COMMITS: usize = 200;
 
 /// A GET of `url` that prints the answer, or fails on an HTTP error.
 fn get(url: &str) -> CommandSpec {
@@ -59,16 +59,21 @@ pub fn latest_tag(output: &[String]) -> Option<String> {
         .map(String::from)
 }
 
-/// What the compare answer brings, `None` when it brings no commits. GitHub
-/// lists the commits oldest first; the page wants the newest first.
-pub fn incoming(output: &[String]) -> Option<Option<Incoming>> {
+/// What the compare answer up to `tag` brings, `None` when it brings no
+/// commits. GitHub lists the commits oldest first, at most 250; the page
+/// wants the newest first.
+pub fn incoming(output: &[String], tag: &str) -> Option<Option<Incoming>> {
     let answer = answer(output)?;
     let total = answer["total_commits"].as_u64()?;
     let listed = answer["commits"].as_array()?;
     if total == 0 {
         return Some(None);
     }
-    let upstream = listed.last()?["sha"].as_str()?.to_string();
+    // With all commits listed, the last is the tag's; else the tag names it.
+    let upstream = match listed.last() {
+        Some(last) if listed.len() as u64 == total => last["sha"].as_str()?.to_string(),
+        _ => tag.to_string(),
+    };
     let commits = listed
         .iter()
         .rev()
@@ -163,7 +168,7 @@ mod tests {
 
     #[test]
     fn the_compare_answer_fills_the_incoming_commits_newest_first() {
-        let incoming = incoming(&lines(COMPARE)).unwrap().unwrap();
+        let incoming = incoming(&lines(COMPARE), "v0.2.3").unwrap().unwrap();
         assert_eq!(incoming.total, 2);
         assert_eq!(incoming.upstream, "011c9e60bbbb");
         assert_eq!(incoming.commits[0].hash, "011c9e60bbbb");
@@ -188,12 +193,23 @@ mod tests {
     }
 
     #[test]
+    fn beyond_the_listed_commits_the_tag_is_upstream() {
+        let long = COMPARE.replace("\"total_commits\": 2", "\"total_commits\": 300");
+        let incoming = incoming(&lines(&long), "v0.2.3").unwrap().unwrap();
+        assert_eq!(incoming.upstream, "v0.2.3");
+        assert_eq!(incoming.total, 300);
+    }
+
+    #[test]
     fn nothing_new_or_no_answer() {
         let same =
             lines(r#"{"status": "identical", "total_commits": 0, "commits": [], "files": []}"#);
-        assert_eq!(incoming(&same), Some(None));
+        assert_eq!(incoming(&same, "v0.2.3"), Some(None));
         assert_eq!(
-            incoming(&lines("curl: (6) Could not resolve host: api.github.com")),
+            incoming(
+                &lines("curl: (6) Could not resolve host: api.github.com"),
+                "v0.2.3"
+            ),
             None
         );
     }

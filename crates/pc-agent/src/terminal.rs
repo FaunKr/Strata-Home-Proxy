@@ -22,22 +22,29 @@ const INSTALL: &str = "install";
 /// The `strata` command in the Terminal's own files.
 const PROGRAM: [&str; 2] = ["bin", "strata.cmd"];
 /// Where `strata update` keeps the engines and newer Terminal files
-/// ("Control"); Strata's own default beside `install`.
+/// ("Control"), beside `install` with Strata's defaults.
 const COMPONENTS: &str = "components";
 
 /// The Strata Terminal in its folder (`strata_home`).
 #[derive(Clone, Debug)]
 pub struct Terminal {
     home: PathBuf,
+    components: PathBuf,
 }
 
 impl Terminal {
+    /// The Terminal in `home`, with Strata's components beside it.
     pub fn new(home: impl Into<PathBuf>) -> Self {
-        Self { home: home.into() }
+        let home = home.into();
+        let components = home.join(COMPONENTS);
+        Self { home, components }
     }
 
     pub fn of(cfg: &crate::Config) -> Self {
-        Self::new(&cfg.strata_home)
+        Self {
+            home: cfg.strata_home.clone(),
+            components: cfg.strata_components.clone(),
+        }
     }
 
     /// The Terminal as the install script left it.
@@ -59,7 +66,7 @@ impl Terminal {
     /// The newer Terminal files `components\control\active.json` names,
     /// if they are whole.
     fn updated_root(&self, current: &Path) -> Option<PathBuf> {
-        let base = self.home.join(COMPONENTS).join("control");
+        let base = self.components.join("control");
         let pointer: Value =
             serde_json::from_str(&std::fs::read_to_string(base.join("active.json")).ok()?).ok()?;
         let name = pointer["folder"].as_str()?;
@@ -109,8 +116,7 @@ impl Terminal {
     /// The Strata commit the files that run were built from (`COMMIT`,
     /// which `packaging/package_terminal.py` writes).
     pub fn commit(&self) -> Option<String> {
-        let text = std::fs::read_to_string(self.root().join("COMMIT")).ok()?;
-        Some(text.trim().to_string()).filter(|c| !c.is_empty())
+        first_line(&self.root().join("COMMIT"))
     }
 
     /// `strata --version`; read it with [`version_text`].
@@ -147,7 +153,11 @@ impl Terminal {
     /// What makes up a running Strata: every program from the Terminal's
     /// folder (its Python) and the engines beside it.
     pub fn processes(&self) -> Vec<String> {
-        vec![crate::platform::folder_entry(&self.home)]
+        let mut entries = vec![crate::platform::folder_entry(&self.home)];
+        if !self.components.starts_with(&self.home) {
+            entries.push(crate::platform::folder_entry(&self.components));
+        }
+        entries
     }
 
     /// Strata's install script from `installer`, into this folder. It
@@ -260,11 +270,7 @@ impl Terminal {
 pub fn engine_installed(output: &[String]) -> Result<(), String> {
     let answer =
         json_answer(output).ok_or("The Strata Terminal gave no answer about the engine")?;
-    if let Some(error) = answer.get("error") {
-        return Err(text(&error["message"])
-            .unwrap_or("The engine update failed")
-            .to_string());
-    }
+    refused(&answer, "The engine update failed")?;
     let engine = answer["results"]
         .as_array()
         .and_then(|r| r.iter().find(|r| r["component"] == "engine"))
@@ -273,8 +279,13 @@ pub fn engine_installed(output: &[String]) -> Result<(), String> {
 }
 
 fn read_version(folder: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(folder.join("VERSION")).ok()?;
-    Some(text.trim().to_string()).filter(|v| !v.is_empty())
+    first_line(&folder.join("VERSION"))
+}
+
+/// A one-line file's text, if it has any.
+fn first_line(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    Some(text.trim().to_string()).filter(|t| !t.is_empty())
 }
 
 /// `0.2.2`, `0.1.44.1` or `0.2.2-rc1` in an order to compare: a
@@ -307,6 +318,15 @@ pub fn version_text(output: &[String]) -> Option<String> {
     })
 }
 
+/// Strata's message when the answer is a refusal
+/// (`{"ok": false, "error": {"code", "message"}}`).
+fn refused(answer: &Value, fallback: &str) -> Result<(), String> {
+    match answer.get("error") {
+        Some(error) => Err(text(&error["message"]).unwrap_or(fallback).to_string()),
+        None => Ok(()),
+    }
+}
+
 /// The last line of `output` that is a JSON object: what `--output json`
 /// answers.
 fn json_answer(output: &[String]) -> Option<Value> {
@@ -322,11 +342,7 @@ fn json_answer(output: &[String]) -> Option<Value> {
 /// (`check` in `strata_control/updater.py`).
 pub fn update_available(output: &[String]) -> Result<bool, String> {
     let answer = json_answer(output).ok_or("The Strata Terminal gave no answer about updates")?;
-    if let Some(error) = answer.get("error") {
-        return Err(text(&error["message"])
-            .unwrap_or("The update check failed")
-            .to_string());
-    }
+    refused(&answer, "The update check failed")?;
     Ok(matches!(
         text(&answer["engine"]["status"]),
         Some("available" | "install")
@@ -338,15 +354,22 @@ pub fn update_available(output: &[String]) -> Result<bool, String> {
 pub fn updated(output: &[String]) -> Result<(), String> {
     let answer =
         json_answer(output).ok_or("The Strata Terminal gave no answer about the update")?;
-    if let Some(error) = answer.get("error") {
-        return Err(text(&error["message"])
-            .unwrap_or("The update failed")
-            .to_string());
-    }
+    refused(&answer, "The update failed")?;
     let results = answer["results"]
         .as_array()
         .ok_or("The Strata Terminal's answer names no parts")?;
-    let problems: Vec<String> = results.iter().filter_map(part_problem).collect();
+    // An engine version that failed its test start before, or was rolled
+    // back from, is left alone without --force: nothing to do, as the
+    // check says.
+    let left_alone = |r: &&Value| {
+        r["component"] == "engine"
+            && matches!(text(&r["status"]), Some("failed-before" | "skipped"))
+    };
+    let problems: Vec<String> = results
+        .iter()
+        .filter(|r| !left_alone(r))
+        .filter_map(part_problem)
+        .collect();
     if problems.is_empty() {
         Ok(())
     } else {
@@ -397,10 +420,10 @@ pub struct BenchSpeeds {
 /// phase (`summaries_of` in `strata_cli/bench_standard.py`).
 pub fn bench_speeds(output: &[String]) -> Result<BenchSpeeds, String> {
     let answer = json_answer(output).ok_or("The benchmark gave no answer")?;
-    if let Some(error) = answer.get("error") {
-        return Err(text(&error["message"])
-            .unwrap_or("The benchmark failed")
-            .to_string());
+    refused(&answer, "The benchmark failed")?;
+    let status = text(&answer["status"]).unwrap_or("unknown");
+    if status != "complete" {
+        return Err(format!("The benchmark did not complete (run {status})"));
     }
     let median = |case: &str, metric: &str| {
         answer["summaries"].as_array()?.iter().find_map(|row| {
@@ -409,10 +432,7 @@ pub fn bench_speeds(output: &[String]) -> Result<BenchSpeeds, String> {
                 .flatten()
         })
     };
-    let decode = median("short", "decode_tps").ok_or_else(|| {
-        let status = text(&answer["status"]).unwrap_or("unknown");
-        format!("The benchmark reported no tokens/s (run {status})")
-    })?;
+    let decode = median("short", "decode_tps").ok_or("The benchmark reported no tokens/s")?;
     Ok(BenchSpeeds {
         decode,
         prompt: median("prompt-4k", "prompt_tps"),
@@ -560,6 +580,10 @@ mod tests {
         assert_eq!(updated(&answer(updated_control)), Ok(()));
         let not_in_feed = r#"{"component": "control", "status": "not-in-feed", "changed": false, "installed_before": "0.1.44.1"}"#;
         assert_eq!(updated(&answer(not_in_feed)), Ok(()));
+        let engine_left = lines(&[
+            r#"{"schema_version": 1, "ok": true, "feed": {"source": "f", "sequence": 42, "channel": "stable", "key_id": "k"}, "results": [{"component": "engine", "status": "failed-before", "installed_before": {"version": "0.1.44.1"}, "changed": false, "note": "0.1.45 failed its test start on 2026-10-21; run with --force to try it again"}, {"component": "control", "status": "updated", "changed": true}], "exit_code": 0}"#,
+        ]);
+        assert_eq!(updated(&engine_left), Ok(()));
         let failed = r#"{"component": "control", "status": "failed", "changed": false, "installed_before": "0.1.44.1", "error": "Control 0.1.45: --version said '' (exit 1)"}"#;
         assert_eq!(
             updated(&answer(failed)),
@@ -608,10 +632,15 @@ mod tests {
         );
         let short_only = answer("complete", &[row("short", "decode_tps", "38.5")]);
         assert_eq!(bench_speeds(&short_only).unwrap().prompt, None);
-        let nothing = answer("failed", &[row("short", "decode_tps", "null")]);
+        let nothing = answer("complete", &[row("short", "decode_tps", "null")]);
         assert_eq!(
             bench_speeds(&nothing),
-            Err("The benchmark reported no tokens/s (run failed)".into())
+            Err("The benchmark reported no tokens/s".into())
+        );
+        let partial = answer("partial", &[row("short", "decode_tps", "38.5")]);
+        assert_eq!(
+            bench_speeds(&partial),
+            Err("The benchmark did not complete (run partial)".into())
         );
     }
 

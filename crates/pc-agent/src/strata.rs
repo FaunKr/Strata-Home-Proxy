@@ -38,6 +38,8 @@ pub use strata_pc_protocol::{
 const BENCH_FILE: &str = "strata-benchmark.json";
 /// The last benchmark of each model.
 const BENCHES_FILE: &str = "strata-benchmarks.json";
+/// What `strata --version` said last, with the build it was for.
+const VERSION_FILE: &str = "strata-version.json";
 /// How often the page's visits ask Git whether Strata has a newer version.
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
 /// How often the page's visits ask the Strata Terminal for an update.
@@ -543,25 +545,37 @@ async fn update_terminal(job: &JobContext) -> Result<Option<String>, Step> {
     Ok(None)
 }
 
-/// Asks `strata --version` and keeps the answer for the page.
+/// Asks `strata --version` and keeps the answer with the build it is for,
+/// also over a restart: the update summary is kept per version.
 async fn terminal_version(agent: &Agent, terminal: &Terminal) {
-    if let Some(version) = output(agent, &terminal.version())
+    let Some(version) = output(agent, &terminal.version())
         .await
         .and_then(|(_, lines)| terminal::version_text(&lines))
+    else {
+        return;
+    };
+    let kept = serde_json::json!({"build": terminal.build(), "version": version});
+    if let Err(e) =
+        crate::write_replacing(&agent.cfg.state_dir().join(VERSION_FILE), &kept.to_string())
     {
-        agent.updates.set_version(version);
+        tracing::warn!("{VERSION_FILE} not saved: {e}");
     }
 }
 
 /// Strata's version for the page and the benchmarks: the Terminal's
-/// version and build, or the Strata folder's short commit.
+/// version and build as `strata --version` said it for the build that
+/// runs, else only the build; or the Strata folder's short commit.
 fn strata_version(agent: &Agent, install: &Installation) -> Option<String> {
     match install.kind() {
-        Kind::Terminal => agent.updates.version().or_else(|| {
-            Terminal::of(&agent.cfg)
-                .build()
-                .map(|build| format!("build {build}"))
-        }),
+        Kind::Terminal => {
+            let build = Terminal::of(&agent.cfg).build()?;
+            std::fs::read_to_string(agent.cfg.state_dir().join(VERSION_FILE))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .filter(|kept| kept["build"] == build.as_str())
+                .and_then(|kept| kept["version"].as_str().map(String::from))
+                .or_else(|| Some(format!("build {build}")))
+        }
         Kind::Source => git_commit(&agent.cfg.strata_dir),
     }
 }
@@ -915,12 +929,7 @@ struct UpdateState {
     asking: bool,
     available: Option<bool>,
     incoming: Option<Incoming>,
-    /// What `strata --version` said last.
-    version: Option<String>,
 }
-
-/// Most incoming commits the page carries.
-const MAX_COMMITS: usize = 200;
 
 impl UpdateCheck {
     pub fn available(&self) -> Option<bool> {
@@ -929,14 +938,6 @@ impl UpdateCheck {
 
     pub fn incoming(&self) -> Option<Incoming> {
         self.inner.lock().unwrap().incoming.clone()
-    }
-
-    fn version(&self) -> Option<String> {
-        self.inner.lock().unwrap().version.clone()
-    }
-
-    fn set_version(&self, version: String) {
-        self.inner.lock().unwrap().version = Some(version);
     }
 
     /// Claims the next check, if one is due after `every`.
@@ -1014,7 +1015,7 @@ async fn release_summary(agent: &Agent, terminal: &Terminal) -> Option<Incoming>
     };
     let commit = terminal.commit()?;
     let tag = releases::latest_tag(&ask(releases::latest_release()).await?)?;
-    releases::incoming(&ask(releases::compare(&commit, &tag)).await?).flatten()
+    releases::incoming(&ask(releases::compare(&commit, &tag)).await?, &tag).flatten()
 }
 
 /// `None` if Git cannot tell; `Some(None)` when nothing is incoming.
@@ -1046,7 +1047,7 @@ async fn incoming_commits(agent: &Agent) -> Option<Option<Incoming>> {
         .first()?
         .trim()
         .to_string();
-    let max = MAX_COMMITS.to_string();
+    let max = releases::MAX_COMMITS.to_string();
     let log = run(&[
         "log",
         "-n",

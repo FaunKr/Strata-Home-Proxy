@@ -160,6 +160,10 @@ impl FakePc {
     pub fn strata_up(&self) -> bool {
         self.strata_running() && !self.starting.load(Ordering::SeqCst)
     }
+    fn job_kind(&self) -> Option<StrataJobKind> {
+        self.strata_job.lock().unwrap().as_ref().map(|j| j.kind)
+    }
+
     pub fn job_running(&self) -> bool {
         self.strata_job
             .lock()
@@ -189,6 +193,7 @@ impl FakePc {
             gaming_mode: self.gaming.load(Ordering::SeqCst),
             strata_running: self.strata_running(),
             strata_job: self.job_running(),
+            strata_job_kind: self.job_running().then(|| self.job_kind()).flatten(),
             mac: self.report_mac.lock().unwrap().clone(),
             version: self.version.lock().unwrap().clone(),
             hardware: self.hardware.lock().unwrap().clone(),
@@ -553,6 +558,9 @@ pub fn model(id: &str, family: Option<&str>, disk_bytes: u64, active: bool) -> S
         config: None,
         chat_settings: None,
         load_lines: None,
+        tunable: None,
+        tune_unavailable: None,
+        last_tune: None,
     }
 }
 
@@ -642,7 +650,8 @@ fn start_job(pc: &Pc, body: Value) -> Response {
         StrataJobRequest::Activate { model }
         | StrataJobRequest::Delete { model }
         | StrataJobRequest::SetSpeedProjection { model, .. }
-        | StrataJobRequest::SetContext { model, .. } => Some(model.clone()),
+        | StrataJobRequest::SetContext { model, .. }
+        | StrataJobRequest::Tune { model, .. } => Some(model.clone()),
         _ => None,
     };
     let job = StrataJob {

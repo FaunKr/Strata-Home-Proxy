@@ -10,7 +10,9 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use strata_pc_protocol::{NeverRule, StrataOptions, TunerOption, TunerTry};
+use strata_pc_protocol::{
+    NeverRule, StrataOptions, StrataTune, TuneMode, TuneUse, TunerOption, TunerTry,
+};
 
 use crate::command::CommandSpec;
 
@@ -182,6 +184,52 @@ impl Terminal {
             spec.env.push(("STRATA_API_KEY".into(), key.into()));
         }
         spec
+    }
+
+    /// Strata's auto-tuner for the run config `config`, for speed only: it
+    /// never tries settings that change answers or are not repeatable. It
+    /// writes its progress to `status` and saves its result as the active
+    /// preset; read the output with [`tune_result`], the status with
+    /// [`tune_progress`].
+    pub fn tune(
+        &self,
+        config: &Path,
+        mode: TuneMode,
+        usage: TuneUse,
+        status: &Path,
+    ) -> CommandSpec {
+        let config = config.display().to_string();
+        let status = status.display().to_string();
+        let mode = match mode {
+            TuneMode::Quick => "quick",
+            TuneMode::Thorough => "thorough",
+        };
+        let usage = match usage {
+            TuneUse::Coding => "coding",
+            TuneUse::Chat => "chat",
+        };
+        self.command(&[
+            "tune",
+            "auto",
+            &config,
+            "--goal",
+            "speed",
+            "--mode",
+            mode,
+            "--use",
+            usage,
+            "--status-file",
+            &status,
+            "--output",
+            "json",
+        ])
+    }
+
+    /// Makes the preset that was active before `preset` the active one
+    /// again (none: the standard settings); read the output with
+    /// [`preset_answer`].
+    pub fn undo_preset(&self, preset: &str) -> CommandSpec {
+        self.command(&["presets", "undo", preset, "--output", "json"])
     }
 
     /// What makes up a running Strata: every program from the Terminal's
@@ -452,6 +500,83 @@ fn part_problem(result: &Value) -> Option<String> {
             Some(why)
         }
     }
+}
+
+/// The tuner's progress from its status file (`state` in `auto` of
+/// `strata_cli/tune_commands.py`): Strata's message as the step, the share
+/// of planned engine runs done and the time left it estimates.
+#[derive(Debug, PartialEq)]
+pub struct TuneProgress {
+    pub step: String,
+    pub percent: Option<u8>,
+    pub eta_secs: Option<u64>,
+}
+
+pub fn tune_progress(status: &str) -> Option<TuneProgress> {
+    let state: Value = serde_json::from_str(status).ok()?;
+    let step = text(&state["message"])?.to_string();
+    let done = state["runs_done"].as_u64();
+    let planned = state["runs_planned"].as_u64().filter(|p| *p > 0);
+    let percent = done
+        .zip(planned)
+        .map(|(done, planned)| (done * 100 / planned).min(99) as u8);
+    Some(TuneProgress {
+        step,
+        percent,
+        eta_secs: state["eta_s"].as_u64(),
+    })
+}
+
+/// Reads what `strata tune auto --output json` printed: `{"ok": true,
+/// "result": …}` with the tuner's result (`TuneResult` in
+/// `strata_control/autotune.py`, after `finalize`), or Strata's reason.
+pub fn tune_result(
+    output: &[String],
+    mode: TuneMode,
+    usage: TuneUse,
+    at: u64,
+) -> Result<StrataTune, String> {
+    let answer = json_answer(output).ok_or("The tuner gave no answer")?;
+    refused(&answer, "The tuner failed")?;
+    let result = &answer["result"];
+    let code = text(&result["code"]).ok_or("The tuner's answer has no result")?;
+    let values = &result["values"];
+    let settings = &result["settings"];
+    let mut changed = Vec::new();
+    for (flag, value) in settings["args"].as_object().into_iter().flatten() {
+        match value {
+            Value::Bool(false) | Value::Null => {}
+            Value::Bool(true) => changed.push(flag.clone()),
+            other => changed.push(format!("{flag} {}", value_text(other))),
+        }
+    }
+    for (name, value) in settings["env"].as_object().into_iter().flatten() {
+        changed.push(format!("{name}={}", value_text(value)));
+    }
+    for (name, value) in settings["per_request"].as_object().into_iter().flatten() {
+        changed.push(format!("per request {name} {}", value_text(value)));
+    }
+    let preset = &result["preset"];
+    Ok(StrataTune {
+        at,
+        mode,
+        usage,
+        code: code.to_string(),
+        base_tps: values["base_tok_s"].as_f64(),
+        tuned_tps: values["tuned_tok_s"].as_f64(),
+        gain_pct: values["gain_pct"].as_f64(),
+        changed,
+        message: text(&result["message"]).map(String::from),
+        preset: text(&preset["id"]).map(String::from),
+        preset_name: text(&preset["name"]).map(String::from),
+    })
+}
+
+/// Reads what `strata presets … --output json` printed: `Ok` unless Strata
+/// refused (`_fail` in `strata_cli/tune_commands.py`).
+pub fn preset_answer(output: &[String]) -> Result<(), String> {
+    let answer = json_answer(output).ok_or("Strata gave no answer about the preset")?;
+    refused(&answer, "Strata refused the preset change")
 }
 
 /// Reads what [`Terminal::options`] printed for Terminal build `version`: `None`
@@ -794,6 +919,129 @@ mod tests {
         assert_eq!(spec.args[0], "-c");
         assert_eq!(spec.args[2], config.display().to_string());
         assert_eq!(terminal.options(None).args.len(), 2);
+    }
+
+    /// A finished tune as `auto` in strata_cli/tune_commands.py prints it
+    /// (Strata 011c9e6): `{"schema_version": 1, "ok": true, "result": out}`
+    /// with `TuneResult.to_dict()` from strata_control/autotune.py, the saved
+    /// preset and `finalize`'s `code` and `values`.
+    const TUNED: &str = include_str!("../fixtures/strata-tune.json");
+
+    #[test]
+    fn a_faster_tune_gives_its_speeds_changes_and_preset() {
+        let out = lines(&["Tuning qwen3.8 (quick)", TUNED.trim_end()]);
+        let tune = tune_result(&out, TuneMode::Quick, TuneUse::Coding, 1_792_000_000).unwrap();
+        assert_eq!(tune.code, "faster");
+        assert_eq!((tune.base_tps, tune.tuned_tps), (Some(31.2), Some(35.1)));
+        assert_eq!(tune.gain_pct, Some(12.4));
+        assert_eq!(tune.changed, ["--kv-resident 65536", "--kv-grow"]);
+        assert_eq!(
+            tune.preset.as_deref(),
+            Some("3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6")
+        );
+        assert_eq!(tune.preset_name.as_deref(), Some("IQ3_XXS 64K coding"));
+        assert_eq!(tune.message, None);
+        assert_eq!(
+            (tune.at, tune.mode, tune.usage),
+            (1_792_000_000, TuneMode::Quick, TuneUse::Coding)
+        );
+    }
+
+    #[test]
+    fn a_tune_without_gain_or_with_an_error_says_so() {
+        // `default_confirmed` with Strata's sentence; env and per-request
+        // settings as `settings` holds them.
+        let same = lines(&[
+            r#"{"schema_version": 1, "ok": true, "result": {"outcome": "inconclusive", "code": "busy_pc", "reason_code": "noisy", "values": {"gain_pct": 0.0, "base_tok_s": 30.9, "tuned_tok_s": null}, "message": "Your PC was too busy to compare settings. Nothing was changed.", "settings": {"args": {}, "env": {"STRATA_SELECT_SIMT": "1"}, "per_request": {"temperature": 0.6}}, "preset": null}}"#,
+        ]);
+        let tune = tune_result(&same, TuneMode::Thorough, TuneUse::Chat, 1).unwrap();
+        assert_eq!(tune.code, "busy_pc");
+        assert_eq!(tune.tuned_tps, None);
+        assert_eq!(
+            tune.changed,
+            ["STRATA_SELECT_SIMT=1", "per request temperature 0.6"]
+        );
+        assert_eq!(tune.preset, None);
+        assert_eq!(
+            tune.message.as_deref(),
+            Some("Your PC was too busy to compare settings. Nothing was changed.")
+        );
+        let refused = lines(&[
+            r#"{"schema_version": 1, "ok": false, "error": {"code": 5, "message": "no engine was found at strata.exe"}}"#,
+        ]);
+        assert_eq!(
+            tune_result(&refused, TuneMode::Quick, TuneUse::Coding, 1),
+            Err("no engine was found at strata.exe".into())
+        );
+        assert!(tune_result(&lines(&["Traceback"]), TuneMode::Quick, TuneUse::Coding, 1).is_err());
+    }
+
+    #[test]
+    fn the_status_file_gives_step_share_and_time_left() {
+        // `state` as `auto` writes it after `Tuner._say`.
+        let status = r#"{"stage": "arm", "message": "Trying: Shorter speculative window (3 tokens)", "state": "running", "elapsed_s": 420, "runs_done": 3, "runs_planned": 8, "eta_s": 750, "speeds": [{"label": "your current settings", "tok_s": 31.2}], "minutes_left": 13, "text": "Finding the fastest settings for your PC… about 13 min left"}"#;
+        assert_eq!(
+            tune_progress(status),
+            Some(TuneProgress {
+                step: "Trying: Shorter speculative window (3 tokens)".into(),
+                percent: Some(37),
+                eta_secs: Some(750),
+            })
+        );
+        // The first state, before any run is planned.
+        let start = r#"{"stage": "start", "message": "Starting", "state": "running"}"#;
+        assert_eq!(
+            tune_progress(start),
+            Some(TuneProgress {
+                step: "Starting".into(),
+                percent: None,
+                eta_secs: None,
+            })
+        );
+        assert_eq!(tune_progress("{\"stage\": "), None);
+    }
+
+    #[test]
+    fn the_tune_command_names_the_run_config_and_the_choices() {
+        let terminal = Terminal::new("C:/Users/me/AppData/Local/Strata");
+        let config = Path::new("C:/Users/me/AppData/Local/Strata/install/strata-iq3_xxs.json");
+        let status = Path::new("C:/ProgramData/strata-tune-status.json");
+        let spec = terminal.tune(config, TuneMode::Thorough, TuneUse::Chat, status);
+        assert_eq!(spec.program, terminal.program());
+        assert_eq!(
+            spec.args,
+            [
+                "tune",
+                "auto",
+                &config.display().to_string(),
+                "--goal",
+                "speed",
+                "--mode",
+                "thorough",
+                "--use",
+                "chat",
+                "--status-file",
+                &status.display().to_string(),
+                "--output",
+                "json",
+            ]
+        );
+        assert_eq!(
+            terminal.undo_preset("3f2a9c0e").args,
+            ["presets", "undo", "3f2a9c0e", "--output", "json"]
+        );
+        assert_eq!(
+            preset_answer(&lines(&[
+                r#"{"schema_version": 1, "ok": true, "active": null}"#
+            ])),
+            Ok(())
+        );
+        assert_eq!(
+            preset_answer(&lines(&[
+                r#"{"schema_version": 1, "ok": false, "error": {"code": 5, "message": "there is nothing to undo"}}"#
+            ])),
+            Err("there is nothing to undo".into())
+        );
     }
 
     #[test]

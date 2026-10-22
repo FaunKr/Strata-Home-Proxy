@@ -63,5 +63,11 @@
   },
   {
     "kind": "remove_old_strata_folder"
+  },
+  {
+    "kind": "tune",
+    "model": "IQ3_XXS",
+    "mode": "quick",
+    "use": "coding"
   }
 ]

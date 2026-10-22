@@ -32,13 +32,19 @@ use crate::{
 pub use strata_pc_protocol::{
     BenchTool, ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, StrataBenchmark,
     StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState,
-    StrataModel, StrataOptions, StrataReport, StrataSize,
+    StrataModel, StrataOptions, StrataReport, StrataSize, StrataTune, TuneMode, TuneUse,
 };
 
 /// The last benchmark run, as older services kept it alone.
 const BENCH_FILE: &str = "strata-benchmark.json";
 /// The last benchmark of each model.
 const BENCHES_FILE: &str = "strata-benchmarks.json";
+/// Each model's latest tune.
+const TUNES_FILE: &str = "strata-tunes.json";
+/// Where the running tune writes its progress.
+const TUNE_STATUS_FILE: &str = "strata-tune-status.json";
+/// How often a tune's progress is read.
+const TUNE_STATUS_EVERY: Duration = Duration::from_secs(1);
 /// What `strata --version` said last, with the build it was for.
 const VERSION_FILE: &str = "strata-version.json";
 /// There since the Strata Terminal's Strata first answered `/health`.
@@ -110,6 +116,11 @@ enum Plan {
         id: String,
     },
     RemoveOldStrataFolder,
+    Tune {
+        id: String,
+        mode: TuneMode,
+        usage: TuneUse,
+    },
 }
 
 impl Plan {
@@ -121,7 +132,8 @@ impl Plan {
             | Self::Benchmark { id }
             | Self::SetSpeedProjection { id, .. }
             | Self::SetContext { id, .. }
-            | Self::SwitchToTerminal { id } => Some(id.clone()),
+            | Self::SwitchToTerminal { id }
+            | Self::Tune { id, .. } => Some(id.clone()),
             Self::Update
             | Self::SetKey
             | Self::CompareModels { .. }
@@ -327,7 +339,31 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             }
             Ok(Plan::RemoveOldStrataFolder)
         }
+        StrataJobRequest::Tune { model, mode, usage } => {
+            let id = installed_model(&install, &model)?;
+            if let Some(why) = tune_unavailable(&install, &id) {
+                return Err(Refusal::Conflict(why));
+            }
+            Ok(Plan::Tune { id, mode, usage })
+        }
     }
+}
+
+/// Why Strata's tuner cannot tune model `id`, if it cannot: it runs only
+/// from the Strata Terminal and knows only some model families.
+fn tune_unavailable(install: &Installation, id: &str) -> Option<String> {
+    if install.kind() != Kind::Terminal {
+        return Some(
+            "Tuning needs the Strata Terminal; this Strata is a folder from source".into(),
+        );
+    }
+    let family = catalog::by_id(id).map(|s| s.family);
+    if family.and_then(catalog::tuner_family).is_none() {
+        return Some(format!(
+            "Strata's tuner does not know the model family of {id}"
+        ));
+    }
+    None
 }
 
 fn strata_installed(install: &Installation) -> Result<(), Refusal> {
@@ -403,6 +439,7 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::CompareModels { ids, active } => compare_models(job, &ids, &active).await,
         Plan::SwitchToTerminal { id } => switch_to_terminal(job, &id).await,
         Plan::RemoveOldStrataFolder => remove_old_strata_folder(job).await,
+        Plan::Tune { id, mode, usage } => tune(job, &id, mode, usage).await,
     }
 }
 
@@ -545,6 +582,7 @@ async fn delete(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
         .map_err(|e| Step::Failed(e.to_string()))??;
     let id = catalog::by_id(&id).map_or(id, Size::id);
     job.agent().output.forget_load(&id);
+    keep_tune(job.agent(), &id, None);
     Ok(None)
 }
 
@@ -785,6 +823,134 @@ async fn compare_models(
         // The first of equal ones.
         .reduce(|a, b| if b.1 > a.1 { b } else { a });
     Ok(fastest.map(|(b, _)| format!("Fastest: {} with {}", b.model, b.result)))
+}
+
+/// Strata's auto-tuner for model `id`, with Strata stopped: the tuner starts
+/// the engine itself and needs the graphics card. Strata saves a result
+/// worth keeping as the model's active preset; the preset that was active
+/// before becomes active again, so nothing is applied until the user says.
+/// Strata runs again afterwards, also after a cancel.
+async fn tune(
+    job: &JobContext,
+    id: &str,
+    mode: TuneMode,
+    usage: TuneUse,
+) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    let terminal = Terminal::of(&agent.cfg);
+    let config = Installation::of(&agent.cfg).config_path(id);
+    let status = agent.cfg.state_dir().join(TUNE_STATUS_FILE);
+    let _ = std::fs::remove_file(&status);
+    agent.strata().wait_idle(job).await?;
+    agent.strata().stop();
+    job.step("Starting the tuner");
+    let ran = {
+        let run = job.command_output(terminal.tune(&config, mode, usage, &status));
+        tokio::pin!(run);
+        loop {
+            tokio::select! {
+                ran = &mut run => break ran,
+                () = tokio::time::sleep(TUNE_STATUS_EVERY) => {
+                    if let Some(p) = tokio::fs::read_to_string(&status)
+                        .await
+                        .ok()
+                        .and_then(|text| terminal::tune_progress(&text))
+                    {
+                        job.progress(&p.step, p.percent, p.eta_secs);
+                    }
+                }
+            }
+        }
+    };
+    let (ran, output) = ran;
+    let read = terminal::tune_result(&output, mode, usage, unix_now());
+    // Strata activates the preset it saved; undone also after a cancel, so
+    // nothing the tuner found is applied.
+    let restored = job
+        .cleanup(async {
+            let restored = match &read {
+                Ok(StrataTune {
+                    preset: Some(preset),
+                    ..
+                }) => {
+                    job.step("Keeping your settings active");
+                    ask_terminal(job, terminal.undo_preset(preset), terminal::preset_answer).await
+                }
+                _ => Ok(()),
+            };
+            job.step("Starting Strata again");
+            agent.strata().start_again().await;
+            restored
+        })
+        .await;
+    let found = match (ran, read) {
+        (Err(Step::Cancelled), _) => return Err(Step::Cancelled),
+        (_, Ok(found)) => found,
+        // The command's own reason says more than its missing answer.
+        (Err(failed), Err(_)) => return Err(failed),
+        (Ok(()), Err(why)) => return Err(Step::Failed(why)),
+    };
+    let text = tune_text(&found);
+    keep_tune(agent, id, found);
+    restored.map_err(|e| match e {
+        Step::Failed(why) => {
+            Step::Failed(format!("{text}, but the tuned settings stay active: {why}"))
+        }
+        other => other,
+    })?;
+    Ok(Some(text))
+}
+
+/// The tune's result in a sentence: tok/s before and after and the changed
+/// options, or why there is nothing to apply.
+fn tune_text(tune: &StrataTune) -> String {
+    match tune.code.as_str() {
+        "faster" => {
+            let speeds = match (tune.base_tps, tune.tuned_tps) {
+                (Some(base), Some(tuned)) => {
+                    format!("{} → {} Token/s", round1(base), round1(tuned))
+                }
+                _ => "Faster".into(),
+            };
+            let gain = tune
+                .gain_pct
+                .map(|g| format!(" (+{}%)", g.round()))
+                .unwrap_or_default();
+            if tune.changed.is_empty() {
+                format!("{speeds}{gain}")
+            } else {
+                format!("{speeds}{gain}: {}", tune.changed.join(", "))
+            }
+        }
+        "already_fastest" => "Your current settings are already the fastest".into(),
+        _ => tune
+            .message
+            .clone()
+            .unwrap_or_else(|| format!("Not tuned ({})", tune.code)),
+    }
+}
+
+fn load_tunes(agent: &Agent) -> Vec<(String, StrataTune)> {
+    std::fs::read_to_string(agent.cfg.state_dir().join(TUNES_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// Keeps model `id`'s tune in place of its last one; `None` forgets it.
+fn keep_tune(agent: &Agent, id: &str, tune: impl Into<Option<StrataTune>>) {
+    let tune = tune.into();
+    let mut all = load_tunes(agent);
+    let before = all.len();
+    all.retain(|(model, _)| !model.eq_ignore_ascii_case(id));
+    if tune.is_none() && all.len() == before {
+        return;
+    }
+    all.extend(tune.map(|t| (id.to_string(), t)));
+    let text = serde_json::to_string_pretty(&all).expect("tunes serialize");
+    if let Err(e) = crate::write_replacing(&agent.cfg.state_dir().join(TUNES_FILE), &text) {
+        tracing::warn!("{TUNES_FILE} not saved: {e}");
+    }
 }
 
 /// Keeps a model's record in place of its last one; the newest also goes
@@ -1654,6 +1820,7 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::CompareModels => "Compare models",
         StrataJobKind::SwitchToTerminal => "Switch to the Strata Terminal",
         StrataJobKind::RemoveOldStrataFolder => "Remove the old Strata folder",
+        StrataJobKind::Tune => "Tune",
     }
 }
 
@@ -1665,6 +1832,7 @@ pub fn view(agent: &Agent) -> StrataReport {
     let active = active_model(agent);
     let install = Installation::of(cfg);
     let support = install.support();
+    let tunes = load_tunes(agent);
     let mut models: Vec<StrataModel> = install
         .models()
         .into_iter()
@@ -1672,6 +1840,7 @@ pub fn view(agent: &Agent) -> StrataReport {
             let size = catalog::by_id(&id);
             let id = size.map_or(id, |s| s.id());
             let model = install.read_model(&id);
+            let no_tune = tune_unavailable(&install, &id);
             StrataModel {
                 disk_bytes: install.disk_bytes(&id),
                 active: active.as_deref() == Some(id.as_str()),
@@ -1682,6 +1851,12 @@ pub fn view(agent: &Agent) -> StrataReport {
                 config: model.shareable_config(),
                 chat_settings: model.shareable_chat(),
                 load_lines: agent.output.load_lines(&id),
+                tunable: Some(no_tune.is_none()),
+                tune_unavailable: no_tune,
+                last_tune: tunes
+                    .iter()
+                    .find(|(model, _)| model.eq_ignore_ascii_case(&id))
+                    .map(|(_, tune)| tune.clone()),
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,

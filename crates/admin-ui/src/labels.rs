@@ -307,6 +307,7 @@ pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
         StrataJobKind::CompareModels => "Comparing models",
         StrataJobKind::SwitchToTerminal => "Switching to the Strata Terminal",
         StrataJobKind::RemoveOldStrataFolder => "Removing the old Strata folder",
+        StrataJobKind::Tune => "Tuning",
     }
 }
 

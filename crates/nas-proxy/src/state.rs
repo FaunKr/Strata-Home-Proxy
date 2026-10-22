@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -14,7 +14,7 @@ use std::{
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use strata_admin_ui::labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED};
-use strata_pc_protocol::PcStatus;
+use strata_pc_protocol::{PcStatus, StrataJobKind};
 
 use crate::{
     agent::{AgentClient, SleepAnswer},
@@ -37,15 +37,24 @@ pub use crate::lifecycle::{PcState, Refusal, Snapshot};
 pub enum Readiness {
     Ready,
     Gaming,
+    /// A tune runs on the PC; Strata is off until it ends.
+    Tuning,
     NeedsWake,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum WakeError {
     Gaming,
+    /// A tune runs on the PC, which may take up to two hours.
+    Tuning,
     Timeout,
     /// No MAC address is known, so no magic packet can be sent.
     NoMac,
+}
+
+/// Whether the PC service runs a tune, which keeps Strata off for its run.
+fn tuning(status: &PcStatus) -> bool {
+    status.strata_job && status.strata_job_kind == Some(StrataJobKind::Tune)
 }
 
 /// Whether Strata answers on `/health`.
@@ -87,6 +96,9 @@ pub struct AppState {
     /// The code benchmark in the container code-bench.
     pub code_bench: crate::code_bench::CodeBench,
     in_flight: AtomicUsize,
+    /// The PC service last reported a tune. The tuner's engine may answer on
+    /// Strata's port meanwhile, so Strata's health says nothing then.
+    tuning: AtomicBool,
     /// Requests sent to Strata up to this moment are given up: Strata has
     /// shown nothing since (`drop_lost_requests`).
     give_up: tokio::sync::watch::Sender<Option<Instant>>,
@@ -146,6 +158,7 @@ impl AppState {
             code_bench: crate::code_bench::CodeBench::new(cfg.data_dir.clone()),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
+            tuning: AtomicBool::new(false),
             give_up: tokio::sync::watch::Sender::new(None),
             quiet_since: Mutex::new(None),
             lost_after: Mutex::new(LOST_AFTER),
@@ -184,6 +197,7 @@ impl AppState {
     /// these noted at once: the next call to Strata needs the new key.
     pub async fn ask_pc(&self, agent: &AgentClient) -> Option<PcStatus> {
         let status = agent.status().await?;
+        self.tuning.store(tuning(&status), Ordering::SeqCst);
         if let Some(mac) = status.mac.as_deref().and_then(|m| parse_mac(m).ok())
             && self.settings.set_reported_mac(mac)
         {
@@ -328,20 +342,24 @@ impl AppState {
     }
 
     pub async fn readiness(&self) -> Readiness {
-        {
-            let (lifecycle, now, t) = self.lifecycle();
-            if lifecycle.healthy_lately(now, t) {
+        // During a tune only the PC service knows when Strata is back.
+        if !self.tuning.load(Ordering::SeqCst) {
+            {
+                let (lifecycle, now, t) = self.lifecycle();
+                if lifecycle.healthy_lately(now, t) {
+                    return Readiness::Ready;
+                }
+            }
+            if self.strata_healthy().await {
                 return Readiness::Ready;
             }
-        }
-        if self.strata_healthy().await {
-            return Readiness::Ready;
         }
         match self.ask_pc(&self.agent()).await {
             Some(status) if status.gaming_mode => {
                 self.seen_gaming();
                 Readiness::Gaming
             }
+            Some(status) if tuning(&status) => Readiness::Tuning,
             _ => Readiness::NeedsWake,
         }
     }
@@ -375,6 +393,9 @@ impl AppState {
                     if status.gaming_mode {
                         self.seen_gaming();
                         return Err(WakeError::Gaming);
+                    }
+                    if tuning(&status) {
+                        return Err(WakeError::Tuning);
                     }
                     pc_answers = true;
                 }
@@ -473,6 +494,11 @@ impl AppState {
             let (mut lifecycle, now, t) = self.lifecycle();
             let seen = lifecycle.pc_answered(status.as_ref(), strata_answers, now, t);
             self.record(seen.record);
+            // A tune holds the idle time: its end starts it again.
+            if status.as_ref().is_some_and(tuning) {
+                lifecycle.touch(now);
+                return;
+            }
             if !seen.up || !lifecycle.wants_sleep(self.in_flight(), now, t) {
                 return;
             }

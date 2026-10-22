@@ -21,10 +21,12 @@ pub enum StrataJobKind {
     SwitchToTerminal,
     /// Deletes the old Strata folder once the Terminal's Strata has served.
     RemoveOldStrataFolder,
+    /// Strata's auto-tuner for one model.
+    Tune,
 }
 
 impl StrataJobKind {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Install,
         Self::AddModel,
         Self::Activate,
@@ -37,7 +39,28 @@ impl StrataJobKind {
         Self::CompareModels,
         Self::SwitchToTerminal,
         Self::RemoveOldStrataFolder,
+        Self::Tune,
     ];
+}
+
+/// How long the tuner looks: *Quick* (about 20 min) or *Thorough* (up to
+/// 2 h).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TuneMode {
+    #[default]
+    Quick,
+    Thorough,
+}
+
+/// What the tuner judges speed by: *Coding* counts long prompts as well,
+/// *Chat* only the answers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TuneUse {
+    #[default]
+    Coding,
+    Chat,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +159,14 @@ pub enum StrataJobRequest {
     CompareModels,
     SwitchToTerminal,
     RemoveOldStrataFolder,
+    /// Runs Strata's auto-tuner for `model` for speed; its result is saved
+    /// as a preset but not applied.
+    Tune {
+        model: String,
+        mode: TuneMode,
+        #[serde(rename = "use")]
+        usage: TuneUse,
+    },
 }
 
 impl StrataJobRequest {
@@ -153,6 +184,7 @@ impl StrataJobRequest {
             Self::CompareModels => StrataJobKind::CompareModels,
             Self::SwitchToTerminal => StrataJobKind::SwitchToTerminal,
             Self::RemoveOldStrataFolder => StrataJobKind::RemoveOldStrataFolder,
+            Self::Tune { .. } => StrataJobKind::Tune,
         }
     }
 }

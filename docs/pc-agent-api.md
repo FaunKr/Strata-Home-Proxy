@@ -369,7 +369,7 @@ tune saved a preset that is not among them: it was made for other choices,
 such as another context. The PC service reads it in the background when
 `/strata` is asked for, outside jobs and gaming mode, one model after the
 other, and again when the run config, the last tune or the Terminal's build
-changed, after `apply_preset` and `undo_preset`, and every 30 minutes (Strata's
+changed, after `apply_preset`, `undo_preset` and `preset_off`, and every 30 minutes (Strata's
 verdict follows driver and engine changes). Missing without a Terminal,
 before the first read and from an older PC service.
 
@@ -417,8 +417,9 @@ read is still without it. An engine replaced under the same `exe` (a
   (PC traits such as `hybrid_cpu`), `families` (Strata's model families) and
   `reason`.
 - `tries`: the tuner's own tries in Strata's order: `label`, `answer`, `args`
-  (the engine arguments it sets; empty for one that sets something else) and
-  `families`.
+  (the engine arguments it sets; empty for one that sets something else),
+  `env` (the engine environment variables it sets, name to value, `null` for
+  one it removes; empty from an older PC service) and `families`.
 - `engine_help`: what the engine of the active model's run config (else the
   first model's) prints for `--help`; `null` without a model or when it does
   not run.
@@ -467,6 +468,7 @@ little space, deleting the active model).
 | `set_engine_settings` | `model`, `env`, `user_args` (optional) | replaces the engine environment and, if given, the engine options set by hand, as `set_user_args` does; one restart for both |
 | `apply_preset` | `model`, `preset` | Terminal only: `strata presets apply <preset>`; the active model restarts once Strata is not handling a request |
 | `undo_preset` | `model`, `preset` | Terminal only: `strata presets undo <preset>`, back to the preset active before (or the standard settings); the active model restarts as with `apply_preset` |
+| `preset_off` | `model` | Terminal only: `strata presets off <run config>`, back to the standard settings; the preset stays saved and can be applied again; the active model restarts as with `apply_preset` |
 | `tune` | `model`, `mode` (`quick`, `thorough`), `use` (`coding`, `chat`) | Terminal only: waits until Strata is not handling a request, stops it, runs `strata tune auto <run config> --goal speed` and starts Strata again; the result goes to `last_tune`, the active settings stay as they were |
 
 `tune` takes about 20 minutes (`quick`) or up to two hours (`thorough`).

@@ -2,6 +2,8 @@
 //! option table and the engine's own help, read once per Strata version.
 //! Values are text as Strata writes them (`0.55`, `auto:32768`).
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Strata's options as the Strata Terminal's own files describe them.
@@ -57,6 +59,10 @@ pub struct TunerTry {
     /// empty for a try that sets something else.
     #[serde(default)]
     pub args: Vec<String>,
+    /// The engine environment variables it sets, `None` for one it
+    /// removes; empty from an older PC service too.
+    #[serde(default)]
+    pub env: BTreeMap<String, Option<String>>,
     /// Only for these model families; all when empty.
     #[serde(default)]
     pub families: Vec<String>,

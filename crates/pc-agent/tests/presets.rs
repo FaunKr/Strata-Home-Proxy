@@ -1,5 +1,5 @@
 //! Strata's presets (`strata presets`) through the service's HTTP interface
-//! with a fake `strata`: each model's preset line, Apply and Undo.
+//! with a fake `strata`: each model's preset line, Apply, Undo and Off.
 
 use crate::common;
 
@@ -153,6 +153,32 @@ async fn applying_a_preset_restarts_the_active_model() {
     );
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn switching_a_preset_off_restarts_the_active_model() {
+    let s = setup("presets-off").await;
+    let leaves = installed(&s);
+    presets_say(&s, r#"{"schema_version": 1, "ok": true, "active": null}"#);
+    let body = json!({"kind": "preset_off", "model": "IQ3_XXS"});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 202, "{answer}");
+    let done = finished(&s).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let config = leaves
+        .installation()
+        .config_path("iq3_xxs")
+        .display()
+        .to_string();
+    let runs = s.fake.runs_of("strata.cmd");
+    assert_eq!(
+        runs[0].args,
+        ["presets", "off", &config, "--output", "json"]
+    );
+    eventually("Strata restarted", || {
+        s.fake.starts.load(Ordering::SeqCst) == 1
+    })
+    .await;
 }
 
 #[tokio::test]

@@ -90,5 +90,9 @@
     "model": "IQ3_XXS",
     "user_args": ["--threads", "8"],
     "env": {"STRATA_HIPBLASLT_TUNING": "tuning.csv", "STRATA_PIN_BY_NEED": "1"}
+  },
+  {
+    "kind": "preset_off",
+    "model": "IQ3_XXS"
   }
 ]

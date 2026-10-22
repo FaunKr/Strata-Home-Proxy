@@ -138,11 +138,10 @@ enum Plan {
         user_args: Option<Vec<String>>,
         env: BTreeMap<String, String>,
     },
-    /// Applies `preset`, a preset of model `id`, or undoes it.
+    /// Changes which preset Strata starts model `id` with.
     Preset {
         id: String,
-        preset: String,
-        undo: bool,
+        change: PresetChange,
     },
 }
 
@@ -408,33 +407,41 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             Ok(Plan::Tune { id, mode, usage })
         }
         StrataJobRequest::ApplyPreset { model, preset } => {
-            preset_plan(&install, &model, preset, false)
+            preset_plan(&install, &model, PresetChange::Apply(preset))
         }
         StrataJobRequest::UndoPreset { model, preset } => {
-            preset_plan(&install, &model, preset, true)
+            preset_plan(&install, &model, PresetChange::Undo(preset))
         }
+        StrataJobRequest::PresetOff { model } => preset_plan(&install, &model, PresetChange::Off),
     }
 }
 
-/// Applying or undoing a preset of `model`: only on the Strata Terminal,
-/// which keeps them, and only for a preset id as Strata makes them.
-fn preset_plan(
-    install: &Installation,
-    model: &str,
-    preset: String,
-    undo: bool,
-) -> Result<Plan, Refusal> {
+/// A change of which preset Strata starts a model with.
+enum PresetChange {
+    /// Makes this preset the active one.
+    Apply(String),
+    /// Back to the one before this active preset.
+    Undo(String),
+    /// No preset: the standard settings; the preset stays saved.
+    Off,
+}
+
+/// Changing the preset of `model`: only on the Strata Terminal, which keeps
+/// them, and only for a preset id as Strata makes them.
+fn preset_plan(install: &Installation, model: &str, change: PresetChange) -> Result<Plan, Refusal> {
     let id = installed_model(install, model)?;
     if install.kind() != Kind::Terminal {
         return Err(Refusal::Conflict(
             "Presets need the Strata Terminal; this Strata is a folder from source".into(),
         ));
     }
-    let hex = preset.len() == 32 && preset.bytes().all(|b| b.is_ascii_hexdigit());
-    if !hex {
-        return Err(Refusal::BadRequest(format!("{preset} is not a preset")));
+    if let PresetChange::Apply(preset) | PresetChange::Undo(preset) = &change {
+        let hex = preset.len() == 32 && preset.bytes().all(|b| b.is_ascii_hexdigit());
+        if !hex {
+            return Err(Refusal::BadRequest(format!("{preset} is not a preset")));
+        }
     }
-    Ok(Plan::Preset { id, preset, undo })
+    Ok(Plan::Preset { id, change })
 }
 
 /// Why Strata's tuner cannot tune model `id`, if it cannot: it runs only
@@ -532,7 +539,7 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::SwitchToTerminal { id } => switch_to_terminal(job, &id).await,
         Plan::RemoveOldStrataFolder => remove_old_strata_folder(job).await,
         Plan::Tune { id, mode, usage } => tune(job, &id, mode, usage).await,
-        Plan::Preset { id, preset, undo } => change_preset(job, &id, &preset, undo).await,
+        Plan::Preset { id, change } => change_preset(job, &id, change).await,
     }
 }
 
@@ -1007,23 +1014,29 @@ async fn tune(
     Ok(Some(text))
 }
 
-/// Applies or undoes a preset with Strata's `strata presets`. Strata puts
-/// the active preset over the run config when the model starts, so the
-/// active model starts again.
+/// Applies, undoes or switches off a preset with Strata's `strata
+/// presets`. Strata puts the active preset over the run config when the
+/// model starts, so the active model starts again.
 async fn change_preset(
     job: &JobContext,
     id: &str,
-    preset: &str,
-    undo: bool,
+    change: PresetChange,
 ) -> Result<Option<String>, Step> {
     let agent = job.agent();
     let terminal = Terminal::of(&agent.cfg);
-    let spec = if undo {
-        job.step("Undoing the preset");
-        terminal.undo_preset(preset)
-    } else {
-        job.step("Applying the preset");
-        terminal.apply_preset(preset)
+    let spec = match &change {
+        PresetChange::Undo(preset) => {
+            job.step("Undoing the preset");
+            terminal.undo_preset(preset)
+        }
+        PresetChange::Apply(preset) => {
+            job.step("Applying the preset");
+            terminal.apply_preset(preset)
+        }
+        PresetChange::Off => {
+            job.step("Turning the preset off");
+            terminal.preset_off(&Installation::of(&agent.cfg).config_path(id))
+        }
     };
     let changed = ask_terminal(job, spec, terminal::preset_answer).await;
     agent.presets.forget(id);
@@ -2174,6 +2187,7 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SetContext => "Change context",
         StrataJobKind::SetUserArgs => "Save engine options",
         StrataJobKind::SetEngineSettings => "Save engine settings",
+        StrataJobKind::PresetOff => "Turn the preset off",
         StrataJobKind::CompareModels => "Compare models",
         StrataJobKind::SwitchToTerminal => "Switch to the Strata Terminal",
         StrataJobKind::RemoveOldStrataFolder => "Remove the old Strata folder",

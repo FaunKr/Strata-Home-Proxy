@@ -158,7 +158,7 @@ A Strata job that runs Strata's own tuner on one model to find faster settings, 
 _Avoid_: optimize, auto-tune, Optimierung
 
 **Preset**:
-Strata's saved settings from a tune, for one model file and its choices (context among them). Strata starts the model with the active one; *Apply* makes a preset active, *Undo* brings back the one before. Strata says whether the active one still fits: a re-check is offered after a new driver or engine, it is not applied after a new graphics card or model file. After a context switch the model has none until it is tuned again.
+Strata's saved settings from a tune, for one model file and its choices (context among them). Strata starts the model with the active one; *Apply* makes a preset active, *Undo* brings back the one before, *Turn off* goes back to the standard settings and keeps the preset saved. Strata says whether the active one still fits: a re-check is offered after a new driver or engine, it is not applied after a new graphics card or model file. After a context switch the model has none until it is tuned again.
 _Avoid_: profile, tuning (for the saved result), Voreinstellung
 
 ## Code benchmark

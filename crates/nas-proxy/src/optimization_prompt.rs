@@ -57,12 +57,12 @@ pub fn build(
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "Suggest changes to the model's engine options (`args`, `user_args`) and to its \
-         `sampling` block that give the most tokens per second on this hardware. Give one \
-         reason for each change. Suggest only options this Strata version has, and say when \
-         a change can alter the answers. End your answer with the `user_args` one option per \
-         line (`--name value`), as I paste them into the model's *Engine options* field in my \
-         web UI, and a ready-to-paste `sampling` block."
+        "Suggest changes to the model's engine options (`args`, `user_args`), its engine \
+         environment (`env`) and its `sampling` block that give the most tokens per second on \
+         this hardware. Give one reason for each change. Suggest only options this Strata \
+         version has and only environment variables from the list under *Engine environment \
+         variables*, and say when a change can alter the answers. End your answer as *Your \
+         answer* at the end says."
     );
     if let Some(at) = read_at {
         let _ = writeln!(out);
@@ -88,6 +88,7 @@ pub fn build(
     if let Some(options) = &info.options {
         options_lines(out, options);
     }
+    env_variables(out, info.options.as_ref());
 
     let _ = writeln!(out, "\n## Model {}\n", model.id);
     model_lines(out, info, model);
@@ -98,6 +99,22 @@ pub fn build(
              secrets are left out and paths are cut to file names.\n"
         );
         fenced(out, "json", config);
+    }
+    if let Some(env) = &model.env {
+        let _ = writeln!(
+            out,
+            "\n### Engine environment\n\nThe run config's `env`, which Strata puts into the \
+             engine's environment at every start, as my web UI shows it in *Engine environment*:\n"
+        );
+        if env.is_empty() {
+            let _ = writeln!(out, "None set.");
+        } else {
+            let lines: Vec<String> = env
+                .iter()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect();
+            fenced(out, "text", &lines.join("\n"));
+        }
     }
     if let Some(chat) = &model.chat_settings {
         let ignored = model
@@ -158,7 +175,29 @@ pub fn build(
         "- Code benchmark: {}",
         code_bench_text(code_bench, &model.id)
     );
+    answer_lines(out, model);
     Ok(text)
+}
+
+/// How the answer has to end: one block per field of the web UI, each
+/// pasted as it is; no options for a Strata that keeps none by hand.
+fn answer_lines(out: &mut String, model: &StrataModel) {
+    let options = if model.user_args.is_some() {
+        "a `text` block with the whole new `user_args`, one option with its value per line \
+         (`--name value`), for the *Engine options* field in my web UI."
+    } else {
+        "an empty `text` block: my Strata version keeps no engine options set by hand."
+    };
+    let _ = writeln!(
+        out,
+        "\n## Your answer\n\nEnd your answer with exactly three code blocks, in this order, \
+         each ready to paste as it is and holding nothing else:\n\n\
+         1. Engine options: {options}\n\
+         2. Engine environment: a `text` block with the whole new `env`, one `NAME=value` per \
+         line, for the *Engine environment* field.\n\
+         3. Sampling: a `json` block with the whole new `sampling` object of the run config.\n\n\
+         Leave a block empty when nothing in its field should change."
+    );
 }
 
 /// The model's preset and Strata's word on it: an active one wins over the
@@ -318,12 +357,13 @@ fn options_lines(out: &mut String, options: &StrataOptions) {
             let _ = writeln!(out, "- {}", one_line(&try_text(one)));
         }
     }
-    if !options.never.is_empty() {
+    if options.never.iter().any(|rule| !rule.env) {
         let _ = writeln!(
             out,
             "\n### Settings the tuner never picks\n\nEach with Strata's reason:\n"
         );
-        for rule in &options.never {
+        // Variables are listed with the others they may be set to.
+        for rule in options.never.iter().filter(|rule| !rule.env) {
             let _ = writeln!(
                 out,
                 "- {}",
@@ -337,6 +377,48 @@ fn options_lines(out: &mut String, options: &StrataOptions) {
             "\n### Engine help\n\nWhat the engine prints for `--help`:\n"
         );
         fenced(out, "text", help);
+    }
+}
+
+/// The engine environment variables an answer may suggest: those of the
+/// tuner's tries, and those it never sets, with Strata's words.
+fn env_variables(out: &mut String, options: Option<&StrataOptions>) {
+    let _ = writeln!(out, "\n### Engine environment variables\n");
+    let tries: Vec<&TunerTry> = options
+        .map(|o| o.tries.iter().filter(|t| !t.env.is_empty()).collect())
+        .unwrap_or_default();
+    let never: Vec<&NeverRule> = options
+        .map(|o| o.never.iter().filter(|rule| rule.env).collect())
+        .unwrap_or_default();
+    if tries.is_empty() && never.is_empty() {
+        let _ = writeln!(
+            out,
+            "The PC service did not report the variables Strata's tuner knows, so suggest none."
+        );
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "The variables Strata's tuner knows; suggest no others. Answers as in *Options the tuner knows*.\n"
+    );
+    for one in tries {
+        let set: Vec<String> = one
+            .env
+            .iter()
+            .map(|(name, value)| match value {
+                Some(value) => format!("`{name}={value}`"),
+                None => format!("`{name}` removed"),
+            })
+            .collect();
+        let text = format!("{}: {}", set.join(", "), try_text(one));
+        let _ = writeln!(out, "- {}", one_line(&text));
+    }
+    for rule in never {
+        let _ = writeln!(
+            out,
+            "- {}",
+            one_line(&format!("never {}: {}", never_text(rule), rule.reason))
+        );
     }
 }
 
@@ -380,11 +462,7 @@ fn cell(text: &str) -> String {
 
 /// The setting and when the rule holds, e.g. `` `--spec` at_most 2, for flash-next ``.
 fn never_text(rule: &NeverRule) -> String {
-    let mut text = if rule.env {
-        format!("environment variable `{}`", rule.setting)
-    } else {
-        format!("`{}`", rule.setting)
-    };
+    let mut text = format!("`{}`", rule.setting);
     if !rule.values.is_empty() {
         let _ = write!(text, " = {}", rule.values.join(" or "));
     }

@@ -36,10 +36,13 @@ pub enum StrataJobKind {
     /// Replaces a model's engine options set by hand and its engine
     /// environment (`env`) together, with one restart.
     SetEngineSettings,
+    /// Switches a model's active preset off: back to the standard settings,
+    /// the preset stays saved.
+    PresetOff,
 }
 
 impl StrataJobKind {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Install,
         Self::AddModel,
         Self::Activate,
@@ -57,6 +60,7 @@ impl StrataJobKind {
         Self::UndoPreset,
         Self::SetUserArgs,
         Self::SetEngineSettings,
+        Self::PresetOff,
     ];
 }
 
@@ -213,6 +217,10 @@ pub enum StrataJobRequest {
         user_args: Option<Vec<String>>,
         env: BTreeMap<String, String>,
     },
+    /// Switches the active preset of `model` off (`strata presets off`).
+    PresetOff {
+        model: String,
+    },
 }
 
 impl StrataJobRequest {
@@ -235,6 +243,7 @@ impl StrataJobRequest {
             Self::UndoPreset { .. } => StrataJobKind::UndoPreset,
             Self::SetUserArgs { .. } => StrataJobKind::SetUserArgs,
             Self::SetEngineSettings { .. } => StrataJobKind::SetEngineSettings,
+            Self::PresetOff { .. } => StrataJobKind::PresetOff,
         }
     }
 }

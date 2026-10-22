@@ -2,6 +2,8 @@
 //! for the models, the output, version and benchmark, and the connection.
 //! A job's progress comes live with the overview stream.
 
+use std::collections::BTreeMap;
+
 use leptos::{html::Dialog, prelude::*};
 use leptos_router::components::{A, Outlet};
 use strata_pc_protocol::{BenchTool, MAX_SWITCHED_CONTEXT, StrataInstall};
@@ -46,6 +48,7 @@ impl Actions {
             tune_use: None,
             preset: None,
             options: None,
+            env: None,
         });
     }
 
@@ -61,6 +64,7 @@ impl Actions {
             tune_use: None,
             preset: None,
             options: None,
+            env: None,
         });
     }
 
@@ -76,6 +80,7 @@ impl Actions {
             tune_use: None,
             preset: None,
             options: None,
+            env: None,
         });
     }
 
@@ -91,13 +96,15 @@ impl Actions {
             tune_use: None,
             preset: None,
             options: None,
+            env: None,
         });
     }
 
-    /// Saves `options`, the field's text, as `model`'s engine options.
-    fn set_user_args(&self, model: String, options: String) {
+    /// Saves the fields' texts as `model`'s engine options (none for a
+    /// Strata that keeps none by hand) and engine environment.
+    fn set_engine_settings(&self, model: String, options: Option<String>, env: String) {
         self.start.dispatch(StartStrataJob {
-            kind: StrataJobKind::SetUserArgs,
+            kind: StrataJobKind::SetEngineSettings,
             family: None,
             size: None,
             context: None,
@@ -106,7 +113,8 @@ impl Actions {
             tune_mode: None,
             tune_use: None,
             preset: None,
-            options: Some(options),
+            options,
+            env: Some(env),
         });
     }
 
@@ -122,6 +130,7 @@ impl Actions {
             tune_use: Some(usage),
             preset: None,
             options: None,
+            env: None,
         });
     }
 
@@ -142,6 +151,7 @@ impl Actions {
             tune_use: None,
             preset: Some(preset),
             options: None,
+            env: None,
         });
     }
 }
@@ -205,10 +215,18 @@ pub fn StrataArea() -> impl IntoView {
         }
         now
     });
+    // Counts the jobs the PC service took: a refused one changes nothing, and
+    // asking again would build the models anew and drop an open dialog's text.
+    let started = RwSignal::new(0u32);
+    Effect::new(move || {
+        if matches!(actions.start.value().get(), Some(Ok(()))) {
+            started.update(|n| *n += 1);
+        }
+    });
     let page = Resource::new(
         move || {
             (
-                actions.start.version().get(),
+                started.get(),
                 actions.cancel.version().get(),
                 actions.summarize.version().get(),
                 job_ended.get(),
@@ -778,6 +796,7 @@ fn ModelChoice(
             tune_use: None,
             preset: None,
             options: None,
+            env: None,
         });
     };
     let picker = format!("{kind:?}-size");
@@ -1041,20 +1060,23 @@ fn ModelRow(
     let preset_button = presets
         .and_then(|p| p.latest.clone())
         .map(|preset| view! { <PresetButton model=model.id.clone() preset actions blocked /> });
-    let options = model.user_args.clone().map(|user| {
+    // Only from a PC service that knows the job that saves them.
+    let engine = model.env.clone().map(|env| {
         let started = model.started_args.clone().unwrap_or_default();
         let preset = presets.and_then(|p| p.latest.clone());
         view! {
-            <EngineOptions
+            <EngineSettings
                 id=model.id.clone()
                 active=model.active
-                user
+                user=model.user_args.clone()
+                env
                 started
                 preset
                 actions
                 blocked
             />
         }
+        .into_any()
     });
     // Only with word from the PC service: an older one does not say.
     let tune = match (model.tunable, model.tune_unavailable.clone()) {
@@ -1101,88 +1123,220 @@ fn ModelRow(
             {sampling}
             {last_tune}
             {preset_line}
-            {options}
             {switch}
             <div class="model-actions">
-                {activate}{projection}<OptimizationPrompt model=model.id.clone() />{preset_button}{tune}
+                {activate}{projection}{engine}<OptimizationPrompt model=model.id.clone() />{preset_button}{tune}
                 {delete}
             </div>
         </li>
     }
 }
 
-/// A model's engine options set by hand (`user_args`), one option per line
-/// in a field with *Save*, and the args Strata starts it with.
+/// *Engine settings* for one model: a dialog with its engine options set by
+/// hand (`user_args`, one option per line) and its engine environment
+/// (`env`, one `NAME=value` per line), the args Strata starts it with and
+/// one *Save* for both. Opened, it shows what the PC service reported; it
+/// stays open with the reason when the save is refused, so nothing typed
+/// is lost.
 #[component]
-fn EngineOptions(
+fn EngineSettings(
     id: String,
     active: bool,
-    user: Vec<String>,
+    /// `None` for a Strata that keeps no options by hand.
+    user: Option<Vec<String>>,
+    env: BTreeMap<String, String>,
     started: Vec<String>,
     preset: Option<StrataPreset>,
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
-    let saved = option_lines(&user, '\n');
-    let text = RwSignal::new(saved.clone());
+    let dialog = NodeRef::<Dialog>::new();
+    let saved_options = user.as_ref().map(|user| option_lines(user, '\n'));
+    let saved_env = env_lines(&env);
+    let options = RwSignal::new(saved_options.clone().unwrap_or_default());
+    let env_text = RwSignal::new(saved_env.clone());
+    let title_id = format!("engine-title-{id}");
+    let labelled_by = title_id.clone();
+    let options_id = format!("{id}-engine-options");
+    let env_id = format!("{id}-engine-env");
+    let title = format!("Engine settings for {id}");
     let preset_note = preset.filter(applied).map(|p| {
-        view! {
-            <p class="muted small">
-                {format!("Preset {} is active; its settings win over these.", p.name)}
-            </p>
-        }
+        let sets: Vec<&String> = p
+            .settings
+            .iter()
+            .filter(|s| !s.starts_with("per request"))
+            .collect();
+        let text = if sets.is_empty() {
+            format!("Preset {} is active; its settings win over these.", p.name)
+        } else {
+            let sets: Vec<&str> = sets.iter().map(|s| s.as_str()).collect();
+            format!(
+                "Preset {} is active and sets {}, which win over these.",
+                p.name,
+                sets.join(", ")
+            )
+        };
+        view! { <p class="muted small">{text}</p> }
     });
     let started_line = (!started.is_empty())
         .then(|| format!("Strata starts with: {}", option_lines(&started, ' ')));
-    let field = format!("{id}-engine-options");
-    let rows = (user.iter().filter(|a| a.starts_with("--")).count() + 1).clamp(2, 12);
-    let confirm = expect_context::<Confirm>();
-    let save = move |_| {
-        let (id, options) = (id.clone(), text.get());
-        if !active {
-            actions.set_user_args(id, options);
-            return;
+    let option_rows = user.as_ref().map_or(2, |user| {
+        (user.iter().filter(|a| a.starts_with("--")).count() + 1).clamp(3, 12)
+    });
+    let env_rows = (env.len() + 1).clamp(3, 12);
+    let close = move || {
+        if let Some(d) = dialog.get() {
+            d.close();
         }
-        let question = Question {
-            title: format!("Save the engine options of {id}?"),
-            text: "Strata restarts with them once no request is running. Requests wait meanwhile. If it does not start, the old ones come back."
-                .into(),
-            confirm: "Save",
-            danger: false,
-        };
-        confirm.ask(question, move || {
-            actions.set_user_args(id.clone(), options.clone())
-        });
     };
-    view! {
-        <div class="engine-options">
-            <label for=field.clone() class="muted small">
-                "Engine options (user_args), one per line"
-            </label>
+    // The save's way: sent, then seen pending, then its answer.
+    let saving = RwSignal::new(Saving::Idle);
+    let refused = RwSignal::new(None::<String>);
+    Effect::new(move || {
+        let pending = actions.start.pending().get();
+        match saving.get() {
+            Saving::Sent if pending => saving.set(Saving::Pending),
+            Saving::Pending if !pending => {
+                saving.set(Saving::Idle);
+                match actions.start.value().get_untracked() {
+                    Some(Err(e)) => refused.set(Some(error_text(&e))),
+                    _ => close(),
+                }
+            }
+            _ => {}
+        }
+    });
+    let (open_options, open_env) = (saved_options.clone(), saved_env.clone());
+    let open = move |_| {
+        refused.set(None);
+        options.set(open_options.clone().unwrap_or_default());
+        env_text.set(open_env.clone());
+        if let Some(d) = dialog.get() {
+            let _ = d.show_modal();
+        }
+    };
+    let keeps_options = saved_options.is_some();
+    let unchanged = {
+        let (saved_options, saved_env) = (saved_options.clone(), saved_env.clone());
+        move || {
+            env_text.with(|t| *t == saved_env)
+                && options.with(|t| Some(t) == saved_options.as_ref())
+        }
+    };
+    let save_id = id.clone();
+    let save = move |_| {
+        let options = keeps_options.then(|| options.get());
+        refused.set(None);
+        saving.set(Saving::Sent);
+        actions.set_engine_settings(save_id.clone(), options, env_text.get());
+    };
+    let options_field = if keeps_options {
+        view! {
+            <label for=options_id.clone()>"Engine options (user_args), one per line"</label>
             <textarea
-                id=field
+                id=options_id
                 class="code text"
-                rows=rows.to_string()
+                rows=option_rows.to_string()
                 spellcheck="false"
                 placeholder="none set by hand, e.g. --threads 8"
-                prop:value=move || text.get()
-                on:input=move |ev| text.set(as_lines(event_target_value(&ev)))
+                prop:value=move || options.get()
+                on:input=move |ev| options.set(as_lines(event_target_value(&ev)))
             >
-                {saved.clone()}
+                {saved_options.clone().unwrap_or_default()}
             </textarea>
-            <div class="model-actions">
-                <button
-                    type="button"
-                    class="secondary"
-                    disabled=move || blocked.get() || text.with(|t| *t == saved)
-                    on:click=save
-                >
-                    "Save engine options"
-                </button>
+        }
+        .into_any()
+    } else {
+        view! {
+            <p class="muted small">
+                "Engine options set by hand need a newer Strata: update Strata."
+            </p>
+        }
+        .into_any()
+    };
+    view! {
+        <button
+            type="button"
+            class="secondary"
+            disabled=move || blocked.get()
+            on:click=open
+        >
+            "Engine settings"
+        </button>
+        <dialog class="confirm wide engine-settings" node_ref=dialog aria-labelledby=labelled_by>
+            <h2 id=title_id>{title}</h2>
+            <div class="stack">
+                <div>{options_field}</div>
+                <div>
+                    <label for=env_id.clone()>"Engine environment (env), one NAME=value per line"</label>
+                    <textarea
+                        id=env_id
+                        class="code text"
+                        rows=env_rows.to_string()
+                        spellcheck="false"
+                        placeholder="none set, e.g. STRATA_PIN_BY_NEED=1"
+                        prop:value=move || env_text.get()
+                        on:input=move |ev| env_text.set(env_as_lines(event_target_value(&ev)))
+                    >
+                        {saved_env.clone()}
+                    </textarea>
+                    <p class="muted small">
+                        "Setup sets its own variables again when it runs. Variables whose name ends in KEY, TOKEN, SECRET or PASSWORD stay on the PC and do not show here."
+                    </p>
+                </div>
             </div>
             {started_line.map(|text| view! { <p class="muted small started-args">{text}</p> })}
             {preset_note}
-        </div>
+            {active
+                .then(|| {
+                    view! {
+                        <p class="muted">
+                            "Strata restarts with them once no request is running. Requests wait meanwhile. If it does not start, the old ones come back."
+                        </p>
+                    }
+                })}
+            {move || refused.get().map(|e| view! { <p class="error" role="alert">{e}</p> })}
+            <div class="actions">
+                <button type="button" class="secondary" on:click=move |_| close()>
+                    "Cancel"
+                </button>
+                <button
+                    type="button"
+                    disabled=move || blocked.get() || unchanged() || saving.get() != Saving::Idle
+                    on:click=save
+                >
+                    {if active { "Save and restart" } else { "Save" }}
+                </button>
+            </div>
+        </dialog>
+    }
+}
+
+/// Where a save of *Engine settings* is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Saving {
+    Idle,
+    Sent,
+    Pending,
+}
+
+/// The engine environment as its field holds it: one `NAME=value` per line.
+fn env_lines(env: &BTreeMap<String, String>) -> String {
+    env.iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The environment field's text, a pasted JSON object of strings turned
+/// into lines.
+fn env_as_lines(text: String) -> String {
+    if !text.trim_start().starts_with('{') {
+        return text;
+    }
+    match serde_json::from_str::<BTreeMap<String, String>>(&text) {
+        Ok(env) => env_lines(&env),
+        Err(_) => text,
     }
 }
 
@@ -2604,6 +2758,16 @@ mod tests {
         );
         assert_eq!(as_lines("[\"--threads\", ".into()), "[\"--threads\", ");
         assert_eq!(as_lines("--threads 8".into()), "--threads 8");
+    }
+
+    #[test]
+    fn a_pasted_json_object_becomes_environment_lines() {
+        assert_eq!(
+            env_as_lines(r#" {"STRATA_X": "1", "A": "b c=d"}"#.into()),
+            "A=b c=d\nSTRATA_X=1"
+        );
+        assert_eq!(env_as_lines("{\"X\": 1}".into()), "{\"X\": 1}");
+        assert_eq!(env_as_lines("X=1".into()), "X=1");
     }
 
     fn speed(label: &str, tok_s: f64) -> TuneSpeed {

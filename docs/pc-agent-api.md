@@ -284,6 +284,12 @@ configuration without `args_written`, whose Strata does not read them.
 `started_args` are the args Strata starts with, cut the same way and without
 an `--api-key` with its value. An older PC service leaves both out.
 
+`env` is the run config's engine environment (`env`) as name and value,
+`{}` without any, each path cut to its file name as in `config` and
+without variables whose name says they hold a secret (as `config` leaves
+them out). A PC service from before `set_engine_settings` leaves it out;
+the web UI offers *Engine settings* only with it.
+
 `context` is the value of `--max-context` in its configuration (tokens),
 `null` if the flag is missing or its value is not a number. An older
 PC service leaves the field out.
@@ -458,6 +464,7 @@ little space, deleting the active model).
 | `set_speed_projection` | `model`, `on` | turns speed projection on or off in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_user_args` | `model`, `user_args` | replaces the engine options set by hand in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
+| `set_engine_settings` | `model`, `env`, `user_args` (optional) | replaces the engine environment and, if given, the engine options set by hand, as `set_user_args` does; one restart for both |
 | `apply_preset` | `model`, `preset` | Terminal only: `strata presets apply <preset>`; the active model restarts once Strata is not handling a request |
 | `undo_preset` | `model`, `preset` | Terminal only: `strata presets undo <preset>`, back to the preset active before (or the standard settings); the active model restarts as with `apply_preset` |
 | `tune` | `model`, `mode` (`quick`, `thorough`), `use` (`coding`, `chat`) | Terminal only: waits until Strata is not handling a request, stops it, runs `strata tune auto <run config> --goal speed` and starts Strata again; the result goes to `last_tune`, the active settings stay as they were |
@@ -532,10 +539,23 @@ itself may come back unchanged. A configuration without `args_written`
 installed are a `409`. Whether Strata knows an option is not checked: the
 restart below shows it.
 
+`set_engine_settings` replaces `env` with the names and values as given (an
+empty object removes the key) and, if `user_args` is there, `user_args` as
+`set_user_args` does, with its refusals; without it `user_args` stays. The
+values come as `GET /strata` shows them: a value equal to how the old one
+of that name shows keeps the old one, so a cut path stays whole. A variable
+with a secret, which never shows, stays. A name that is not letters, digits
+and `_` (not starting with a digit) is a `400`, as are `PATH`,
+`CUDA_VISIBLE_DEVICES`, `HIP_VISIBLE_DEVICES` and `CUDA_DEVICE_ORDER`:
+Strata puts `env` over the GPU choice's variables, so these would override
+it. Such a variable already there may come back unchanged. `user_args`
+for a configuration without `args_written` is a `409`; `env` is taken from
+every Strata.
+
 For the active model, the job waits after the restart until Strata answers on
 `/health`. If Strata exits before that or does not answer within
 `context_start_secs` (default 600), it writes the old `args`,
-`args_written` and `user_args` back,
+`args_written`, `user_args` and `env` back,
 restarts Strata with them and fails; the last lines of the
 Strata output are then in the job's `lines`. If the wait is
 cancelled, the old `args` are restored as well. A job does not start in

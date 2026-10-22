@@ -1,6 +1,8 @@
 //! Strata jobs: `POST /strata/jobs`, `GET /strata/job` and
 //! `POST /strata/job/cancel`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::TuneSpeed;
@@ -31,10 +33,13 @@ pub enum StrataJobKind {
     UndoPreset,
     /// Replaces a model's engine options set by hand (`user_args`).
     SetUserArgs,
+    /// Replaces a model's engine options set by hand and its engine
+    /// environment (`env`) together, with one restart.
+    SetEngineSettings,
 }
 
 impl StrataJobKind {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Install,
         Self::AddModel,
         Self::Activate,
@@ -51,6 +56,7 @@ impl StrataJobKind {
         Self::ApplyPreset,
         Self::UndoPreset,
         Self::SetUserArgs,
+        Self::SetEngineSettings,
     ];
 }
 
@@ -198,6 +204,15 @@ pub enum StrataJobRequest {
         model: String,
         user_args: Vec<String>,
     },
+    /// Replaces the model's engine environment (`env`, empty removes it)
+    /// and, when given, its engine options set by hand as `SetUserArgs`
+    /// does. Paths may come cut as `GET /strata` shows them.
+    SetEngineSettings {
+        model: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_args: Option<Vec<String>>,
+        env: BTreeMap<String, String>,
+    },
 }
 
 impl StrataJobRequest {
@@ -219,10 +234,18 @@ impl StrataJobRequest {
             Self::ApplyPreset { .. } => StrataJobKind::ApplyPreset,
             Self::UndoPreset { .. } => StrataJobKind::UndoPreset,
             Self::SetUserArgs { .. } => StrataJobKind::SetUserArgs,
+            Self::SetEngineSettings { .. } => StrataJobKind::SetEngineSettings,
         }
     }
 }
 
 fn is_false(b: &bool) -> bool {
     !b
+}
+
+/// A name `set_engine_settings` takes for the engine environment: letters,
+/// digits and `_`, not starting with a digit.
+pub fn is_env_name(name: &str) -> bool {
+    name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && name.chars().next().is_some_and(|c| !c.is_ascii_digit())
 }

@@ -236,32 +236,49 @@ async function oldFolder(page, errors, name) {
   return issue ? 1 : 0;
 }
 
-// Edits the active model's engine options: Save asks first, as Strata
-// restarts; cancelled again. Returns the number of findings.
+// Opens the active model's Engine settings: both fields as the PC service
+// reported them, Save and restart once changed; a refused save keeps the
+// dialog open; Cancel drops the edits.
+// Returns the number of findings.
 async function engineOptions(page, errors, name) {
   const wait = { timeout: 15000 };
   errors.length = 0;
   let issue = null;
   try {
     await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
-    const field = page.locator('#IQ3_XXS-engine-options');
-    await field.waitFor(wait);
-    if ((await field.inputValue()) !== '--threads 8') throw new Error(`field holds "${await field.inputValue()}"`);
-    await page.getByText('Strata starts with: --native').first().waitFor(wait);
-    await field.fill('--threads 8\n--no-mmap');
-    await page.getByRole('button', { name: 'Save engine options' }).first().click(wait);
+    await page.getByRole('button', { name: 'Engine settings' }).first().click(wait);
     const dialog = page.locator('dialog[open]');
-    await dialog.getByText('Save the engine options of IQ3_XXS?').waitFor(wait);
+    const field = dialog.locator('#IQ3_XXS-engine-options');
+    const env = dialog.locator('#IQ3_XXS-engine-env');
+    await field.waitFor(wait);
+    if ((await field.inputValue()) !== '--threads 8') throw new Error(`options hold "${await field.inputValue()}"`);
+    if ((await env.inputValue()) !== 'STRATA_PIN_BY_NEED=1') throw new Error(`env holds "${await env.inputValue()}"`);
+    await dialog.getByText('Strata starts with: --native').waitFor(wait);
+    const save = dialog.getByRole('button', { name: 'Save and restart' });
+    if (!(await save.isDisabled())) throw new Error('Save is enabled before a change');
+    await env.fill('STRATA_PIN_BY_NEED=1\nSTRATA_X=1');
+    if (await save.isDisabled()) throw new Error('Save stays disabled after a change');
     if (process.env.SHOTS === '1') {
-      await page.screenshot({ path: `${process.env.OUT}/${name}_engine-options.jpg`, type: 'jpeg', quality: 60 });
+      await page.screenshot({ path: `${process.env.OUT}/${name}_engine-settings.jpg`, type: 'jpeg', quality: 60 });
     }
+    // A refused save keeps the dialog open with the reason and what was typed.
+    await env.fill('9X=1');
+    await save.click(wait);
+    // The proxy's own refusal, or on the phone pass the PC's (a code
+    // benchmark from the desk pass still runs).
+    await dialog.getByRole('alert').waitFor(wait);
+    if ((await env.inputValue()) !== '9X=1') throw new Error('the refused text is gone');
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await page.locator('dialog[open]').waitFor({ state: 'detached', ...wait });
+    await page.getByRole('button', { name: 'Engine settings' }).first().click(wait);
+    const again = page.locator('dialog[open] #IQ3_XXS-engine-env');
+    if ((await again.inputValue()) !== 'STRATA_PIN_BY_NEED=1') throw new Error('Cancel kept the edit');
+    await page.locator('dialog[open]').getByRole('button', { name: 'Cancel' }).click();
   } catch (e) {
     issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
   }
   if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
-  console.log(`${issue ? 'FAIL' : 'ok  '} ${name} engine options${issue ? '\n     ' + issue : ''}`);
+  console.log(`${issue ? 'FAIL' : 'ok  '} ${name} engine settings${issue ? '\n     ' + issue : ''}`);
   return issue ? 1 : 0;
 }
 

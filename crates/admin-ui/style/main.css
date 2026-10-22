@@ -284,8 +284,7 @@ textarea.code.text {
 .model-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
 .model-actions .push { margin-left: auto; }
 .model-actions:empty { display: none; }
-.engine-options { margin-top: 8px; }
-.engine-options .lines { margin: 4px 0; overflow-wrap: anywhere; }
+.engine-settings textarea { width: 100%; }
 .started-args { overflow-wrap: anywhere; }
 .inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
 .inline-form button { white-space: nowrap; }

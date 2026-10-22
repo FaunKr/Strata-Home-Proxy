@@ -3,6 +3,7 @@
 //! reaches the page.
 
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -17,7 +18,7 @@ use strata_admin_ui::{
 };
 
 use strata_pc_protocol::{
-    PcStatus, StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState,
+    PcStatus, StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState, is_env_name,
 };
 
 use crate::{
@@ -345,7 +346,49 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
             model: model()?,
             user_args: engine_options(form.options.as_deref().unwrap_or(""))?,
         },
+        StrataJobKind::SetEngineSettings => StrataJobRequest::SetEngineSettings {
+            model: model()?,
+            user_args: form.options.as_deref().map(engine_options).transpose()?,
+            env: engine_env(form.env.as_deref().unwrap_or(""))?,
+        },
     })
+}
+
+/// The engine environment as its field holds it: a pasted JSON object of
+/// strings as it is, else one `NAME=value` per line, the name without the
+/// spaces around it, the value everything after the first `=` as it is.
+fn engine_env(text: &str) -> Result<BTreeMap<String, String>, String> {
+    let not_a_name = |name: &str| {
+        format!(
+            "\"{name}\" is not a variable name (letters, digits and _, not starting with a digit)."
+        )
+    };
+    if text.trim_start().starts_with('{') {
+        let env: BTreeMap<String, String> = serde_json::from_str(text)
+            .map_err(|_| "The pasted object is no JSON object of strings.".to_string())?;
+        return match env.keys().find(|name| !is_env_name(name)) {
+            Some(name) => Err(not_a_name(name)),
+            None => Ok(env),
+        };
+    }
+    let mut env = BTreeMap::new();
+    for (n, line) in text
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+    {
+        let Some((name, value)) = line.split_once('=') else {
+            return Err(format!("Line {} is not NAME=value: {}", n + 1, line.trim()));
+        };
+        let name = name.trim();
+        if !is_env_name(name) {
+            return Err(format!("Line {}: {}", n + 1, not_a_name(name)));
+        }
+        if env.insert(name.to_string(), value.to_string()).is_some() {
+            return Err(format!("Line {}: {name} is given twice.", n + 1));
+        }
+    }
+    Ok(env)
 }
 
 /// The engine options as the field holds them: a pasted JSON list of

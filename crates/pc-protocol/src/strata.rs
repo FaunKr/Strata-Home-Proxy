@@ -1,6 +1,8 @@
 //! `GET /strata`: Strata on the PC, its models, Strata's catalog,
 //! benchmarks and what an update brings.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{MachineFacts, StrataJob, StrataOptions};
@@ -133,6 +135,10 @@ pub struct StrataModel {
     /// same way; `None` from older services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_args: Option<Vec<String>>,
+    /// Its engine environment (`env`), each path cut to its file name;
+    /// empty without any, `None` from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<BTreeMap<String, String>>,
     /// Its Chat settings from Strata's web app as JSON text, cut the same
     /// way; `None` without the file, or from older services.
     #[serde(default, skip_serializing_if = "Option::is_none")]

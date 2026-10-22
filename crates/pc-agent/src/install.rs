@@ -9,6 +9,7 @@
 //! beside it ([`crate::terminal`]); an older Strata folder from source (a
 //! Git clone) holds both. The run configs have the same format in both.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -36,6 +37,18 @@ const WRITTEN_KEY: &str = "args_written";
 /// Since Strata 8aaf188a: the options set by hand, which Strata puts over
 /// `args` at every start and every setup run.
 const USER_KEY: &str = "user_args";
+/// The engine's environment, which Strata puts over the GPU choice's at
+/// every start (`serve/server.py`).
+const ENV_KEY: &str = "env";
+/// Environment variables the GPU choice in Strata's setup sets for the
+/// engine, and its search path for the engine's libraries; Windows reads
+/// names without case.
+const REFUSED_ENV: [&str; 4] = [
+    "PATH",
+    "CUDA_VISIBLE_DEVICES",
+    "HIP_VISIBLE_DEVICES",
+    "CUDA_DEVICE_ORDER",
+];
 /// Strata's vector, in the Strata folder.
 const PROJECTION_VECTOR: [&str; 3] = [
     "data",
@@ -592,6 +605,71 @@ impl Model {
         }
     }
 
+    /// The engine environment, as shown outside the PC: every path cut to
+    /// its file name, without variables whose name says they hold a secret.
+    pub fn shareable_env(&self) -> BTreeMap<String, String> {
+        self.env()
+            .filter(|(name, _)| !is_secret(name))
+            .map(|(name, value)| (name.clone(), shown(value)))
+            .collect()
+    }
+
+    fn env(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.fields
+            .get(ENV_KEY)
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+    }
+
+    /// Why `requested` cannot replace the engine environment, if it cannot:
+    /// a name that is not one, or one the GPU choice sets. Such a variable
+    /// already there may come back unchanged.
+    pub fn refused_env(&self, requested: &BTreeMap<String, String>) -> Option<String> {
+        let kept = self.shareable_env();
+        requested.iter().find_map(|(name, value)| {
+            if !strata_pc_protocol::is_env_name(name) {
+                Some(format!(
+                    "\"{name}\" is not a variable name: letters, digits and _, not starting with a digit"
+                ))
+            } else if REFUSED_ENV.iter().any(|r| r.eq_ignore_ascii_case(name))
+                && kept.get(name) != Some(value)
+            {
+                Some(format!(
+                    "{name} is set by the GPU choice: change it in Strata's setup"
+                ))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Replaces the engine environment with `requested`, which comes as
+    /// [`Self::shareable_env`] shows it; empty removes it. A value equal to
+    /// how the old one shows keeps the old one, so a cut path stays whole;
+    /// a variable with a secret, which never shows, stays.
+    pub fn set_env(&mut self, requested: &BTreeMap<String, String>) {
+        let old: serde_json::Map<String, Value> =
+            self.env().map(|(n, v)| (n.clone(), v.clone())).collect();
+        let mut env: serde_json::Map<String, Value> = old
+            .iter()
+            .filter(|(name, _)| is_secret(name))
+            .map(|(n, v)| (n.clone(), v.clone()))
+            .collect();
+        for (name, value) in requested {
+            let kept = old.get(name).filter(|v| shown(v) == *value);
+            env.insert(
+                name.clone(),
+                kept.cloned().unwrap_or_else(|| value.as_str().into()),
+            );
+        }
+        if env.is_empty() {
+            self.fields.remove(ENV_KEY);
+        } else {
+            self.fields.insert(ENV_KEY.into(), Value::Object(env));
+        }
+    }
+
     /// The context it starts with (`--max-context`), if the config says.
     pub fn context(&self) -> Option<u32> {
         let args = self.started_args();
@@ -622,7 +700,7 @@ impl Model {
     pub fn restore_args(&mut self, before: &Model) {
         let args = before.args().to_vec();
         *self.args_mut() = args;
-        for key in [WRITTEN_KEY, USER_KEY] {
+        for key in [WRITTEN_KEY, USER_KEY, ENV_KEY] {
             match before.fields.get(key) {
                 Some(v) => self.fields.insert(key.into(), v.clone()),
                 None => self.fields.remove(key),
@@ -806,6 +884,15 @@ fn shareable_args(args: &[Value]) -> Vec<String> {
             other => other.to_string(),
         })
         .collect()
+}
+
+/// A value as shown outside the PC: text with a path cut ([`shareable`]),
+/// anything else as JSON.
+fn shown(value: &Value) -> String {
+    match shareable(value) {
+        Value::String(text) => text,
+        other => other.to_string(),
+    }
 }
 
 /// `fields` as JSON text without secrets and with every path cut to its

@@ -88,6 +88,8 @@ pub struct FakePc {
     pub job_bodies: Mutex<Vec<Value>>,
     /// The PC service refuses jobs with this reason.
     pub refuse_job: Mutex<Option<String>>,
+    /// An older PC service: it cannot read jobs of this kind (`422`).
+    pub unknown_job: Mutex<Option<&'static str>>,
     pub job_cancels: AtomicUsize,
     pub job_polls: AtomicUsize,
     /// Version the PC service reports in `/status`; none, like an old service, if unset.
@@ -568,6 +570,7 @@ pub fn model(id: &str, family: Option<&str>, disk_bytes: u64, active: bool) -> S
         chat_settings: None,
         user_args: None,
         started_args: None,
+        env: None,
         load_lines: None,
         tunable: None,
         tune_unavailable: None,
@@ -648,6 +651,11 @@ pub async fn agent_start_job(State(pc): State<Pc>, Json(body): Json<Value>) -> R
 }
 
 fn start_job(pc: &Pc, body: Value) -> Response {
+    if let Some(kind) = *pc.unknown_job.lock().unwrap()
+        && body["kind"] == kind
+    {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "unknown variant").into_response();
+    }
     // The PC service takes only what the protocol says.
     let request: StrataJobRequest = match serde_json::from_value(body) {
         Ok(request) => request,
@@ -666,7 +674,9 @@ fn start_job(pc: &Pc, body: Value) -> Response {
         | StrataJobRequest::SetContext { model, .. }
         | StrataJobRequest::Tune { model, .. }
         | StrataJobRequest::ApplyPreset { model, .. }
-        | StrataJobRequest::UndoPreset { model, .. } => Some(model.clone()),
+        | StrataJobRequest::UndoPreset { model, .. }
+        | StrataJobRequest::SetUserArgs { model, .. }
+        | StrataJobRequest::SetEngineSettings { model, .. } => Some(model.clone()),
         _ => None,
     };
     let job = StrataJob {

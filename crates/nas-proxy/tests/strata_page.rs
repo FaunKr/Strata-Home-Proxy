@@ -962,15 +962,22 @@ async fn the_switch_and_the_removal_show_by_the_pc_s_state() {
         (on(StrataInstall::Terminal, true, true), false, true),
         (on(StrataInstall::Terminal, false, true), false, false),
     ] {
-        let state = format!("{:?}", report.info);
+        let state = format!(
+            "{:?}, old folder {}, served {}",
+            report.info.install, report.info.old_strata_folder, report.info.terminal_served
+        );
         *s.pc.strata_info.lock().unwrap() = Some(report);
         let html = b.page("/admin/strata/version").await;
         assert_eq!(
             html.contains("Switch to Strata Terminal"),
             switch,
-            "{state}"
+            "{state}: {html}"
         );
-        assert_eq!(html.contains("Remove old Strata folder"), remove, "{state}");
+        assert_eq!(
+            html.contains("Remove old Strata folder"),
+            remove,
+            "{state}: {html}"
+        );
     }
 }
 

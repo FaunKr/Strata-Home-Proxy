@@ -22,7 +22,7 @@ use crate::{
     agent::Agent,
     catalog::{self, Size},
     command::CommandSpec,
-    install::{Installation, Kind, Model},
+    install::{Installation, Kind, Model, SWITCH_FILE},
     job::{JobContext, KEPT_LINES, POLL, Step, unix_now},
     managed::Managed,
     releases,
@@ -310,7 +310,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             Ok(Plan::SwitchToTerminal { id })
         }
         StrataJobRequest::RemoveOldStrataFolder => {
-            if !Installation::new(dir, &agent.cfg.strata_data_dir).in_use() {
+            if !Installation::old(&agent.cfg).exists() {
                 return Err(Refusal::Conflict("There is no old Strata folder".into()));
             }
             if install.kind() == Kind::Source {
@@ -848,9 +848,10 @@ fn load_benchmarks(agent: &Agent) -> Vec<StrataBenchmark> {
 /// on the same Strata data folder with the model's context and speed
 /// projection (files already there are not downloaded again) and its Chat
 /// settings; once Strata has no request at work, `strata serve` replaces
-/// the old start. Until the Terminal's Strata answers, a failure or a
-/// cancel takes the Terminal's run config away again, so the old Strata
-/// folder is the service's Strata, and the old start serves again.
+/// the old start. Until then the old Strata folder stays the service's
+/// Strata ([`SWITCH_FILE`]), also across a restart of the service. Until the
+/// Terminal's Strata answers, a failure or a cancel takes the Terminal's
+/// run config away again and the old start serves again.
 async fn switch_to_terminal(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
     let agent = job.agent();
     let cfg = &agent.cfg;
@@ -858,7 +859,11 @@ async fn switch_to_terminal(job: &JobContext, id: &str) -> Result<Option<String>
     let terminal = Installation::terminal(&Terminal::of(cfg), &cfg.strata_data_dir);
     let size = catalog::by_id(id).expect("the check finds the model in the catalog");
     let model = old.read_model(id);
-    let before = agent.managed();
+    let switch = Switch {
+        model: id.to_string(),
+        managed: agent.managed(),
+    };
+    switch.save(agent).map_err(Step::Failed)?;
     let prepared = async {
         install_terminal(job).await?;
         let key = agent.strata_key.key(cfg).unwrap_or_default();
@@ -877,50 +882,53 @@ async fn switch_to_terminal(job: &JobContext, id: &str) -> Result<Option<String>
                 "The Strata Terminal's setup ended without a run config for {id}"
             )));
         }
-        terminal
-            .adopt_chat_settings(&old, id)
-            .map_err(Step::Failed)?;
-        manage(agent).await;
+        let (from, to) = (old.clone(), terminal.clone());
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || {
+            to.adopt_chat_settings(&from, &id)?;
+            to.manage();
+            Ok(())
+        })
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))?
+        .map_err(Step::Failed)?;
         agent.strata().wait_idle(job).await
     }
     .await;
     if let Err(stopped) = prepared {
         // The old Strata still runs; only the Terminal's run config goes.
-        return Err(match terminal.remove_config(id) {
-            Ok(()) => stopped,
-            Err(e) => Step::Failed(e),
-        });
+        return Err(switch
+            .undo(agent, &terminal)
+            .map_or_else(Step::Failed, |()| stopped));
     }
     job.step("Starting Strata on the Strata Terminal");
     agent.strata().stop();
-    let started = match agent.set_managed(managed_start(agent, &terminal, id)) {
+    // The start writes its new key into the service's Strata: the Terminal's.
+    let started = agent
+        .set_managed(managed_start(agent, &terminal, id))
+        .map_err(|e| e.to_string())
+        .and_then(|()| Switch::end(agent))
+        .map_err(Step::Failed);
+    let started = match started {
         Ok(()) => {
             agent.strata().start_again().await;
-            if agent.gaming() {
-                Ok(true)
-            } else {
-                agent.strata().came_up(job).await
-            }
+            agent.strata().came_up(job).await
         }
-        Err(e) => Err(Step::Failed(e.to_string())),
+        Err(e) => Err(e),
     };
     if let Ok(true) = started {
-        // In gaming mode Strata starts later; the watchdog notes its answer.
-        if !agent.gaming() {
-            note_served(agent);
-        }
+        note_served(agent);
         return Ok(None);
     }
     let output = agent.output.last_lines(KEPT_LINES);
     job.cleanup(async {
         job.step("Starting the old Strata again");
         agent.strata().stop();
-        let removed = terminal.remove_config(id);
-        let restored = agent.set_managed(before).map_err(|e| e.to_string());
+        let undone = switch.undo(agent, &terminal);
         agent.strata().start_again().await;
         // Strata's own words explain the failure.
         job.show_lines(output);
-        removed.and(restored)
+        undone
     })
     .await
     .map_err(Step::Failed)?;
@@ -930,12 +938,75 @@ async fn switch_to_terminal(job: &JobContext, id: &str) -> Result<Option<String>
     ))
 }
 
+/// A switch to the Strata Terminal under way: the model it takes over and
+/// the start from before, kept in [`SWITCH_FILE`].
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Switch {
+    model: String,
+    managed: Managed,
+}
+
+impl Switch {
+    fn path(agent: &Agent) -> PathBuf {
+        agent.cfg.state_dir().join(SWITCH_FILE)
+    }
+
+    fn save(&self, agent: &Agent) -> Result<(), String> {
+        let text = serde_json::to_string_pretty(self).expect("a switch serializes");
+        crate::write_replacing(&Self::path(agent), &text)
+            .map_err(|e| format!("{SWITCH_FILE} not written: {e}"))
+    }
+
+    /// The switch has proven itself as far as the service can tell: the
+    /// Terminal is the service's Strata from now on.
+    fn end(agent: &Agent) -> Result<(), String> {
+        match std::fs::remove_file(Self::path(agent)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(format!("{SWITCH_FILE} not deleted: {e}"))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Back to the old Strata folder: the Terminal's run config goes and
+    /// the start from before applies. Until the run config is gone, the
+    /// switch stays on record, so the next start of the service tries again.
+    fn undo(&self, agent: &Agent, terminal: &Installation) -> Result<(), String> {
+        self.save(agent)?;
+        let restored = agent
+            .set_managed(self.managed.clone())
+            .map_err(|e| e.to_string());
+        terminal.remove_config(&self.model)?;
+        restored?;
+        Self::end(agent)
+    }
+}
+
+/// At the service's start: undoes a switch to the Strata Terminal that the
+/// service's end interrupted before the Terminal's Strata started.
+fn undo_interrupted_switch(agent: &Agent) {
+    let Ok(text) = std::fs::read_to_string(Switch::path(agent)) else {
+        return;
+    };
+    let undone = serde_json::from_str::<Switch>(&text)
+        .map_err(|e| format!("{SWITCH_FILE} is invalid: {e}"))
+        .and_then(|switch| {
+            let cfg = &agent.cfg;
+            let terminal = Installation::terminal(&Terminal::of(cfg), &cfg.strata_data_dir);
+            switch.undo(agent, &terminal)
+        });
+    match undone {
+        Ok(()) => tracing::info!("An interrupted switch to the Strata Terminal was undone"),
+        Err(e) => tracing::error!("Interrupted switch to the Strata Terminal not undone: {e}"),
+    }
+}
+
 /// Deletes the old Strata folder; the Strata data folder and the Strata
 /// Terminal's folders stay, also where they lie inside it.
 async fn remove_old_strata_folder(job: &JobContext) -> Result<Option<String>, Step> {
     job.step("Deleting the old Strata folder");
     let cfg = &job.agent().cfg;
-    let old = Installation::new(&cfg.strata_dir, &cfg.strata_data_dir);
+    let old = Installation::old(cfg);
     let mut keep = vec![cfg.strata_home.clone(), cfg.strata_components.clone()];
     // The service's own state, should it lie inside.
     keep.extend(Some(cfg.state_dir()).filter(|d| d.starts_with(&cfg.strata_dir)));
@@ -1073,6 +1144,7 @@ fn active_changed(agent: &Agent, changed: &[String]) -> bool {
 /// configs as they are now.
 pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output = ()> + use<> {
     let after_update = crate::update::take_start_after_update(agent);
+    undo_interrupted_switch(agent);
     let changed = manage(agent).await;
     let agent = Arc::clone(agent);
     async move {
@@ -1624,7 +1696,7 @@ pub fn view(agent: &Agent) -> StrataReport {
     let info = StrataInfo {
         installed: install.is_set_up(),
         install: install.is_set_up().then_some(install.kind().into()),
-        old_strata_folder: Installation::new(&cfg.strata_dir, &cfg.strata_data_dir).in_use(),
+        old_strata_folder: Installation::old(cfg).exists(),
         terminal_served: terminal_served(agent),
         version,
         options,

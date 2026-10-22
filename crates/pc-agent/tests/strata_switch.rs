@@ -23,13 +23,28 @@ const CHAT: &str = r#"{"temperature": 0.6}"#;
 /// The old Strata folder serving IQ3_XXS with 128K context, the speed
 /// projection and Chat settings, its files in the Strata data folder.
 fn old_folder(s: &Setup) -> Managed {
+    old_folder_with(
+        s,
+        json!([
+            "--native",
+            "a.gguf",
+            "--max-context",
+            "131072",
+            "--control-vector-scaled",
+            "C:\\Strata\\data\\v.gguf",
+            "0.6"
+        ]),
+    )
+}
+
+/// The old Strata folder serving IQ3_XXS with these engine arguments.
+fn old_folder_with(s: &Setup, args: Value) -> Managed {
     let cfg = &s.agent.cfg;
     let leaves = SetupLeaves::new(&cfg.strata_dir, &cfg.strata_data_dir, "0123456789abcdef");
     leaves
         .model(
             "iq3_xxs",
-            json!({"exe": "strata.exe", "args": ["--native", "a.gguf", "--max-context", "131072",
-                "--control-vector-scaled", "C:\\Strata\\data\\v.gguf", "0.6"], "port": 8080}),
+            json!({"exe": "strata.exe", "args": args, "port": 8080}),
         )
         .chat_settings("iq3_xxs", CHAT)
         .download("IQ3_XXS", "a.gguf", "0123456789");
@@ -241,10 +256,10 @@ async fn the_switch_is_only_for_an_old_strata_folder() {
 async fn the_old_folder_stays_until_the_terminal_s_strata_has_served() {
     let s = setup("switch-remove-early").await;
     old_folder(&s);
+    let reason = refused(&s, "remove_old_strata_folder").await;
     assert!(
-        refused(&s, "remove_old_strata_folder")
-            .await
-            .contains("switch to the Strata Terminal first")
+        reason.contains("switch to the Strata Terminal first"),
+        "{reason}"
     );
     SetupLeaves::terminal(
         &s.agent.cfg.strata_home,
@@ -255,11 +270,8 @@ async fn the_old_folder_stays_until_the_terminal_s_strata_has_served() {
         "iq3_xxs",
         json!({"exe": "component:strata-engine", "args": []}),
     );
-    assert!(
-        refused(&s, "remove_old_strata_folder")
-            .await
-            .contains("has not served yet")
-    );
+    let reason = refused(&s, "remove_old_strata_folder").await;
+    assert!(reason.contains("has not served yet"), "{reason}");
     assert!(s.agent.cfg.strata_dir.join("setup.py").is_file());
 }
 
@@ -301,19 +313,7 @@ async fn a_cancel_while_strata_is_busy_leaves_the_old_strata_serving() {
     let s = setup("switch-cancel").await;
     let old = old_folder(&s);
     switchable(&s);
-    s.fake.strata_busy.store(true, Ordering::SeqCst);
-    assert_eq!(
-        post(&s, "/strata/jobs", json!({"kind": "switch_to_terminal"}))
-            .await
-            .0,
-        202
-    );
-    job_until(&s, "waiting for the request", |j| {
-        j["step"]
-            .as_str()
-            .is_some_and(|step| step.contains("running request"))
-    })
-    .await;
+    switch_waiting(&s).await;
     assert_eq!(post(&s, "/strata/job/cancel", json!({})).await.0, 202);
     assert_eq!(finished(&s).await["state"], "cancelled");
     assert_eq!(
@@ -367,4 +367,71 @@ async fn the_watchdog_notes_when_the_terminal_s_strata_answers() {
         .unwrap();
     s.agent.watchdog_tick().await;
     assert_eq!(get(&s, "/strata").await["terminal_served"], true);
+}
+
+/// Starts the switch and waits until it waits for Strata's running request,
+/// with the Terminal's run config written.
+async fn switch_waiting(s: &Setup) {
+    s.fake.strata_busy.store(true, Ordering::SeqCst);
+    let (code, answer) = post(s, "/strata/jobs", json!({"kind": "switch_to_terminal"})).await;
+    assert_eq!(code, 202, "{answer}");
+    job_until(s, "waiting for the request", |j| {
+        j["step"]
+            .as_str()
+            .is_some_and(|step| step.contains("running request"))
+    })
+    .await;
+    assert_eq!(terminal_folder(s).installation().models(), ["iq3_xxs"]);
+}
+
+#[tokio::test]
+async fn until_the_terminal_serves_the_page_shows_the_old_folder() {
+    let s = setup("switch-midway").await;
+    let old = old_folder(&s);
+    switchable(&s);
+    switch_waiting(&s).await;
+    let view = get(&s, "/strata").await;
+    assert_eq!(view["install"], "source", "{view}");
+    assert_eq!(view["models"][0]["active"], true, "{view}");
+
+    // The service ends here; the next one undoes the switch.
+    let again = s.restarted();
+    // What is left to do afterwards (a restart of Strata) does not matter here.
+    drop(strata_pc_agent::strata::manage_configs_at_start(&again).await);
+    assert_eq!(again.managed(), old);
+    assert!(terminal_folder(&s).installation().models().is_empty());
+    let view = serde_json::to_value(strata_pc_agent::strata::view(&again)).unwrap();
+    assert_eq!(view["install"], "source", "{view}");
+}
+
+#[tokio::test]
+async fn gaming_mode_during_the_switch_leaves_the_old_start() {
+    let s = setup("switch-gaming-midway").await;
+    let old = old_folder(&s);
+    switchable(&s);
+    switch_waiting(&s).await;
+    s.agent.set_gaming(true);
+    assert_eq!(finished(&s).await["state"], "cancelled");
+    assert_eq!(s.agent.managed(), old);
+    assert!(terminal_folder(&s).installation().models().is_empty());
+    assert_eq!(get(&s, "/strata").await["install"], "source");
+}
+
+#[tokio::test]
+async fn a_model_without_a_context_switches_with_the_default_one() {
+    let s = setup("switch-default-context").await;
+    old_folder_with(&s, json!(["--native", "a.gguf"]));
+    switchable(&s);
+    assert_eq!(job(&s, "switch_to_terminal").await["state"], "done");
+    let setup = &s.fake.runs_of("python")[0];
+    for wanted in [
+        ["--context", "65536"],
+        ["--experimental-speed-projection", "off"],
+    ] {
+        assert!(
+            setup.args.windows(2).any(|w| w == wanted),
+            "{wanted:?}: {:?}",
+            setup.args
+        );
+    }
 }

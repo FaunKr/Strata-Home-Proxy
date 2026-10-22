@@ -52,6 +52,11 @@ const SAMPLING_KEY: &str = "sampling";
 
 type ConfigFields = serde_json::Map<String, Value>;
 
+/// In the service's state folder while a switch to the Strata Terminal
+/// has not proven itself: the old Strata folder stays the service's Strata,
+/// though the Terminal has a run config already.
+pub const SWITCH_FILE: &str = "strata-switch.json";
+
 /// The Strata folder and the data folder its models live in.
 #[derive(Clone, Debug)]
 pub struct Installation {
@@ -114,12 +119,14 @@ impl Installation {
     }
 
     /// The service's Strata: the Strata Terminal, unless an older Strata
-    /// folder is in use and the Terminal has no run configs yet. A PC
-    /// without Strata gets the Terminal.
+    /// folder is there and the Terminal has no run configs yet, or a switch
+    /// to the Terminal is under way ([`SWITCH_FILE`]). A PC without Strata
+    /// gets the Terminal.
     pub fn of(cfg: &crate::Config) -> Self {
         let terminal = Self::terminal(&Terminal::of(cfg), &cfg.strata_data_dir);
-        let source = Self::new(&cfg.strata_dir, &cfg.strata_data_dir);
-        if source.in_use() && terminal.models().is_empty() {
+        let source = Self::old(cfg);
+        let switching = cfg.state_dir().join(SWITCH_FILE).exists();
+        if source.exists() && (switching || terminal.models().is_empty()) {
             source
         } else {
             terminal
@@ -130,9 +137,14 @@ impl Installation {
         self.kind
     }
 
+    /// The Strata folder from source in `strata_dir`, there or not.
+    pub fn old(cfg: &crate::Config) -> Self {
+        Self::new(&cfg.strata_dir, &cfg.strata_data_dir)
+    }
+
     /// Whether this Strata folder from source is there: its setup or run
     /// configs.
-    pub fn in_use(&self) -> bool {
+    pub fn exists(&self) -> bool {
         self.code.join("setup.py").is_file() || !self.models().is_empty()
     }
 
@@ -339,11 +351,15 @@ impl Installation {
     }
 
     /// Deletes the whole Strata folder, but never the Strata data folder,
-    /// the folders in `keep` or the folders on the way to them.
+    /// the folders in `keep` or the folders on the way to them, however
+    /// their paths are spelled (letter case, short names, junctions).
     pub fn remove_folder(&self, keep: &[PathBuf]) -> Result<(), String> {
-        let mut keep = keep.to_vec();
-        keep.push(self.data.clone());
-        if keep.iter().any(|k| self.dir.starts_with(k)) {
+        let keep: Vec<PathBuf> = keep
+            .iter()
+            .chain([&self.data])
+            .map(|k| same_spelling(k))
+            .collect();
+        if keep.iter().any(|k| same_spelling(&self.dir).starts_with(k)) {
             return Err(format!(
                 "{} lies in a folder that stays and is not deleted",
                 self.dir.display()
@@ -833,8 +849,21 @@ fn projection_flag_values(flag: &str) -> Option<usize> {
         .map(|(_, values)| values.len())
 }
 
-/// Deletes `dir` with everything in it but `keep` and the folders on the
-/// way to them; gives whether `dir` is still there.
+/// A path spelled the one way two spellings of it compare equal: resolved
+/// (short names, junctions, `subst`) where it exists, in lower case on
+/// Windows, whose paths ignore letter case.
+fn same_spelling(path: &Path) -> PathBuf {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if cfg!(windows) {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    } else {
+        path
+    }
+}
+
+/// Deletes `dir` with everything in it but `keep` (as [`same_spelling`]
+/// gives them) and the folders on the way to them; gives whether `dir` is
+/// still there.
 fn remove_except(dir: &Path, keep: &[PathBuf]) -> Result<bool, String> {
     let not_deleted =
         |path: &Path, e: std::io::Error| format!("{} not deleted: {e}", path.display());
@@ -847,9 +876,10 @@ fn remove_except(dir: &Path, keep: &[PathBuf]) -> Result<bool, String> {
     for entry in entries {
         let entry = entry.map_err(|e| not_deleted(dir, e))?;
         let path = entry.path();
-        if keep.contains(&path) {
+        let spelled = same_spelling(&path);
+        if keep.contains(&spelled) {
             stays = true;
-        } else if keep.iter().any(|k| k.starts_with(&path)) {
+        } else if keep.iter().any(|k| k.starts_with(&spelled)) {
             stays |= remove_except(&path, keep)?;
         } else {
             let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
@@ -1042,6 +1072,48 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn put(path: PathBuf, content: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn removing_the_folder_keeps_a_folder_inside_however_it_is_spelled() {
+        let f = Folders::new("remove-folder");
+        let strata = f.0.join("Strata");
+        let data = strata.join("models").join("data");
+        let install = Installation::new(&strata, &data);
+        put(strata.join("setup.py"), "");
+        put(strata.join(".git").join("HEAD"), "0123456789\n");
+        put(data.join("models").join("IQ3_XXS").join("a.gguf"), "0123");
+        put(strata.join("models").join("other.txt"), "");
+        let spelled = strata.join("models").join("..").join("models").join("kept");
+        put(spelled.join("state.json"), "{}");
+
+        install.remove_folder(&[spelled]).unwrap();
+        assert!(data.join("models").join("IQ3_XXS").join("a.gguf").is_file());
+        assert!(
+            strata
+                .join("models")
+                .join("kept")
+                .join("state.json")
+                .is_file()
+        );
+        assert!(!strata.join("setup.py").exists());
+        assert!(!strata.join(".git").exists());
+        assert!(!strata.join("models").join("other.txt").exists());
+    }
+
+    #[test]
+    fn a_strata_folder_inside_a_kept_one_is_not_deleted() {
+        let f = Folders::new("remove-inside");
+        let strata = f.0.join("data").join("Strata");
+        put(strata.join("setup.py"), "");
+        let install = Installation::new(&strata, f.0.join("data"));
+        assert!(install.remove_folder(&[]).is_err());
+        assert!(strata.join("setup.py").is_file());
     }
 
     fn config(args: Value) -> Value {

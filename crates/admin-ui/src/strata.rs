@@ -1204,6 +1204,9 @@ fn TerminalSwitch(
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
+    if !info.old_strata_folder {
+        return None;
+    }
     let confirm = expect_context::<Confirm>();
     let wakes = if asleep {
         "The PC wakes up first. "
@@ -1247,14 +1250,7 @@ fn TerminalSwitch(
     } else {
         return None;
     };
-    if !info.old_strata_folder {
-        return None;
-    }
-    let class = if kind == StrataJobKind::RemoveOldStrataFolder {
-        "ghost-danger"
-    } else {
-        ""
-    };
+    let class = if question.danger { "ghost-danger" } else { "" };
     Some(view! {
         <section class="card">
             <h2>"Strata Terminal"</h2>

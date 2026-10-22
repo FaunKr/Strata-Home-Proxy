@@ -135,10 +135,14 @@ service sets loop recovery and sampling in the new run config as in every
 other. Once Strata has no request at work, the service stops the old Strata
 and starts `strata serve` with the new run config.
 
-Until the Terminal's Strata answers on `/health`, any failure (no engine for
-the card, a failed setup, Strata not answering within `context_start_secs`)
-and *Cancel* take the Terminal's run config away and bring the old start
-back: the old Strata folder serves again, and the job names the reason.
+Until the old Strata stops, the old Strata folder stays the service's Strata
+(`strata-switch.json` next to the TOML holds the start from before); a
+service that ends meanwhile undoes the switch at its next start. Until the
+Terminal's Strata answers on `/health`, any failure (no engine for the card,
+a failed setup, Strata not answering within `context_start_secs`), *Cancel*
+and gaming mode (which cancels the job) take the Terminal's run config away
+and bring the old start back: the old Strata folder serves again, and the
+job names the reason.
 
 After the first answer of the Terminal's Strata (the service keeps
 `strata-terminal-served` next to the TOML), **Remove old Strata folder**

@@ -1034,7 +1034,7 @@ async fn change_preset(
             terminal.apply_preset(preset)
         }
         PresetChange::Off => {
-            job.step("Switching the preset off");
+            job.step("Turning the preset off");
             terminal.preset_off(&Installation::of(&agent.cfg).config_path(id))
         }
     };
@@ -2187,7 +2187,7 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SetContext => "Change context",
         StrataJobKind::SetUserArgs => "Save engine options",
         StrataJobKind::SetEngineSettings => "Save engine settings",
-        StrataJobKind::PresetOff => "Switch the preset off",
+        StrataJobKind::PresetOff => "Turn the preset off",
         StrataJobKind::CompareModels => "Compare models",
         StrataJobKind::SwitchToTerminal => "Switch to the Strata Terminal",
         StrataJobKind::RemoveOldStrataFolder => "Remove the old Strata folder",

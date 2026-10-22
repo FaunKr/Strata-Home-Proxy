@@ -155,7 +155,7 @@ impl Actions {
         });
     }
 
-    /// Switches `model`'s active preset off; the preset stays saved.
+    /// Turns `model`'s active preset off; the preset stays saved.
     fn preset_off(&self, model: String) {
         self.start.dispatch(StartStrataJob {
             kind: StrataJobKind::PresetOff,

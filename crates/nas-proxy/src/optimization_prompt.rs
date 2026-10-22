@@ -175,19 +175,24 @@ pub fn build(
         "- Code benchmark: {}",
         code_bench_text(code_bench, &model.id)
     );
-    answer_lines(out);
+    answer_lines(out, model);
     Ok(text)
 }
 
 /// How the answer has to end: one block per field of the web UI, each
-/// pasted as it is.
-fn answer_lines(out: &mut String) {
+/// pasted as it is; no options for a Strata that keeps none by hand.
+fn answer_lines(out: &mut String, model: &StrataModel) {
+    let options = if model.user_args.is_some() {
+        "a `text` block with the whole new `user_args`, one option with its value per line \
+         (`--name value`), for the *Engine options* field in my web UI."
+    } else {
+        "an empty `text` block: my Strata version keeps no engine options set by hand."
+    };
     let _ = writeln!(
         out,
         "\n## Your answer\n\nEnd your answer with exactly three code blocks, in this order, \
          each ready to paste as it is and holding nothing else:\n\n\
-         1. Engine options: a `text` block with the whole new `user_args`, one option with its \
-         value per line (`--name value`), for the *Engine options* field in my web UI.\n\
+         1. Engine options: {options}\n\
          2. Engine environment: a `text` block with the whole new `env`, one `NAME=value` per \
          line, for the *Engine environment* field.\n\
          3. Sampling: a `json` block with the whole new `sampling` object of the run config.\n\n\
@@ -405,11 +410,7 @@ fn env_variables(out: &mut String, options: Option<&StrataOptions>) {
                 None => format!("`{name}` removed"),
             })
             .collect();
-        let mut text = format!("{}: {}", set.join(", "), one.label);
-        if !one.families.is_empty() {
-            let _ = write!(text, ", for {}", one.families.join(", "));
-        }
-        let _ = write!(text, ", {}", one.answer);
+        let text = format!("{}: {}", set.join(", "), try_text(one));
         let _ = writeln!(out, "- {}", one_line(&text));
     }
     for rule in never {

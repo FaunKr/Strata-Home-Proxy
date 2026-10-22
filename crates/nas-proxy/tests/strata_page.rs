@@ -1200,31 +1200,35 @@ async fn an_active_preset_says_it_wins_over_the_engine_options() {
 
 // --- #306 turning a preset off ---
 
-#[tokio::test]
-async fn only_an_active_preset_can_be_turned_off_and_only_with_word_on_the_environment() {
+/// How often the Strata page offers *Turn off preset* when IQ3_XXS has a
+/// preset (`active` or only saved) and the PC service reports its engine
+/// environment or not.
+async fn turn_off_buttons(active: bool, env: bool) -> usize {
     let s = setup(true, |_| {}).await;
     let mut report = with_engine_options();
     report.info.models[0].presets = serde_json::from_value(json!({
-        "latest": {"id": "p1", "name": "Full speed", "active": true, "state": "fresh"}
+        "latest": {"id": "p1", "name": "Full speed", "active": active, "state": "fresh"}
     }))
     .unwrap();
-    report.info.models[1].presets = serde_json::from_value(json!({
-        "latest": {"id": "p2", "name": "Saved", "active": false}
-    }))
-    .unwrap();
-    // An older PC service: active, but it does not know the job.
-    report.info.models.push(report.info.models[1].clone());
-    report.info.models[2].id = "swift-IQ3_M".into();
-    report.info.models[2].env = None;
-    report.info.models[2].presets = serde_json::from_value(json!({
-        "latest": {"id": "p3", "name": "Older", "active": true, "state": "fresh"}
-    }))
-    .unwrap();
+    if !env {
+        report.info.models[0].env = None;
+    }
     *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
-    assert_eq!(html.matches("Turn off preset").count(), 1, "{html}");
+    html.matches(">Turn off preset<").count()
+}
+
+#[tokio::test]
+async fn only_the_active_preset_can_be_turned_off() {
+    assert_eq!(turn_off_buttons(true, true).await, 1);
+    assert_eq!(turn_off_buttons(false, true).await, 0);
+}
+
+#[tokio::test]
+async fn a_pc_service_without_word_on_the_environment_gets_no_turn_off() {
+    assert_eq!(turn_off_buttons(true, false).await, 0);
 }
 
 // --- #297 saving the engine options ---

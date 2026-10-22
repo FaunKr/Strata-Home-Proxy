@@ -308,7 +308,7 @@ pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SetContext => "Changing context",
         StrataJobKind::SetUserArgs => "Saving engine options",
         StrataJobKind::SetEngineSettings => "Saving engine settings",
-        StrataJobKind::PresetOff => "Switching the preset off",
+        StrataJobKind::PresetOff => "Turning the preset off",
         StrataJobKind::CompareModels => "Comparing models",
         StrataJobKind::SwitchToTerminal => "Switching to the Strata Terminal",
         StrataJobKind::RemoveOldStrataFolder => "Removing the old Strata folder",

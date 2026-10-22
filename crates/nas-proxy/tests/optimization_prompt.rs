@@ -24,7 +24,9 @@ async fn prompt(b: &mut Browser, model: &str) -> String {
 #[tokio::test]
 async fn asks_for_three_blocks_as_the_fields_take_them() {
     let s = setup(true, |_| {}).await;
-    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    let mut report = strata_info(true);
+    report.info.models[0].user_args = Some(vec!["--threads".into(), "8".into()]);
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     let text = prompt(&mut b, "IQ3_XXS").await;
     let answer = text
@@ -46,6 +48,23 @@ async fn asks_for_three_blocks_as_the_fields_take_them() {
         ),
         "{text}"
     );
+}
+
+#[tokio::test]
+async fn a_strata_that_keeps_no_options_by_hand_gets_an_empty_options_block() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.models[0].user_args = None;
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert!(
+        text.contains(
+            "1. Engine options: an empty `text` block: my Strata version keeps no engine options set by hand."
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("the whole new `user_args`"), "{text}");
 }
 
 #[tokio::test]
@@ -561,7 +580,7 @@ async fn carries_strata_s_options_when_the_pc_service_read_them() {
         "| `--odd` | a\\|b | exact ## not a heading |",
         "- Shorter speculative window (3 tokens) (`--spec 3`), for flash-next: placement",
         "### Engine environment variables\n\nThe variables Strata's tuner knows; suggest no others.",
-        "- `STRATA_PIN_BY_NEED=1`: Pin memory only when needed, for flash-next, exact",
+        "- `STRATA_PIN_BY_NEED=1`: Pin memory only when needed, for flash-next: exact",
         "- never `STRATA_SH_STREAM`, on PCs with gfx12: it halves decode speed",
         "- `--spec` at_most 2, for flash-next: a 2-token window",
         "```text\nstrata generate --pack DIR [options]\n  --kv-grow  grow\n```",

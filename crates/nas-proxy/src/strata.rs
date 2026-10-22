@@ -3,6 +3,7 @@
 //! reaches the page.
 
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -345,7 +346,46 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
             model: model()?,
             user_args: engine_options(form.options.as_deref().unwrap_or(""))?,
         },
+        StrataJobKind::SetEngineSettings => StrataJobRequest::SetEngineSettings {
+            model: model()?,
+            user_args: form.options.as_deref().map(engine_options).transpose()?,
+            env: engine_env(form.env.as_deref().unwrap_or(""))?,
+        },
     })
+}
+
+/// The engine environment as its field holds it: a pasted JSON object of
+/// strings as it is, else one `NAME=value` per line, the value everything
+/// after the first `=` as it is.
+fn engine_env(text: &str) -> Result<BTreeMap<String, String>, String> {
+    if text.trim_start().starts_with('{') {
+        return serde_json::from_str(text)
+            .map_err(|_| "The pasted object is no JSON object of strings.".to_string());
+    }
+    let mut env = BTreeMap::new();
+    for (n, line) in text
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+    {
+        let line = line.trim();
+        let Some((name, value)) = line.split_once('=') else {
+            return Err(format!("Line {} is not NAME=value: {line}", n + 1));
+        };
+        let name = name.trim();
+        let valid = name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && name.chars().next().is_some_and(|c| !c.is_ascii_digit());
+        if !valid {
+            return Err(format!(
+                "Line {}: \"{name}\" is not a variable name (letters, digits and _, not starting with a digit).",
+                n + 1
+            ));
+        }
+        if env.insert(name.to_string(), value.to_string()).is_some() {
+            return Err(format!("Line {}: {name} is given twice.", n + 1));
+        }
+    }
+    Ok(env)
 }
 
 /// The engine options as the field holds them: a pasted JSON list of

@@ -2140,6 +2140,186 @@ async fn engine_options_strata_does_not_start_with_go_back() {
     }
 }
 
+// --- #305 the engine environment ---
+
+/// A model config with `env` beside the options set by hand.
+fn config_with_env(s: &Setup, id: &str, env: Value) {
+    let args = json!(["--native", "C:/Users/faun/strata/b.gguf"]);
+    strata_folder(s).config(
+        id,
+        json!({"exe": "C:/Strata/engine/strata.exe", "args": args, "port": 8080,
+            "api_key": OLD_KEY, "args_written": args, "user_args": ["--threads", "8"],
+            "env": env}),
+    );
+}
+
+#[tokio::test]
+async fn a_model_shows_its_engine_environment() {
+    let s = setup("models-env-shown").await;
+    installed(&s);
+    config_with_env(
+        &s,
+        "coder-iq1_m",
+        json!({"STRATA_HIPBLASLT_TUNING": "C:\\Users\\faun\\Strata\\tuning\\gfx1100.csv",
+            "STRATA_PIN_BY_NEED": "1", "HF_TOKEN": "secret-token"}),
+    );
+    let view = get(&s, "/strata").await;
+    assert_eq!(
+        model(&view, "coder-IQ1_M")["env"],
+        json!({"STRATA_HIPBLASLT_TUNING": "gfx1100.csv", "STRATA_PIN_BY_NEED": "1"}),
+        "paths cut, secrets out: {view}"
+    );
+    assert!(!view.to_string().contains("faun"), "{view}");
+    assert!(!view.to_string().contains("secret-token"), "{view}");
+    // Without an env block: empty.
+    assert_eq!(model(&view, "IQ3_XXS")["env"], json!({}), "{view}");
+}
+
+#[tokio::test]
+async fn saving_engine_settings_replaces_options_and_environment_together() {
+    let s = setup("models-env-save").await;
+    installed(&s);
+    let tuning = "C:\\Users\\faun\\Strata\\tuning\\gfx1100.csv";
+    config_with_env(
+        &s,
+        "coder-iq1_m",
+        json!({"STRATA_HIPBLASLT_TUNING": tuning, "STRATA_OLD": "1", "HF_TOKEN": "t"}),
+    );
+    let old = modified(&s, "coder-iq1_m");
+    let done = job(
+        &s,
+        json!({"kind": "set_engine_settings", "model": "coder-IQ1_M",
+            "user_args": ["--threads", "12"],
+            "env": {"STRATA_HIPBLASLT_TUNING": "gfx1100.csv", "STRATA_PIN_BY_NEED": "1",
+                "STRATA_NOTE": "a b=c"}}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let cfg = read_config(&s, "coder-iq1_m");
+    assert_eq!(cfg["user_args"], json!(["--threads", "12"]), "{cfg}");
+    assert_eq!(
+        cfg["env"],
+        json!({"STRATA_HIPBLASLT_TUNING": tuning, "STRATA_PIN_BY_NEED": "1",
+            "STRATA_NOTE": "a b=c", "HF_TOKEN": "t"}),
+        "an unchanged cut path stays whole, a secret stays, the rest is replaced: {cfg}"
+    );
+    assert_eq!(cfg["args_written"], cfg["args"], "{cfg}");
+    assert_eq!(modified(&s, "coder-iq1_m"), old);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0, "an inactive model");
+}
+
+#[tokio::test]
+async fn a_new_path_with_the_same_file_name_is_taken_as_it_is_in_the_environment() {
+    let s = setup("models-env-new-path").await;
+    installed(&s);
+    config_with_env(&s, "coder-iq1_m", json!({"STRATA_TABLE": "D:/old/t.csv"}));
+    let env = json!({"STRATA_TABLE": "E:/new/t.csv"});
+    let body = json!({"kind": "set_engine_settings", "model": "coder-IQ1_M", "env": env});
+    assert_eq!(job(&s, body).await["state"], "done");
+    assert_eq!(read_config(&s, "coder-iq1_m")["env"], env);
+}
+
+#[tokio::test]
+async fn saving_no_environment_removes_it_and_keeps_the_options() {
+    let s = setup("models-env-clear").await;
+    installed(&s);
+    config_with_env(&s, "coder-iq1_m", json!({"STRATA_PIN_BY_NEED": "1"}));
+    let body = json!({"kind": "set_engine_settings", "model": "coder-IQ1_M", "env": {}});
+    assert_eq!(job(&s, body).await["state"], "done");
+    let cfg = read_config(&s, "coder-iq1_m");
+    assert!(cfg.get("env").is_none(), "{cfg}");
+    assert_eq!(cfg["user_args"], json!(["--threads", "8"]), "{cfg}");
+}
+
+#[tokio::test]
+async fn variables_the_gpu_choice_sets_are_refused_unless_unchanged() {
+    let s = setup("models-env-refused").await;
+    installed(&s);
+    config_with_env(&s, "coder-iq1_m", json!({"CUDA_VISIBLE_DEVICES": "1"}));
+    let before = strata_folder(&s).text("coder-iq1_m");
+    for (env, says) in [
+        (json!({"PATH": "C:/x"}), "GPU choice"),
+        (json!({"CUDA_VISIBLE_DEVICES": "0"}), "GPU choice"),
+        (json!({"HIP_VISIBLE_DEVICES": "0"}), "GPU choice"),
+        (json!({"CUDA_DEVICE_ORDER": "FASTEST_FIRST"}), "GPU choice"),
+        (json!({"9LIVES": "1"}), "not a variable name"),
+        (json!({"A-B": "1"}), "not a variable name"),
+    ] {
+        let body = json!({"kind": "set_engine_settings", "model": "coder-IQ1_M", "env": env});
+        let (code, answer) = post(&s, "/strata/jobs", body).await;
+        assert_eq!(code, 400, "{env}: {answer}");
+        assert!(answer.to_string().contains(says), "{env}: {answer}");
+    }
+    let body = json!({"kind": "set_engine_settings", "model": "coder-IQ1_M",
+        "user_args": ["--host", "0.0.0.0"], "env": {}});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 400, "the options' refusals: {answer}");
+    assert_eq!(strata_folder(&s).text("coder-iq1_m"), before);
+    // What Strata's setup put there may come back unchanged.
+    let body = json!({"kind": "set_engine_settings", "model": "coder-IQ1_M",
+        "env": {"CUDA_VISIBLE_DEVICES": "1", "STRATA_X": "1"}});
+    assert_eq!(job(&s, body).await["state"], "done");
+}
+
+#[tokio::test]
+async fn options_for_a_strata_that_keeps_none_by_hand_are_refused_but_the_environment_is_not() {
+    let s = setup("models-env-older").await;
+    installed(&s);
+    let body = json!({"kind": "set_engine_settings", "model": "coder-IQ1_M",
+        "user_args": [], "env": {}});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 409, "{answer}");
+    let body = json!({"kind": "set_engine_settings", "model": "coder-IQ1_M",
+        "env": {"STRATA_X": "1"}});
+    assert_eq!(job(&s, body).await["state"], "done");
+    assert_eq!(
+        read_config(&s, "coder-iq1_m")["env"],
+        json!({"STRATA_X": "1"})
+    );
+}
+
+#[tokio::test]
+async fn engine_settings_strata_does_not_start_with_go_back_together() {
+    let s = setup_with("models-env-back", |c| c.context_start_secs = 3).await;
+    installed(&s);
+    let args = json!(["--native", "a.gguf"]);
+    strata_folder(&s).config(
+        "iq3_xxs",
+        json!({"exe": "C:/Strata/engine/strata.exe", "args": args, "port": 8080,
+            "api_key": OLD_KEY, "args_written": args, "user_args": ["--threads", "8"],
+            "env": {"STRATA_X": "1"}}),
+    );
+    s.fake.command(
+        "run-iq3_xxs.bat",
+        FakeCommand {
+            lines: lines(&["STRATA_BOGUS is not known"]),
+            exit: Some(1),
+            ..Default::default()
+        },
+    );
+    let before = read_config(&s, "iq3_xxs");
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    let body = json!({"kind": "set_engine_settings", "model": "IQ3_XXS",
+        "user_args": ["--bogus"], "env": {"STRATA_BOGUS": "1"}});
+    assert_eq!(post(&s, "/strata/jobs", body).await.0, 202);
+    let done = finished_slowly(&s).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(
+        done["error"].to_string().contains("engine settings"),
+        "{done}"
+    );
+    assert!(done["lines"].to_string().contains("STRATA_BOGUS"), "{done}");
+    let after = read_config(&s, "iq3_xxs");
+    for key in ["args", "args_written", "user_args", "env"] {
+        assert_eq!(after[key], before[key], "{key}: {after}");
+    }
+    assert_eq!(
+        s.fake.stops.load(Ordering::SeqCst),
+        2,
+        "once with, once back"
+    );
+}
+
 fn sample(name: &str) -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../pc-protocol/tests/samples")

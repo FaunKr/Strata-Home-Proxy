@@ -23,8 +23,15 @@ A model's `strata-<id>.json` in the Strata folder, as setup writes it: the engin
 _Avoid_: launch config, profile (Strata's own profiles are something else)
 
 **Engine options**:
-A model's engine options set by hand: `user_args` in its run config, which Strata puts over `args` at every start and which setup keeps. The web UI shows them one option per line under each installed model, with the args Strata starts with. Only a Strata since commit 8aaf188a keeps them (its run configs have `args_written`).
+A model's engine options set by hand: `user_args` in its run config, which Strata puts over `args` at every start and which setup keeps. The web UI shows them one option per line in each installed model's *Engine settings*, with the args Strata starts with. Only a Strata since commit 8aaf188a keeps them (its run configs have `args_written`).
 _Avoid_: user args (except `user_args` in code, the run config and the web UI's label *Engine options (user_args)*), custom flags, extra args
+
+**Engine environment**:
+A model's environment variables for the engine: `env` in its run config, which Strata puts into the engine's environment at every start. The web UI shows them one `NAME=value` per line in *Engine settings*.
+_Avoid_: env vars (except `env` in code, the run config and the web UI's label *Engine environment (env)*)
+
+**Engine settings**:
+The dialog of an installed model with its Engine options and its Engine environment, saved together with one restart.
 
 **PC service**:
 The small program on the PC that reports state, gaming mode and user activity to the proxy and triggers standby on request. In code and file names it is `pc-agent`.

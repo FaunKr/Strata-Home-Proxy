@@ -53,6 +53,8 @@ pub enum Forced<T> {
     NoAnswer,
 }
 
+pub const TOO_OLD_FOR_JOB: &str =
+    "The PC service is older than the web UI: update it in the PC area.";
 pub const TOO_OLD_FOR_UPDATE: &str = "This PC service is too old to update from the web UI. Install it once more with the command from the PC area.";
 
 pub struct AgentClient {
@@ -215,6 +217,10 @@ impl AgentClient {
             .send()
             .await
             .map_err(|_| "The PC service does not answer.".to_string())?;
+        if resp.status() == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+            // It cannot read the job: it does not know its kind yet.
+            return Err(TOO_OLD_FOR_JOB.into());
+        }
         if !resp.status().is_success() {
             return Err(reason(resp).await);
         }

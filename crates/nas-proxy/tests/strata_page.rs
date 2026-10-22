@@ -1061,6 +1061,12 @@ fn with_engine_options() -> StrataReport {
     ]);
     report.info.models[1].user_args = Some(vec![]);
     report.info.models[1].started_args = Some(vec!["--native".into(), "b.gguf".into()]);
+    report.info.models[0].env = Some(
+        [("STRATA_PIN_BY_NEED", "1"), ("STRATA_NOTE", "a b=c")]
+            .map(|(n, v)| (n.to_string(), v.to_string()))
+            .into(),
+    );
+    report.info.models[1].env = Some(Default::default());
     report
 }
 
@@ -1071,6 +1077,7 @@ async fn an_installed_model_shows_its_engine_options_one_per_line() {
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
+    assert_eq!(html.matches(">Engine settings<").count(), 2, "{html}");
     assert_eq!(html.matches("Engine options").count(), 2, "{html}");
     assert!(
         html.contains("--threads 8\n--control-vector \"my vector.gguf\"\n--no-mmap"),
@@ -1081,21 +1088,54 @@ async fn an_installed_model_shows_its_engine_options_one_per_line() {
         "{html}"
     );
     assert!(html.contains("none set by hand"), "{html}");
+    assert!(
+        html.contains("STRATA_NOTE=a b=c\nSTRATA_PIN_BY_NEED=1"),
+        "one NAME=value per line: {html}"
+    );
+    assert!(
+        html.contains("Setup sets its own variables again"),
+        "{html}"
+    );
+    assert!(
+        html.contains("Save and restart"),
+        "the active model: {html}"
+    );
 }
 
 #[tokio::test]
-async fn without_word_on_engine_options_none_show() {
+async fn a_strata_that_keeps_no_options_by_hand_gets_only_the_environment() {
     let s = setup(true, |_| {}).await;
     let mut report = with_engine_options();
-    // An older PC service, and a Strata that keeps no options by hand.
-    report.info.models[0].user_args = None;
-    report.info.models[0].started_args = None;
     report.info.models[1].user_args = None;
     *s.pc.strata_info.lock().unwrap() = Some(report);
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
+    assert_eq!(
+        html.matches("Engine options (user_args)").count(),
+        1,
+        "{html}"
+    );
+    assert_eq!(html.matches("Engine environment").count(), 2, "{html}");
+    assert!(html.contains("need a newer Strata"), "{html}");
+}
+
+#[tokio::test]
+async fn without_word_on_the_engine_environment_no_engine_settings_show() {
+    let s = setup(true, |_| {}).await;
+    let mut report = with_engine_options();
+    // Older PC services: one from before the options, one from before the
+    // job that saves both.
+    report.info.models[0].user_args = None;
+    report.info.models[0].started_args = None;
+    report.info.models[0].env = None;
+    report.info.models[1].env = None;
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
     assert!(!html.contains("Engine options"), "{html}");
+    assert!(!html.contains("Engine settings"), "{html}");
     assert!(!html.contains("Strata starts with"), "{html}");
 }
 
@@ -1104,7 +1144,8 @@ async fn an_active_preset_says_it_wins_over_the_engine_options() {
     let s = setup(true, |_| {}).await;
     let mut report = with_engine_options();
     report.info.models[0].presets = serde_json::from_value(json!({
-        "latest": {"id": "p1", "name": "Full speed", "active": true, "state": "fresh"}
+        "latest": {"id": "p1", "name": "Full speed", "active": true, "state": "fresh",
+            "settings": ["--kv-grow", "STRATA_PIN_BY_NEED=1", "per request temperature 0.6"]}
     }))
     .unwrap();
     // Saved but not applied, and set aside after a new graphics card.
@@ -1123,8 +1164,10 @@ async fn an_active_preset_says_it_wins_over_the_engine_options() {
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
     assert_eq!(
-        html.matches("Preset Full speed is active; its settings win over these.")
-            .count(),
+        html.matches(
+            "Preset Full speed is active and sets --kv-grow, STRATA_PIN_BY_NEED=1, which win over these."
+        )
+        .count(),
         1,
         "{html}"
     );
@@ -1197,4 +1240,80 @@ async fn a_line_without_an_option_is_refused_and_nothing_is_sent() {
         assert!(body.contains(says), "{text}: {body}");
     }
     assert!(s.pc.job_bodies.lock().unwrap().is_empty());
+}
+
+// --- #305 saving engine settings ---
+
+async fn save_settings(b: &mut Browser, options: Option<&str>, env: &str) -> reqwest::Response {
+    let mut form = vec![
+        ("kind", "set_engine_settings"),
+        ("model", "IQ3_XXS"),
+        ("env", env),
+    ];
+    if let Some(options) = options {
+        form.push(("options", options));
+    }
+    b.call("strata-job", &form).await
+}
+
+#[tokio::test]
+async fn saved_engine_settings_go_to_the_pc_service_together() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let env = "STRATA_PIN_BY_NEED=1\n\n  STRATA_NOTE = a b=c \r\nSTRATA_EMPTY=\n";
+    let resp = save_settings(&mut b, Some("--threads 8"), env).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        last_body(&s),
+        json!({"kind": "set_engine_settings", "model": "IQ3_XXS",
+            "user_args": ["--threads", "8"],
+            "env": {"STRATA_PIN_BY_NEED": "1", "STRATA_NOTE": " a b=c", "STRATA_EMPTY": ""}})
+    );
+}
+
+#[tokio::test]
+async fn without_the_options_field_only_the_environment_is_sent() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = save_settings(&mut b, None, " {\"STRATA_X\": \"1\"}").await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        last_body(&s),
+        json!({"kind": "set_engine_settings", "model": "IQ3_XXS", "env": {"STRATA_X": "1"}})
+    );
+}
+
+#[tokio::test]
+async fn a_bad_environment_line_is_refused_and_nothing_is_sent() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    for (env, says) in [
+        ("STRATA_X=1\nSTRATA_Y", "Line 2 is not NAME=value"),
+        ("9X=1", "Line 1"),
+        ("A-B=1", "not a variable name"),
+        ("X=1\nX=2", "Line 2: X is given twice"),
+        ("{\"X\": 1}", "object"),
+    ] {
+        let resp = save_settings(&mut b, Some(""), env).await;
+        assert_eq!(resp.status(), 400, "{env}");
+        let body = resp.text().await.unwrap();
+        assert!(body.contains(says), "{env}: {body}");
+    }
+    let resp = save_settings(&mut b, Some("threads 8"), "").await;
+    assert_eq!(resp.status(), 400, "the options are checked too");
+    assert!(s.pc.job_bodies.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_pc_service_that_cannot_read_a_job_is_called_older_than_the_web_ui() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.unknown_job.lock().unwrap() = Some("set_engine_settings");
+    let mut b = logged_in(&s.url).await;
+    let resp = save_settings(&mut b, None, "STRATA_X=1").await;
+    assert_eq!(resp.status(), 400);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("The PC service is older than the web UI: update it in the PC area."),
+        "{body}"
+    );
 }

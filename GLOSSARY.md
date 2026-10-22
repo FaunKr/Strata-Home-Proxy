@@ -22,6 +22,10 @@ _Avoid_: Strata directory, install folder, Strata-Ordner
 A model's `strata-<id>.json` in the Strata folder, as setup writes it: the engine, its flags, the Strata key and the chat defaults. `strata serve` starts Strata with one. Older text says *model config*.
 _Avoid_: launch config, profile (Strata's own profiles are something else)
 
+**Engine options**:
+A model's engine options set by hand: `user_args` in its run config, which Strata puts over `args` at every start and which setup keeps. The web UI shows them one option per line under each installed model, with the args Strata starts with. Only a Strata since commit 8aaf188a keeps them (its run configs have `args_written`).
+_Avoid_: user args (except `user_args` in code, the run config and the web UI's label *Engine options (user_args)*), custom flags, extra args
+
 **PC service**:
 The small program on the PC that reports state, gaming mode and user activity to the proxy and triggers standby on request. In code and file names it is `pc-agent`.
 _Avoid_: agent, PC agent (except `pc-agent` in code and file names), PC-Dienst

@@ -519,6 +519,24 @@ impl Model {
         args
     }
 
+    /// The engine options set by hand, as shown outside the PC: every path
+    /// cut to its file name. `None` when its Strata keeps none, which a
+    /// config without `args_written` says.
+    pub fn shareable_user_args(&self) -> Option<Vec<String>> {
+        self.fields.get(WRITTEN_KEY)?;
+        let user = self
+            .fields
+            .get(USER_KEY)
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        Some(shareable_args(user))
+    }
+
+    /// The args Strata starts with, as shown outside the PC.
+    pub fn shareable_started_args(&self) -> Vec<String> {
+        shareable_args(&self.started_args())
+    }
+
     /// The context it starts with (`--max-context`), if the config says.
     pub fn context(&self) -> Option<u32> {
         let args = self.started_args();
@@ -685,6 +703,23 @@ fn flag_of(group: &[Value]) -> &str {
         .and_then(Value::as_str)
         .filter(|a| a.starts_with("--"))
         .unwrap_or("")
+}
+
+/// Args as text with each path cut ([`shareable`]), without a key passed
+/// as `--api-key` (also `--api-key=…`) and its value.
+fn shareable_args(args: &[Value]) -> Vec<String> {
+    groups(args)
+        .into_iter()
+        .filter(|g| {
+            let flag = flag_of(g);
+            flag != "--api-key" && !flag.starts_with("--api-key=")
+        })
+        .flatten()
+        .map(|arg| match shareable(&arg) {
+            Value::String(text) => text,
+            other => other.to_string(),
+        })
+        .collect()
 }
 
 /// `fields` as JSON text without secrets and with every path cut to its

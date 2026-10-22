@@ -936,7 +936,6 @@ async fn tune(
     };
     let text = tune_text(&found);
     keep_tune(agent, id, found);
-    agent.presets.forget(id);
     restored.map_err(|e| match e {
         Step::Failed(why) => {
             Step::Failed(format!("{text}, but the tuned settings stay active: {why}"))
@@ -1592,6 +1591,9 @@ pub struct PresetsCheck {
 struct PresetsState {
     asking: bool,
     read: HashMap<String, PresetsRead>,
+    /// Counts the jobs that changed presets: a read that began before one
+    /// is not kept.
+    changes: u64,
 }
 
 struct PresetsRead {
@@ -1610,7 +1612,13 @@ impl PresetsCheck {
 
     /// Model `id`'s presets changed: read them at the next visit.
     pub fn forget(&self, id: &str) {
-        self.inner.lock().unwrap().read.remove(id);
+        let mut state = self.inner.lock().unwrap();
+        state.read.remove(id);
+        state.changes += 1;
+    }
+
+    fn changes(&self) -> u64 {
+        self.inner.lock().unwrap().changes
     }
 
     fn claim(&self) -> bool {
@@ -1630,13 +1638,19 @@ impl PresetsCheck {
         })
     }
 
-    fn keep(&self, id: String, key: u64, presets: Option<StrataPresets>) {
+    /// Keeps a read that began at `changes`, unless a job changed presets
+    /// since.
+    fn keep(&self, id: String, key: u64, presets: Option<StrataPresets>, changes: u64) {
+        let mut state = self.inner.lock().unwrap();
+        if state.changes != changes {
+            return;
+        }
         let read = PresetsRead {
             key,
             presets,
             at: Instant::now(),
         };
-        self.inner.lock().unwrap().read.insert(id, read);
+        state.read.insert(id, read);
     }
 
     fn done(&self) {
@@ -1671,13 +1685,18 @@ pub fn check_presets(agent: &Arc<Agent>) {
                 .unwrap_or_default()
         };
         for (id, key, spec, last_tuned) in wanted {
+            // A job or gaming mode that began meanwhile has the PC first.
+            if agent.gaming() || agent.jobs.running() {
+                break;
+            }
             if !agent.presets.due(&id, key) {
                 continue;
             }
+            let changes = agent.presets.changes();
             let presets = output_within(&agent, &spec, PRESETS_TIMEOUT)
                 .await
                 .and_then(|lines| terminal::read_presets(&lines, last_tuned.as_deref()));
-            agent.presets.keep(id, key, presets);
+            agent.presets.keep(id, key, presets, changes);
         }
         agent.presets.done();
     });

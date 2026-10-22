@@ -29,10 +29,12 @@ pub enum StrataJobKind {
     ApplyPreset,
     /// Back to the preset that was active before (or the standard settings).
     UndoPreset,
+    /// Replaces a model's engine options set by hand (`user_args`).
+    SetUserArgs,
 }
 
 impl StrataJobKind {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Install,
         Self::AddModel,
         Self::Activate,
@@ -48,6 +50,7 @@ impl StrataJobKind {
         Self::Tune,
         Self::ApplyPreset,
         Self::UndoPreset,
+        Self::SetUserArgs,
     ];
 }
 
@@ -189,6 +192,12 @@ pub enum StrataJobRequest {
         model: String,
         preset: String,
     },
+    /// `user_args` replace the model's engine options set by hand; empty
+    /// removes them. Paths may come cut as `GET /strata` shows them.
+    SetUserArgs {
+        model: String,
+        user_args: Vec<String>,
+    },
 }
 
 impl StrataJobRequest {
@@ -209,6 +218,7 @@ impl StrataJobRequest {
             Self::Tune { .. } => StrataJobKind::Tune,
             Self::ApplyPreset { .. } => StrataJobKind::ApplyPreset,
             Self::UndoPreset { .. } => StrataJobKind::UndoPreset,
+            Self::SetUserArgs { .. } => StrataJobKind::SetUserArgs,
         }
     }
 }

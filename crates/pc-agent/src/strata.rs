@@ -129,6 +129,10 @@ enum Plan {
         mode: TuneMode,
         usage: TuneUse,
     },
+    SetUserArgs {
+        id: String,
+        user_args: Vec<String>,
+    },
     /// Applies `preset`, a preset of model `id`, or undoes it.
     Preset {
         id: String,
@@ -146,6 +150,7 @@ impl Plan {
             | Self::Benchmark { id }
             | Self::SetSpeedProjection { id, .. }
             | Self::SetContext { id, .. }
+            | Self::SetUserArgs { id, .. }
             | Self::SwitchToTerminal { id }
             | Self::Tune { id, .. }
             | Self::Preset { id, .. } => Some(id.clone()),
@@ -305,6 +310,19 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             }
             let id = installed_model(&install, &model)?;
             Ok(Plan::SetContext { id, context })
+        }
+        StrataJobRequest::SetUserArgs { model, user_args } => {
+            let id = installed_model(&install, &model)?;
+            let current = install.read_model(&id);
+            if let Some(why) = current.refused_user_args(&user_args) {
+                return Err(Refusal::BadRequest(why));
+            }
+            if !current.keeps_user_args() {
+                return Err(Refusal::Conflict(format!(
+                    "The Strata of {id} keeps no engine options set by hand; update Strata"
+                )));
+            }
+            Ok(Plan::SetUserArgs { id, user_args })
         }
         StrataJobRequest::CompareModels => {
             strata_installed(&install)?;
@@ -478,6 +496,7 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::SetKey => set_key(job).await,
         Plan::SetSpeedProjection { id, on } => set_speed_projection(job, &id, on).await,
         Plan::SetContext { id, context } => set_context(job, &id, context).await,
+        Plan::SetUserArgs { id, user_args } => set_user_args(job, &id, user_args).await,
         Plan::CompareModels { ids, active } => compare_models(job, &ids, &active).await,
         Plan::SwitchToTerminal { id } => switch_to_terminal(job, &id).await,
         Plan::RemoveOldStrataFolder => remove_old_strata_folder(job).await,
@@ -1361,6 +1380,43 @@ async fn set_context(job: &JobContext, id: &str, context: u32) -> Result<Option<
     }
 }
 
+/// Replaces a model's engine options set by hand. The active model restarts
+/// with them once Strata has no request at work; if it does not come up,
+/// the old ones come back and Strata starts with those.
+async fn set_user_args(
+    job: &JobContext,
+    id: &str,
+    user_args: Vec<String>,
+) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    job.step("Changing the configuration");
+    let before = change_model(agent, id, move |model| {
+        model.set_user_args(&user_args);
+        Ok(())
+    })
+    .await?;
+    if active_model(agent).as_deref() != Some(id) {
+        return Ok(None);
+    }
+    let applied = agent
+        .strata()
+        .restart_or_roll_back(job, "Restoring the old engine options", || async move {
+            change_model(agent, id, move |model| {
+                model.restore_args(&before);
+                Ok(())
+            })
+            .await
+            .map(drop)
+        })
+        .await?;
+    match applied {
+        Applied::Kept => Ok(None),
+        Applied::RolledBack => Err(Step::Failed(
+            "Strata did not start with the new engine options; the old ones apply again".into(),
+        )),
+    }
+}
+
 /// Changes a model's config off the runtime's threads; gives it from before.
 async fn change_model(
     agent: &Agent,
@@ -2062,6 +2118,7 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SetKey => "Set Strata key",
         StrataJobKind::SetSpeedProjection => "Switch speed projection",
         StrataJobKind::SetContext => "Change context",
+        StrataJobKind::SetUserArgs => "Save engine options",
         StrataJobKind::CompareModels => "Compare models",
         StrataJobKind::SwitchToTerminal => "Switch to the Strata Terminal",
         StrataJobKind::RemoveOldStrataFolder => "Remove the old Strata folder",

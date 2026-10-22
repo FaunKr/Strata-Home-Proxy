@@ -236,6 +236,35 @@ async function oldFolder(page, errors, name) {
   return issue ? 1 : 0;
 }
 
+// Edits the active model's engine options: Save asks first, as Strata
+// restarts; cancelled again. Returns the number of findings.
+async function engineOptions(page, errors, name) {
+  const wait = { timeout: 15000 };
+  errors.length = 0;
+  let issue = null;
+  try {
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    const field = page.locator('#IQ3_XXS-engine-options');
+    await field.waitFor(wait);
+    if ((await field.inputValue()) !== '--threads 8') throw new Error(`field holds "${await field.inputValue()}"`);
+    await page.getByText('Strata starts with: --native').first().waitFor(wait);
+    await field.fill('--threads 8\n--no-mmap');
+    await page.getByRole('button', { name: 'Save engine options' }).first().click(wait);
+    const dialog = page.locator('dialog[open]');
+    await dialog.getByText('Save the engine options of IQ3_XXS?').waitFor(wait);
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/${name}_engine-options.jpg`, type: 'jpeg', quality: 60 });
+    }
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await page.locator('dialog[open]').waitFor({ state: 'detached', ...wait });
+  } catch (e) {
+    issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
+  }
+  if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+  console.log(`${issue ? 'FAIL' : 'ok  '} ${name} engine options${issue ? '\n     ' + issue : ''}`);
+  return issue ? 1 : 0;
+}
+
 // Opens Tune of the first installed model: the dialog with how long and for
 // what, closed again without starting; then the preset lines and Undo's question, and a
 // running tune's log and measurements. Returns the number of findings.
@@ -355,6 +384,7 @@ async function codeBench(page, errors) {
     findings += await optimizationPrompt(page, errors, name);
     findings += await oldFolder(page, errors, name);
     findings += await tune(page, errors, name);
+    findings += await engineOptions(page, errors, name);
     if (name === 'desk') {
       for (const [state, mode, texts] of summaryStates) {
         const upstream = state.padEnd(40, '0');

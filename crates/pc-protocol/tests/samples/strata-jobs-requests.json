@@ -79,5 +79,10 @@
     "kind": "undo_preset",
     "model": "IQ3_XXS",
     "preset": "3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6"
+  },
+  {
+    "kind": "set_user_args",
+    "model": "IQ3_XXS",
+    "user_args": ["--threads", "8", "--control-vector", "mine.gguf"]
   }
 ]

@@ -1130,3 +1130,72 @@ async fn an_active_preset_says_it_wins_over_the_engine_options() {
     );
     assert_eq!(html.matches("win over these").count(), 1, "{html}");
 }
+
+// --- #297 saving the engine options ---
+
+async fn save_options(b: &mut Browser, text: &str) -> reqwest::Response {
+    b.call(
+        "strata-job",
+        &[
+            ("kind", "set_user_args"),
+            ("model", "IQ3_XXS"),
+            ("options", text),
+        ],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn saved_engine_options_go_to_the_pc_service_as_a_list() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let text =
+        "--threads 8\n\n  --control-vector \"my vector.gguf\" 1.0\r\n--say \"a \\\"b\\\"\" \"\"\n";
+    let resp = save_options(&mut b, text).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        last_body(&s),
+        json!({"kind": "set_user_args", "model": "IQ3_XXS", "user_args": [
+            "--threads", "8", "--control-vector", "my vector.gguf", "1.0",
+            "--say", "a \"b\"", ""
+        ]})
+    );
+}
+
+#[tokio::test]
+async fn a_pasted_json_list_is_taken_as_it_is() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = save_options(&mut b, " [\"--threads\", \"8\", \"--x\", \"a b\"]\n").await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        last_body(&s)["user_args"],
+        json!(["--threads", "8", "--x", "a b"])
+    );
+}
+
+#[tokio::test]
+async fn an_empty_field_removes_the_engine_options() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = save_options(&mut b, "  \n").await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(last_body(&s)["user_args"], json!([]));
+}
+
+#[tokio::test]
+async fn a_line_without_an_option_is_refused_and_nothing_is_sent() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    for (text, says) in [
+        ("--threads 8\nthreads 8", "Line 2"),
+        ("--x \"open", "Line 1"),
+        ("[\"--x\", 1]", "list"),
+    ] {
+        let resp = save_options(&mut b, text).await;
+        assert_eq!(resp.status(), 400, "{text}");
+        let body = resp.text().await.unwrap();
+        assert!(body.contains(says), "{text}: {body}");
+    }
+    assert!(s.pc.job_bodies.lock().unwrap().is_empty());
+}

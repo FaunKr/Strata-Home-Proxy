@@ -537,6 +537,58 @@ impl Model {
         shareable_args(&self.started_args())
     }
 
+    /// Whether its Strata keeps engine options set by hand: since Strata
+    /// 8aaf188a, whose configs have `args_written`.
+    pub fn keeps_user_args(&self) -> bool {
+        self.fields.contains_key(WRITTEN_KEY)
+    }
+
+    /// Why `shown` cannot replace the engine options set by hand, if it
+    /// cannot: it starts with a value, or adds or changes an option with a
+    /// switch of its own or one the proxy needs ([`refused_group`]). Such an
+    /// option Strata put there itself may come back unchanged.
+    pub fn refused_user_args(&self, shown: &[String]) -> Option<String> {
+        if let Some(first) = shown.first().filter(|a| !a.starts_with("--")) {
+            return Some(format!(
+                "Engine options start with an option (--name), not \"{first}\""
+            ));
+        }
+        let kept = self.shareable_user_args().unwrap_or_default();
+        let kept = groups(&kept.into_iter().map(Value::from).collect::<Vec<_>>());
+        let shown: Vec<Value> = shown.iter().map(|a| Value::from(a.as_str())).collect();
+        groups(&shown)
+            .into_iter()
+            .filter(|group| !kept.contains(group))
+            .find_map(|group| refused_group(&group))
+    }
+
+    /// Replaces the engine options set by hand with `shown`, as the page
+    /// shows them; empty removes them. An option that comes back as
+    /// [`Self::shareable_user_args`] showed it keeps its whole value, so a
+    /// cut path stays whole.
+    pub fn set_user_args(&mut self, shown: &[String]) {
+        let old = self
+            .fields
+            .get(USER_KEY)
+            .and_then(Value::as_array)
+            .map_or_else(Vec::new, |user| groups(user));
+        let shown: Vec<Value> = shown.iter().map(|a| Value::from(a.as_str())).collect();
+        let user: Vec<Value> = groups(&shown)
+            .into_iter()
+            .flat_map(|group| {
+                old.iter()
+                    .find(|g| shareable_args(g) == shareable_args(&group))
+                    .cloned()
+                    .unwrap_or(group)
+            })
+            .collect();
+        if user.is_empty() {
+            self.fields.remove(USER_KEY);
+        } else {
+            self.fields.insert(USER_KEY.into(), Value::Array(user));
+        }
+    }
+
     /// The context it starts with (`--max-context`), if the config says.
     pub fn context(&self) -> Option<u32> {
         let args = self.started_args();
@@ -679,6 +731,29 @@ fn with_context(args: &mut Vec<Value>, context: u32) {
         kept.extend([CONTEXT_FLAG.into(), context.to_string().into()]);
     }
     *args = kept;
+}
+
+/// Why this group of engine options cannot be set by hand, if it cannot:
+/// its option is one the service switches itself, or one the proxy needs to
+/// reach Strata.
+fn refused_group(group: &[Value]) -> Option<String> {
+    let flag = flag_of(group);
+    let flag = flag.split_once('=').map_or(flag, |(flag, _)| flag);
+    let switch = if flag == CONTEXT_FLAG || ROPE_FLAGS.contains(&flag) {
+        "Change context"
+    } else if flag == PROJECTION_VECTOR_FLAG
+        || flag == "--control-vector"
+        || PROJECTION_FLAGS.iter().any(|(f, _)| *f == flag)
+    {
+        "the speed projection switch"
+    } else if ["--host", "--port", "--api-key"].contains(&flag) {
+        return Some(format!(
+            "{flag} is set by the PC service, which the proxy reaches Strata through"
+        ));
+    } else {
+        return None;
+    };
+    Some(format!("{flag} has its own control: use {switch}"))
 }
 
 /// An argument list in Strata's groups (`strata_control/user_args.py`): an

@@ -230,10 +230,10 @@ pub async fn start_job(state: &AppState, form: StrataJobForm) -> Result<(), Stri
     if state.code_bench.busy() {
         return Err("A code benchmark is running. Strata jobs wait until it ends.".into());
     }
+    let request = request(&form)?;
     if state.ask_pc(&agent).await.is_none() {
         wake(state, BY_UI).await?;
     }
-    let request = request(&form)?;
     let job = agent.start_strata_job(&request).await?;
     state.strata.job_running.store(true, Ordering::SeqCst);
     state
@@ -341,7 +341,67 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
             model: model()?,
             preset: preset()?,
         },
+        StrataJobKind::SetUserArgs => StrataJobRequest::SetUserArgs {
+            model: model()?,
+            user_args: engine_options(form.options.as_deref().unwrap_or(""))?,
+        },
     })
+}
+
+/// The engine options as the field holds them: a pasted JSON list of
+/// strings as it is, else one option per line with its values apart by
+/// spaces, a value in double quotes (`\"` inside) as one.
+fn engine_options(text: &str) -> Result<Vec<String>, String> {
+    if text.trim_start().starts_with('[') {
+        return serde_json::from_str(text)
+            .map_err(|_| "The pasted list is no JSON list of strings.".to_string());
+    }
+    let mut args = Vec::new();
+    for (n, line) in text
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+    {
+        let words = words(line).ok_or_else(|| format!("Line {}: a quote is not closed.", n + 1))?;
+        if !words[0].starts_with("--") {
+            return Err(format!(
+                "Line {} does not start with an option (--name): {}",
+                n + 1,
+                line.trim()
+            ));
+        }
+        args.extend(words);
+    }
+    Ok(args)
+}
+
+/// A line's words apart by whitespace, a quoted one as one; `None` for a
+/// quote that is not closed.
+fn words(line: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut chars = line.chars().peekable();
+    loop {
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        let Some(&first) = chars.peek() else {
+            return Some(words);
+        };
+        let mut word = String::new();
+        if first == '"' {
+            chars.next();
+            loop {
+                match chars.next()? {
+                    '"' => break,
+                    '\\' if chars.peek() == Some(&'"') => word.push(chars.next()?),
+                    c => word.push(c),
+                }
+            }
+        } else {
+            while let Some(c) = chars.next_if(|c| !c.is_whitespace()) {
+                word.push(c);
+            }
+        }
+        words.push(word);
+    }
 }
 
 fn detail(job: &StrataJob) -> String {

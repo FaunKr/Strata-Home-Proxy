@@ -692,6 +692,7 @@ mod strata_job {
         tune_mode: Option<TuneMode>,
         tune_use: Option<TuneUse>,
         preset: Option<String>,
+        options: Option<String>,
     ) -> Result<(), ServerFnError> {
         require_login(false).await?;
         let form = StrataJobForm {
@@ -704,6 +705,7 @@ mod strata_job {
             tune_mode: tune_mode.unwrap_or_default(),
             tune_use: tune_use.unwrap_or_default(),
             preset,
+            options,
         };
         backend()?.start_strata_job(form).await.map_err(bad_request)
     }
@@ -921,6 +923,8 @@ pub struct StrataJobForm {
     pub tune_use: TuneUse,
     /// The preset to apply or undo, by its id.
     pub preset: Option<String>,
+    /// The engine options to save, as the field holds them.
+    pub options: Option<String>,
 }
 
 // --- History: the PC's states over a range of days ---

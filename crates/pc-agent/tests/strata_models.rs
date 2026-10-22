@@ -1884,6 +1884,194 @@ async fn a_config_without_options_by_hand_shows_an_empty_list() {
     );
 }
 
+// --- #297 saving the engine options ---
+
+/// coder-IQ1_M as a Strata that keeps options by hand writes it, with a
+/// vector of the user's own; gives the config's modification time.
+fn with_own_options(s: &Setup) -> std::time::SystemTime {
+    installed(s);
+    let args = json!(["--native", "b.gguf", "--threads", "4"]);
+    let user = json!([
+        "--threads",
+        "8",
+        "--control-vector",
+        "D:/own vectors/mine.gguf"
+    ]);
+    config_with_user_args(s, "coder-iq1_m", args.clone(), args, user);
+    modified(s, "coder-iq1_m")
+}
+
+#[tokio::test]
+async fn saving_engine_options_replaces_what_strata_keeps_as_set_by_hand() {
+    let s = setup("models-user-save").await;
+    let old = with_own_options(&s);
+    let done = job(
+        &s,
+        json!({"kind": "set_user_args", "model": "coder-IQ1_M",
+            "user_args": ["--threads", "12", "--no-mmap", "--cache-dir", "C:/strata cache"]}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let cfg = read_config(&s, "coder-iq1_m");
+    assert_eq!(
+        cfg["user_args"],
+        json!([
+            "--threads",
+            "12",
+            "--no-mmap",
+            "--cache-dir",
+            "C:/strata cache"
+        ]),
+        "{cfg}"
+    );
+    let args = json!(["--native", "b.gguf", "--threads", "4"]);
+    assert_eq!(cfg["args"], args, "{cfg}");
+    assert_eq!(cfg["args_written"], args, "{cfg}");
+    assert_eq!(modified(&s, "coder-iq1_m"), old);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0, "an inactive model");
+}
+
+#[tokio::test]
+async fn an_unchanged_option_with_a_cut_path_keeps_its_whole_path() {
+    let s = setup("models-user-cut").await;
+    with_own_options(&s);
+    // As the page shows them, with one option more.
+    let shown = json!([
+        "--threads",
+        "8",
+        "--control-vector",
+        "mine.gguf",
+        "--no-mmap"
+    ]);
+    let done = job(
+        &s,
+        json!({"kind": "set_user_args", "model": "coder-IQ1_M", "user_args": shown}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let cfg = read_config(&s, "coder-iq1_m");
+    assert_eq!(
+        cfg["user_args"],
+        json!([
+            "--threads",
+            "8",
+            "--control-vector",
+            "D:/own vectors/mine.gguf",
+            "--no-mmap"
+        ]),
+        "{cfg}"
+    );
+}
+
+#[tokio::test]
+async fn saving_no_engine_options_removes_them() {
+    let s = setup("models-user-clear").await;
+    with_own_options(&s);
+    let done = job(
+        &s,
+        json!({"kind": "set_user_args", "model": "coder-IQ1_M", "user_args": []}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let cfg = read_config(&s, "coder-iq1_m");
+    assert!(cfg.get("user_args").is_none(), "{cfg}");
+    assert!(cfg.get("args_written").is_some(), "{cfg}");
+}
+
+#[tokio::test]
+async fn engine_options_with_a_switch_or_that_the_proxy_needs_are_refused() {
+    let s = setup("models-user-refused").await;
+    with_own_options(&s);
+    let before = strata_folder(&s).text("coder-iq1_m");
+    for (args, says) in [
+        (json!(["--max-context", "131072"]), "Change context"),
+        (json!(["--rope-scale", "2"]), "Change context"),
+        (json!(["--rope-scaling=yarn"]), "Change context"),
+        (json!(["--control-vector", "x.gguf"]), "speed projection"),
+        (
+            json!(["--control-vector-scaled", "x.gguf:1.0"]),
+            "speed projection",
+        ),
+        (json!(["--cvec-mode", "project"]), "speed projection"),
+        (json!(["--host", "0.0.0.0"]), "--host"),
+        (json!(["--port=9000"]), "--port"),
+        (json!(["--api-key", "k"]), "--api-key"),
+        (json!(["8", "--threads"]), "(--name)"),
+    ] {
+        let body = json!({"kind": "set_user_args", "model": "coder-IQ1_M", "user_args": args});
+        let (code, answer) = post(&s, "/strata/jobs", body).await;
+        assert_eq!(code, 400, "{args}: {answer}");
+        assert!(answer.to_string().contains(says), "{args}: {answer}");
+    }
+    assert_eq!(strata_folder(&s).text("coder-iq1_m"), before);
+}
+
+#[tokio::test]
+async fn a_strata_that_keeps_no_options_by_hand_takes_none() {
+    let s = setup("models-user-older-save").await;
+    installed(&s);
+    let body =
+        json!({"kind": "set_user_args", "model": "coder-IQ1_M", "user_args": ["--threads", "8"]});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 409, "{answer}");
+    let body = json!({"kind": "set_user_args", "model": "swift-IQ2_XS", "user_args": []});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 409, "not installed: {answer}");
+}
+
+#[tokio::test]
+async fn the_active_model_starts_again_with_its_new_engine_options() {
+    let s = setup("models-user-active").await;
+    installed(&s);
+    let args = json!(["--native", "a.gguf"]);
+    config_with_user_args(&s, "iq3_xxs", args.clone(), args, json!([]));
+    let done = job(
+        &s,
+        json!({"kind": "set_user_args", "model": "IQ3_XXS", "user_args": ["--threads", "8"]}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+    let view = get(&s, "/strata").await;
+    assert_eq!(
+        model(&view, "IQ3_XXS")["started_args"],
+        json!(["--native", "a.gguf", "--threads", "8"]),
+        "{view}"
+    );
+}
+
+#[tokio::test]
+async fn engine_options_strata_does_not_start_with_go_back() {
+    let s = setup_with("models-user-back", |c| c.context_start_secs = 3).await;
+    installed(&s);
+    let args = json!(["--native", "a.gguf"]);
+    config_with_user_args(&s, "iq3_xxs", args.clone(), args, json!(["--threads", "8"]));
+    s.fake.command(
+        "run-iq3_xxs.bat",
+        FakeCommand {
+            lines: lines(&["unknown option --bogus"]),
+            exit: Some(1),
+            ..Default::default()
+        },
+    );
+    let before = read_config(&s, "iq3_xxs");
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    let body = json!({"kind": "set_user_args", "model": "IQ3_XXS", "user_args": ["--bogus"]});
+    assert_eq!(post(&s, "/strata/jobs", body).await.0, 202);
+    let done = finished_slowly(&s).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(
+        done["error"].to_string().contains("engine options"),
+        "{done}"
+    );
+    assert!(done["lines"].to_string().contains("--bogus"), "{done}");
+    let after = read_config(&s, "iq3_xxs");
+    for key in ["args", "args_written", "user_args"] {
+        assert_eq!(after[key], before[key], "{key}: {after}");
+    }
+}
+
 fn sample(name: &str) -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../pc-protocol/tests/samples")

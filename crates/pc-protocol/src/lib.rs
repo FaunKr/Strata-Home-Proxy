@@ -21,8 +21,9 @@ mod options;
 mod output;
 mod status;
 mod strata;
+mod tune;
 
-pub use job::{StrataJob, StrataJobKind, StrataJobRequest, StrataJobState};
+pub use job::{StrataJob, StrataJobKind, StrataJobRequest, StrataJobState, TuneMode, TuneUse};
 pub use machine::{CpuFacts, GpuFacts, MachineFacts, RamStick, WindowsFacts};
 pub use options::{NeverRule, StrataOptions, TunerOption, TunerTry};
 pub use output::{LOAD_LINES, LoadLines, StrataOutputMessage, StrataOutputNotice};
@@ -35,3 +36,4 @@ pub use strata::{
     SamplingSource, SamplingSupport, StrataBenchmark, StrataFamily, StrataInfo, StrataInstall,
     StrataModel, StrataReport, StrataSampling, StrataSize,
 };
+pub use tune::StrataTune;

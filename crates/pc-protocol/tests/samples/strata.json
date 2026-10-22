@@ -86,6 +86,21 @@
           "listening on 0.0.0.0:8080"
         ],
         "answered": true
+      },
+      "tunable": false,
+      "tune_unavailable": "Tuning needs the Strata Terminal; this Strata is a folder from source",
+      "last_tune": {
+        "at": 1792448900,
+        "mode": "quick",
+        "use": "coding",
+        "code": "faster",
+        "base_tps": 31.2,
+        "tuned_tps": 35.1,
+        "gain_pct": 12.4,
+        "changed": ["--kv-resident 65536", "--kv-grow"],
+        "message": null,
+        "preset": "3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6",
+        "preset_name": "IQ3_XXS 64K coding"
       }
     },
     {
@@ -97,7 +112,9 @@
       "speed_projection": false,
       "context": null,
       "loop_recovery": "stop",
-      "sampling": null
+      "sampling": null,
+      "tunable": false,
+      "tune_unavailable": "Tuning needs the Strata Terminal; this Strata is a folder from source"
     }
   ],
   "families": [

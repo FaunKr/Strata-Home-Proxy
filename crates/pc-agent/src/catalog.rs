@@ -127,6 +127,18 @@ pub const DEFAULT_CONTEXT: u32 = 65536;
 /// Free space the setup needs beside the download.
 pub const DISK_SPARE_GB: f64 = 8.0;
 
+/// The model family Strata's tuner knows a family's models as
+/// (`detect_family` in `strata_control/autotune.py`): Qwen3.6 is `qwen36`,
+/// every Qwen3.8-Flash-Next build (Swift, the Coder, Unsloth's and Gyro's
+/// quantizations among them) is `flash-next`.
+pub fn tuner_family(family: &str) -> Option<&'static str> {
+    match family {
+        "qwen36" => Some("qwen36"),
+        "qwen" | "swift" | "coder" | "unsloth" | "gyro" => Some("flash-next"),
+        _ => None,
+    }
+}
+
 pub fn family(id: &str) -> Option<&'static Family> {
     FAMILIES.iter().find(|f| f.id == id)
 }

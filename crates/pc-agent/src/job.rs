@@ -97,6 +97,11 @@ impl Jobs {
         self.inner.lock().unwrap().running().is_some()
     }
 
+    /// The kind of the running job.
+    pub fn running_kind(&self) -> Option<StrataJobKind> {
+        self.inner.lock().unwrap().running().map(|j| j.kind)
+    }
+
     /// Ends the running job; downloaded parts stay for the next start.
     pub fn cancel(&self) -> bool {
         let cancel = {
@@ -185,9 +190,25 @@ impl JobContext {
             if let Some(job) = inner.current.as_mut() {
                 job.step = Some(step);
                 job.percent = None;
+                job.eta_secs = None;
             }
         });
         self.save();
+    }
+
+    /// Shows a step with its own progress, as a tool reports it.
+    pub fn progress(&self, step: &str, percent: Option<u8>, eta_secs: Option<u64>) {
+        let changed = self.with(|inner| {
+            let job = inner.current.as_mut()?;
+            let changed = job.step.as_deref() != Some(step) || job.percent != percent;
+            job.step = Some(step.to_string());
+            job.percent = percent;
+            job.eta_secs = eta_secs;
+            Some(changed)
+        });
+        if changed == Some(true) {
+            self.save();
+        }
     }
 
     /// Sets what goes before each step from now on, or none.

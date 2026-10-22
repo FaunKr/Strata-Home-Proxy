@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub use strata_pc_protocol::{
     Cpu, ForcedRestart, Gpu, Hardware, SamplingField, SamplingSource, SamplingSupport,
     StrataBenchmark, StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
-    StrataModel, StrataSampling, StrataSize,
+    StrataModel, StrataSampling, StrataSize, StrataTune, TuneMode, TuneUse,
 };
 
 #[cfg(feature = "ssr")]
@@ -666,26 +666,39 @@ pub async fn get_strata() -> Result<StrataPage, ServerFnError> {
     Ok(backend()?.strata().await)
 }
 
-/// Starts a job on the PC, waking it first if it sleeps.
-#[server(prefix = "/admin/api", endpoint = "strata-job")]
-pub async fn start_strata_job(
-    kind: StrataJobKind,
-    family: Option<String>,
-    size: Option<String>,
-    context: Option<u32>,
-    model: Option<String>,
-    speed_projection: Option<bool>,
-) -> Result<(), ServerFnError> {
-    require_login(false).await?;
-    let form = StrataJobForm {
-        kind,
-        family,
-        size,
-        context,
-        model,
-        speed_projection: speed_projection.unwrap_or(false),
-    };
-    backend()?.start_strata_job(form).await.map_err(bad_request)
+pub use strata_job::*;
+
+// Each argument of the server function is a form field of its request, which
+// clippy counts against it in the code the macro writes too.
+#[allow(clippy::too_many_arguments)]
+mod strata_job {
+    use super::*;
+
+    /// Starts a job on the PC, waking it first if it sleeps.
+    #[server(prefix = "/admin/api", endpoint = "strata-job")]
+    pub async fn start_strata_job(
+        kind: StrataJobKind,
+        family: Option<String>,
+        size: Option<String>,
+        context: Option<u32>,
+        model: Option<String>,
+        speed_projection: Option<bool>,
+        tune_mode: Option<TuneMode>,
+        tune_use: Option<TuneUse>,
+    ) -> Result<(), ServerFnError> {
+        require_login(false).await?;
+        let form = StrataJobForm {
+            kind,
+            family,
+            size,
+            context,
+            model,
+            speed_projection: speed_projection.unwrap_or(false),
+            tune_mode: tune_mode.unwrap_or_default(),
+            tune_use: tune_use.unwrap_or_default(),
+        };
+        backend()?.start_strata_job(form).await.map_err(bad_request)
+    }
 }
 
 /// A forced Strata restart: the PC service cancels a running job, kills
@@ -895,6 +908,9 @@ pub struct StrataJobForm {
     /// Strata's experimental speed projection, for setup and another model;
     /// on or off for an installed one.
     pub speed_projection: bool,
+    /// How a tune looks and what it judges speed by.
+    pub tune_mode: TuneMode,
+    pub tune_use: TuneUse,
 }
 
 // --- History: the PC's states over a range of days ---

@@ -241,6 +241,7 @@ pub async fn generate(state: &Arc<AppState>, by: &str) -> Result<(), String> {
         Err(e) => {
             let why = match e {
                 WakeError::Gaming => GAMING.to_string(),
+                WakeError::Tuning => "Strata is tuning.".to_string(),
                 WakeError::NoMac => NO_MAC.to_string(),
                 WakeError::Timeout => "Strata did not start in time.".to_string(),
             };

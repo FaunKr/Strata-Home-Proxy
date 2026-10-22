@@ -13,8 +13,8 @@ use crate::{
         GetOptimizationPrompt, PcView, PresetState, SamplingField, SamplingSource, SamplingSupport,
         StartCodeBench, StartCodeBenchAll, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob,
         StrataJobKind, StrataJobState, StrataModel, StrataPage, StrataPreset, StrataPresets,
-        StrataSampling, StrataSize, StrataTune, StrataUpdate, TuneMode, TuneUse, UpdateSummary,
-        error_text, get_code_bench, get_strata,
+        StrataSampling, StrataSize, StrataTune, StrataUpdate, TuneMode, TuneSpeed, TuneUse,
+        UpdateSummary, error_text, get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
     copy::CopyText,
@@ -519,6 +519,33 @@ fn eta_text(secs: u64) -> String {
     }
 }
 
+/// A running tune's measurements, one row each: the model's own settings
+/// (Strata's `base`) in plain words, the others with their difference from
+/// them, and the fastest marked.
+fn speed_rows(speeds: &[TuneSpeed]) -> Vec<String> {
+    let base = speeds.iter().find(|s| s.label == "base").map(|s| s.tok_s);
+    let fastest = speeds.iter().map(|s| s.tok_s).fold(f64::MIN, f64::max);
+    speeds
+        .iter()
+        .map(|s| {
+            let mut row = if s.label == "base" {
+                format!("Your current settings: {:.1} tok/s", s.tok_s)
+            } else {
+                format!("{}: {:.1} tok/s", s.label, s.tok_s)
+            };
+            if let Some(base) = base.filter(|b| *b > 0.0)
+                && s.label != "base"
+            {
+                row.push_str(&format!(" ({:+.1} %)", (s.tok_s / base - 1.0) * 100.0));
+            }
+            if s.tok_s == fastest && speeds.len() > 1 {
+                row.push_str(" · fastest so far");
+            }
+            row
+        })
+        .collect()
+}
+
 #[component]
 fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoView {
     let title = match &job.model {
@@ -536,6 +563,7 @@ fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoVi
         figures.push(format!("about {} left", eta_text(eta)));
     }
     let lines = job.lines.join("\n");
+    let speeds = speed_rows(&job.speeds);
     let confirm = expect_context::<Confirm>();
     view! {
         <section class="card job" role="status">
@@ -551,6 +579,15 @@ fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoVi
                 })}
             {(!figures.is_empty()).then(|| view! { <p class="hint">{figures.join(" · ")}</p> })}
             {(!lines.is_empty()).then(|| view! { <pre class="lines">{lines}</pre> })}
+            {(!speeds.is_empty())
+                .then(|| {
+                    view! {
+                        <p class="hint">"Measured so far"</p>
+                        <ul class="speeds">
+                            {speeds.into_iter().map(|r| view! { <li>{r}</li> }).collect_view()}
+                        </ul>
+                    }
+                })}
             <p class="muted small">
                 "The PC stays awake and other Strata actions wait until this has finished."
             </p>
@@ -2372,6 +2409,47 @@ fn StrataKey(unreported: bool) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn speed(label: &str, tok_s: f64) -> TuneSpeed {
+        TuneSpeed {
+            label: label.into(),
+            tok_s,
+        }
+    }
+
+    #[test]
+    fn a_tunes_speeds_name_the_current_settings_and_mark_the_fastest() {
+        let rows = speed_rows(&[
+            speed("base", 171.4),
+            speed("Keep more of the conversation in graphics memory", 172.2),
+            speed("Run the control thread on the last CPU core", 168.0),
+        ]);
+        assert_eq!(
+            rows,
+            [
+                "Your current settings: 171.4 tok/s",
+                "Keep more of the conversation in graphics memory: 172.2 tok/s (+0.5 %) · fastest so far",
+                "Run the control thread on the last CPU core: 168.0 tok/s (-2.0 %)",
+            ]
+        );
+        // The current settings alone are no leader yet.
+        assert_eq!(
+            speed_rows(&[speed("base", 171.4)]),
+            ["Your current settings: 171.4 tok/s"]
+        );
+        // Without them, nothing to compare with.
+        assert_eq!(
+            speed_rows(&[
+                speed("Shorter speculative window", 30.0),
+                speed("Longer", 29.0)
+            ]),
+            [
+                "Shorter speculative window: 30.0 tok/s · fastest so far",
+                "Longer: 29.0 tok/s"
+            ]
+        );
+        assert!(speed_rows(&[]).is_empty());
+    }
 
     fn presets(active: bool, state: Option<PresetState>, reasons: &[&str]) -> StrataPresets {
         StrataPresets {

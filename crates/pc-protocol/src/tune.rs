@@ -40,6 +40,15 @@ pub struct StrataTune {
     pub preset_name: Option<String>,
 }
 
+/// One measurement of a running tune, as Strata's status file has it:
+/// `base` is the model's own settings, any other label the setting tried.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TuneSpeed {
+    pub label: String,
+    /// Tokens per second, as the tuner judges them for its use.
+    pub tok_s: f64,
+}
+
 /// A model's presets, from `strata presets status` for its run config: they
 /// belong to the model file and its choices (context among them).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

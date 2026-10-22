@@ -248,12 +248,18 @@ async fn a_cancel_after_the_tuner_answered_still_undoes_its_preset() {
     tuner_says(&s, &[TUNED.trim_end()], Duration::ZERO, true);
     let (code, _) = post(&s, "/strata/jobs", tune("IQ3_XXS")).await;
     assert_eq!(code, 202);
-    job_until(&s, "the tuner's answer", |j| {
-        j["lines"]
-            .as_array()
-            .is_some_and(|l| l.iter().any(|l| l.as_str().unwrap().contains(PRESET)))
+    // The answer comes at once; the status file is read a second later.
+    eventually("the tuner started", || {
+        !s.fake.runs_of("strata.cmd").is_empty()
     })
     .await;
+    let status = s.agent.cfg.state_dir().join("strata-tune-status.json");
+    std::fs::write(
+        &status,
+        r#"{"stage": "done", "message": "Done", "state": "done"}"#,
+    )
+    .unwrap();
+    job_until(&s, "the tuner's answer", |j| j["step"] == "Done").await;
     let (code, _) = post(&s, "/strata/job/cancel", json!({})).await;
     assert_eq!(code, 202);
     let done = finished(&s).await;
@@ -317,4 +323,71 @@ async fn a_tuner_that_fails_without_an_answer_gives_its_reason() {
     assert_eq!(done["state"], "failed", "{done}");
     assert_ne!(done["error"], "The tuner gave no answer", "{done}");
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_running_tune_logs_each_new_step_and_shows_its_speeds() {
+    let s = setup("tune-log").await;
+    installed(&s);
+    // The answer comes once the status files below are read.
+    tuner_says(&s, &[TUNED.trim_end()], Duration::from_secs(6), false);
+    let (code, answer) = post(&s, "/strata/jobs", tune("IQ3_XXS")).await;
+    assert_eq!(code, 202, "{answer}");
+    let status = s.agent.cfg.state_dir().join("strata-tune-status.json");
+    eventually("the tuner started", || {
+        !s.fake.runs_of("strata.cmd").is_empty()
+    })
+    .await;
+
+    // As a thorough tune on the PC wrote them.
+    std::fs::write(
+        &status,
+        r#"{"stage": "base", "message": "Measuring your current settings", "state": "running", "elapsed_s": 0, "runs_done": 0, "runs_planned": 6, "eta_s": 900, "speeds": [], "minutes_left": 15, "text": "Finding the fastest settings for your PC… about 15 min left"}"#,
+    )
+    .unwrap();
+    let first = job_until(&s, "the first step's line", |j| {
+        j["lines"].as_array().is_some_and(|l| !l.is_empty())
+    })
+    .await;
+    assert_eq!(
+        first["lines"],
+        json!(["[0m] Measuring your current settings"])
+    );
+    assert!(first.get("speeds").is_none(), "{first}");
+
+    std::fs::write(
+        &status,
+        r#"{"stage": "rounds", "message": "Trying: Run the control thread on the last CPU core (round 1 of 3)", "state": "running", "elapsed_s": 631, "runs_done": 2, "runs_planned": 23, "eta_s": 6569, "speeds": [{"label": "base", "tok_s": 171.4}, {"label": "Keep more of the conversation in graphics memory", "tok_s": 172.2}], "minutes_left": 109, "text": "Finding the fastest settings for your PC… about 109 min left", "arm": "host_core_last"}"#,
+    )
+    .unwrap();
+    let second = job_until(&s, "the second step's line", |j| {
+        j["lines"].as_array().is_some_and(|l| l.len() >= 2)
+    })
+    .await;
+    // The first step was read more than once, and logged once.
+    assert_eq!(
+        second["lines"],
+        json!([
+            "[0m] Measuring your current settings",
+            "[0m] Trying: Run the control thread on the last CPU core (round 1 of 3)",
+        ])
+    );
+    assert_eq!(
+        second["speeds"],
+        json!([
+            {"label": "base", "tok_s": 171.4},
+            {"label": "Keep more of the conversation in graphics memory", "tok_s": 172.2},
+        ])
+    );
+
+    let done = finished(&s).await;
+    assert_eq!(done["state"], "done", "{done}");
+    // The tuner's answer is no line to read.
+    let lines = done["lines"].as_array().unwrap();
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.as_str().unwrap().contains("\"result\"")),
+        "{done}"
+    );
 }

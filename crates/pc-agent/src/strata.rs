@@ -888,9 +888,11 @@ async fn tune(
     agent.strata().wait_idle(job).await?;
     agent.strata().stop();
     job.step("Starting the tuner");
+    let started = Instant::now();
     let ran = {
-        let run = job.command_output(terminal.tune(&config, mode, usage, &status));
+        let run = job.command_answer(terminal.tune(&config, mode, usage, &status));
         tokio::pin!(run);
+        let mut last_step = None;
         loop {
             tokio::select! {
                 ran = &mut run => break ran,
@@ -900,7 +902,13 @@ async fn tune(
                         .ok()
                         .and_then(|text| terminal::tune_progress(&text))
                     {
+                        // One line per new step, with the time since the start.
+                        if last_step.as_ref() != Some(&p.step) {
+                            job.add_line(format!("[{}] {}", since_text(started.elapsed()), p.step));
+                        }
                         job.progress(&p.step, p.percent, p.eta_secs);
+                        job.show_speeds(p.speeds);
+                        last_step = Some(p.step);
                     }
                 }
             }
@@ -970,6 +978,15 @@ async fn change_preset(
         agent.strata().restart_when_idle(job).await?;
     }
     Ok(None)
+}
+
+/// A tune's time so far for its log: `7m`, from an hour on `1h 05m`.
+fn since_text(elapsed: Duration) -> String {
+    let minutes = elapsed.as_secs() / 60;
+    match minutes {
+        0..60 => format!("{minutes}m"),
+        _ => format!("{}h {:02}m", minutes / 60, minutes % 60),
+    }
 }
 
 /// The tune's result in a sentence: tok/s before and after and the changed
@@ -2173,4 +2190,17 @@ fn git_commit(dir: &Path) -> Option<String> {
             .to_string(),
     };
     (full.len() >= 7).then(|| full[..7].to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tunes_time_reads_in_minutes_and_from_an_hour_on_with_hours() {
+        assert_eq!(since_text(Duration::from_secs(59)), "0m");
+        assert_eq!(since_text(Duration::from_secs(10 * 60 + 5)), "10m");
+        assert_eq!(since_text(Duration::from_secs(65 * 60)), "1h 05m");
+        assert_eq!(since_text(Duration::from_secs(2 * 3600)), "2h 00m");
+    }
 }

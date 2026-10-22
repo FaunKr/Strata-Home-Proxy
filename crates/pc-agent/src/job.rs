@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use strata_pc_protocol::{StrataJob, StrataJobKind, StrataJobState};
+use strata_pc_protocol::{StrataJob, StrataJobKind, StrataJobState, TuneSpeed};
 
 use crate::{
     agent::Agent,
@@ -154,6 +154,7 @@ impl JobContext {
                 bytes_per_sec: None,
                 eta_secs: None,
                 lines: Vec::new(),
+                speeds: Vec::new(),
                 error: None,
                 result: None,
                 started: unix_now(),
@@ -291,6 +292,34 @@ impl JobContext {
         self.with(|inner| inner.bench)
     }
 
+    /// Adds `line` to the job's output, which keeps the last
+    /// [`KEPT_LINES`].
+    pub fn add_line(&self, line: String) {
+        let added = self.with(|inner| {
+            let job = inner.current.as_mut()?;
+            job.lines.push(line);
+            let over = job.lines.len().saturating_sub(KEPT_LINES);
+            job.lines.drain(..over);
+            Some(())
+        });
+        if added.is_some() {
+            self.save();
+        }
+    }
+
+    /// Shows a running tune's measurements so far.
+    pub fn show_speeds(&self, speeds: Vec<TuneSpeed>) {
+        let changed = self.with(|inner| {
+            let job = inner.current.as_mut()?;
+            let changed = job.speeds != speeds;
+            job.speeds = speeds;
+            Some(changed)
+        });
+        if changed == Some(true) {
+            self.save();
+        }
+    }
+
     /// Shows `lines` as the job's output.
     pub fn show_lines(&self, lines: Vec<String>) {
         self.with(|inner| {
@@ -314,7 +343,7 @@ impl JobContext {
     /// when `progress` is set and the benchmark's speeds, and ends it on
     /// cancel.
     pub(crate) async fn command(&self, spec: CommandSpec, progress: bool) -> Result<(), Step> {
-        self.run_command(spec, progress, None).await
+        self.run_command(spec, progress, None, true).await
     }
 
     /// Like [`command`](Self::command) without setup's progress, and gives
@@ -324,7 +353,20 @@ impl JobContext {
         spec: CommandSpec,
     ) -> (Result<(), Step>, Vec<String>) {
         let mut output = Vec::new();
-        let ran = self.run_command(spec, false, Some(&mut output)).await;
+        let ran = self.run_command(spec, false, Some(&mut output), true).await;
+        (ran, output)
+    }
+
+    /// Like [`command_output`](Self::command_output), but the output stays
+    /// out of the job's lines: a machine's answer, not for reading.
+    pub(crate) async fn command_answer(
+        &self,
+        spec: CommandSpec,
+    ) -> (Result<(), Step>, Vec<String>) {
+        let mut output = Vec::new();
+        let ran = self
+            .run_command(spec, false, Some(&mut output), false)
+            .await;
         (ran, output)
     }
 
@@ -333,6 +375,7 @@ impl JobContext {
         spec: CommandSpec,
         progress: bool,
         mut output: Option<&mut Vec<String>>,
+        show: bool,
     ) -> Result<(), Step> {
         let mut run = self
             .agent
@@ -354,6 +397,9 @@ impl JobContext {
         while let Some(line) = run.next_line().await {
             if let Some(output) = output.as_mut() {
                 output.push(line.clone());
+            }
+            if !show {
+                continue;
             }
             let step_changed = self.with(|inner| {
                 let JobsInner {
@@ -659,6 +705,7 @@ mod tests {
             bytes_per_sec: None,
             eta_secs: None,
             lines: Vec::new(),
+            speeds: Vec::new(),
             error: None,
             result: None,
             started: 0,

@@ -8,7 +8,7 @@ pub use strata_pc_protocol::{
     Cpu, ForcedRestart, Gpu, Hardware, PresetState, SamplingField, SamplingSource, SamplingSupport,
     StrataBenchmark, StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
     StrataModel, StrataPreset, StrataPresets, StrataSampling, StrataSize, StrataTune, TuneMode,
-    TuneUse,
+    TuneSpeed, TuneUse,
 };
 
 #[cfg(feature = "ssr")]

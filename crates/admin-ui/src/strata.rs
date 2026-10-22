@@ -154,6 +154,23 @@ impl Actions {
             env: None,
         });
     }
+
+    /// Switches `model`'s active preset off; the preset stays saved.
+    fn preset_off(&self, model: String) {
+        self.start.dispatch(StartStrataJob {
+            kind: StrataJobKind::PresetOff,
+            family: None,
+            size: None,
+            context: None,
+            model: Some(model),
+            speed_projection: None,
+            tune_mode: None,
+            tune_use: None,
+            preset: None,
+            options: None,
+            env: None,
+        });
+    }
 }
 
 /// What the tabs share: Strata as the PC service reported it, and the
@@ -1060,6 +1077,11 @@ fn ModelRow(
     let preset_button = presets
         .and_then(|p| p.latest.clone())
         .map(|preset| view! { <PresetButton model=model.id.clone() preset actions blocked /> });
+    // Only from a PC service that knows the job, which came with `env`.
+    let preset_off = presets
+        .and_then(|p| p.latest.clone())
+        .filter(|preset| preset.active && model.env.is_some())
+        .map(|preset| view! { <PresetOff model=model.id.clone() preset actions blocked /> });
     // Only from a PC service that knows the job that saves them.
     let engine = model.env.clone().map(|env| {
         let started = model.started_args.clone().unwrap_or_default();
@@ -1125,7 +1147,7 @@ fn ModelRow(
             {preset_line}
             {switch}
             <div class="model-actions">
-                {activate}{projection}{engine}<OptimizationPrompt model=model.id.clone() />{preset_button}{tune}
+                {activate}{projection}{engine}<OptimizationPrompt model=model.id.clone() />{preset_button}{preset_off}{tune}
                 {delete}
             </div>
         </li>
@@ -1538,6 +1560,41 @@ fn PresetButton(
             }
         >
             {if undo { "Undo preset" } else { "Apply preset" }}
+        </button>
+    }
+}
+
+/// *Turn off* for the active preset: Strata goes back to its standard
+/// settings, the preset stays saved; restarts Strata when the model runs.
+#[component]
+fn PresetOff(
+    model: String,
+    preset: StrataPreset,
+    actions: Actions,
+    blocked: Signal<bool>,
+) -> impl IntoView {
+    let question = Question {
+        title: format!("Turn the preset off for {model}?"),
+        text: format!(
+            "Strata starts {model} with its standard settings again; \"{}\" stays saved \
+             and can be applied later. If {model} is running, Strata restarts.",
+            preset.name
+        ),
+        confirm: "Turn off",
+        danger: false,
+    };
+    let confirm = expect_context::<Confirm>();
+    view! {
+        <button
+            type="button"
+            class="secondary"
+            disabled=move || blocked.get()
+            on:click=move |_| {
+                let model = model.clone();
+                confirm.ask(question.clone(), move || actions.preset_off(model.clone()));
+            }
+        >
+            "Turn off preset"
         </button>
     }
 }

@@ -1,4 +1,4 @@
-//! Apply and Undo of a model's preset from the Strata page, against the
+//! Apply, Undo and Turn off of a model's preset from the Strata page, against the
 //! simulated PC and its service.
 
 use crate::common;
@@ -58,4 +58,19 @@ async fn a_preset_job_needs_its_preset() {
         .await;
     assert_ne!(resp.status(), 200);
     assert!(s.pc.job_bodies.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn turning_a_preset_off_reaches_the_pc_service() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = b
+        .call(
+            "strata-job",
+            &[("kind", "preset_off"), ("model", "IQ3_XXS")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = s.pc.job_bodies.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(body, json!({"kind": "preset_off", "model": "IQ3_XXS"}));
 }

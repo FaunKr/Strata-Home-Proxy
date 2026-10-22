@@ -233,6 +233,14 @@ impl Terminal {
         self.command(&["presets", "undo", preset, "--output", "json"])
     }
 
+    /// Switches the active preset of run config `config`'s model and
+    /// choices off: back to the standard settings, the preset stays saved;
+    /// read the output with [`preset_answer`].
+    pub fn preset_off(&self, config: &Path) -> CommandSpec {
+        let config = config.display().to_string();
+        self.command(&["presets", "off", &config, "--output", "json"])
+    }
+
     /// Makes `preset` the active one for its model and choices, keeping the
     /// one before for undo; read the output with [`preset_answer`].
     pub fn apply_preset(&self, preset: &str) -> CommandSpec {

@@ -1198,6 +1198,35 @@ async fn an_active_preset_says_it_wins_over_the_engine_options() {
     assert_eq!(html.matches("win over these").count(), 1, "{html}");
 }
 
+// --- #306 turning a preset off ---
+
+#[tokio::test]
+async fn only_an_active_preset_can_be_turned_off_and_only_with_word_on_the_environment() {
+    let s = setup(true, |_| {}).await;
+    let mut report = with_engine_options();
+    report.info.models[0].presets = serde_json::from_value(json!({
+        "latest": {"id": "p1", "name": "Full speed", "active": true, "state": "fresh"}
+    }))
+    .unwrap();
+    report.info.models[1].presets = serde_json::from_value(json!({
+        "latest": {"id": "p2", "name": "Saved", "active": false}
+    }))
+    .unwrap();
+    // An older PC service: active, but it does not know the job.
+    report.info.models.push(report.info.models[1].clone());
+    report.info.models[2].id = "swift-IQ3_M".into();
+    report.info.models[2].env = None;
+    report.info.models[2].presets = serde_json::from_value(json!({
+        "latest": {"id": "p3", "name": "Older", "active": true, "state": "fresh"}
+    }))
+    .unwrap();
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(html.matches("Turn off preset").count(), 1, "{html}");
+}
+
 // --- #297 saving the engine options ---
 
 async fn save_options(b: &mut Browser, text: &str) -> reqwest::Response {

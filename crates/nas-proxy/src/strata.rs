@@ -346,6 +346,7 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
             model: model()?,
             user_args: engine_options(form.options.as_deref().unwrap_or(""))?,
         },
+        StrataJobKind::PresetOff => StrataJobRequest::PresetOff { model: model()? },
         StrataJobKind::SetEngineSettings => StrataJobRequest::SetEngineSettings {
             model: model()?,
             user_args: form.options.as_deref().map(engine_options).transpose()?,

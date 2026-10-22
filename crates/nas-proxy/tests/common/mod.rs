@@ -676,7 +676,8 @@ fn start_job(pc: &Pc, body: Value) -> Response {
         | StrataJobRequest::ApplyPreset { model, .. }
         | StrataJobRequest::UndoPreset { model, .. }
         | StrataJobRequest::SetUserArgs { model, .. }
-        | StrataJobRequest::SetEngineSettings { model, .. } => Some(model.clone()),
+        | StrataJobRequest::SetEngineSettings { model, .. }
+        | StrataJobRequest::PresetOff { model } => Some(model.clone()),
         _ => None,
     };
     let job = StrataJob {

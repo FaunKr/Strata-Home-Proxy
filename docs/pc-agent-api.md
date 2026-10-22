@@ -538,8 +538,9 @@ For the active model, the job waits after the restart until Strata answers on
 `args_written` and `user_args` back,
 restarts Strata with them and fails; the last lines of the
 Strata output are then in the job's `lines`. If the wait is
-cancelled, the old `args` are restored as well. In gaming mode Strata
-does not restart, and there is no waiting.
+cancelled, the old `args` are restored as well. A job does not start in
+gaming mode (`409`, as every job); if gaming mode comes on while the job
+waits, Strata does not restart, and there is no waiting.
 
 ### `GET /strata/job`
 

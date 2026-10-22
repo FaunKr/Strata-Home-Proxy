@@ -2082,6 +2082,8 @@ pub fn view(agent: &Agent) -> StrataReport {
                 loop_recovery: Some(model.loop_recovery().into()),
                 sampling: support.map(|support| model.sampling(support)),
                 config: model.shareable_config(),
+                user_args: model.shareable_user_args(),
+                started_args: Some(model.shareable_started_args()),
                 chat_settings: model.shareable_chat(),
                 load_lines: agent.output.load_lines(&id),
                 tunable: Some(no_tune.is_none()),

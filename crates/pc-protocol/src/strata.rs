@@ -124,6 +124,15 @@ pub struct StrataModel {
     /// cannot be read, or from older services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<String>,
+    /// Its engine options set by hand (`user_args`), each path cut to its
+    /// file name; empty without any, `None` when its Strata keeps none
+    /// (no `args_written`), or from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_args: Option<Vec<String>>,
+    /// The args Strata starts it with, `user_args` over `args`, cut the
+    /// same way; `None` from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_args: Option<Vec<String>>,
     /// Its Chat settings from Strata's web app as JSON text, cut the same
     /// way; `None` without the file, or from older services.
     #[serde(default, skip_serializing_if = "Option::is_none")]

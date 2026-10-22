@@ -972,6 +972,11 @@ fn ModelRow(
     let preset_button = presets
         .and_then(|p| p.latest.clone())
         .map(|preset| view! { <PresetButton model=model.id.clone() preset actions blocked /> });
+    let options = model.user_args.clone().map(|user| {
+        let started = model.started_args.clone().unwrap_or_default();
+        let preset = model.presets.as_ref().and_then(|p| p.latest.as_ref());
+        view! { <EngineOptions user started preset=preset.cloned() /> }
+    });
     // Only with word from the PC service: an older one does not say.
     let tune = match (model.tunable, model.tune_unavailable.clone()) {
         (Some(true), _) => {
@@ -1017,6 +1022,7 @@ fn ModelRow(
             {sampling}
             {last_tune}
             {preset_line}
+            {options}
             {switch}
             <div class="model-actions">
                 {activate}{projection}<OptimizationPrompt model=model.id.clone() />{preset_button}{tune}
@@ -1024,6 +1030,70 @@ fn ModelRow(
             </div>
         </li>
     }
+}
+
+/// A model's engine options set by hand (`user_args`), one option per line,
+/// and the args Strata starts it with.
+#[component]
+fn EngineOptions(
+    user: Vec<String>,
+    started: Vec<String>,
+    preset: Option<StrataPreset>,
+) -> impl IntoView {
+    let lines = option_lines(&user);
+    // A preset Strata applies wins over the run config.
+    let wins = preset
+        .filter(|p| p.active && p.state != Some(PresetState::Hard))
+        .map(|p| {
+            view! {
+                <p class="muted small">
+                    {format!("Preset {} is active; its settings win over these.", p.name)}
+                </p>
+            }
+        });
+    let started = (!started.is_empty()).then(|| {
+        format!(
+            "Strata starts with: {}",
+            option_lines(&started).replace('\n', " ")
+        )
+    });
+    view! {
+        <div class="engine-options">
+            <p class="muted small">
+                {if lines.is_empty() {
+                    "Engine options (user_args): none set by hand"
+                } else {
+                    "Engine options (user_args):"
+                }}
+            </p>
+            {(!lines.is_empty()).then(|| view! { <pre class="lines">{lines}</pre> })}
+            {started.map(|text| view! { <p class="muted small started-args">{text}</p> })}
+            {wins}
+        </div>
+    }
+}
+
+/// Args one option per line, each with its values; a value that is empty
+/// or holds a space or a quote is quoted.
+fn option_lines(args: &[String]) -> String {
+    let mut out = String::new();
+    for arg in args {
+        if arg.starts_with("--") {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+        } else if !out.is_empty() {
+            out.push(' ');
+        }
+        if arg.is_empty() || arg.contains(char::is_whitespace) || arg.contains('"') {
+            out.push('"');
+            out.push_str(&arg.replace('"', "\\\""));
+            out.push('"');
+        } else {
+            out.push_str(arg);
+        }
+    }
+    out
 }
 
 /// The optimization prompt of one model: a button, and a dialog with the
@@ -2372,6 +2442,26 @@ fn StrataKey(unreported: bool) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engine_options_go_one_per_line_with_odd_values_quoted() {
+        let args: Vec<String> = [
+            "--threads",
+            "8",
+            "--x",
+            "a b",
+            "",
+            "say \"hi\"",
+            "--no-mmap",
+        ]
+        .map(Into::into)
+        .into();
+        assert_eq!(
+            option_lines(&args),
+            "--threads 8\n--x \"a b\" \"\" \"say \\\"hi\\\"\"\n--no-mmap"
+        );
+        assert_eq!(option_lines(&[]), "");
+    }
 
     fn presets(active: bool, state: Option<PresetState>, reasons: &[&str]) -> StrataPresets {
         StrataPresets {

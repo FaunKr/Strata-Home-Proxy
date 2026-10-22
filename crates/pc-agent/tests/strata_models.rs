@@ -1794,6 +1794,79 @@ async fn a_context_that_goes_back_brings_back_what_strata_kept() {
     }
 }
 
+// --- #296 the engine options a model shows ---
+
+#[tokio::test]
+async fn a_model_shows_its_engine_options_and_what_strata_starts_with() {
+    let s = setup("models-user-shown").await;
+    installed(&s);
+    let args = json!(["--native", "C:/Users/faun/strata/b.gguf", "--threads", "4"]);
+    let user = json!([
+        "--threads",
+        "8",
+        "--control-vector",
+        "D:\\own vectors\\mine.gguf",
+        "--no-mmap"
+    ]);
+    config_with_user_args(&s, "coder-iq1_m", args.clone(), args, user);
+    let view = get(&s, "/strata").await;
+    let coder = model(&view, "coder-IQ1_M");
+    assert_eq!(
+        coder["user_args"],
+        json!([
+            "--threads",
+            "8",
+            "--control-vector",
+            "mine.gguf",
+            "--no-mmap"
+        ]),
+        "paths cut to the file name: {view}"
+    );
+    assert_eq!(
+        coder["started_args"],
+        json!([
+            "--native",
+            "b.gguf",
+            "--threads",
+            "8",
+            "--control-vector",
+            "mine.gguf",
+            "--no-mmap"
+        ]),
+        "user_args over args: {view}"
+    );
+    assert!(!view.to_string().contains("faun"), "{view}");
+    assert!(!view.to_string().contains(OLD_KEY), "{view}");
+}
+
+#[tokio::test]
+async fn a_strata_that_keeps_no_options_by_hand_shows_none() {
+    let s = setup("models-user-older-shown").await;
+    installed(&s);
+    let view = get(&s, "/strata").await;
+    let coder = model(&view, "coder-IQ1_M");
+    assert!(coder.get("user_args").is_none(), "{view}");
+    assert!(coder["started_args"].is_array(), "{view}");
+}
+
+#[tokio::test]
+async fn a_config_without_options_by_hand_shows_an_empty_list() {
+    let s = setup("models-user-none").await;
+    installed(&s);
+    let args = json!(["--native", "b.gguf"]);
+    strata_folder(&s).config(
+        "coder-iq1_m",
+        json!({"exe": "C:/Strata/engine/strata.exe", "args": args, "port": 8080,
+            "api_key": OLD_KEY, "args_written": args}),
+    );
+    let view = get(&s, "/strata").await;
+    assert_eq!(
+        model(&view, "coder-IQ1_M")["user_args"],
+        json!([]),
+        "{view}"
+    );
+}
+
 fn sample(name: &str) -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../pc-protocol/tests/samples")

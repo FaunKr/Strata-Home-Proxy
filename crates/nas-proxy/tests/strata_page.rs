@@ -940,3 +940,91 @@ async fn update_from_the_kept_answer_wakes_the_pc() {
     assert_eq!(last_body(&s)["kind"], "update");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Strata as `install` with an old Strata folder, served or not.
+fn on(install: StrataInstall, old_folder: bool, served: bool) -> StrataReport {
+    let mut report = strata_info(true);
+    report.info.install = Some(install);
+    report.info.old_strata_folder = old_folder;
+    report.info.terminal_served = served;
+    report
+}
+
+#[tokio::test]
+async fn the_switch_and_the_removal_show_by_the_pc_s_state() {
+    let s = setup(true, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    for (report, switch, remove) in [
+        (on(StrataInstall::Source, true, false), true, false),
+        // An older PC service knows no switch.
+        (on(StrataInstall::Source, false, false), false, false),
+        (on(StrataInstall::Terminal, true, false), false, false),
+        (on(StrataInstall::Terminal, true, true), false, true),
+        (on(StrataInstall::Terminal, false, true), false, false),
+    ] {
+        let state = format!("{:?}", report.info);
+        *s.pc.strata_info.lock().unwrap() = Some(report);
+        let html = b.page("/admin/strata/version").await;
+        assert_eq!(
+            html.contains("Switch to Strata Terminal"),
+            switch,
+            "{state}"
+        );
+        assert_eq!(html.contains("Remove old Strata folder"), remove, "{state}");
+    }
+}
+
+#[tokio::test]
+async fn the_switch_wakes_the_pc_and_is_recorded() {
+    let dir = data_dir("switch");
+    let s = answered(&dir, on(StrataInstall::Source, true, false), None).await;
+    let mut b = restarted_asleep(&s).await;
+    assert_eq!(page(&mut b).await["stale"], true);
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("Switch to Strata Terminal"), "{html}");
+
+    let resp = b
+        .call("strata-job", &[("kind", "switch_to_terminal")])
+        .await;
+    assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
+    assert!(s.pc.wol_packets.load(Ordering::SeqCst) > 0);
+    assert_eq!(last_body(&s), json!({"kind": "switch_to_terminal"}));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn the_switch_and_the_removal_land_in_the_history() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    b.call("strata-job", &[("kind", "switch_to_terminal")])
+        .await;
+    s.pc.update_job(|j| {
+        j.state = StrataJobState::Failed;
+        j.error = Some("The feed has no engine package for this PC.".into());
+    });
+    eventually("failure recorded", || {
+        kinds(&s.state).contains(&EventKind::StrataJobFailed)
+    })
+    .await;
+    b.call("strata-job", &[("kind", "remove_old_strata_folder")])
+        .await;
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    eventually("removal recorded", || {
+        kinds(&s.state).contains(&EventKind::StrataJobDone)
+    })
+    .await;
+    let details: Vec<_> = s
+        .state
+        .events
+        .recent()
+        .into_iter()
+        .filter_map(|e| e.detail)
+        .collect();
+    for wanted in [
+        "Switching to the Strata Terminal",
+        "Switching to the Strata Terminal: The feed has no engine package for this PC.",
+        "Removing the old Strata folder",
+    ] {
+        assert!(details.iter().any(|d| d == wanted), "{wanted}: {details:?}");
+    }
+}

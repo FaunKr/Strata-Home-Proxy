@@ -1188,8 +1188,89 @@ fn Version(
                 </button>
             </div>
         </section>
+        <TerminalSwitch info=info.clone() asleep actions blocked />
         <Benchmarks info actions blocked />
     }
+}
+
+/// The way from the old Strata folder to the Strata Terminal: the switch
+/// while Strata runs from the old folder, then removing the old folder
+/// once the Terminal's Strata has served. Nothing once that is done.
+#[component]
+fn TerminalSwitch(
+    info: StrataInfo,
+    /// The PC sleeps: the job wakes it first.
+    asleep: bool,
+    actions: Actions,
+    blocked: Signal<bool>,
+) -> impl IntoView {
+    let confirm = expect_context::<Confirm>();
+    let wakes = if asleep {
+        "The PC wakes up first. "
+    } else {
+        ""
+    };
+    let on_terminal = info.install == Some(StrataInstall::Terminal);
+    let (text, button, question, kind) = if info.install == Some(StrataInstall::Source) {
+        let model = info
+            .models
+            .iter()
+            .find(|m| m.active)
+            .map_or("the active model".to_string(), |m| m.id.clone());
+        (
+            "Strata runs from the old Strata folder. Strata itself now installs and runs through the Strata Terminal.",
+            "Switch to Strata Terminal",
+            Question {
+                title: "Switch to the Strata Terminal?".into(),
+                text: format!(
+                    "{wakes}The PC service installs the Strata Terminal and takes over {model} with its context, speed projection and sampling; model files already in the Strata data folder are not downloaded again. Strata cannot answer requests while it restarts. If the switch fails, the old Strata folder serves again."
+                ),
+                confirm: "Switch to Strata Terminal",
+                danger: false,
+            },
+            StrataJobKind::SwitchToTerminal,
+        )
+    } else if on_terminal && info.terminal_served {
+        (
+            "Strata runs on the Strata Terminal. The old Strata folder is no longer needed.",
+            "Remove old Strata folder",
+            Question {
+                title: "Remove the old Strata folder?".into(),
+                text: format!(
+                    "{wakes}The PC service deletes the old Strata folder. The Strata data folder with the models stays."
+                ),
+                confirm: "Remove old Strata folder",
+                danger: true,
+            },
+            StrataJobKind::RemoveOldStrataFolder,
+        )
+    } else {
+        return None;
+    };
+    if !info.old_strata_folder {
+        return None;
+    }
+    let class = if kind == StrataJobKind::RemoveOldStrataFolder {
+        "ghost-danger"
+    } else {
+        ""
+    };
+    Some(view! {
+        <section class="card">
+            <h2>"Strata Terminal"</h2>
+            <p class="muted">{text}</p>
+            <div class="actions">
+                <button
+                    type="button"
+                    class=class
+                    disabled=move || blocked.get()
+                    on:click=move |_| confirm.ask(question.clone(), move || actions.job(kind))
+                >
+                    {button}
+                </button>
+            </div>
+        </section>
+    })
 }
 
 /// How often the card asks again while a code benchmark runs.

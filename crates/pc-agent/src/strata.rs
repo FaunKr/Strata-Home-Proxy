@@ -8,7 +8,8 @@
 //! through [`crate::strata_process`].
 //!
 //! A new setup installs the Strata Terminal ([`crate::terminal`]); a PC
-//! with an older Strata folder from source keeps it and its jobs.
+//! with an older Strata folder from source keeps it and its jobs until the
+//! switch to the Terminal, which may then delete the old folder.
 
 use std::{
     future::Future,
@@ -22,7 +23,7 @@ use crate::{
     catalog::{self, Size},
     command::CommandSpec,
     install::{Installation, Kind, Model},
-    job::{JobContext, POLL, Step, unix_now},
+    job::{JobContext, KEPT_LINES, POLL, Step, unix_now},
     managed::Managed,
     releases,
     strata_process::Applied,
@@ -40,6 +41,8 @@ const BENCH_FILE: &str = "strata-benchmark.json";
 const BENCHES_FILE: &str = "strata-benchmarks.json";
 /// What `strata --version` said last, with the build it was for.
 const VERSION_FILE: &str = "strata-version.json";
+/// There since the Strata Terminal's Strata first answered `/health`.
+const SERVED_FILE: &str = "strata-terminal-served";
 /// How often the page's visits ask Git whether Strata has a newer version.
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
 /// How soon Strata's options are read again after a read that failed or
@@ -101,6 +104,12 @@ enum Plan {
         ids: Vec<String>,
         active: String,
     },
+    /// The Strata Terminal serves the active model `id` in place of the old
+    /// Strata folder.
+    SwitchToTerminal {
+        id: String,
+    },
+    RemoveOldStrataFolder,
 }
 
 impl Plan {
@@ -111,8 +120,12 @@ impl Plan {
             | Self::Delete { id }
             | Self::Benchmark { id }
             | Self::SetSpeedProjection { id, .. }
-            | Self::SetContext { id, .. } => Some(id.clone()),
-            Self::Update | Self::SetKey | Self::CompareModels { .. } => None,
+            | Self::SetContext { id, .. }
+            | Self::SwitchToTerminal { id } => Some(id.clone()),
+            Self::Update
+            | Self::SetKey
+            | Self::CompareModels { .. }
+            | Self::RemoveOldStrataFolder => None,
         }
     }
 }
@@ -279,6 +292,41 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             ids.sort();
             Ok(Plan::CompareModels { ids, active })
         }
+        StrataJobRequest::SwitchToTerminal => {
+            if install.kind() == Kind::Terminal {
+                return Err(Refusal::Conflict(
+                    "Strata runs on the Strata Terminal already".into(),
+                ));
+            }
+            strata_installed(&install)?;
+            let id = active_model(agent).ok_or_else(|| {
+                Refusal::Conflict("No active model known; activate a model first".into())
+            })?;
+            if catalog::by_id(&id).is_none() {
+                return Err(Refusal::Conflict(format!(
+                    "{id} is not in Strata's catalog, so the Strata Terminal cannot take it over"
+                )));
+            }
+            Ok(Plan::SwitchToTerminal { id })
+        }
+        StrataJobRequest::RemoveOldStrataFolder => {
+            if !Installation::new(dir, &agent.cfg.strata_data_dir).in_use() {
+                return Err(Refusal::Conflict("There is no old Strata folder".into()));
+            }
+            if install.kind() == Kind::Source {
+                return Err(Refusal::Conflict(
+                    "Strata still runs from the old Strata folder; switch to the Strata Terminal first"
+                        .into(),
+                ));
+            }
+            if !terminal_served(agent) {
+                return Err(Refusal::Conflict(
+                    "The Strata Terminal's Strata has not served yet; the old Strata folder stays until it has"
+                        .into(),
+                ));
+            }
+            Ok(Plan::RemoveOldStrataFolder)
+        }
     }
 }
 
@@ -353,6 +401,8 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::SetSpeedProjection { id, on } => set_speed_projection(job, &id, on).await,
         Plan::SetContext { id, context } => set_context(job, &id, context).await,
         Plan::CompareModels { ids, active } => compare_models(job, &ids, &active).await,
+        Plan::SwitchToTerminal { id } => switch_to_terminal(job, &id).await,
+        Plan::RemoveOldStrataFolder => remove_old_strata_folder(job).await,
     }
 }
 
@@ -370,7 +420,7 @@ async fn install(
     // Setup writes a key only if one is known; the start below makes the
     // one Strata runs with.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
-    setup(job, size, context, &key, speed_projection).await?;
+    setup(job, &strata, size, context, &key, speed_projection).await?;
     // A Strata started by hand ends with the old values, the new one starts
     // with the managed ones.
     agent.strata().stop();
@@ -452,7 +502,8 @@ async fn add_model(
     // The key Strata runs with: a model with another key would answer the
     // proxy with 401 until the next start.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
-    setup(job, size, context, &key, speed_projection).await?;
+    let install = Installation::of(&agent.cfg);
+    setup(job, &install, size, context, &key, speed_projection).await?;
     if active_changed(agent, &manage(agent).await) {
         agent.strata().restart_when_idle(job).await?;
     }
@@ -789,6 +840,132 @@ fn load_benchmarks(agent: &Agent) -> Vec<StrataBenchmark> {
                 vec![b]
             })
             .unwrap_or_default(),
+    }
+}
+
+/// From the old Strata folder to the Strata Terminal with the active model
+/// `id`: the Terminal and the engine for this PC, then the Terminal's setup
+/// on the same Strata data folder with the model's context and speed
+/// projection (files already there are not downloaded again) and its Chat
+/// settings; once Strata has no request at work, `strata serve` replaces
+/// the old start. Until the Terminal's Strata answers, a failure or a
+/// cancel takes the Terminal's run config away again, so the old Strata
+/// folder is the service's Strata, and the old start serves again.
+async fn switch_to_terminal(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    let cfg = &agent.cfg;
+    let old = Installation::of(cfg);
+    let terminal = Installation::terminal(&Terminal::of(cfg), &cfg.strata_data_dir);
+    let size = catalog::by_id(id).expect("the check finds the model in the catalog");
+    let model = old.read_model(id);
+    let before = agent.managed();
+    let prepared = async {
+        install_terminal(job).await?;
+        let key = agent.strata_key.key(cfg).unwrap_or_default();
+        let context = model.context().unwrap_or(catalog::DEFAULT_CONTEXT);
+        setup(
+            job,
+            &terminal,
+            size,
+            context,
+            &key,
+            model.speed_projection(),
+        )
+        .await?;
+        if !terminal.has(id) {
+            return Err(Step::Failed(format!(
+                "The Strata Terminal's setup ended without a run config for {id}"
+            )));
+        }
+        terminal
+            .adopt_chat_settings(&old, id)
+            .map_err(Step::Failed)?;
+        manage(agent).await;
+        agent.strata().wait_idle(job).await
+    }
+    .await;
+    if let Err(stopped) = prepared {
+        // The old Strata still runs; only the Terminal's run config goes.
+        return Err(match terminal.remove_config(id) {
+            Ok(()) => stopped,
+            Err(e) => Step::Failed(e),
+        });
+    }
+    job.step("Starting Strata on the Strata Terminal");
+    agent.strata().stop();
+    let started = match agent.set_managed(managed_start(agent, &terminal, id)) {
+        Ok(()) => {
+            agent.strata().start_again().await;
+            if agent.gaming() {
+                Ok(true)
+            } else {
+                agent.strata().came_up(job).await
+            }
+        }
+        Err(e) => Err(Step::Failed(e.to_string())),
+    };
+    if let Ok(true) = started {
+        // In gaming mode Strata starts later; the watchdog notes its answer.
+        if !agent.gaming() {
+            note_served(agent);
+        }
+        return Ok(None);
+    }
+    let output = agent.output.last_lines(KEPT_LINES);
+    job.cleanup(async {
+        job.step("Starting the old Strata again");
+        agent.strata().stop();
+        let removed = terminal.remove_config(id);
+        let restored = agent.set_managed(before).map_err(|e| e.to_string());
+        agent.strata().start_again().await;
+        // Strata's own words explain the failure.
+        job.show_lines(output);
+        removed.and(restored)
+    })
+    .await
+    .map_err(Step::Failed)?;
+    started?;
+    Err(Step::Failed(
+        "Strata did not start on the Strata Terminal; the old Strata folder serves again".into(),
+    ))
+}
+
+/// Deletes the old Strata folder; the Strata data folder and the Strata
+/// Terminal's folders stay, also where they lie inside it.
+async fn remove_old_strata_folder(job: &JobContext) -> Result<Option<String>, Step> {
+    job.step("Deleting the old Strata folder");
+    let cfg = &job.agent().cfg;
+    let old = Installation::new(&cfg.strata_dir, &cfg.strata_data_dir);
+    let mut keep = vec![cfg.strata_home.clone(), cfg.strata_components.clone()];
+    // The service's own state, should it lie inside.
+    keep.extend(Some(cfg.state_dir()).filter(|d| d.starts_with(&cfg.strata_dir)));
+    tokio::task::spawn_blocking(move || old.remove_folder(&keep))
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))??;
+    Ok(None)
+}
+
+/// Whether the Strata Terminal's Strata has answered `/health` once.
+fn terminal_served(agent: &Agent) -> bool {
+    agent.cfg.state_dir().join(SERVED_FILE).exists()
+}
+
+/// Notes that Strata answered, if it is the Strata Terminal's: the managed
+/// start serves a run config of the Terminal.
+pub(crate) fn note_served(agent: &Agent) {
+    if terminal_served(agent) {
+        return;
+    }
+    let served = agent
+        .managed()
+        .start(&agent.cfg)
+        .is_some_and(|(_, args)| Terminal::served_config(args).is_some());
+    if !served || Installation::of(&agent.cfg).kind() != Kind::Terminal {
+        return;
+    }
+    let path = agent.cfg.state_dir().join(SERVED_FILE);
+    if let Err(e) = crate::write_replacing(&path, &unix_now().to_string()) {
+        tracing::warn!("{SERVED_FILE} not written: {e}");
     }
 }
 
@@ -1227,16 +1404,17 @@ fn parse_numstat(line: &str) -> Option<ChangedFile> {
     })
 }
 
-/// Runs Strata's setup without questions, with the fixed values and the key.
+/// Runs the setup of `install` without questions, with the fixed values
+/// and the key.
 async fn setup(
     job: &JobContext,
+    install: &Installation,
     size: &Size,
     context: u32,
     api_key: &str,
     speed_projection: bool,
 ) -> Result<(), Step> {
     let agent = job.agent();
-    let install = Installation::of(&agent.cfg);
     let mut args: Vec<String> = vec!["--yes".into(), "--no-start".into(), "--no-browser".into()];
     if !install.models().is_empty() {
         args.push("--setup".into());
@@ -1402,6 +1580,8 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SetSpeedProjection => "Switch speed projection",
         StrataJobKind::SetContext => "Change context",
         StrataJobKind::CompareModels => "Compare models",
+        StrataJobKind::SwitchToTerminal => "Switch to the Strata Terminal",
+        StrataJobKind::RemoveOldStrataFolder => "Remove the old Strata folder",
     }
 }
 
@@ -1444,6 +1624,8 @@ pub fn view(agent: &Agent) -> StrataReport {
     let info = StrataInfo {
         installed: install.is_set_up(),
         install: install.is_set_up().then_some(install.kind().into()),
+        old_strata_folder: Installation::new(&cfg.strata_dir, &cfg.strata_data_dir).in_use(),
+        terminal_served: terminal_served(agent),
         version,
         options,
         update_available: agent.updates.available(),

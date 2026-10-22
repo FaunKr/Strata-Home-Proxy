@@ -305,6 +305,8 @@ pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SetSpeedProjection => "Switching speed projection",
         StrataJobKind::SetContext => "Changing context",
         StrataJobKind::CompareModels => "Comparing models",
+        StrataJobKind::SwitchToTerminal => "Switching to the Strata Terminal",
+        StrataJobKind::RemoveOldStrataFolder => "Removing the old Strata folder",
     }
 }
 

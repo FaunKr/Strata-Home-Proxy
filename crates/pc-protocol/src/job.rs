@@ -16,10 +16,15 @@ pub enum StrataJobKind {
     SetSpeedProjection,
     SetContext,
     CompareModels,
+    /// From the old Strata folder to the Strata Terminal, with the active
+    /// model.
+    SwitchToTerminal,
+    /// Deletes the old Strata folder once the Terminal's Strata has served.
+    RemoveOldStrataFolder,
 }
 
 impl StrataJobKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 12] = [
         Self::Install,
         Self::AddModel,
         Self::Activate,
@@ -30,6 +35,8 @@ impl StrataJobKind {
         Self::SetSpeedProjection,
         Self::SetContext,
         Self::CompareModels,
+        Self::SwitchToTerminal,
+        Self::RemoveOldStrataFolder,
     ];
 }
 
@@ -127,6 +134,8 @@ pub enum StrataJobRequest {
         context: u32,
     },
     CompareModels,
+    SwitchToTerminal,
+    RemoveOldStrataFolder,
 }
 
 impl StrataJobRequest {
@@ -142,6 +151,8 @@ impl StrataJobRequest {
             Self::SetSpeedProjection { .. } => StrataJobKind::SetSpeedProjection,
             Self::SetContext { .. } => StrataJobKind::SetContext,
             Self::CompareModels => StrataJobKind::CompareModels,
+            Self::SwitchToTerminal => StrataJobKind::SwitchToTerminal,
+            Self::RemoveOldStrataFolder => StrataJobKind::RemoveOldStrataFolder,
         }
     }
 }

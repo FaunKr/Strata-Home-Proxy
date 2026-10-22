@@ -1,6 +1,8 @@
 {
   "installed": true,
   "install": "source",
+  "old_strata_folder": true,
+  "terminal_served": false,
   "version": "0123456",
   "update_available": true,
   "update": {

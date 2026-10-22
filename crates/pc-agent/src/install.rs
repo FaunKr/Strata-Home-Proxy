@@ -119,10 +119,7 @@ impl Installation {
     pub fn of(cfg: &crate::Config) -> Self {
         let terminal = Self::terminal(&Terminal::of(cfg), &cfg.strata_data_dir);
         let source = Self::new(&cfg.strata_dir, &cfg.strata_data_dir);
-        let in_use = |install: &Self| {
-            install.code.join("setup.py").is_file() || !install.models().is_empty()
-        };
-        if in_use(&source) && terminal.models().is_empty() {
+        if source.in_use() && terminal.models().is_empty() {
             source
         } else {
             terminal
@@ -131,6 +128,12 @@ impl Installation {
 
     pub fn kind(&self) -> Kind {
         self.kind
+    }
+
+    /// Whether this Strata folder from source is there: its setup or run
+    /// configs.
+    pub fn in_use(&self) -> bool {
+        self.code.join("setup.py").is_file() || !self.models().is_empty()
     }
 
     /// Whether Strata is installed here: setup's folder, or the Terminal.
@@ -302,6 +305,51 @@ impl Installation {
                 _ => Ok(()),
             }
         })
+    }
+
+    /// Deletes a model's run config with its Chat settings, start script
+    /// and log; its files in the data folder stay.
+    pub fn remove_config(&self, id: &str) -> Result<(), String> {
+        let paths = [
+            self.log_path(id),
+            self.run_script(id),
+            self.chat_path(id),
+            self.config_path(id),
+        ];
+        paths
+            .iter()
+            .try_for_each(|path| match std::fs::remove_file(path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    Err(format!("{} not deleted: {e}", path.display()))
+                }
+                _ => Ok(()),
+            })
+    }
+
+    /// Copies a model's Chat settings from `from`, if it has some.
+    pub fn adopt_chat_settings(&self, from: &Installation, id: &str) -> Result<(), String> {
+        let source = from.chat_path(id);
+        if !source.is_file() {
+            return Ok(());
+        }
+        let target = self.chat_path(id);
+        std::fs::copy(&source, &target)
+            .map(drop)
+            .map_err(|e| format!("{} not copied: {e}", source.display()))
+    }
+
+    /// Deletes the whole Strata folder, but never the Strata data folder,
+    /// the folders in `keep` or the folders on the way to them.
+    pub fn remove_folder(&self, keep: &[PathBuf]) -> Result<(), String> {
+        let mut keep = keep.to_vec();
+        keep.push(self.data.clone());
+        if keep.iter().any(|k| self.dir.starts_with(k)) {
+            return Err(format!(
+                "{} lies in a folder that stays and is not deleted",
+                self.dir.display()
+            ));
+        }
+        remove_except(&self.dir, &keep).map(drop)
     }
 
     fn model_paths(&self, id: &str) -> Vec<PathBuf> {
@@ -783,6 +831,40 @@ fn projection_flag_values(flag: &str) -> Option<usize> {
         .iter()
         .find(|(f, _)| *f == flag)
         .map(|(_, values)| values.len())
+}
+
+/// Deletes `dir` with everything in it but `keep` and the folders on the
+/// way to them; gives whether `dir` is still there.
+fn remove_except(dir: &Path, keep: &[PathBuf]) -> Result<bool, String> {
+    let not_deleted =
+        |path: &Path, e: std::io::Error| format!("{} not deleted: {e}", path.display());
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(not_deleted(dir, e)),
+    };
+    let mut stays = false;
+    for entry in entries {
+        let entry = entry.map_err(|e| not_deleted(dir, e))?;
+        let path = entry.path();
+        if keep.contains(&path) {
+            stays = true;
+        } else if keep.iter().any(|k| k.starts_with(&path)) {
+            stays |= remove_except(&path, keep)?;
+        } else {
+            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+            if is_dir {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            }
+            .map_err(|e| not_deleted(&path, e))?;
+        }
+    }
+    if !stays {
+        std::fs::remove_dir(dir).map_err(|e| not_deleted(dir, e))?;
+    }
+    Ok(stays)
 }
 
 fn dir_size(dir: &Path) -> u64 {

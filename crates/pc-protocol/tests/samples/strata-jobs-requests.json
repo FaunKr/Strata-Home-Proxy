@@ -57,5 +57,11 @@
   },
   {
     "kind": "compare_models"
+  },
+  {
+    "kind": "switch_to_terminal"
+  },
+  {
+    "kind": "remove_old_strata_folder"
   }
 ]

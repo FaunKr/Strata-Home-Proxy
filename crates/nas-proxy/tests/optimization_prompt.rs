@@ -8,9 +8,9 @@ use std::{sync::atomic::Ordering, time::Duration};
 use common::*;
 use serde_json::json;
 use strata_pc_protocol::{
-    CpuFacts, GpuFacts, Incoming, LoadLines, MachineFacts, NeverRule, RamStick, SamplingField,
-    SamplingSource, SamplingSupport, StrataOptions, StrataSampling, TunerOption, TunerTry,
-    WindowsFacts,
+    CpuFacts, GpuFacts, Incoming, LoadLines, MachineFacts, NeverRule, PresetState, RamStick,
+    SamplingField, SamplingSource, SamplingSupport, StrataOptions, StrataPreset, StrataPresets,
+    StrataSampling, StrataTune, TuneMode, TuneUse, TunerOption, TunerTry, WindowsFacts,
 };
 
 async fn prompt(b: &mut Browser, model: &str) -> String {
@@ -500,4 +500,166 @@ async fn carries_strata_s_options_when_the_pc_service_read_them() {
     ] {
         assert!(text.contains(part), "{part} missing:\n{text}");
     }
+}
+
+fn preset(active: bool, state: Option<PresetState>, reasons: &[&str]) -> StrataPreset {
+    StrataPreset {
+        id: "3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6".into(),
+        name: "IQ3_XXS 64K – Full speed".into(),
+        active,
+        state,
+        reasons: reasons.iter().map(|r| r.to_string()).collect(),
+        gain_pct: Some(12.4),
+        settings: vec!["--kv-resident 65536".into(), "--kv-grow".into()],
+        decode_tps: Some(35.1),
+        base_tps: Some(31.2),
+    }
+}
+
+/// The prompt for IQ3_XXS with these presets and last tune.
+async fn tuning_prompt(presets: Option<StrataPresets>, tune: Option<StrataTune>) -> String {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.models[0].presets = presets;
+    report.info.models[0].last_tune = tune;
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    prompt(&mut b, "IQ3_XXS").await
+}
+
+fn latest(preset: StrataPreset) -> Option<StrataPresets> {
+    Some(StrataPresets {
+        latest: Some(preset),
+        other_context: false,
+    })
+}
+
+#[tokio::test]
+async fn an_active_preset_comes_with_its_settings_and_wins_over_the_config() {
+    let text = tuning_prompt(latest(preset(true, Some(PresetState::Fresh), &[])), None).await;
+    for part in [
+        "### Strata's tuning",
+        "- Preset: \"IQ3_XXS 64K – Full speed\" (`--kv-resident 65536`, `--kv-grow`; \
+         measured 31.2 → 35.1 tokens/s answering, +12%), active",
+        "its settings win over `args` and `user_args`",
+        "- Last tune: not run yet",
+    ] {
+        assert!(text.contains(part), "{part} missing:\n{text}");
+    }
+    assert!(!text.contains("re-check"), "{text}");
+
+    let text = tuning_prompt(
+        latest(preset(
+            true,
+            Some(PresetState::Soft),
+            &["the graphics driver changed"],
+        )),
+        None,
+    )
+    .await;
+    assert!(
+        text.contains("Strata offers a re-check, because the graphics driver changed"),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_preset_not_applied_or_missing_for_the_context_says_so() {
+    let text = tuning_prompt(
+        latest(preset(
+            true,
+            Some(PresetState::Hard),
+            &["the graphics card changed"],
+        )),
+        None,
+    )
+    .await;
+    assert!(
+        text.contains(
+            "active but not applied, because the graphics card changed: the run config runs as it is"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("win over"), "{text}");
+
+    let text = tuning_prompt(latest(preset(false, None, &[])), None).await;
+    assert!(text.contains("saved but not applied"), "{text}");
+
+    let other = StrataPresets {
+        latest: None,
+        other_context: true,
+    };
+    let text = tuning_prompt(Some(other), None).await;
+    assert!(text.contains("- Preset: none for this context"), "{text}");
+
+    let text = tuning_prompt(None, None).await;
+    assert!(text.contains("- Preset: unknown"), "{text}");
+}
+
+#[tokio::test]
+async fn carries_the_last_tune() {
+    let tune = StrataTune {
+        at: 1_792_448_900,
+        mode: TuneMode::Thorough,
+        usage: TuneUse::Chat,
+        code: "faster".into(),
+        base_tps: Some(31.2),
+        tuned_tps: Some(35.1),
+        gain_pct: Some(12.4),
+        changed: vec!["--kv-grow".into()],
+        message: None,
+        preset: Some("3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6".into()),
+        preset_name: Some("IQ3_XXS 64K – Full speed".into()),
+    };
+    let text = tuning_prompt(None, Some(tune.clone())).await;
+    assert!(
+        text.contains(
+            "(thorough, for chat): faster, 31.2 → 35.1 tokens/s with `--kv-grow`, \
+             saved as preset \"IQ3_XXS 64K – Full speed\""
+        ),
+        "{text}"
+    );
+    let busy = StrataTune {
+        code: "busy_pc".into(),
+        message: Some("Your PC was too busy to compare settings.".into()),
+        ..tune
+    };
+    let text = tuning_prompt(None, Some(busy)).await;
+    assert!(
+        text.contains("busy_pc: Your PC was too busy to compare settings."),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn tuned_settings_lose_their_paths_and_a_loss_shows_as_such() {
+    let mut odd = preset(true, Some(PresetState::Hard), &[]);
+    odd.settings = vec![
+        "--draft-model D:\\Strata-data\\models\\draft.gguf".into(),
+        "STRATA_CACHE=C:/Users/faun/cache".into(),
+        "--split 1/2".into(),
+    ];
+    odd.gain_pct = Some(-2.6);
+    let text = tuning_prompt(latest(odd), None).await;
+    assert!(
+        text.contains("`--draft-model draft.gguf`, `STRATA_CACHE=cache`, `--split 1/2`"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Strata-data") && !text.contains("Users"),
+        "{text}"
+    );
+    assert!(text.contains("-3%") && !text.contains("+-"), "{text}");
+    assert!(
+        text.contains("active but not applied: the run config runs as it is"),
+        "{text}"
+    );
+
+    let mut both = latest(preset(true, Some(PresetState::Fresh), &[])).unwrap();
+    both.other_context = true;
+    let text = tuning_prompt(Some(both), None).await;
+    assert!(
+        text.contains("; the last tune was for other settings"),
+        "{text}"
+    );
 }

@@ -2382,6 +2382,9 @@ mod tests {
                 state,
                 reasons: reasons.iter().map(|r| r.to_string()).collect(),
                 gain_pct: Some(12.4),
+                settings: vec!["--kv-resident 65536".into()],
+                decode_tps: Some(35.1),
+                base_tps: Some(31.2),
             }),
             other_context: false,
         }

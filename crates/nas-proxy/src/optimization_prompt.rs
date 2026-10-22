@@ -7,8 +7,9 @@ use std::{fmt::Write, sync::Arc};
 
 use strata_admin_ui::api::{CodeBenchRun, CodeBenchState};
 use strata_pc_protocol::{
-    LOAD_LINES, MachineFacts, NeverRule, SamplingField, SamplingSource, SamplingSupport,
-    StrataBenchmark, StrataInfo, StrataModel, StrataOptions, TunerOption, TunerTry,
+    LOAD_LINES, MachineFacts, NeverRule, PresetState, SamplingField, SamplingSource,
+    SamplingSupport, StrataBenchmark, StrataInfo, StrataModel, StrataOptions, StrataPreset,
+    StrataTune, TuneMode, TuneUse, TunerOption, TunerTry,
 };
 
 use crate::{clock, state::AppState};
@@ -138,6 +139,17 @@ pub fn build(
         }
     }
 
+    let _ = writeln!(out, "\n### Strata's tuning\n");
+    let _ = writeln!(out, "- Preset: {}", preset_text(model));
+    let _ = writeln!(
+        out,
+        "- Last tune: {}",
+        model
+            .last_tune
+            .as_ref()
+            .map_or_else(|| NOT_RUN.into(), tune_text)
+    );
+
     let _ = writeln!(out, "\n## Benchmarks\n");
     let _ = writeln!(out, "- Speed benchmark: {}", speed_text(info, &model.id));
     let _ = writeln!(
@@ -146,6 +158,134 @@ pub fn build(
         code_bench_text(code_bench, &model.id)
     );
     Ok(text)
+}
+
+/// The model's preset and Strata's word on it: an active one wins over the
+/// run config, so the chat has to know its settings.
+fn preset_text(model: &StrataModel) -> String {
+    let Some(presets) = &model.presets else {
+        return "unknown; the PC service has not reported Strata's presets".into();
+    };
+    const OTHER: &str = "the last tune was for other settings, such as another context";
+    let Some(preset) = &presets.latest else {
+        return if presets.other_context {
+            format!("none for this context; {OTHER}")
+        } else {
+            "none".into()
+        };
+    };
+    let what = preset_what(preset);
+    let because = if preset.reasons.is_empty() {
+        String::new()
+    } else {
+        format!(", because {}", one_line(&preset.reasons.join(", ")))
+    };
+    let mut text = match (preset.active, preset.state) {
+        (false, _) => format!("{what}, saved but not applied: the run config runs as it is"),
+        (true, Some(PresetState::Hard)) => {
+            format!("{what}, active but not applied{because}: the run config runs as it is")
+        }
+        (true, state) => {
+            let mut text = format!(
+                "{what}, active: Strata puts it over the run config when the model starts, \
+                 so its settings win over `args` and `user_args`"
+            );
+            if state == Some(PresetState::Soft) {
+                let _ = write!(text, "; Strata offers a re-check{because}");
+            }
+            text
+        }
+    };
+    if presets.other_context {
+        let _ = write!(text, "; {OTHER}");
+    }
+    text
+}
+
+/// Tuned settings as code: one line each, with paths cut to file names as
+/// in the run config.
+fn settings_code(settings: &[String]) -> String {
+    let each: Vec<String> = settings
+        .iter()
+        .map(|setting| {
+            let words: Vec<String> = setting
+                .split_whitespace()
+                .map(|word| match word.split_once('=') {
+                    Some((name, value)) if is_path(value) => format!("{name}={}", file_name(value)),
+                    _ if is_path(word) => file_name(word).to_string(),
+                    _ => word.to_string(),
+                })
+                .collect();
+            format!("`{}`", words.join(" ").replace('`', "'"))
+        })
+        .collect();
+    each.join(", ")
+}
+
+/// A Windows or Unix path, not a value such as `1/2`.
+fn is_path(text: &str) -> bool {
+    text.contains('\\') || text.starts_with('/') || text.contains(":/")
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
+/// `"Name" (--kv-grow; 31.2 → 35.1 tokens/s answering, +12%)`.
+fn preset_what(preset: &StrataPreset) -> String {
+    let mut parts = Vec::new();
+    if !preset.settings.is_empty() {
+        parts.push(settings_code(&preset.settings));
+    }
+    let speed = match (preset.base_tps, preset.decode_tps) {
+        (Some(base), Some(tuned)) => Some(format!("{base:.1} → {tuned:.1} tokens/s answering")),
+        (None, Some(tuned)) => Some(format!("{tuned:.1} tokens/s answering")),
+        _ => None,
+    };
+    let gain = preset.gain_pct.map(|g| format!("{g:+.0}%"));
+    let measured: Vec<String> = speed.into_iter().chain(gain).collect();
+    if !measured.is_empty() {
+        parts.push(format!("measured {}", measured.join(", ")));
+    }
+    let name = one_line(&preset.name);
+    if parts.is_empty() {
+        format!("\"{name}\"")
+    } else {
+        format!("\"{name}\" ({})", parts.join("; "))
+    }
+}
+
+/// The model's last tune: when, how and what it found.
+fn tune_text(tune: &StrataTune) -> String {
+    let mode = match tune.mode {
+        TuneMode::Quick => "quick",
+        TuneMode::Thorough => "thorough",
+    };
+    let usage = match tune.usage {
+        TuneUse::Coding => "coding",
+        TuneUse::Chat => "chat",
+    };
+    let found = match (tune.code.as_str(), tune.base_tps, tune.tuned_tps) {
+        ("faster", Some(base), Some(tuned)) => {
+            let mut text = format!("faster, {base:.1} → {tuned:.1} tokens/s");
+            if !tune.changed.is_empty() {
+                let _ = write!(text, " with {}", settings_code(&tune.changed));
+            }
+            if let Some(name) = &tune.preset_name {
+                let _ = write!(text, ", saved as preset \"{}\"", one_line(name));
+            }
+            text
+        }
+        ("already_fastest", ..) => "the model's own settings were already the fastest".into(),
+        (code, ..) => match &tune.message {
+            Some(message) => format!("{code}: {}", one_line(message)),
+            None => code.to_string(),
+        },
+    };
+    format!(
+        "on {} ({mode}, for {usage}): {found}",
+        clock::full_text(tune.at)
+    )
 }
 
 /// What this Strata version offers to tune: the tuner's table, what it

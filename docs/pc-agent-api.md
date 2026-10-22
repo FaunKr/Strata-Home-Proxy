@@ -348,7 +348,9 @@ the model forgets it. All three are missing from an older PC service.
 
 `presets` is what Strata says about the model's presets for its current
 run config (`strata presets status`): `latest` is the active preset, else
-the newest, with `id`, `name`, `active`, `gain_pct` and, for the active one,
+the newest, with `id`, `name`, `active`, `gain_pct`, `settings` (written as
+`changed` in `last_tune`), `decode_tps` and `base_tps` (answer tokens/s with
+it and with the model's own settings, as the tuner measured) and, for the active one,
 `state` (`fresh`, `soft`: re-check offered, `hard`: not applied) and
 `reasons` in Strata's words. `other_context` is `true` when the model's last
 tune saved a preset that is not among them: it was made for other choices,

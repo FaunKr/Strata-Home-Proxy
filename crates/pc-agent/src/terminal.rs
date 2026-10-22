@@ -555,21 +555,7 @@ pub fn tune_result(
     let result = &answer["result"];
     let code = text(&result["code"]).ok_or("The tuner's answer has no result")?;
     let values = &result["values"];
-    let settings = &result["settings"];
-    let mut changed = Vec::new();
-    for (flag, value) in settings["args"].as_object().into_iter().flatten() {
-        match value {
-            Value::Bool(false) | Value::Null => {}
-            Value::Bool(true) => changed.push(flag.clone()),
-            other => changed.push(format!("{flag} {}", value_text(other))),
-        }
-    }
-    for (name, value) in settings["env"].as_object().into_iter().flatten() {
-        changed.push(format!("{name}={}", value_text(value)));
-    }
-    for (name, value) in settings["per_request"].as_object().into_iter().flatten() {
-        changed.push(format!("per request {name} {}", value_text(value)));
-    }
+    let changed = settings_text(&result["settings"]);
     let preset = &result["preset"];
     Ok(StrataTune {
         at,
@@ -584,6 +570,26 @@ pub fn tune_result(
         preset: text(&preset["id"]).map(String::from),
         preset_name: text(&preset["name"]).map(String::from),
     })
+}
+
+/// What tuned `settings` (`args`, `env`, `per_request`) set: `--spec 3`,
+/// a switch alone, `NAME=value`, `per request temperature 0.6`.
+fn settings_text(settings: &Value) -> Vec<String> {
+    let mut changed = Vec::new();
+    for (flag, value) in settings["args"].as_object().into_iter().flatten() {
+        match value {
+            Value::Bool(false) | Value::Null => {}
+            Value::Bool(true) => changed.push(flag.clone()),
+            other => changed.push(format!("{flag} {}", value_text(other))),
+        }
+    }
+    for (name, value) in settings["env"].as_object().into_iter().flatten() {
+        changed.push(format!("{name}={}", value_text(value)));
+    }
+    for (name, value) in settings["per_request"].as_object().into_iter().flatten() {
+        changed.push(format!("per request {name} {}", value_text(value)));
+    }
+    changed
 }
 
 /// Reads what `strata presets … --output json` printed: `Ok` unless Strata
@@ -635,6 +641,9 @@ fn preset(summary: &Value) -> Option<StrataPreset> {
         state: None,
         reasons: Vec::new(),
         gain_pct: summary["gain_pct"].as_f64(),
+        settings: settings_text(&summary["settings"]),
+        decode_tps: summary["decode_tok_s"].as_f64(),
+        base_tps: summary["baseline_decode_tok_s"].as_f64(),
     })
 }
 
@@ -1002,6 +1011,11 @@ mod tests {
         assert_eq!(latest.state, Some(PresetState::Soft));
         assert_eq!(latest.reasons, ["the graphics driver changed"]);
         assert_eq!(latest.gain_pct, Some(12.4));
+        assert_eq!(latest.settings, ["--kv-resident 65536", "--kv-grow"]);
+        assert_eq!(
+            (latest.decode_tps, latest.base_tps),
+            (Some(35.1), Some(31.2))
+        );
         assert!(!read.other_context);
     }
 

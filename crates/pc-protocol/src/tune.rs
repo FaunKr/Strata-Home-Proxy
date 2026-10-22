@@ -70,6 +70,15 @@ pub struct StrataPreset {
     pub reasons: Vec<String>,
     #[serde(default)]
     pub gain_pct: Option<f64>,
+    /// What it sets, written as [`StrataTune::changed`].
+    #[serde(default)]
+    pub settings: Vec<String>,
+    /// Answer tokens/s the tuner measured with it and with the model's own
+    /// settings.
+    #[serde(default)]
+    pub decode_tps: Option<f64>,
+    #[serde(default)]
+    pub base_tps: Option<f64>,
 }
 
 /// Strata's `staleness` (`strata_control/presets.py`).

@@ -237,7 +237,8 @@ async function oldFolder(page, errors, name) {
 }
 
 // Opens Tune of the first installed model: the dialog with how long and for
-// what, closed again without starting; then the preset lines and Undo's question. Returns the number of findings.
+// what, closed again without starting; then the preset lines and Undo's question, and a
+// running tune's log and measurements. Returns the number of findings.
 async function tune(page, errors, name) {
   const wait = { timeout: 15000 };
   errors.length = 0;
@@ -267,8 +268,18 @@ async function tune(page, errors, name) {
     await page.locator('dialog[open]').getByRole('button', { name: 'Cancel' }).click();
     await page.locator('dialog[open]').waitFor({ state: 'detached', ...wait });
     await page.getByRole('button', { name: 'Apply preset' }).first().waitFor(wait);
+    // A running tune: its step log and its measurements so far.
+    await fetch(`${process.env.FAKE_PC}/fake/tune`, { method: 'POST' });
+    await page.getByText('[5m] Trying: Keep more of the conversation', { exact: false }).waitFor(wait);
+    await page.getByText('Measured so far').waitFor(wait);
+    await page.getByText('Your current settings: 171.4 tok/s').waitFor(wait);
+    await page.getByText('172.2 tok/s (+0.5 %) · fastest so far', { exact: false }).waitFor(wait);
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/${name}_tune-running.jpg`, type: 'jpeg', quality: 60 });
+    }
+    await page.getByText('Measured so far').waitFor({ state: 'detached', ...wait });
   } catch (e) {
-    issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
+    issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n').slice(0, 3).join(' ');
   }
   if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
   console.log(`${issue ? 'FAIL' : 'ok  '} ${name} tune${issue ? '\n     ' + issue : ''}`);

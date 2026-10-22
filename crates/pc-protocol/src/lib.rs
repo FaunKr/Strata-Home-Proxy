@@ -36,4 +36,4 @@ pub use strata::{
     SamplingSource, SamplingSupport, StrataBenchmark, StrataFamily, StrataInfo, StrataInstall,
     StrataModel, StrataReport, StrataSampling, StrataSize,
 };
-pub use tune::{PresetState, StrataPreset, StrataPresets, StrataTune};
+pub use tune::{PresetState, StrataPreset, StrataPresets, StrataTune, TuneSpeed};

@@ -6,14 +6,13 @@
 //! handlers (status, current job, cancel) see the state, through [`Jobs`].
 
 use std::{
-    collections::VecDeque,
     future::Future,
     path::Path,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use strata_pc_protocol::{StrataJob, StrataJobKind, StrataJobState};
+use strata_pc_protocol::{StrataJob, StrataJobKind, StrataJobState, TuneSpeed};
 
 use crate::{
     agent::Agent,
@@ -154,6 +153,7 @@ impl JobContext {
                 bytes_per_sec: None,
                 eta_secs: None,
                 lines: Vec::new(),
+                speeds: Vec::new(),
                 error: None,
                 result: None,
                 started: unix_now(),
@@ -291,6 +291,37 @@ impl JobContext {
         self.with(|inner| inner.bench)
     }
 
+    /// A running tune's state from Strata's status file: its step, share
+    /// and time left, a new line for the log when the step is new, and the
+    /// measurements so far.
+    pub fn tune_status(
+        &self,
+        line: Option<String>,
+        step: &str,
+        percent: Option<u8>,
+        eta_secs: Option<u64>,
+        speeds: Vec<TuneSpeed>,
+    ) {
+        let changed = self.with(|inner| {
+            let job = inner.current.as_mut()?;
+            let changed = line.is_some()
+                || job.step.as_deref() != Some(step)
+                || job.percent != percent
+                || job.speeds != speeds;
+            if let Some(line) = line {
+                keep_line(&mut job.lines, line);
+            }
+            job.step = Some(step.to_string());
+            job.percent = percent;
+            job.eta_secs = eta_secs;
+            job.speeds = speeds;
+            Some(changed)
+        });
+        if changed == Some(true) {
+            self.save();
+        }
+    }
+
     /// Shows `lines` as the job's output.
     pub fn show_lines(&self, lines: Vec<String>) {
         self.with(|inner| {
@@ -314,7 +345,7 @@ impl JobContext {
     /// when `progress` is set and the benchmark's speeds, and ends it on
     /// cancel.
     pub(crate) async fn command(&self, spec: CommandSpec, progress: bool) -> Result<(), Step> {
-        self.run_command(spec, progress, None).await
+        self.run_command(spec, progress, None, true).await
     }
 
     /// Like [`command`](Self::command) without setup's progress, and gives
@@ -324,7 +355,20 @@ impl JobContext {
         spec: CommandSpec,
     ) -> (Result<(), Step>, Vec<String>) {
         let mut output = Vec::new();
-        let ran = self.run_command(spec, false, Some(&mut output)).await;
+        let ran = self.run_command(spec, false, Some(&mut output), true).await;
+        (ran, output)
+    }
+
+    /// Like [`command_output`](Self::command_output), but a line holding a
+    /// JSON object, the command's answer, stays out of the job's lines.
+    pub(crate) async fn command_answer(
+        &self,
+        spec: CommandSpec,
+    ) -> (Result<(), Step>, Vec<String>) {
+        let mut output = Vec::new();
+        let ran = self
+            .run_command(spec, false, Some(&mut output), false)
+            .await;
         (ran, output)
     }
 
@@ -333,6 +377,7 @@ impl JobContext {
         spec: CommandSpec,
         progress: bool,
         mut output: Option<&mut Vec<String>>,
+        show_answers: bool,
     ) -> Result<(), Step> {
         let mut run = self
             .agent
@@ -354,6 +399,12 @@ impl JobContext {
         while let Some(line) = run.next_line().await {
             if let Some(output) = output.as_mut() {
                 output.push(line.clone());
+            }
+            if !show_answers
+                && serde_json::from_str::<serde_json::Value>(line.trim())
+                    .is_ok_and(|v| v.is_object())
+            {
+                continue;
             }
             let step_changed = self.with(|inner| {
                 let JobsInner {
@@ -383,12 +434,7 @@ impl JobContext {
                         *step = format!("{prefix} · {step}");
                     }
                 }
-                let mut lines: VecDeque<String> = std::mem::take(&mut job.lines).into();
-                lines.push_back(line);
-                while lines.len() > KEPT_LINES {
-                    lines.pop_front();
-                }
-                job.lines = lines.into();
+                keep_line(&mut job.lines, line);
                 Some(job.step != before)
             });
             if step_changed == Some(true) {
@@ -622,6 +668,13 @@ fn parse_download(line: &str) -> Option<(&str, u64, u64, u8)> {
     Some((label, gb(done)?, gb(total)?, percent.trim().parse().ok()?))
 }
 
+/// Adds `line` to a job's output, which keeps the last [`KEPT_LINES`].
+fn keep_line(lines: &mut Vec<String>, line: String) {
+    lines.push(line);
+    let over = lines.len().saturating_sub(KEPT_LINES);
+    lines.drain(..over);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -659,6 +712,7 @@ mod tests {
             bytes_per_sec: None,
             eta_secs: None,
             lines: Vec::new(),
+            speeds: Vec::new(),
             error: None,
             result: None,
             started: 0,

@@ -1,0 +1,31 @@
+{
+  "id": 8,
+  "kind": "tune",
+  "model": "IQ3_XXS",
+  "state": "running",
+  "step": "Trying: Run the control thread on the last CPU core (round 1 of 3)",
+  "percent": 8,
+  "done_bytes": null,
+  "total_bytes": null,
+  "bytes_per_sec": null,
+  "eta_secs": 6569,
+  "lines": [
+    "[0m] Measuring your current settings",
+    "[5m] Trying: Keep more of the conversation in graphics memory (round 1 of 3)",
+    "[10m] Trying: Run the control thread on the last CPU core (round 1 of 3)"
+  ],
+  "speeds": [
+    {
+      "label": "base",
+      "tok_s": 171.4
+    },
+    {
+      "label": "Keep more of the conversation in graphics memory",
+      "tok_s": 172.2
+    }
+  ],
+  "error": null,
+  "result": null,
+  "started": 1792449000,
+  "ended": null
+}

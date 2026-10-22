@@ -598,6 +598,7 @@ pub fn job(kind: StrataJobKind, state: StrataJobState) -> StrataJob {
         bytes_per_sec: None,
         eta_secs: None,
         lines: vec![],
+        speeds: vec![],
         error: None,
         result: None,
         started: 0,

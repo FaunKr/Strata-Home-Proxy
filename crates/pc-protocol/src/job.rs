@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::TuneSpeed;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StrataJobKind {
@@ -106,6 +108,10 @@ pub struct StrataJob {
     /// The last lines of output.
     #[serde(default)]
     pub lines: Vec<String>,
+    /// A running tune's measurements so far, in the tuner's order; the
+    /// model's own settings first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub speeds: Vec<TuneSpeed>,
     #[serde(default)]
     pub error: Option<String>,
     /// What came out, e.g. a benchmark's tokens per second.

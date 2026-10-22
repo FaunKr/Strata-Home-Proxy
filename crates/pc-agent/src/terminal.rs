@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use strata_pc_protocol::{
     NeverRule, PresetState, StrataOptions, StrataPreset, StrataPresets, StrataTune, TuneMode,
-    TuneUse, TunerOption, TunerTry,
+    TuneSpeed, TuneUse, TunerOption, TunerTry,
 };
 
 use crate::command::CommandSpec;
@@ -518,12 +518,14 @@ fn part_problem(result: &Value) -> Option<String> {
 
 /// The tuner's progress from its status file (`state` in `auto` of
 /// `strata_cli/tune_commands.py`): Strata's message as the step, the share
-/// of planned engine runs done and the time left it estimates.
+/// of planned engine runs done, the time left it estimates and the
+/// measurements so far (`speeds`, after `Tuner._say`).
 #[derive(Debug, PartialEq)]
 pub struct TuneProgress {
     pub step: String,
     pub percent: Option<u8>,
     pub eta_secs: Option<u64>,
+    pub speeds: Vec<TuneSpeed>,
 }
 
 pub fn tune_progress(status: &str) -> Option<TuneProgress> {
@@ -534,10 +536,22 @@ pub fn tune_progress(status: &str) -> Option<TuneProgress> {
     let percent = done
         .zip(planned)
         .map(|(done, planned)| (done * 100 / planned).min(99) as u8);
+    let speeds = state["speeds"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| {
+            Some(TuneSpeed {
+                label: text(&s["label"])?.to_string(),
+                tok_s: s["tok_s"].as_f64()?,
+            })
+        })
+        .collect();
     Some(TuneProgress {
         step,
         percent,
         eta_secs: state["eta_s"].as_u64(),
+        speeds,
     })
 }
 
@@ -1108,15 +1122,25 @@ mod tests {
     }
 
     #[test]
-    fn the_status_file_gives_step_share_and_time_left() {
-        // `state` as `auto` writes it after `Tuner._say`.
-        let status = r#"{"stage": "arm", "message": "Trying: Shorter speculative window (3 tokens)", "state": "running", "elapsed_s": 420, "runs_done": 3, "runs_planned": 8, "eta_s": 750, "speeds": [{"label": "your current settings", "tok_s": 31.2}], "minutes_left": 13, "text": "Finding the fastest settings for your PC… about 13 min left"}"#;
+    fn the_status_file_gives_step_share_time_left_and_speeds() {
+        // As a thorough tune on the PC wrote it.
+        let status = r#"{"stage": "rounds", "message": "Trying: Run the control thread on the last CPU core (round 1 of 3)", "state": "running", "elapsed_s": 631, "runs_done": 2, "runs_planned": 23, "eta_s": 6569, "speeds": [{"label": "base", "tok_s": 171.4}, {"label": "Keep more of the conversation in graphics memory", "tok_s": 172.2}], "minutes_left": 109, "text": "Finding the fastest settings for your PC… about 109 min left", "arm": "host_core_last"}"#;
         assert_eq!(
             tune_progress(status),
             Some(TuneProgress {
-                step: "Trying: Shorter speculative window (3 tokens)".into(),
-                percent: Some(37),
-                eta_secs: Some(750),
+                step: "Trying: Run the control thread on the last CPU core (round 1 of 3)".into(),
+                percent: Some(8),
+                eta_secs: Some(6569),
+                speeds: vec![
+                    TuneSpeed {
+                        label: "base".into(),
+                        tok_s: 171.4
+                    },
+                    TuneSpeed {
+                        label: "Keep more of the conversation in graphics memory".into(),
+                        tok_s: 172.2
+                    },
+                ],
             })
         );
         // The first state, before any run is planned.
@@ -1127,6 +1151,7 @@ mod tests {
                 step: "Starting".into(),
                 percent: None,
                 eta_secs: None,
+                speeds: Vec::new(),
             })
         );
         assert_eq!(tune_progress("{\"stage\": "), None);

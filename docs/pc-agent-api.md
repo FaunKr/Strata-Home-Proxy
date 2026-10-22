@@ -464,7 +464,12 @@ little space, deleting the active model).
 `tune` takes about 20 minutes (`quick`) or up to two hours (`thorough`).
 Strata's tuner writes its progress to `strata-tune-status.json` in the
 PC service's state folder; the job's `step`, `percent` and `eta_secs` follow it
-every second (`percent` stays below 100 until the tuner ends). Strata activates
+every second (`percent` stays below 100 until the tuner ends). Each new step
+adds a line to the job's `lines` with the time since the tune started
+(`[10m] Trying: …`, from an hour on `[1h 05m] …`); the tuner's JSON answer is
+no line. The job's `speeds` lists the measurements so far as Strata's status
+file has them (`{label, tok_s}`, `base` for the model's own settings first);
+it is left out when empty, and only a tune fills it. Strata activates
 the preset it saves for faster settings; the PC service undoes that right away
 (`strata presets undo <id>`), so the model keeps running as before and the
 tuned settings wait in the preset; also after a cancel. If Strata refuses

@@ -389,7 +389,12 @@ impl AppState {
         let mut last_wol: Option<Instant> = None;
         let mut last_agent_check: Option<Instant> = None;
         let mut pc_answers = false;
-        let mut waking = false;
+        // A PC in gaming mode is asked first: a miss that gaming mode
+        // outlasts needs the PC still in gaming mode.
+        let mut waking = self.pc_state() != PcState::Gaming;
+        if waking {
+            self.lifecycle.lock().unwrap().wake_started();
+        }
         loop {
             let cfg = self.cfg();
             // Ask the PC service now and then: gaming mode ends the wait, and an
@@ -408,8 +413,6 @@ impl AppState {
                     pc_answers = true;
                 }
             }
-            // After the first check: a miss that gaming mode outlasts needs
-            // the PC still in gaming mode.
             if !waking {
                 waking = true;
                 self.lifecycle.lock().unwrap().wake_started();

@@ -99,11 +99,12 @@ async fn forced_restart_reaches_the_pc_service_and_strata_loads() {
 
 #[tokio::test]
 async fn forced_restart_is_refused_in_gaming_mode() {
-    let s = setup(true, |_| {}).await;
+    // No idle check: two status answers in a row that miss the probe
+    // timeout under load would count the PC as asleep.
+    let s = setup(true, |c| c.idle_check = Duration::from_secs(3600)).await;
     s.pc.gaming.store(true, Ordering::SeqCst);
-    // Seen in gaming mode first: a status answer that misses the probe
-    // timeout under load then leaves it in gaming mode.
-    eventually("gaming mode seen", || s.state.pc_state() == PcState::Gaming).await;
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
+    assert_eq!(resp.headers()["x-strata-proxy-status"], "gaming");
     let mut b = logged_in(&s.url).await;
     let resp = b.call("strata-force-restart", &[]).await;
     assert_eq!(resp.status(), 400);

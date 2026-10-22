@@ -40,4 +40,4 @@ Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/ag
 
 ### Strata
 
-Strata is its own engine, not llama-server. Endpoints, fields, metrics and auth that the proxy and the PC service use: `docs/strata-api.md`.
+Strata is its own engine, not llama-server. Endpoints, fields, metrics and auth that the proxy and the PC service use: `docs/strata-api.md`. This project does not change Strata: a feature works with what Strata already writes and prints, and grilling offers no option that needs a Strata change.

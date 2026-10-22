@@ -325,6 +325,8 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
             context: context()?,
         },
         StrataJobKind::CompareModels => StrataJobRequest::CompareModels,
+        StrataJobKind::SwitchToTerminal => StrataJobRequest::SwitchToTerminal,
+        StrataJobKind::RemoveOldStrataFolder => StrataJobRequest::RemoveOldStrataFolder,
         StrataJobKind::Tune => StrataJobRequest::Tune {
             model: model()?,
             mode: form.tune_mode,

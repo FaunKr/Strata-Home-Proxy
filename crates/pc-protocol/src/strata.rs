@@ -34,6 +34,15 @@ pub struct StrataInfo {
     /// How Strata is installed; `None` before it is and from older services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install: Option<StrataInstall>,
+    /// An old Strata folder from source is still there: the one Strata
+    /// runs from, or the one left after the switch to the Strata Terminal;
+    /// `false` from older services.
+    #[serde(default)]
+    pub old_strata_folder: bool,
+    /// The Strata Terminal's Strata has answered `/health` once; `false`
+    /// before and from older services.
+    #[serde(default)]
+    pub terminal_served: bool,
     /// The Strata Terminal's version, or the short commit of a Strata
     /// folder from source.
     #[serde(default)]

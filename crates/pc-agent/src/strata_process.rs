@@ -354,7 +354,7 @@ impl<'a> StrataProcess<'a> {
 
     /// Whether the restarted Strata answers: `false` once it has ended or
     /// not answered within `context_start_secs`.
-    async fn came_up(&self, job: &JobContext) -> Result<bool, Step> {
+    pub(crate) async fn came_up(&self, job: &JobContext) -> Result<bool, Step> {
         let agent = self.agent;
         let limit = Duration::from_secs(agent.cfg.context_start_secs);
         let answer = job

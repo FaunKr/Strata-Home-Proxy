@@ -16,7 +16,8 @@ talks to a newer proxy. Therefore:
   that an older PC service's response stays readable.
 - An optional request field is absent as long as it is not set: the
   PC service rejects request fields it does not know. Kinds without fields
-  (`update`, `benchmark`, `compare_models`) ignore extra fields.
+  (`update`, `benchmark`, `compare_models`, `switch_to_terminal`,
+  `remove_old_strata_folder`) ignore extra fields.
 - A request field a newer PC service ignores is still sent with a value an
   older one accepts: older services keep checking it (the `api_key` of
   `install` is a random throwaway key, because older services refuse an
@@ -243,7 +244,10 @@ free space, last benchmark and the running or last job.
 Never contains the Strata key. `install` says how Strata is installed:
 `terminal` (the Strata Terminal in `strata_home`) or `source` (a Strata folder
 from source in `strata_dir`); missing when Strata is not installed and from an
-older PC service. `version` is the folder's short commit, or for the
+older PC service. `old_strata_folder` says whether an old Strata folder from
+source (`strata_dir`) is still there, the one Strata runs from or the one left
+after the switch; `terminal_served` whether the Terminal's Strata has answered
+`/health` once. Both are `false` from an older PC service. `version` is the folder's short commit, or for the
 Terminal its version and build from `strata --version` (`0.2.2 (build
 0.1.44.1)`; before the first check only `build 0.1.44.1` from its `VERSION`
 file). Along the way it asks whether there is a newer Strata version
@@ -427,6 +431,8 @@ little space, deleting the active model).
 | `update` | – | Terminal: `strata update --output json` (engine and Terminal files, each after a test start) with Strata stopped, restarts; a part that is not in place fails the job with Strata's reason. Folder from source: `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts |
 | `benchmark` | – | Terminal: `strata bench run --url <strata_url> --out <new folder> --output json` with the Strata key in `STRATA_API_KEY`. Folder from source: `BENCH.bat --config <active model>`. Keeps tokens/s with model, date and tool |
 | `compare_models` | – | `benchmark` for each installed model in turn, each as it is set up; activates each model for this and at the end (also after cancelling) the previously active one again |
+| `switch_to_terminal` | – | only while Strata runs from an old Strata folder: the Strata Terminal and its engine as with `install`, the Terminal's setup in its install mode for the active model with its context and speed projection on the same Strata data folder (no new download of files already there), its Chat settings copied; once Strata is idle, the old Strata stops and `strata serve` starts with the new run config. Until the old Strata stops, `GET /strata` still shows the old folder (`install: source`), also after a restart of the service, which undoes the unfinished switch. Until the Terminal's Strata answers on `/health` (within `context_start_secs`), a failure or a cancel removes the Terminal's run config, restores the managed start and starts the old Strata again |
+| `remove_old_strata_folder` | – | deletes `strata_dir`, leaving the Strata data folder, the Terminal's folders and the service's state folder; `409` while Strata runs from the old folder, without one, and before the Terminal's Strata has answered once (`terminal_served`) |
 | `set_key` | `api_key` | waits until Strata is not handling a request and restarts it, which brings a new key |
 | `set_speed_projection` | `model`, `on` | turns speed projection on or off in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |

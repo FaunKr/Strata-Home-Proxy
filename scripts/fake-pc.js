@@ -45,6 +45,9 @@ const strata = {
   benchmark: undefined,
   installed: true,
   install: 'terminal',
+  // The switch is done; the old Strata folder waits to be removed.
+  old_strata_folder: true,
+  terminal_served: true,
   version: '0.2.2 (build 0.1.44.1)',
   update_available: true,
   update: {

@@ -432,6 +432,9 @@ impl Agent {
             return;
         }
         let healthy = self.strata_healthy().await;
+        if healthy {
+            crate::strata::note_served(self);
+        }
         let loading = self.strata().loading();
         let now = Instant::now();
         let restart = {

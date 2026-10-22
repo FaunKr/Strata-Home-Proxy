@@ -59,6 +59,12 @@
     "kind": "compare_models"
   },
   {
+    "kind": "switch_to_terminal"
+  },
+  {
+    "kind": "remove_old_strata_folder"
+  },
+  {
     "kind": "tune",
     "model": "IQ3_XXS",
     "mode": "quick",

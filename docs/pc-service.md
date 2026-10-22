@@ -121,6 +121,35 @@ with Windows' own `curl.exe` what the commits since the installed build bring.
 last report stays in `strata-bench` next to the TOML. Results from the old
 Strata folder's `BENCH.bat` are marked as not comparable.
 
+## Switching to the Strata Terminal
+
+A PC that still runs Strata from an old Strata folder from source keeps
+running it after a service update. Tab *Version & benchmark* then offers
+**Switch to Strata Terminal** (with a question first; a sleeping PC wakes
+first). The job installs the Strata Terminal with Strata's `install.ps1` and
+the engine for the PC with `strata update`, then runs the Terminal's setup
+in its install mode for the active model with its context and speed
+projection and the same Strata data folder: model files that are already
+there are not downloaded again. The model's Chat settings come along, the
+service sets loop recovery and sampling in the new run config as in every
+other. Once Strata has no request at work, the service stops the old Strata
+and starts `strata serve` with the new run config.
+
+Until the old Strata stops, the old Strata folder stays the service's Strata
+(`strata-switch.json` next to the TOML holds the start from before); a
+service that ends meanwhile undoes the switch at its next start. Until the
+Terminal's Strata answers on `/health`, any failure (no engine for the card,
+a failed setup, Strata not answering within `context_start_secs`), *Cancel*
+and gaming mode (which cancels the job) take the Terminal's run config away
+and bring the old start back: the old Strata folder serves again, and the
+job names the reason.
+
+After the first answer of the Terminal's Strata (the service keeps
+`strata-terminal-served` next to the TOML), **Remove old Strata folder**
+deletes `strata_dir`, after a question. The Strata data folder, the Terminal's
+folders and the service's own folder stay, also where they lie inside
+`strata_dir`.
+
 ## Notes
 
 - The service runs in the user account, not as a Windows service: only this way does it see

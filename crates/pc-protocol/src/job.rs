@@ -16,12 +16,17 @@ pub enum StrataJobKind {
     SetSpeedProjection,
     SetContext,
     CompareModels,
+    /// From the old Strata folder to the Strata Terminal, with the active
+    /// model.
+    SwitchToTerminal,
+    /// Deletes the old Strata folder once the Terminal's Strata has served.
+    RemoveOldStrataFolder,
     /// Strata's auto-tuner for one model.
     Tune,
 }
 
 impl StrataJobKind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::Install,
         Self::AddModel,
         Self::Activate,
@@ -32,6 +37,8 @@ impl StrataJobKind {
         Self::SetSpeedProjection,
         Self::SetContext,
         Self::CompareModels,
+        Self::SwitchToTerminal,
+        Self::RemoveOldStrataFolder,
         Self::Tune,
     ];
 }
@@ -150,6 +157,8 @@ pub enum StrataJobRequest {
         context: u32,
     },
     CompareModels,
+    SwitchToTerminal,
+    RemoveOldStrataFolder,
     /// Runs Strata's auto-tuner for `model` for speed; its result is saved
     /// as a preset but not applied.
     Tune {
@@ -173,6 +182,8 @@ impl StrataJobRequest {
             Self::SetSpeedProjection { .. } => StrataJobKind::SetSpeedProjection,
             Self::SetContext { .. } => StrataJobKind::SetContext,
             Self::CompareModels => StrataJobKind::CompareModels,
+            Self::SwitchToTerminal => StrataJobKind::SwitchToTerminal,
+            Self::RemoveOldStrataFolder => StrataJobKind::RemoveOldStrataFolder,
             Self::Tune { .. } => StrataJobKind::Tune,
         }
     }

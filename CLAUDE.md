@@ -10,6 +10,7 @@
 - Tests run with cargo-nextest, at least the version `.config/nextest.toml` pins (check.sh prints the install command). Each crate's integration tests are one binary: a new file in `tests/` needs its `mod` line in `tests/main.rs`, or check.sh fails.
 - Tools check.sh needs: CI installs them in the `test` job, cloud sessions in `.claude/hooks/session-start.sh`. A pinned version lives in one script both read (`scripts/install-actionlint.sh`, `scripts/nextest-version.sh`), never copied into each place.
 - Flaky or hanging tests: `scripts/repeat-test.sh` runs one test file many times and names the one that hangs. Before pushing a new or changed proxy test file, run it 20 times this way: CI is slower and catches races the session misses. For a rare timing failure that full runs at 32 threads don't show, run three full runs of the test binary side by side: `scripts/side-by-side.sh <package>` names the failed tests of each run.
+- CPU-heavy work in the proxy, such as password hashing, runs on the blocking pool (`spawn_blocking`), never in an async function. Each proxy test's single-thread runtime also plays the PC, Strata and the runner, so blocking it makes their answers miss timeouts. When a test misses a timeout only under load, first check whether something blocks the runtime.
 - CI costs, Actions minutes, which jobs a PR starts: `docs/ci.md`.
 
 ## Process

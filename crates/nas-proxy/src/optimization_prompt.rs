@@ -60,8 +60,9 @@ pub fn build(
         "Suggest changes to the model's engine options (`args`, `user_args`) and to its \
          `sampling` block that give the most tokens per second on this hardware. Give one \
          reason for each change. Suggest only options this Strata version has, and say when \
-         a change can alter the answers. End your answer with a ready-to-paste `user_args` \
-         list and `sampling` block."
+         a change can alter the answers. End your answer with the `user_args` one option per \
+         line (`--name value`), as I paste them into the model's *Engine options* field in my \
+         web UI, and a ready-to-paste `sampling` block."
     );
     if let Some(at) = read_at {
         let _ = writeln!(out);

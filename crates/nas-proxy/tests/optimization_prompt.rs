@@ -33,7 +33,9 @@ async fn carries_the_model_and_the_task() {
         "RAM: 64.0 GB",
         "IQ3_XXS",
         "81.0 GB",
-        "ready-to-paste `user_args` list and `sampling` block",
+        "the `user_args` one option per line (`--name value`)",
+        "paste them into the model's *Engine options* field in my web UI",
+        "and a ready-to-paste `sampling` block",
         "most tokens per second",
         "one reason for each change",
     ] {

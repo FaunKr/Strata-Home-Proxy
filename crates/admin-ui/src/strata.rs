@@ -13,7 +13,8 @@ use crate::{
         GetOptimizationPrompt, PcView, SamplingField, SamplingSource, SamplingSupport,
         StartCodeBench, StartCodeBenchAll, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob,
         StrataJobKind, StrataJobState, StrataModel, StrataPage, StrataSampling, StrataSize,
-        StrataUpdate, UpdateSummary, error_text, get_code_bench, get_strata,
+        StrataTune, StrataUpdate, TuneMode, TuneUse, UpdateSummary, error_text, get_code_bench,
+        get_strata,
     },
     confirm::{Confirm, Question},
     copy::CopyText,
@@ -41,6 +42,8 @@ impl Actions {
             context: None,
             model: None,
             speed_projection: None,
+            tune_mode: None,
+            tune_use: None,
         });
     }
 
@@ -52,6 +55,8 @@ impl Actions {
             context: None,
             model: Some(model),
             speed_projection: None,
+            tune_mode: None,
+            tune_use: None,
         });
     }
 
@@ -63,6 +68,8 @@ impl Actions {
             context: None,
             model: Some(model),
             speed_projection: Some(on),
+            tune_mode: None,
+            tune_use: None,
         });
     }
 
@@ -74,6 +81,21 @@ impl Actions {
             context: Some(context),
             model: Some(model),
             speed_projection: None,
+            tune_mode: None,
+            tune_use: None,
+        });
+    }
+
+    fn tune(&self, model: String, mode: TuneMode, usage: TuneUse) {
+        self.start.dispatch(StartStrataJob {
+            kind: StrataJobKind::Tune,
+            family: None,
+            size: None,
+            context: None,
+            model: Some(model),
+            speed_projection: None,
+            tune_mode: Some(mode),
+            tune_use: Some(usage),
         });
     }
 }
@@ -660,6 +682,8 @@ fn ModelChoice(
             context: Some(context.get()),
             model: None,
             speed_projection: Some(takes_projection.get() && speed_projection.get()),
+            tune_mode: None,
+            tune_use: None,
         });
     };
     let picker = format!("{kind:?}-size");
@@ -912,6 +936,25 @@ fn ModelRow(
         }
     });
     let sampling = model.sampling.as_ref().map(sampling_lines);
+    let last_tune = model
+        .last_tune
+        .as_ref()
+        .map(|tune| view! { <p class="muted small">{last_tune_text(tune)}</p> });
+    // Only with word from the PC service: an older one does not say.
+    let tune = match (model.tunable, model.tune_unavailable.clone()) {
+        (Some(true), _) => {
+            Some(view! { <Tune model=model.id.clone() actions blocked /> }.into_any())
+        }
+        (Some(false), why) => Some(
+            view! {
+                <span class="muted small">
+                    {why.unwrap_or_else(|| "Strata's tuner cannot tune this model".into())}
+                </span>
+            }
+            .into_any(),
+        ),
+        (None, _) => None,
+    };
     // Name and state on top, what it runs with below, then the context and
     // one row of buttons in the same order for each model; Delete stands apart.
     view! {
@@ -940,9 +983,10 @@ fn ModelRow(
             </div>
             <p class="muted small">{meta}</p>
             {sampling}
+            {last_tune}
             {switch}
             <div class="model-actions">
-                {activate}{projection}<OptimizationPrompt model=model.id.clone() />{delete}
+                {activate}{projection}<OptimizationPrompt model=model.id.clone() />{tune}{delete}
             </div>
         </li>
     }
@@ -1001,6 +1045,121 @@ fn OptimizationPrompt(model: String) -> impl IntoView {
                     }
                 >
                     "Close"
+                </button>
+            </div>
+        </dialog>
+    }
+}
+
+/// `Last tune (quick, coding): 31.2 → 35.1 tok/s with --kv-grow; not applied`.
+fn last_tune_text(tune: &StrataTune) -> String {
+    let mode = match tune.mode {
+        TuneMode::Quick => "quick",
+        TuneMode::Thorough => "thorough",
+    };
+    let usage = match tune.usage {
+        TuneUse::Coding => "coding",
+        TuneUse::Chat => "chat",
+    };
+    let found = match (tune.code.as_str(), tune.base_tps, tune.tuned_tps) {
+        ("faster", Some(base), Some(tuned)) => format!(
+            "{base:.1} → {tuned:.1} tok/s with {}; not applied",
+            tune.changed.join(", ")
+        ),
+        ("already_fastest", ..) => "your current settings are already the fastest".into(),
+        _ => tune
+            .message
+            .clone()
+            .unwrap_or_else(|| format!("no result ({})", tune.code)),
+    };
+    format!("Last tune ({mode}, {usage}): {found}")
+}
+
+/// *Tune* for one model: a dialog with how long and for what, then Strata's
+/// tuner runs as a job with its progress above. Nothing it finds is applied.
+#[component]
+fn Tune(model: String, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+    let dialog = NodeRef::<Dialog>::new();
+    let mode = RwSignal::new(TuneMode::Quick);
+    let usage = RwSignal::new(TuneUse::Coding);
+    let title_id = format!("tune-title-{model}");
+    let labelled_by = title_id.clone();
+    let mode_id = format!("tune-mode-{model}");
+    let use_id = format!("tune-use-{model}");
+    let title = format!("Tune {model}");
+    let close = move || {
+        if let Some(d) = dialog.get() {
+            d.close();
+        }
+    };
+    let start = move |_| {
+        actions.tune(model.clone(), mode.get(), usage.get());
+        close();
+    };
+    view! {
+        <button
+            type="button"
+            class="secondary"
+            disabled=move || blocked.get()
+            on:click=move |_| {
+                if let Some(d) = dialog.get() {
+                    let _ = d.show_modal();
+                }
+            }
+        >
+            "Tune"
+        </button>
+        <dialog class="confirm" node_ref=dialog aria-labelledby=labelled_by>
+            <h2 id=title_id>{title}</h2>
+            <p class="muted">
+                "Strata measures settings for this model on your PC and keeps the fastest. "
+                "It never tries settings that change answers. Strata is off while it runs; "
+                "requests get \"Strata is tuning\" until it ends. Nothing is applied on its own."
+            </p>
+            <div class="stack">
+                <div>
+                    <label for=mode_id.clone()>"How long"</label>
+                    <select
+                        id=mode_id
+                        on:change=move |ev| {
+                            mode.set(
+                                if event_target_value(&ev) == "thorough" {
+                                    TuneMode::Thorough
+                                } else {
+                                    TuneMode::Quick
+                                },
+                            )
+                        }
+                    >
+                        <option value="quick" selected>"Quick (about 20 min)"</option>
+                        <option value="thorough">"Thorough (up to 2 hours)"</option>
+                    </select>
+                </div>
+                <div>
+                    <label for=use_id.clone()>"For"</label>
+                    <select
+                        id=use_id
+                        on:change=move |ev| {
+                            usage.set(
+                                if event_target_value(&ev) == "chat" {
+                                    TuneUse::Chat
+                                } else {
+                                    TuneUse::Coding
+                                },
+                            )
+                        }
+                    >
+                        <option value="coding" selected>"Coding (long prompts count too)"</option>
+                        <option value="chat">"Chat (answer speed only)"</option>
+                    </select>
+                </div>
+            </div>
+            <div class="actions">
+                <button type="button" class="secondary" on:click=move |_| close()>
+                    "Cancel"
+                </button>
+                <button type="button" disabled=move || blocked.get() on:click=start>
+                    "Start tuning"
                 </button>
             </div>
         </dialog>

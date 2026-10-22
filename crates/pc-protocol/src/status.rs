@@ -25,6 +25,10 @@ pub struct PcStatus {
     /// A Strata job (setup, download, update, benchmark) runs.
     #[serde(default)]
     pub strata_job: bool,
+    /// The kind of the running job; missing without one and from older
+    /// services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strata_job_kind: Option<StrataJobKind>,
     /// The PC service's version, e.g. `0.1.0+558db97`; missing from services
     /// before the update button.
     #[serde(default, skip_serializing_if = "Option::is_none")]

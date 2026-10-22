@@ -233,6 +233,7 @@ impl Agent {
             user_idle_secs: self.platform.user_idle().as_secs(),
             mac: None,
             strata_job: self.jobs.running(),
+            strata_job_kind: self.jobs.running_kind(),
             version: Some(crate::version().to_string()),
             hardware: Some(self.platform.hardware()),
             strata_key_generation: Some(self.strata_key.generation()),

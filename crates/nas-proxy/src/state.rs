@@ -14,7 +14,7 @@ use std::{
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use strata_admin_ui::labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED};
-use strata_pc_protocol::PcStatus;
+use strata_pc_protocol::{PcStatus, StrataJobKind};
 
 use crate::{
     agent::{AgentClient, SleepAnswer},
@@ -37,15 +37,24 @@ pub use crate::lifecycle::{PcState, Refusal, Snapshot};
 pub enum Readiness {
     Ready,
     Gaming,
+    /// A tune runs on the PC; Strata is off until it ends.
+    Tuning,
     NeedsWake,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum WakeError {
     Gaming,
+    /// A tune runs on the PC, which may take up to two hours.
+    Tuning,
     Timeout,
     /// No MAC address is known, so no magic packet can be sent.
     NoMac,
+}
+
+/// Whether the PC service runs a tune, which keeps Strata off for its run.
+fn tuning(status: &PcStatus) -> bool {
+    status.strata_job && status.strata_job_kind == Some(StrataJobKind::Tune)
 }
 
 /// Whether Strata answers on `/health`.
@@ -342,6 +351,7 @@ impl AppState {
                 self.seen_gaming();
                 Readiness::Gaming
             }
+            Some(status) if tuning(&status) => Readiness::Tuning,
             _ => Readiness::NeedsWake,
         }
     }
@@ -375,6 +385,9 @@ impl AppState {
                     if status.gaming_mode {
                         self.seen_gaming();
                         return Err(WakeError::Gaming);
+                    }
+                    if tuning(&status) {
+                        return Err(WakeError::Tuning);
                     }
                     pc_answers = true;
                 }
@@ -473,6 +486,11 @@ impl AppState {
             let (mut lifecycle, now, t) = self.lifecycle();
             let seen = lifecycle.pc_answered(status.as_ref(), strata_answers, now, t);
             self.record(seen.record);
+            // A tune holds the idle time: its end starts it again.
+            if status.as_ref().is_some_and(tuning) {
+                lifecycle.touch(now);
+                return;
+            }
             if !seen.up || !lifecycle.wants_sleep(self.in_flight(), now, t) {
                 return;
             }

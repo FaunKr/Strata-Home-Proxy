@@ -123,6 +123,15 @@ pub struct StrataModel {
     /// older services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_lines: Option<crate::LoadLines>,
+    /// Whether Strata's tuner can tune it; `None` from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tunable: Option<bool>,
+    /// Why it cannot be tuned, when it cannot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tune_unavailable: Option<String>,
+    /// Its latest tune; `None` before one, or from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tune: Option<crate::StrataTune>,
 }
 
 /// Which defaults the PC's Strata applies to a request without sampling

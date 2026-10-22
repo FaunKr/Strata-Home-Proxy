@@ -40,7 +40,11 @@ service started it less than `load_time_secs` ago and has not stopped it
 since. A Strata still loading its model (e.g. after a forced restart) thus
 already counts as running; the Overview shows it as loading.
 
-`strata_job` is `true` while a Strata job is running (see below).
+`strata_job` is `true` while a Strata job is running (see below), and
+`strata_job_kind` names its kind; missing without a job and from an older PC
+service. The proxy reads `tune` there: while a tune runs, Strata is off and
+the proxy answers requests with a `503` instead of waking (see `tune`
+below).
 
 `version` is the crate version plus the build's commit (`STRATA_BUILD_ID`
 at build time, otherwise `dev`). The same value is in the .exe as the text
@@ -327,6 +331,17 @@ reported nothing has `error` instead of the values. `benchmark` stays the last
 successful run, for proxies that only know one. An older PC service
 leaves out `benchmarks`.
 
+`tunable` says whether `tune` can run for this model; when it is `false`,
+`tune_unavailable` says why (a Strata folder from source, or a family the
+tuner does not know). `last_tune` is the model's last finished tune: `at`,
+`mode`, `use`, `code` (Strata's: `faster`, `already_fastest`, `busy_pc`,
+`failed`), `base_tps` and `tuned_tps` (tokens/s before and with the tuned
+settings), `gain_pct`, `changed` (each setting the tuner changed: `flag
+value`, a switch alone, `NAME=value` for the environment, `per request key
+value`), `message`, and `preset` and `preset_name` of the preset Strata saved.
+The PC service keeps it in `strata-tunes.json` in its state folder; deleting
+the model forgets it. All three are missing from an older PC service.
+
 `machine` (`MachineFacts`) says what the PC is, for the optimization prompt.
 The PC service reads it with the first `GET /strata` and keeps it; a read
 without a graphics card or the drive (a driver not ready yet after boot) is
@@ -415,6 +430,17 @@ little space, deleting the active model).
 | `set_key` | `api_key` | waits until Strata is not handling a request and restarts it, which brings a new key |
 | `set_speed_projection` | `model`, `on` | turns speed projection on or off in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
+| `tune` | `model`, `mode` (`quick`, `thorough`), `use` (`coding`, `chat`) | Terminal only: waits until Strata is not handling a request, stops it, runs `strata tune auto <run config> --goal speed` and starts Strata again; the result goes to `last_tune`, the active settings stay as they were |
+
+`tune` takes about 20 minutes (`quick`) or up to two hours (`thorough`).
+Strata's tuner writes its progress to `strata-tune-status.json` in the
+PC service's state folder; the job's `step`, `percent` and `eta_secs` follow it
+every second (`percent` stays below 100 until the tuner ends). Strata activates
+the preset it saves for faster settings; the PC service undoes that right away
+(`strata presets undo <id>`), so the model keeps running as before and the
+tuned settings wait in the preset. A cancelled tune keeps nothing. A source
+folder or a family the tuner does not know is a `409` with the reason of
+`tune_unavailable`.
 
 The service ignores `api_key` in every job: the key comes with the next start
 of Strata (see `GET /strata/key`). The proxy still sends a random one with

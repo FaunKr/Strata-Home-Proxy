@@ -135,6 +135,12 @@ fn wake_error_parts(err: &WakeError) -> (StatusCode, &'static str, &'static str,
             "overloaded_error",
             "Strata is not available: gaming mode is on.",
         ),
+        WakeError::Tuning => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "tuning",
+            "overloaded_error",
+            "Strata is not available: Strata is tuning.",
+        ),
         WakeError::Timeout => (
             StatusCode::GATEWAY_TIMEOUT,
             "wake_timeout",
@@ -555,6 +561,7 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
             st.events.record(EventKind::GamingRejected, None);
             unavailable(flavor, &WakeError::Gaming)
         }
+        Readiness::Tuning => unavailable(flavor, &WakeError::Tuning),
         // Held while ready, or asleep: wait for the run's end or the wake-up.
         Readiness::Ready | Readiness::NeedsWake if streaming => {
             wake_then_stream(st, guard, req, flavor, held)

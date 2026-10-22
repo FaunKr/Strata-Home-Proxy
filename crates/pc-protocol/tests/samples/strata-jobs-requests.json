@@ -57,5 +57,11 @@
   },
   {
     "kind": "compare_models"
+  },
+  {
+    "kind": "tune",
+    "model": "IQ3_XXS",
+    "mode": "quick",
+    "use": "coding"
   }
 ]

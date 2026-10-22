@@ -142,6 +142,10 @@ _Avoid_: Strata log, log entry (except `strata-log` and `strata.log` in code and
 The English text per installed model that the web UI's *Optimization prompt* button shows for pasting into an AI chat: the PC, Strata's version, the model and its benchmarks, with the request for faster settings. The proxy builds it from the PC service's last report; it never holds a path, the MAC address, a key or the Git remote.
 _Avoid_: tuning prompt, export, Optimierungsprompt
 
+**Tune**:
+A Strata job that runs Strata's own tuner on one model to find faster settings, in a quick (about 20 minutes) or thorough (up to two hours) run, for coding or chat. Strata is off while it runs and the proxy answers requests at once. The result is kept per model and shown; it does not change the settings the model runs with.
+_Avoid_: optimize, auto-tune, Optimierung
+
 ## Code benchmark
 
 **Code benchmark**:

@@ -101,7 +101,7 @@ What sleep saves compared with a PC awake around the clock: asleep hours × (`PO
 _Avoid_: Ersparnis
 
 **Gaming mode**:
-A state of the PC in which Strata is stopped, requests are refused and the proxy does not send the PC to sleep.
+A state of the PC in which Strata is stopped, requests are refused and the proxy does not send the PC to sleep. One missed status answer from the PC service does not end it; only a second miss in a row counts the PC as asleep.
 _Avoid_: game mode, Spielemodus, Gaming-Modus
 
 **Keep awake**:

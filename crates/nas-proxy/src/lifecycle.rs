@@ -141,6 +141,10 @@ pub struct Lifecycle {
     /// Unknown is the state since the start, not that of a wake-up that
     /// failed.
     unknown_since_start: bool,
+    /// The PC service's last answer, for one that gaming mode outlasts.
+    last_status: Option<PcStatus>,
+    /// The PC service's missed answers in a row.
+    misses: u32,
 }
 
 impl Lifecycle {
@@ -157,6 +161,8 @@ impl Lifecycle {
             refused: None,
             keep_awake_until,
             unknown_since_start: true,
+            last_status: None,
+            misses: 0,
         }
     }
 
@@ -179,6 +185,24 @@ impl Lifecycle {
     pub fn settling(&self, now: Now, t: Timings) -> bool {
         self.sleep_accepted_at
             .is_some_and(|at| now.at.saturating_duration_since(at) < t.settle)
+    }
+
+    /// The PC service's answer as every check reads it, `None` for a miss.
+    /// Gaming mode outlasts one missed answer: Strata never answers then,
+    /// and a game that loads the PC may hold up the answer. The first miss
+    /// in a row in gaming mode reads as the last answer, in gaming mode; the
+    /// second one counts as a miss.
+    pub fn pc_status(&mut self, answer: Option<PcStatus>) -> Option<PcStatus> {
+        if let Some(status) = answer {
+            self.misses = 0;
+            self.last_status = Some(status.clone());
+            return Some(status);
+        }
+        self.misses = self.misses.saturating_add(1);
+        (self.pc == PcState::Gaming && self.misses == 1).then(|| PcStatus {
+            gaming_mode: true,
+            ..self.last_status.clone().unwrap_or_default()
+        })
     }
 
     /// Notes the PC service's answer: gaming mode, a sleeping PC (no answer,
@@ -540,6 +564,78 @@ mod tests {
             seen(EventKind::PcSeenAsleep)
         );
         assert_eq!(l.pc(), PcState::Asleep);
+    }
+
+    /// A check of the PC as the shell runs it: `answer` read through
+    /// `pc_status`, then noted; Strata does not answer.
+    fn check(l: &mut Lifecycle, answer: Option<PcStatus>, now: Now) -> Observed {
+        let status = l.pc_status(answer);
+        l.pc_answered(status.as_ref(), false, now, T)
+    }
+
+    #[test]
+    fn gaming_mode_outlasts_one_miss_but_not_two_in_a_row() {
+        let c = Clock::new();
+        let mut l = awake(&c);
+        let _ = check(&mut l, Some(gaming()), c.at(10));
+        assert_eq!(check(&mut l, None, c.at(20)).record, None);
+        assert_eq!(l.pc(), PcState::Gaming);
+        assert_eq!(
+            check(&mut l, None, c.at(30)).record,
+            seen(EventKind::PcSeenAsleep)
+        );
+        assert_eq!(l.pc(), PcState::Asleep);
+    }
+
+    #[test]
+    fn an_answer_between_two_misses_keeps_gaming_mode() {
+        let c = Clock::new();
+        let mut l = awake(&c);
+        let _ = check(&mut l, Some(gaming()), c.at(10));
+        let _ = check(&mut l, None, c.at(20));
+        let _ = check(&mut l, Some(gaming()), c.at(30));
+        assert_eq!(check(&mut l, None, c.at(40)).record, None);
+        assert_eq!(l.pc(), PcState::Gaming);
+    }
+
+    #[test]
+    fn a_miss_in_gaming_mode_reads_as_the_last_answer() {
+        let c = Clock::new();
+        let mut l = awake(&c);
+        let answer = PcStatus {
+            version: Some("0.1.0".into()),
+            ..gaming()
+        };
+        let _ = check(&mut l, Some(answer.clone()), c.at(10));
+        assert_eq!(l.pc_status(None), Some(answer));
+        assert_eq!(l.pc_status(None), None);
+    }
+
+    #[test]
+    fn gaming_mode_switched_on_outlasts_one_miss() {
+        let c = Clock::new();
+        let mut l = awake(&c);
+        let _ = l.gaming_switched(true, "from the web UI", c.at(10));
+        let missed = l.pc_status(None);
+        assert!(missed.is_some_and(|s| s.gaming_mode));
+    }
+
+    #[test]
+    fn a_miss_outside_gaming_mode_counts_at_once() {
+        let c = Clock::new();
+        let mut l = awake(&c);
+        assert_eq!(
+            check(&mut l, None, c.at(10)).record,
+            seen(EventKind::PcSeenAsleep)
+        );
+        assert_eq!(l.pc(), PcState::Asleep);
+        assert_eq!(check(&mut l, None, c.at(20)).record, None);
+        assert_eq!(l.pc(), PcState::Asleep);
+
+        let mut l = awake(&c);
+        let _ = check(&mut l, Some(gaming()), c.at(30));
+        let _ = check(&mut l, Some(up()), c.at(40));
+        assert_eq!(l.pc_status(None), None);
     }
 
     #[test]

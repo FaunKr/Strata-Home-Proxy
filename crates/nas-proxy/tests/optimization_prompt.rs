@@ -609,11 +609,14 @@ async fn carries_the_last_tune() {
         changed: vec!["--kv-grow".into()],
         message: None,
         preset: Some("3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6".into()),
-        preset_name: None,
+        preset_name: Some("IQ3_XXS 64K – Full speed".into()),
     };
     let text = tuning_prompt(None, Some(tune.clone())).await;
     assert!(
-        text.contains("(thorough, for chat): faster, 31.2 → 35.1 tokens/s with `--kv-grow`"),
+        text.contains(
+            "(thorough, for chat): faster, 31.2 → 35.1 tokens/s with `--kv-grow`, \
+             saved as preset \"IQ3_XXS 64K – Full speed\""
+        ),
         "{text}"
     );
     let busy = StrataTune {
@@ -624,6 +627,39 @@ async fn carries_the_last_tune() {
     let text = tuning_prompt(None, Some(busy)).await;
     assert!(
         text.contains("busy_pc: Your PC was too busy to compare settings."),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn tuned_settings_lose_their_paths_and_a_loss_shows_as_such() {
+    let mut odd = preset(true, Some(PresetState::Hard), &[]);
+    odd.settings = vec![
+        "--draft-model D:\\Strata-data\\models\\draft.gguf".into(),
+        "STRATA_CACHE=C:/Users/faun/cache".into(),
+        "--split 1/2".into(),
+    ];
+    odd.gain_pct = Some(-2.6);
+    let text = tuning_prompt(latest(odd), None).await;
+    assert!(
+        text.contains("`--draft-model draft.gguf`, `STRATA_CACHE=cache`, `--split 1/2`"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Strata-data") && !text.contains("Users"),
+        "{text}"
+    );
+    assert!(text.contains("-3%") && !text.contains("+-"), "{text}");
+    assert!(
+        text.contains("active but not applied: the run config runs as it is"),
+        "{text}"
+    );
+
+    let mut both = latest(preset(true, Some(PresetState::Fresh), &[])).unwrap();
+    both.other_context = true;
+    let text = tuning_prompt(Some(both), None).await;
+    assert!(
+        text.contains("; the last tune was for other settings"),
         "{text}"
     );
 }

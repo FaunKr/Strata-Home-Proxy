@@ -166,47 +166,83 @@ fn preset_text(model: &StrataModel) -> String {
     let Some(presets) = &model.presets else {
         return "unknown; the PC service has not reported Strata's presets".into();
     };
+    const OTHER: &str = "the last tune was for other settings, such as another context";
     let Some(preset) = &presets.latest else {
         return if presets.other_context {
-            "none for this context; the last tune was for other settings, such as \
-             another context"
-                .into()
+            format!("none for this context; {OTHER}")
         } else {
             "none".into()
         };
     };
     let what = preset_what(preset);
-    let reasons = one_line(&preset.reasons.join(", "));
-    match (preset.active, preset.state) {
+    let because = if preset.reasons.is_empty() {
+        String::new()
+    } else {
+        format!(", because {}", one_line(&preset.reasons.join(", ")))
+    };
+    let mut text = match (preset.active, preset.state) {
         (false, _) => format!("{what}, saved but not applied: the run config runs as it is"),
-        (true, Some(PresetState::Hard)) => format!(
-            "{what}, active but not applied, because {reasons}: the run config runs as it is"
-        ),
+        (true, Some(PresetState::Hard)) => {
+            format!("{what}, active but not applied{because}: the run config runs as it is")
+        }
         (true, state) => {
             let mut text = format!(
                 "{what}, active: Strata puts it over the run config when the model starts, \
                  so its settings win over `args` and `user_args`"
             );
             if state == Some(PresetState::Soft) {
-                let _ = write!(text, "; Strata offers a re-check, because {reasons}");
+                let _ = write!(text, "; Strata offers a re-check{because}");
             }
             text
         }
+    };
+    if presets.other_context {
+        let _ = write!(text, "; {OTHER}");
     }
+    text
+}
+
+/// Tuned settings as code: one line each, with paths cut to file names as
+/// in the run config.
+fn settings_code(settings: &[String]) -> String {
+    let each: Vec<String> = settings
+        .iter()
+        .map(|setting| {
+            let words: Vec<String> = setting
+                .split_whitespace()
+                .map(|word| match word.split_once('=') {
+                    Some((name, value)) if is_path(value) => format!("{name}={}", file_name(value)),
+                    _ if is_path(word) => file_name(word).to_string(),
+                    _ => word.to_string(),
+                })
+                .collect();
+            format!("`{}`", words.join(" ").replace('`', "'"))
+        })
+        .collect();
+    each.join(", ")
+}
+
+/// A Windows or Unix path, not a value such as `1/2`.
+fn is_path(text: &str) -> bool {
+    text.contains('\\') || text.starts_with('/') || text.contains(":/")
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
 /// `"Name" (--kv-grow; 31.2 → 35.1 tokens/s answering, +12%)`.
 fn preset_what(preset: &StrataPreset) -> String {
     let mut parts = Vec::new();
     if !preset.settings.is_empty() {
-        parts.push(format!("`{}`", preset.settings.join("`, `")));
+        parts.push(settings_code(&preset.settings));
     }
     let speed = match (preset.base_tps, preset.decode_tps) {
         (Some(base), Some(tuned)) => Some(format!("{base:.1} → {tuned:.1} tokens/s answering")),
         (None, Some(tuned)) => Some(format!("{tuned:.1} tokens/s answering")),
         _ => None,
     };
-    let gain = preset.gain_pct.map(|g| format!("+{g:.0}%"));
+    let gain = preset.gain_pct.map(|g| format!("{g:+.0}%"));
     let measured: Vec<String> = speed.into_iter().chain(gain).collect();
     if !measured.is_empty() {
         parts.push(format!("measured {}", measured.join(", ")));
@@ -233,7 +269,10 @@ fn tune_text(tune: &StrataTune) -> String {
         ("faster", Some(base), Some(tuned)) => {
             let mut text = format!("faster, {base:.1} → {tuned:.1} tokens/s");
             if !tune.changed.is_empty() {
-                let _ = write!(text, " with `{}`", tune.changed.join("`, `"));
+                let _ = write!(text, " with {}", settings_code(&tune.changed));
+            }
+            if let Some(name) = &tune.preset_name {
+                let _ = write!(text, ", saved as preset \"{}\"", one_line(name));
             }
             text
         }

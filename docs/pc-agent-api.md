@@ -346,6 +346,19 @@ value`), `message`, and `preset` and `preset_name` of the preset Strata saved.
 The PC service keeps it in `strata-tunes.json` in its state folder; deleting
 the model forgets it. All three are missing from an older PC service.
 
+`presets` is what Strata says about the model's presets for its current
+run config (`strata presets status`): `latest` is the active preset, else
+the newest, with `id`, `name`, `active`, `gain_pct` and, for the active one,
+`state` (`fresh`, `soft`: re-check offered, `hard`: not applied) and
+`reasons` in Strata's words. `other_context` is `true` when the model's last
+tune saved a preset that is not among them: it was made for other choices,
+such as another context. The PC service reads it in the background when
+`/strata` is asked for, outside jobs and gaming mode, one model after the
+other, and again when the run config, the last tune or the Terminal's build
+changed, after `apply_preset` and `undo_preset`, and every 30 minutes (Strata's
+verdict follows driver and engine changes). Missing without a Terminal,
+before the first read and from an older PC service.
+
 `machine` (`MachineFacts`) says what the PC is, for the optimization prompt.
 The PC service reads it with the first `GET /strata` and keeps it; a read
 without a graphics card or the drive (a driver not ready yet after boot) is
@@ -436,6 +449,8 @@ little space, deleting the active model).
 | `set_key` | `api_key` | waits until Strata is not handling a request and restarts it, which brings a new key |
 | `set_speed_projection` | `model`, `on` | turns speed projection on or off in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
+| `apply_preset` | `model`, `preset` | Terminal only: `strata presets apply <preset>`; the active model restarts once Strata is not handling a request |
+| `undo_preset` | `model`, `preset` | Terminal only: `strata presets undo <preset>`, back to the preset active before (or the standard settings); the active model restarts as with `apply_preset` |
 | `tune` | `model`, `mode` (`quick`, `thorough`), `use` (`coding`, `chat`) | Terminal only: waits until Strata is not handling a request, stops it, runs `strata tune auto <run config> --goal speed` and starts Strata again; the result goes to `last_tune`, the active settings stay as they were |
 
 `tune` takes about 20 minutes (`quick`) or up to two hours (`thorough`).

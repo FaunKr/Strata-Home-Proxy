@@ -247,6 +247,8 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::StrataJobDone => "Strata job done",
         EventKind::StrataJobFailed => "Strata job failed",
         EventKind::StrataJobCancelled => "Strata job cancelled",
+        EventKind::PresetApplied => "Preset applied",
+        EventKind::PresetUndone => "Preset undone",
         EventKind::StrataKeyChanged => "Strata key changed",
         EventKind::PcServiceRegistered => "PC service set up",
         EventKind::PcServiceUpdateRequested => "PC service update requested",
@@ -308,6 +310,8 @@ pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SwitchToTerminal => "Switching to the Strata Terminal",
         StrataJobKind::RemoveOldStrataFolder => "Removing the old Strata folder",
         StrataJobKind::Tune => "Tuning",
+        StrataJobKind::ApplyPreset => "Applying preset",
+        StrataJobKind::UndoPreset => "Undoing preset",
     }
 }
 

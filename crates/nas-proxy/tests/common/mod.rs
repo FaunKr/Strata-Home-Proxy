@@ -561,6 +561,7 @@ pub fn model(id: &str, family: Option<&str>, disk_bytes: u64, active: bool) -> S
         tunable: None,
         tune_unavailable: None,
         last_tune: None,
+        presets: None,
     }
 }
 
@@ -651,7 +652,9 @@ fn start_job(pc: &Pc, body: Value) -> Response {
         | StrataJobRequest::Delete { model }
         | StrataJobRequest::SetSpeedProjection { model, .. }
         | StrataJobRequest::SetContext { model, .. }
-        | StrataJobRequest::Tune { model, .. } => Some(model.clone()),
+        | StrataJobRequest::Tune { model, .. }
+        | StrataJobRequest::ApplyPreset { model, .. }
+        | StrataJobRequest::UndoPreset { model, .. } => Some(model.clone()),
         _ => None,
     };
     let job = StrataJob {

@@ -103,6 +103,17 @@
         "message": null,
         "preset": "3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6",
         "preset_name": "IQ3_XXS 64K coding"
+      },
+      "presets": {
+        "latest": {
+          "id": "3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6",
+          "name": "IQ3_XXS 64K – Full speed",
+          "active": true,
+          "state": "soft",
+          "reasons": ["the graphics driver changed"],
+          "gain_pct": 12.4
+        },
+        "other_context": false
       }
     },
     {

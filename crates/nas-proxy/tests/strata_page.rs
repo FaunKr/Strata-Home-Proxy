@@ -1107,8 +1107,15 @@ async fn an_active_preset_says_it_wins_over_the_engine_options() {
         "latest": {"id": "p1", "name": "Full speed", "active": true, "state": "fresh"}
     }))
     .unwrap();
+    // Saved but not applied, and set aside after a new graphics card.
     report.info.models[1].presets = serde_json::from_value(json!({
         "latest": {"id": "p2", "name": "Saved", "active": false}
+    }))
+    .unwrap();
+    report.info.models.push(report.info.models[1].clone());
+    report.info.models[2].id = "swift-IQ3_M".into();
+    report.info.models[2].presets = serde_json::from_value(json!({
+        "latest": {"id": "p3", "name": "Old card", "active": true, "state": "hard"}
     }))
     .unwrap();
     *s.pc.strata_info.lock().unwrap() = Some(report);
@@ -1121,4 +1128,5 @@ async fn an_active_preset_says_it_wins_over_the_engine_options() {
         1,
         "{html}"
     );
+    assert_eq!(html.matches("win over these").count(), 1, "{html}");
 }

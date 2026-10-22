@@ -1840,6 +1840,23 @@ async fn a_model_shows_its_engine_options_and_what_strata_starts_with() {
 }
 
 #[tokio::test]
+async fn a_key_among_the_engine_options_never_shows() {
+    let s = setup("models-user-key").await;
+    installed(&s);
+    let args = json!(["--native", "b.gguf", "--api-key", OLD_KEY]);
+    let user = json!([format!("--api-key={OLD_KEY}"), "--threads", "8"]);
+    config_with_user_args(&s, "coder-iq1_m", args.clone(), args, user);
+    let view = get(&s, "/strata").await;
+    let coder = model(&view, "coder-IQ1_M");
+    assert_eq!(coder["user_args"], json!(["--threads", "8"]), "{view}");
+    assert_eq!(
+        coder["started_args"],
+        json!(["--native", "b.gguf", "--threads", "8"]),
+        "{view}"
+    );
+}
+
+#[tokio::test]
 async fn a_strata_that_keeps_no_options_by_hand_shows_none() {
     let s = setup("models-user-older-shown").await;
     installed(&s);

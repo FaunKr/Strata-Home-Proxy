@@ -706,11 +706,14 @@ fn flag_of(group: &[Value]) -> &str {
 }
 
 /// Args as text with each path cut ([`shareable`]), without a key passed
-/// as `--api-key` and its value.
+/// as `--api-key` (also `--api-key=…`) and its value.
 fn shareable_args(args: &[Value]) -> Vec<String> {
     groups(args)
         .into_iter()
-        .filter(|g| flag_of(g) != "--api-key")
+        .filter(|g| {
+            let flag = flag_of(g);
+            flag != "--api-key" && !flag.starts_with("--api-key=")
+        })
         .flatten()
         .map(|arg| match shareable(&arg) {
             Value::String(text) => text,

@@ -974,8 +974,8 @@ fn ModelRow(
         .map(|preset| view! { <PresetButton model=model.id.clone() preset actions blocked /> });
     let options = model.user_args.clone().map(|user| {
         let started = model.started_args.clone().unwrap_or_default();
-        let preset = model.presets.as_ref().and_then(|p| p.latest.as_ref());
-        view! { <EngineOptions user started preset=preset.cloned() /> }
+        let preset = presets.and_then(|p| p.latest.clone());
+        view! { <EngineOptions user started preset /> }
     });
     // Only with word from the PC service: an older one does not say.
     let tune = match (model.tunable, model.tune_unavailable.clone()) {
@@ -1040,23 +1040,16 @@ fn EngineOptions(
     started: Vec<String>,
     preset: Option<StrataPreset>,
 ) -> impl IntoView {
-    let lines = option_lines(&user);
-    // A preset Strata applies wins over the run config.
-    let wins = preset
-        .filter(|p| p.active && p.state != Some(PresetState::Hard))
-        .map(|p| {
-            view! {
-                <p class="muted small">
-                    {format!("Preset {} is active; its settings win over these.", p.name)}
-                </p>
-            }
-        });
-    let started = (!started.is_empty()).then(|| {
-        format!(
-            "Strata starts with: {}",
-            option_lines(&started).replace('\n', " ")
-        )
+    let lines = option_lines(&user, '\n');
+    let preset_note = preset.filter(applied).map(|p| {
+        view! {
+            <p class="muted small">
+                {format!("Preset {} is active; its settings win over these.", p.name)}
+            </p>
+        }
     });
+    let started_line = (!started.is_empty())
+        .then(|| format!("Strata starts with: {}", option_lines(&started, ' ')));
     view! {
         <div class="engine-options">
             <p class="muted small">
@@ -1067,20 +1060,27 @@ fn EngineOptions(
                 }}
             </p>
             {(!lines.is_empty()).then(|| view! { <pre class="lines">{lines}</pre> })}
-            {started.map(|text| view! { <p class="muted small started-args">{text}</p> })}
-            {wins}
+            {started_line.map(|text| view! { <p class="muted small started-args">{text}</p> })}
+            {preset_note}
         </div>
     }
 }
 
-/// Args one option per line, each with its values; a value that is empty
-/// or holds a space or a quote is quoted.
-fn option_lines(args: &[String]) -> String {
+/// Whether Strata starts the model with this preset, so that it wins over
+/// the run config: active, and not set aside after a new graphics card or
+/// model file (see [`preset_text`]).
+fn applied(preset: &StrataPreset) -> bool {
+    preset.active && preset.state != Some(PresetState::Hard)
+}
+
+/// Args with each option and its values, options apart by `between`; a
+/// value that is empty or holds a space or a quote is quoted.
+fn option_lines(args: &[String], between: char) -> String {
     let mut out = String::new();
     for arg in args {
         if arg.starts_with("--") {
             if !out.is_empty() {
-                out.push('\n');
+                out.push(between);
             }
         } else if !out.is_empty() {
             out.push(' ');
@@ -2457,10 +2457,10 @@ mod tests {
         .map(Into::into)
         .into();
         assert_eq!(
-            option_lines(&args),
+            option_lines(&args, '\n'),
             "--threads 8\n--x \"a b\" \"\" \"say \\\"hi\\\"\"\n--no-mmap"
         );
-        assert_eq!(option_lines(&[]), "");
+        assert_eq!(option_lines(&[], '\n'), "");
     }
 
     fn presets(active: bool, state: Option<PresetState>, reasons: &[&str]) -> StrataPresets {

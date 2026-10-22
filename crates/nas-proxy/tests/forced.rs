@@ -7,7 +7,7 @@ use std::{sync::atomic::Ordering, time::Duration};
 
 use common::*;
 use serde_json::{Value, json};
-use strata_nas_proxy::events::EventKind;
+use strata_nas_proxy::{events::EventKind, state::PcState};
 
 /// The detail of the latest event of `kind`.
 fn detail(s: &Setup, kind: EventKind) -> String {
@@ -99,11 +99,12 @@ async fn forced_restart_reaches_the_pc_service_and_strata_loads() {
 
 #[tokio::test]
 async fn forced_restart_is_refused_in_gaming_mode() {
-    // A status answer that misses the probe timeout counts as a sleeping
-    // PC, as Strata does not answer in gaming mode; under load the test's
-    // 500 ms can run out (#259).
-    let s = setup(true, |c| c.probe_timeout = Duration::from_secs(5)).await;
+    // No idle check: two status answers in a row that miss the probe
+    // timeout under load would count the PC as asleep.
+    let s = setup(true, |c| c.idle_check = Duration::from_secs(3600)).await;
     s.pc.gaming.store(true, Ordering::SeqCst);
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
+    assert_eq!(resp.headers()["x-strata-proxy-status"], "gaming");
     let mut b = logged_in(&s.url).await;
     let resp = b.call("strata-force-restart", &[]).await;
     assert_eq!(resp.status(), 400);
@@ -202,4 +203,36 @@ async fn a_forced_restart_past_the_proxys_limit_counts_as_no_answer() {
     let text = resp.text().await.unwrap();
     assert!(text.ends_with("The PC service does not answer."), "{text}");
     assert!(!kinds(&s.state).contains(&EventKind::ForcedStrataRestart));
+}
+
+#[tokio::test]
+async fn one_missed_answer_in_gaming_mode_is_still_gaming_mode() {
+    // No idle check: the request below gets the missed answer.
+    let s = setup(true, |c| c.idle_check = Duration::from_secs(3600)).await;
+    s.pc.gaming.store(true, Ordering::SeqCst);
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
+    assert_eq!(resp.headers()["x-strata-proxy-status"], "gaming");
+    assert_eq!(s.state.pc_state(), PcState::Gaming);
+
+    s.pc.status_misses.store(1, Ordering::SeqCst);
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
+    assert_eq!(resp.status(), 503);
+    assert_eq!(resp.headers()["x-strata-proxy-status"], "gaming");
+    assert_eq!(
+        s.pc.status_misses.load(Ordering::SeqCst),
+        0,
+        "the miss was not used"
+    );
+    assert_eq!(s.state.pc_state(), PcState::Gaming);
+
+    let mut b = logged_in(&s.url).await;
+    let resp = b.call("strata-force-restart", &[]).await;
+    assert_eq!(resp.status(), 400);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("Gaming mode is on"), "{text}");
+
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+    let kinds = kinds(&s.state);
+    assert!(!kinds.contains(&EventKind::PcSeenAsleep), "{kinds:?}");
+    assert!(!kinds.contains(&EventKind::WakeSent), "{kinds:?}");
 }

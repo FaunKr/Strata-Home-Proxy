@@ -195,9 +195,18 @@ impl AppState {
     /// besides the PC's state: a reported MAC, the PC service's version,
     /// the end of a Strata job and a new Strata key. Every caller wants
     /// these noted at once: the next call to Strata needs the new key.
+    /// `None` counts as a sleeping PC, except for one miss in gaming mode:
+    /// that reads as gaming mode (`Lifecycle::pc_status`).
     pub async fn ask_pc(&self, agent: &AgentClient) -> Option<PcStatus> {
-        let status = agent.status().await?;
-        self.tuning.store(tuning(&status), Ordering::SeqCst);
+        let answer = agent.status().await;
+        if let Some(status) = &answer {
+            self.take_over(agent, status).await;
+        }
+        self.lifecycle.lock().unwrap().pc_status(answer)
+    }
+
+    async fn take_over(&self, agent: &AgentClient, status: &PcStatus) {
+        self.tuning.store(tuning(status), Ordering::SeqCst);
         if let Some(mac) = status.mac.as_deref().and_then(|m| parse_mac(m).ok())
             && self.settings.set_reported_mac(mac)
         {
@@ -208,9 +217,8 @@ impl AppState {
             self.events
                 .record(EventKind::PcServiceUpdated, status.version.clone());
         }
-        crate::strata_key::note_status(self, agent, &status).await;
-        crate::strata::note_status(self, agent, &status).await;
-        Some(status)
+        crate::strata_key::note_status(self, agent, status).await;
+        crate::strata::note_status(self, agent, status).await;
     }
 
     /// Strata at the current address with the current key; `None` without
@@ -381,7 +389,12 @@ impl AppState {
         let mut last_wol: Option<Instant> = None;
         let mut last_agent_check: Option<Instant> = None;
         let mut pc_answers = false;
-        self.lifecycle.lock().unwrap().wake_started();
+        // A PC in gaming mode is asked first: a miss that gaming mode
+        // outlasts needs the PC still in gaming mode.
+        let mut waking = self.pc_state() != PcState::Gaming;
+        if waking {
+            self.lifecycle.lock().unwrap().wake_started();
+        }
         loop {
             let cfg = self.cfg();
             // Ask the PC service now and then: gaming mode ends the wait, and an
@@ -399,6 +412,10 @@ impl AppState {
                     }
                     pc_answers = true;
                 }
+            }
+            if !waking {
+                waking = true;
+                self.lifecycle.lock().unwrap().wake_started();
             }
             let settling = self.settling();
             if !pc_answers && let Err(e) = self.send_wake_packet(&cfg, &mut last_wol).await {

@@ -151,10 +151,21 @@ impl Auth {
 
     /// Checks the password and returns a session token.
     pub fn login(&self, password: &str, client: IpAddr) -> Result<String, AuthError> {
-        let mut inner = self.inner.lock().unwrap();
-        self.check_password(&mut inner, password, client)?;
-        let generation = inner.stored.as_ref().map_or(0, |s| s.generation);
-        Ok(self.issue_token(generation))
+        loop {
+            let (generation, hash) = self.begin_attempt(&mut self.inner.lock().unwrap(), client)?;
+            let ok = self.matches(hash.as_deref(), password);
+            let mut inner = self.inner.lock().unwrap();
+            end_attempt(&mut inner, client, ok);
+            // The password changed meanwhile: check against the new one.
+            if current_generation(&inner) != generation {
+                continue;
+            }
+            return if ok {
+                Ok(self.issue_token(generation))
+            } else {
+                Err(AuthError::WrongPassword)
+            };
+        }
     }
 
     /// Sets a new own password. Ends all other sessions and returns a new
@@ -166,25 +177,38 @@ impl Auth {
         new: &str,
         client: IpAddr,
     ) -> Result<String, AuthError> {
+        let (generation, hash) = {
+            let mut inner = self.inner.lock().unwrap();
+            if self.valid_generation(&inner, token) != Some(current_generation(&inner)) {
+                return Err(AuthError::NotLoggedIn);
+            }
+            if new.chars().count() < MIN_PASSWORD_LEN
+                || new == self.default_password
+                || new == DEFAULT_PASSWORD
+            {
+                return Err(AuthError::WeakPassword);
+            }
+            // Counts towards the same limit as logins: a stolen cookie must not
+            // allow guessing the password either.
+            self.begin_attempt(&mut inner, client)?
+        };
+        let ok = self.matches(hash.as_deref(), current);
+        let new_hash = ok.then(|| {
+            let salt = SaltString::generate(&mut OsRng);
+            Argon2::default()
+                .hash_password(new.as_bytes(), &salt)
+                .expect("hashing works")
+                .to_string()
+        });
         let mut inner = self.inner.lock().unwrap();
-        let generation = inner.stored.as_ref().map_or(0, |s| s.generation);
-        if self.valid_generation(&inner, token) != Some(generation) {
+        end_attempt(&mut inner, client, ok);
+        let Some(hash) = new_hash else {
+            return Err(AuthError::WrongPassword);
+        };
+        // Another change meanwhile ended this session.
+        if current_generation(&inner) != generation {
             return Err(AuthError::NotLoggedIn);
         }
-        if new.chars().count() < MIN_PASSWORD_LEN
-            || new == self.default_password
-            || new == DEFAULT_PASSWORD
-        {
-            return Err(AuthError::WeakPassword);
-        }
-        // Counts towards the same limit as logins: a stolen cookie must not
-        // allow guessing the password either.
-        self.check_password(&mut inner, current, client)?;
-        let salt = SaltString::generate(&mut OsRng);
-        let hash = Argon2::default()
-            .hash_password(new.as_bytes(), &salt)
-            .expect("hashing works")
-            .to_string();
         let stored = Stored {
             hash,
             generation: generation + 1,
@@ -200,27 +224,21 @@ impl Auth {
         Ok(self.issue_token(generation + 1))
     }
 
-    /// Compares with the own password, or the default one while none is
-    /// saved, and slows down repeated failures from one address.
-    fn check_password(
+    /// Starts an attempt from `client`, counted as failed until
+    /// `end_attempt` says otherwise, so attempts in parallel cannot get past
+    /// the limit: the generation and the own password's hash (none while the
+    /// default applies) to check against. The check itself takes a while and
+    /// runs without the lock, so sessions are checked meanwhile.
+    fn begin_attempt(
         &self,
         inner: &mut Inner,
-        password: &str,
         client: IpAddr,
-    ) -> Result<(), AuthError> {
+    ) -> Result<(u64, Option<String>), AuthError> {
         let now = Instant::now();
         if let Some((_, Some(until))) = inner.failures.get(&client)
             && *until > now
         {
             return Err(AuthError::Throttled(*until - now));
-        }
-        let ok = match &inner.stored {
-            Some(stored) => verify_hash(&stored.hash, password),
-            None => constant_time_eq(password.as_bytes(), self.default_password.as_bytes()),
-        };
-        if ok {
-            inner.failures.remove(&client);
-            return Ok(());
         }
         if inner.failures.len() >= MAX_TRACKED_CLIENTS {
             // Forget addresses that are not locked out, so the map stays small.
@@ -236,7 +254,17 @@ impl Auth {
         if entry.0 >= MAX_FAILURES {
             entry.1 = Some(now + LOCKOUT);
         }
-        Err(AuthError::WrongPassword)
+        let hash = inner.stored.as_ref().map(|s| s.hash.clone());
+        Ok((current_generation(inner), hash))
+    }
+
+    /// Compares with the own password's hash, or the default password
+    /// without one.
+    fn matches(&self, hash: Option<&str>, password: &str) -> bool {
+        match hash {
+            Some(hash) => verify_hash(hash, password),
+            None => constant_time_eq(password.as_bytes(), self.default_password.as_bytes()),
+        }
     }
 
     /// Ends one session, also for copies of its cookie.
@@ -298,6 +326,17 @@ impl Auth {
         mac.update(payload.as_bytes());
         mac.finalize().into_bytes().to_vec()
     }
+}
+
+/// A right password ends the count of failed attempts from `client`.
+fn end_attempt(inner: &mut Inner, client: IpAddr, ok: bool) {
+    if ok {
+        inner.failures.remove(&client);
+    }
+}
+
+fn current_generation(inner: &Inner) -> u64 {
+    inner.stored.as_ref().map_or(0, |s| s.generation)
 }
 
 fn verify_hash(hash: &str, password: &str) -> bool {
@@ -407,6 +446,26 @@ mod tests {
         ));
         let other: IpAddr = "10.0.0.2".parse().unwrap();
         assert!(auth.login("admin", other).is_ok());
+    }
+
+    #[test]
+    fn attempts_at_once_do_not_get_past_the_limit() {
+        let auth = Auth::new(None, None);
+        let token = auth.login("admin", IP).unwrap();
+        auth.change_password(&token, "admin", "a long password", IP)
+            .unwrap();
+        // The hash is checked without the lock, so these overlap.
+        let answers: Vec<_> = std::thread::scope(|scope| {
+            let attempts: Vec<_> = (0..3 * MAX_FAILURES)
+                .map(|_| scope.spawn(|| auth.login("wrong", IP)))
+                .collect();
+            attempts.into_iter().map(|a| a.join().unwrap()).collect()
+        });
+        let checked = answers
+            .iter()
+            .filter(|a| **a == Err(AuthError::WrongPassword))
+            .count();
+        assert_eq!(checked, MAX_FAILURES as usize, "{answers:?}");
     }
 }
 

@@ -105,7 +105,8 @@ async fn a_plug_that_is_not_there_leaves_no_samples() {
 
 #[tokio::test]
 async fn a_hanging_plug_leaves_no_samples_and_holds_back_nothing() {
-    let s = setup(true, |_| {}).await;
+    // Each round waits for the plug's probe to run out.
+    let s = setup(true, |c| c.probe_timeout = Duration::from_millis(500)).await;
     s.pc.plug_hangs.store(true, Ordering::SeqCst);
     s.state.settings.set("SHELLY_URL", &s.plug).unwrap();
     let b = logged_in(&s.url).await;

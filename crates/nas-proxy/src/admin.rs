@@ -34,6 +34,15 @@ const BY_UI: &str = "from the web UI";
 
 struct UiBackend(Arc<AppState>);
 
+/// Runs `work` on the blocking pool.
+async fn blocking(
+    work: impl FnOnce() -> Result<String, String> + Send + 'static,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|e| Err(format!("Internal error: {e}")))
+}
+
 pub fn backend(state: &Arc<AppState>) -> SharedBackend {
     Arc::new(UiBackend(Arc::clone(state)))
 }
@@ -47,25 +56,39 @@ impl Backend for UiBackend {
         }
     }
 
-    fn login(&self, password: &str, client: IpAddr) -> Result<String, String> {
-        self.0
-            .auth
-            .login(password, client)
-            .map_err(|e| e.to_string())
+    // Hashing a password takes the CPU for a while: off the async workers,
+    // so the proxy answers and checks on the PC meanwhile.
+    fn login(
+        &self,
+        password: String,
+        client: IpAddr,
+    ) -> BoxFuture<'static, Result<String, String>> {
+        let state = Arc::clone(&self.0);
+        blocking(move || {
+            state
+                .auth
+                .login(&password, client)
+                .map_err(|e| e.to_string())
+        })
+        .boxed()
     }
 
     fn change_password(
         &self,
-        token: &str,
-        current: &str,
-        new: &str,
+        token: String,
+        current: String,
+        new: String,
         client: IpAddr,
-    ) -> Result<String, String> {
-        let result = self.0.auth.change_password(token, current, new, client);
-        if result.is_ok() {
-            self.0.events.record(EventKind::PasswordChanged, None);
-        }
-        result.map_err(|e: AuthError| e.to_string())
+    ) -> BoxFuture<'static, Result<String, String>> {
+        let state = Arc::clone(&self.0);
+        blocking(move || {
+            let result = state.auth.change_password(&token, &current, &new, client);
+            if result.is_ok() {
+                state.events.record(EventKind::PasswordChanged, None);
+            }
+            result.map_err(|e: AuthError| e.to_string())
+        })
+        .boxed()
     }
 
     fn logout(&self, token: &str) {

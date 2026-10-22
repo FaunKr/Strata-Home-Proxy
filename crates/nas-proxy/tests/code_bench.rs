@@ -171,15 +171,13 @@ async fn drive_end(s: &Setup, runner: &Runner, model: &str, end_run: Value) {
 /// Activates `model` through the simulated PC, ends its job, waits for its run
 /// to start, then ends that run.
 async fn drive_model(s: &Setup, runner: &Runner, model: &str, end_run: Value) {
-    wait_for_activate(s, model).await;
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
-    for _ in 0..100 {
-        if last_run(runner) == model {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert_eq!(last_run(runner), model, "run for {model} not started");
+    end_activate(s, model).await;
+    eventually_for(
+        Duration::from_secs(10),
+        &format!("run for {model} started"),
+        || last_run(runner) == model,
+    )
+    .await;
     drive_end(s, runner, model, end_run).await;
 }
 
@@ -209,8 +207,10 @@ async fn wait_for_activate(s: &Setup, model: &str) {
     .await;
 }
 
-/// Ends the job that activates `model` again after a run over all models.
-async fn drive_back(s: &Setup, model: &str) {
+/// Ends the job that activates `model` once it runs, e.g. the one that brings
+/// the active model back after a run over all models. Ending the job before
+/// it started would end the one before it instead.
+async fn end_activate(s: &Setup, model: &str) {
     wait_for_activate(s, model).await;
     s.pc.update_job(|j| j.state = StrataJobState::Done);
 }
@@ -581,7 +581,7 @@ async fn a_run_over_all_models_goes_through_them_and_brings_the_active_one_back(
         drive(&s, &runner, id).await;
     }
     // The model active before the run (the second) is activated again.
-    drive_back(&s, ids[1]).await;
+    end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     // The models in order, then the one active before the run.
     let order: Vec<String> =
@@ -615,7 +615,7 @@ async fn a_model_that_does_not_load_gets_its_error_row_and_the_run_goes_on() {
     })
     .await;
     drive(&s, &runner, ids[2]).await;
-    drive_back(&s, ids[1]).await;
+    end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     let v = page(&mut b).await;
     let row = v["results"]
@@ -658,7 +658,7 @@ async fn a_model_that_does_not_load_keeps_its_earlier_result_with_the_error() {
     })
     .await;
     drive(&s, &runner, ids[2]).await;
-    drive_back(&s, ids[1]).await;
+    end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
 
     // One row for the model: its earlier result, with the failure on it.
@@ -695,13 +695,7 @@ async fn cancelling_a_run_over_all_models_keeps_finished_results_and_stops_the_r
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
     drive(&s, &runner, ids[0]).await;
     // The second model is running when it is cancelled.
-    for _ in 0..100 {
-        if last_activate(&s) == ids[1] {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "run for the second model", || {
         last_run(&runner) == ids[1]
     })
@@ -811,7 +805,7 @@ async fn results_are_sorted_by_tests_passed_then_the_time() {
         done_run(ids[1], [6, 6, 0], [40.0, 30.0, 30.0]),
     )
     .await;
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     let v = page(&mut b).await;
     let models: Vec<&str> = v["results"]
@@ -840,7 +834,7 @@ async fn results_are_sorted_by_tests_passed_then_the_time() {
         done_run(ids[1], [3, 3, 0], [60.0, 60.0, 60.0]),
     )
     .await;
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     let v = page(&mut b).await;
     let models: Vec<&str> = v["results"]
@@ -859,12 +853,7 @@ async fn a_run_over_all_models_refuses_a_strata_job_started_by_hand() {
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
     // While the first model is being activated, a job started by hand is refused.
-    for _ in 0..100 {
-        if last_activate(&s) == ids[0] {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    wait_for_activate(&s, ids[0]).await;
     let resp = b.call("strata-job", &[("kind", "benchmark")]).await;
     assert_eq!(resp.status(), 400);
     assert!(
@@ -938,18 +927,7 @@ async fn after_a_restart_mid_run_the_current_run_is_followed_and_the_model_broug
     // end that run.
     tokio::time::sleep(Duration::from_millis(100)).await;
     *runner.current.lock().unwrap() = Some(run(ids[0], "done"));
-    for _ in 0..100 {
-        if last_activate(&s) == ids[1] {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert_eq!(
-        last_activate(&s),
-        ids[1],
-        "the active model is not brought back"
-    );
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || {
         !has_key_state(&restarted)
     })
@@ -984,13 +962,7 @@ async fn a_runner_that_stops_answering_gives_the_model_its_error_row_and_the_run
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
     drive(&s, &runner, ids[0]).await;
-    for _ in 0..100 {
-        if last_activate(&s) == ids[1] {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "run for the second model", || {
         last_run(&runner) == ids[1]
     })
@@ -1055,7 +1027,7 @@ async fn other_keys_wait_for_a_run_over_all_models_and_its_own_key_passes() {
     drive_end(&s, &runner, ids[0], run(ids[0], "done")).await;
     drive(&s, &runner, ids[1]).await;
     // Still held while the active model is brought back.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_activate(&s, ids[1]).await;
     assert!(!waiting.is_finished(), "released before the run ended");
     s.pc.update_job(|j| j.state = StrataJobState::Done);
     let status = tokio::time::timeout(Duration::from_secs(10), waiting)
@@ -1135,7 +1107,7 @@ async fn the_pc_counts_as_busy_for_a_whole_run_over_all_models() {
     drive(&s, &runner, ids[0]).await;
     drive(&s, &runner, ids[1]).await;
     assert!(s.state.in_flight() > 0, "not busy before the model is back");
-    drive_back(&s, ids[1]).await;
+    end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "idle after the run", || {
         s.state.in_flight() == 0
     })

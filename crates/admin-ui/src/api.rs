@@ -32,7 +32,8 @@ pub async fn get_session() -> Result<Session, ServerFnError> {
 #[server(prefix = "/admin/api", endpoint = "login")]
 pub async fn login(password: String) -> Result<(), ServerFnError> {
     let token = backend()?
-        .login(&password, client_ip().await)
+        .login(password, client_ip().await)
+        .await
         .map_err(|e| {
             crate::server::set_status(axum::http::StatusCode::UNAUTHORIZED);
             ServerFnError::new(e)
@@ -61,7 +62,8 @@ pub async fn change_password(
         return Err(ServerFnError::new("The two new passwords do not match."));
     }
     let token = backend()?
-        .change_password(&token, &current, &new, client_ip().await)
+        .change_password(token, current, new, client_ip().await)
+        .await
         .map_err(ServerFnError::new)?;
     set_cookie(&token);
     Ok(())

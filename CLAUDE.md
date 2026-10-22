@@ -3,6 +3,7 @@
 - PRs go against `main`. Start implementing from a freshly fetched `origin/main`: the session's clone may be hours behind.
 - Before pushing, run `scripts/check.sh` and push only when its last line reads `check.sh: PASSED`: the same checks as the CI job `test`. To iterate, `scripts/check.sh <crate>…` checks only those crates.
 - Before you suggest merging a PR: `/code-review` over its diff.
+- Bringing a PR to merge: read `.claude/skills/steward/SKILL.md` when opening a PR, before waiting on CI and before every merge, also after the context was compacted. Session skill lists may not show it.
 - Check UI changes in the browser: `scripts/ui-check.sh` (`SHOTS=1` for screenshots).
 - New proxy tests use the harness with a simulated PC and Strata in `crates/nas-proxy/tests/common`; a proxy restart over the same `DATA_DIR` is `restarted` there, not a second `setup`.
 - What the PC service takes and answers over HTTP is written down as types in `crates/pc-protocol`; fields are only ever added, rules in `docs/pc-agent-api.md`.

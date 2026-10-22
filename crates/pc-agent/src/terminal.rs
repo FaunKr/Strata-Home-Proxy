@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use strata_pc_protocol::{NeverRule, StrataOptions, TunerOption, TunerTry};
 
 use crate::command::CommandSpec;
 
@@ -21,6 +22,39 @@ const CURRENT: [&str; 2] = ["terminal", "current"];
 const INSTALL: &str = "install";
 /// The `strata` command in the Terminal's own files.
 const PROGRAM: [&str; 2] = ["bin", "strata.cmd"];
+/// Prints the tuner's option table (`strata_control/tune_knobs.py`) and,
+/// for the run config named as its argument, what its engine prints for
+/// `--help`, run the way Strata's own tuner runs it
+/// (`strata_control/tuning.py`). The Terminal has no command for either.
+const OPTIONS_SCRIPT: &str = r#"import json, subprocess, sys
+from pathlib import Path
+def plain(v):
+    if isinstance(v, (tuple, list, set, frozenset)):
+        return [plain(x) for x in v]
+    if isinstance(v, dict):
+        return {str(a): plain(b) for a, b in v.items()}
+    return v
+out = {}
+try:
+    from strata_control import tune_knobs as k
+    out["tuner"] = {"bounds": plain(k.BOUNDS), "never": plain(k.NEVER),
+        "answer_of_flag": plain(k.ANSWER_OF_FLAG), "bool_flags": sorted(k.BOOL_FLAGS),
+        "arms": [{"label": a.label, "answer": a.answer, "set_args": plain(a.set_args),
+                  "families": plain(a.families)} for a in k.ARMS]}
+except Exception as e:
+    out["tuner_error"] = str(e)
+if len(sys.argv) > 1:
+    try:
+        from strata_control import engine_component, tuning
+        cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
+        exe = Path(engine_component.expand(cfg["exe"], cfg, full=False))
+        p = subprocess.run([*tuning.engine_command(exe), "--help"], capture_output=True,
+                           text=True, timeout=20, env=tuning.engine_env(exe))
+        out["engine_help"] = f"{p.stdout or ''}\n{p.stderr or ''}"
+    except Exception as e:
+        out["engine_error"] = str(e)
+print(json.dumps(out))
+"#;
 /// Where `strata update` keeps the engines and newer Terminal files
 /// ("Control"), beside `install` with Strata's defaults.
 const COMPONENTS: &str = "components";
@@ -217,6 +251,20 @@ impl Terminal {
         }
     }
 
+    /// Prints Strata's options, with the help of the engine that run config
+    /// `config` starts; read the output with [`read_options`].
+    pub fn options(&self, config: Option<&Path>) -> CommandSpec {
+        let root = self.root();
+        let mut args = vec!["-c".to_string(), OPTIONS_SCRIPT.to_string()];
+        args.extend(config.map(|c| c.display().to_string()));
+        CommandSpec {
+            program: root.join("python").join("python.exe"),
+            args,
+            dir: Some(root),
+            env: vec![self.install_env(), ("PYTHONNOUSERSITE".into(), "1".into())],
+        }
+    }
+
     /// The arguments to start the `strata` command with, so that it serves
     /// `config` in the foreground on `host` and `port`; the key comes from
     /// the run config.
@@ -406,6 +454,136 @@ fn part_problem(result: &Value) -> Option<String> {
     }
 }
 
+/// Reads what [`Terminal::options`] printed for Terminal build `version`: `None`
+/// without its answer. The engine's help counts only with a flag in it,
+/// as in Strata's own read (`strata_cli/launch/params.py`).
+pub fn read_options(output: &[String], version: &str) -> Option<StrataOptions> {
+    let answer = json_answer(output)?;
+    let tuner = &answer["tuner"];
+    let engine_help = text(&answer["engine_help"])
+        .map(str::trim)
+        .filter(|h| h.contains("--"))
+        .map(String::from);
+    Some(StrataOptions {
+        version: version.to_string(),
+        tuner: tuner_options(tuner),
+        never: never_rules(&tuner["never"]),
+        tries: tuner_tries(&tuner["arms"]),
+        engine_help,
+    })
+}
+
+fn tuner_options(tuner: &Value) -> Vec<TunerOption> {
+    let bounds = tuner["bounds"].as_object();
+    let answers = tuner["answer_of_flag"].as_object();
+    let switches: Vec<&str> = list(&tuner["bool_flags"])
+        .iter()
+        .filter_map(|f| f.as_str())
+        .collect();
+    let arms = list(&tuner["arms"]);
+    let mut flags: Vec<&str> = bounds
+        .into_iter()
+        .chain(answers)
+        .flat_map(|o| o.keys().map(String::as_str))
+        .chain(switches.iter().copied())
+        .chain(
+            arms.iter()
+                .filter_map(|a| a["set_args"].as_object())
+                .flat_map(|s| s.keys().map(String::as_str)),
+        )
+        .filter(|f| f.starts_with("--"))
+        .collect();
+    flags.sort_unstable();
+    flags.dedup();
+    flags
+        .into_iter()
+        .map(|flag| {
+            let bound = bounds.and_then(|b| b.get(flag)).unwrap_or(&Value::Null);
+            let takes_value = !switches.contains(&flag);
+            TunerOption {
+                flag: flag.to_string(),
+                takes_value,
+                min: value(&bound["min"]),
+                max: value(&bound["max"]),
+                choices: values(&bound["choices"]),
+                answer: answers
+                    .and_then(|a| a.get(flag))
+                    .and_then(Value::as_str)
+                    .unwrap_or("exact")
+                    .to_string(),
+            }
+        })
+        .collect()
+}
+
+fn never_rules(never: &Value) -> Vec<NeverRule> {
+    list(never)
+        .iter()
+        .filter_map(|rule| {
+            let (setting, env) = match (text(&rule["flag"]), text(&rule["env"])) {
+                (Some(flag), _) => (flag, false),
+                (None, Some(env)) => (env, true),
+                (None, None) => return None,
+            };
+            let mut values = values(&rule["values"]);
+            values.extend(value(&rule["value"]));
+            Some(NeverRule {
+                setting: setting.to_string(),
+                env,
+                values,
+                test: text(&rule["test"]).map(String::from),
+                limit: value(&rule["limit"]),
+                when: self::values(&rule["when"]),
+                families: self::values(&rule["families"]),
+                reason: text(&rule["reason"]).unwrap_or_default().to_string(),
+            })
+        })
+        .collect()
+}
+
+fn tuner_tries(arms: &Value) -> Vec<TunerTry> {
+    list(arms)
+        .iter()
+        .filter_map(|arm| {
+            let mut args = Vec::new();
+            for (flag, set) in arm["set_args"].as_object().into_iter().flatten() {
+                match set {
+                    Value::Bool(false) | Value::Null => {}
+                    Value::Bool(true) => args.push(flag.clone()),
+                    other => args.extend([flag.clone(), value_text(other)]),
+                }
+            }
+            Some(TunerTry {
+                label: text(&arm["label"])?.to_string(),
+                answer: text(&arm["answer"]).unwrap_or("exact").to_string(),
+                args,
+                families: values(&arm["families"]),
+            })
+        })
+        .collect()
+}
+
+fn list(v: &Value) -> &[Value] {
+    v.as_array().map_or(&[], Vec::as_slice)
+}
+
+fn values(v: &Value) -> Vec<String> {
+    list(v).iter().filter_map(value).collect()
+}
+
+/// A value Strata gave, `None` for none or `null`.
+fn value(v: &Value) -> Option<String> {
+    (!v.is_null()).then(|| value_text(v))
+}
+
+/// A value as Strata writes it on the command line.
+fn value_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
 /// Tokens/s from the standard benchmark's answer
 /// (`strata bench run --output json`).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -496,6 +674,126 @@ mod tests {
             Err("the feed's signature is not valid".into())
         );
         assert!(engine_installed(&lines(&["Traceback (most recent call last):"])).is_err());
+    }
+
+    /// What the options script printed with Strata 011c9e6: the tables of
+    /// `strata_control/tune_knobs.py` as the script dumps them, and as the
+    /// engine's help the text of `usage()` in `src/program/generate.cpp`,
+    /// which the engine writes to stderr.
+    const OPTIONS: &str = include_str!("../fixtures/strata-options.json");
+
+    #[test]
+    fn the_options_are_the_tuner_s_table_and_the_engine_s_help() {
+        let out = lines(&["a warning before", OPTIONS.trim_end()]);
+        let options = read_options(&out, "0.3.0").unwrap();
+        assert_eq!(options.version, "0.3.0");
+
+        let option = |flag: &str| {
+            options
+                .tuner
+                .iter()
+                .find(|o| o.flag == flag)
+                .unwrap_or_else(|| panic!("{flag} missing"))
+        };
+        let spec = option("--spec");
+        assert_eq!(spec.choices, ["3", "4"]);
+        assert_eq!(spec.answer, "placement");
+        assert!(spec.takes_value);
+        let pcie = option("--pcie-frac");
+        assert_eq!(
+            (pcie.min.as_deref(), pcie.max.as_deref()),
+            (Some("0.0"), Some("0.55"))
+        );
+        assert_eq!(
+            option("--prefill").choices,
+            ["auto", "auto:16384", "auto:32768", "2048", "4096"]
+        );
+        assert_eq!(option("--kv").answer, "quality");
+        assert_eq!(option("--adapt-async").answer, "nonrepeatable");
+        let switch = option("--kv-grow");
+        assert!(!switch.takes_value);
+        assert_eq!(switch.answer, "exact");
+        let mut sorted = options.tuner.clone();
+        sorted.sort_by(|a, b| a.flag.cmp(&b.flag));
+        assert_eq!(sorted, options.tuner);
+
+        assert_eq!(options.never.len(), 18);
+        let first = &options.never[0];
+        assert_eq!(first.setting, "STRATA_SH_STREAM");
+        assert!(first.env);
+        assert_eq!(first.when, ["gfx12"]);
+        assert_eq!(first.reason, "it halves decode speed on this graphics card");
+        assert_eq!(options.never[1].values, ["all"]);
+        let affinity = &options.never[4];
+        assert_eq!(affinity.setting, "--pool-affinity");
+        assert!(!affinity.env);
+        assert_eq!(affinity.values, ["auto", "p-cores"]);
+        let spec = options
+            .never
+            .iter()
+            .find(|r| r.families == ["flash-next"])
+            .unwrap();
+        assert_eq!(
+            (
+                spec.setting.as_str(),
+                spec.test.as_deref(),
+                spec.limit.as_deref()
+            ),
+            ("--spec", Some("at_most"), Some("2"))
+        );
+
+        assert_eq!(options.tries.len(), 16);
+        let rebalance = &options.tries[3];
+        assert_eq!(rebalance.label, "Re-balance the expert cache faster");
+        assert_eq!(rebalance.answer, "placement");
+        assert_eq!(
+            rebalance.args,
+            [
+                "--adapt-every",
+                "1",
+                "--adapt-swaps",
+                "80",
+                "--adapt-decay",
+                "0.97"
+            ]
+        );
+        assert_eq!(rebalance.families, ["flash-next"]);
+        assert_eq!(options.tries[6].args, ["--trim-stage-weights"]);
+        assert!(options.tries[8].args.is_empty());
+        assert_eq!(options.tries[9].families, ["qwen36"]);
+
+        let help = options.engine_help.unwrap();
+        assert!(help.starts_with("strata generate --pack DIR"), "{help}");
+        assert!(help.contains("  --kv-grow "), "{help}");
+        assert!(help.contains("54.4% hits"), "{help}");
+    }
+
+    #[test]
+    fn options_without_a_table_or_an_engine_keep_what_was_read() {
+        let out = lines(&[
+            r#"{"tuner_error": "No module named 'strata_control.tune_knobs'", "engine_help": "\n'strata.exe' is not recognized"}"#,
+        ]);
+        let options = read_options(&out, "0.2.2").unwrap();
+        assert!(options.tuner.is_empty() && options.never.is_empty());
+        assert_eq!(options.engine_help, None);
+        assert_eq!(
+            read_options(&lines(&["Traceback (most recent call last):"]), "0.2.2"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_options_script_gets_the_run_config() {
+        let terminal = Terminal::new("C:/Users/me/AppData/Local/Strata");
+        let config = Path::new("C:/Users/me/AppData/Local/Strata/install/strata-iq3_xxs.json");
+        let spec = terminal.options(Some(config));
+        assert_eq!(
+            spec.program,
+            terminal.root().join("python").join("python.exe")
+        );
+        assert_eq!(spec.args[0], "-c");
+        assert_eq!(spec.args[2], config.display().to_string());
+        assert_eq!(terminal.options(None).args.len(), 2);
     }
 
     #[test]

@@ -350,6 +350,36 @@ read again after 10 minutes:
 Whatever the PC service cannot read is `null` or an empty list. An older PC
 service leaves out `machine`.
 
+`options` (`StrataOptions`) says what the installed Strata Terminal offers to
+tune, for the optimization prompt. The PC service reads it in the background
+when `/strata` is asked for, outside jobs and gaming mode, with the Terminal's
+own Python (see [strata-api.md](strata-api.md)), and again only when the
+Terminal's build or the engine the run config names (`exe`) changes. A read
+that failed, took longer than a minute or lacks the tuner's table or (with a
+model) the engine's help is tried again after 10 minutes. An answer during the
+read is still without it. An engine replaced under the same `exe` (a
+`component:` reference) is read again with the next Terminal build.
+- `version`: the build of the Terminal files it was read from (their
+  `VERSION`); the field is missing while another build runs.
+- `tuner`: each engine option of the tuner's table, sorted by `flag`:
+  `takes_value` (`false` for a switch), `min` and `max` of the searched range,
+  `choices` and `answer` (`exact`, `placement`, `quality` or
+  `nonrepeatable`). Values are text as Strata writes them.
+- `never`: what the tuner never picks: `setting` (an engine flag, or an
+  environment variable when `env`), `values` (all when empty), `test` and
+  `limit` (Strata's name for the check on the value and its bound), `when`
+  (PC traits such as `hybrid_cpu`), `families` (Strata's model families) and
+  `reason`.
+- `tries`: the tuner's own tries in Strata's order: `label`, `answer`, `args`
+  (the engine arguments it sets; empty for one that sets something else) and
+  `families`.
+- `engine_help`: what the engine of the active model's run config (else the
+  first model's) prints for `--help`; `null` without a model or when it does
+  not run.
+
+Missing without a Terminal (a Strata folder from source), before the first
+read and from an older PC service.
+
 ### What the PC service keeps in the model configurations
 
 When the PC service starts, and after `install`, `add_model` and `update`, it

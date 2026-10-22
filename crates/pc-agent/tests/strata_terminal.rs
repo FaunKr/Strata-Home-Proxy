@@ -250,6 +250,85 @@ async fn gaming_mode_stops_every_program_from_the_terminal_s_folder() {
     assert_eq!(stopped, Terminal::of(&s.agent.cfg).processes());
 }
 
+/// What the options script printed with Strata 011c9e6 (see the unit test
+/// in `terminal.rs`).
+const OPTIONS: &str = include_str!("../fixtures/strata-options.json");
+
+/// The page once it shows Strata's options for Terminal build `build`;
+/// each visit may start the read, as the web UI's do.
+async fn options_read(s: &Setup, build: &str) -> Value {
+    let mut last = Value::Null;
+    for _ in 0..200 {
+        last = get(s, "/strata").await;
+        if last["options"]["version"] == build {
+            return last;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("no options on the page: {last}");
+}
+
+#[tokio::test]
+async fn strata_s_options_are_read_once_per_terminal_version() {
+    let s = setup("terminal-options").await;
+    let leaves = installed(&s);
+    s.fake.command(
+        "python -c",
+        FakeCommand {
+            lines: vec![OPTIONS.trim_end().to_string()],
+            ..Default::default()
+        },
+    );
+    let view = options_read(&s, "0.2.2").await;
+    assert_eq!(s.fake.runs_of("python").len(), 1);
+    let options = &view["options"];
+    assert_eq!(options["version"], "0.2.2");
+    let spec = options["tuner"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["flag"] == "--spec")
+        .unwrap();
+    assert_eq!(spec["choices"], json!(["3", "4"]));
+    assert_eq!(options["never"][0]["setting"], "STRATA_SH_STREAM");
+    assert!(
+        options["engine_help"]
+            .as_str()
+            .unwrap()
+            .starts_with("strata generate")
+    );
+    let run = &s.fake.runs_of("python")[0];
+    let served = leaves.installation().config_path("iq3_xxs");
+    assert_eq!(run.args.last().unwrap(), &served.display().to_string());
+
+    get(&s, "/strata").await;
+    get(&s, "/strata").await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(
+        s.fake.runs_of("python").len(),
+        1,
+        "read again without a change"
+    );
+
+    Terminal::of(&s.agent.cfg).fake_install("0.2.3");
+    let view = options_read(&s, "0.2.3").await;
+    assert_eq!(view["options"]["version"], "0.2.3");
+    assert_eq!(s.fake.runs_of("python").len(), 2);
+}
+
+#[tokio::test]
+async fn a_strata_folder_from_source_has_no_options() {
+    let s = setup("source-options").await;
+    let cfg = &s.agent.cfg;
+    SetupLeaves::new(&cfg.strata_dir, &cfg.strata_data_dir, "0123456789abcdef")
+        .model("swift-iq2_xs", config_json("c.gguf"));
+    get(&s, "/strata").await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let view = get(&s, "/strata").await;
+    assert!(view.get("options").is_none(), "{view}");
+    assert!(s.fake.runs_of("python").is_empty());
+}
+
 /// What `strata update --output json` answers (`run` in
 /// strata_cli/update_cmd.py), with the Terminal's files at `control`.
 fn update_answer(control: &str) -> String {

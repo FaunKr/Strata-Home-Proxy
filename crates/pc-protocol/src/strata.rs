@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{MachineFacts, StrataJob};
+use crate::{MachineFacts, StrataJob, StrataOptions};
 
 /// The longest context `set_context` takes: the model's trained length,
 /// which needs no rope scaling. Longer ones only Setup sets up.
@@ -67,6 +67,10 @@ pub struct StrataInfo {
     pub benchmarks: Vec<StrataBenchmark>,
     #[serde(default)]
     pub job: Option<StrataJob>,
+    /// What the installed Strata Terminal offers to tune; `None` before it
+    /// was read, without a Terminal and from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<StrataOptions>,
 }
 
 /// How Strata is installed on the PC.

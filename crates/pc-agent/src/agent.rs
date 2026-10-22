@@ -39,7 +39,7 @@ use crate::{
     managed::Managed,
     output::{StrataOutput, StrataOutputMessage, StrataOutputNotice},
     platform::Platform,
-    strata::{self, Refusal, StrataJobRequest, UpdateCheck},
+    strata::{self, OptionsCheck, Refusal, StrataJobRequest, UpdateCheck},
     strata_key::StrataKey,
     strata_process::{StrataProcess, Times},
     update::UpdateError,
@@ -91,6 +91,7 @@ pub struct Agent {
     pub(crate) jobs: Jobs,
     pub(crate) times: Times,
     pub(crate) updates: UpdateCheck,
+    pub(crate) options: OptionsCheck,
     /// An update of this program is under way.
     pub(crate) updating: AtomicBool,
     /// A sleep request was taken and standby follows; a second one adds
@@ -150,6 +151,7 @@ impl Agent {
             jobs,
             times: Times::default(),
             updates: UpdateCheck::default(),
+            options: OptionsCheck::default(),
             updating: AtomicBool::new(false),
             standby_pending: AtomicBool::new(false),
             output,
@@ -568,6 +570,7 @@ async fn gaming(State(agent): State<Arc<Agent>>, Json(req): Json<GamingRequest>)
 
 async fn strata_view(State(agent): State<Arc<Agent>>) -> Json<strata::StrataReport> {
     strata::check_for_update(&agent);
+    strata::check_options(&agent);
     let view = tokio::task::spawn_blocking(move || strata::view(&agent))
         .await
         .expect("view task");

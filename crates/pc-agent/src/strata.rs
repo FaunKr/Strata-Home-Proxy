@@ -31,7 +31,7 @@ use crate::{
 pub use strata_pc_protocol::{
     BenchTool, ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, StrataBenchmark,
     StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState,
-    StrataModel, StrataReport, StrataSize,
+    StrataModel, StrataOptions, StrataReport, StrataSize,
 };
 
 /// The last benchmark run, as older services kept it alone.
@@ -42,6 +42,12 @@ const BENCHES_FILE: &str = "strata-benchmarks.json";
 const VERSION_FILE: &str = "strata-version.json";
 /// How often the page's visits ask Git whether Strata has a newer version.
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
+/// How soon Strata's options are read again after a read that failed or
+/// lacked a part.
+const OPTIONS_RETRY: Duration = Duration::from_secs(600);
+/// How long reading Strata's options may take; the engine's `--help` alone
+/// may take 20 s in Strata's own read.
+const OPTIONS_TIMEOUT: Duration = Duration::from_secs(60);
 /// How often the page's visits ask the Strata Terminal for an update.
 const TERMINAL_CHECK_EVERY: Duration = Duration::from_secs(24 * 3600);
 /// How long a benchmark waits for Strata to load its model.
@@ -986,6 +992,131 @@ pub fn check_for_update(agent: &Arc<Agent>) {
     });
 }
 
+/// Strata's options (`StrataInfo.options`): read in the background when the
+/// page is looked at, once per Strata Terminal build and engine.
+#[derive(Default)]
+pub struct OptionsCheck {
+    inner: Mutex<OptionsState>,
+}
+
+#[derive(Default)]
+struct OptionsState {
+    asking: bool,
+    read: Option<OptionsRead>,
+}
+
+struct OptionsRead {
+    key: OptionsKey,
+    options: Option<StrataOptions>,
+    at: Instant,
+}
+
+impl OptionsRead {
+    /// With the tuner's table, and the engine's help if there is an engine.
+    fn is_whole(&self) -> bool {
+        self.options.as_ref().is_some_and(|o| {
+            !o.tuner.is_empty() && (self.key.engine.is_none() || o.engine_help.is_some())
+        })
+    }
+}
+
+/// What the options are read for: the Terminal's build and the engine
+/// the run config starts, as it names it.
+#[derive(Clone, PartialEq, Eq)]
+struct OptionsKey {
+    version: String,
+    engine: Option<String>,
+}
+
+impl OptionsCheck {
+    /// The options read for the Terminal build `version`.
+    pub fn current(&self, version: Option<&str>) -> Option<StrataOptions> {
+        let state = self.inner.lock().unwrap();
+        let read = state.read.as_ref()?;
+        (Some(read.key.version.as_str()) == version)
+            .then(|| read.options.clone())
+            .flatten()
+    }
+
+    fn claim(&self) -> bool {
+        let mut state = self.inner.lock().unwrap();
+        !std::mem::replace(&mut state.asking, true)
+    }
+
+    fn due(&self, key: &OptionsKey) -> bool {
+        let state = self.inner.lock().unwrap();
+        state.read.as_ref().is_none_or(|read| {
+            read.key != *key || (!read.is_whole() && read.at.elapsed() >= OPTIONS_RETRY)
+        })
+    }
+
+    fn done(&self, read: Option<(OptionsKey, Option<StrataOptions>)>) {
+        let mut state = self.inner.lock().unwrap();
+        state.asking = false;
+        if let Some((key, options)) = read {
+            state.read = Some(OptionsRead {
+                key,
+                options,
+                at: Instant::now(),
+            });
+        }
+    }
+}
+
+/// Reads Strata's options in the background when the Terminal's version or
+/// the engine changed since the last read; the page shows them at its next
+/// visit.
+pub fn check_options(agent: &Arc<Agent>) {
+    if agent.gaming() || agent.jobs.running() || !agent.options.claim() {
+        return;
+    }
+    let agent = Arc::clone(agent);
+    tokio::spawn(async move {
+        let wanted = {
+            let agent = Arc::clone(&agent);
+            tokio::task::spawn_blocking(move || options_wanted(&agent))
+                .await
+                .ok()
+                .flatten()
+        };
+        let read = match wanted {
+            Some((key, spec)) if agent.options.due(&key) => {
+                let options = output_within(&agent, &spec, OPTIONS_TIMEOUT)
+                    .await
+                    .and_then(|lines| terminal::read_options(&lines, &key.version));
+                Some((key, options))
+            }
+            _ => None,
+        };
+        agent.options.done(read);
+    });
+}
+
+/// What to read the options for and how, with the engine of the active
+/// model's run config or else the first model's; only from a Terminal.
+fn options_wanted(agent: &Agent) -> Option<(OptionsKey, CommandSpec)> {
+    let install = Installation::of(&agent.cfg);
+    if install.kind() != Kind::Terminal {
+        return None;
+    }
+    let terminal = Terminal::of(&agent.cfg);
+    let version = terminal.build()?;
+    let model = active_model(agent)
+        .filter(|id| install.has(id))
+        .or_else(|| install.models().into_iter().next());
+    let engine = model.as_deref().and_then(|id| {
+        let model = install.read_model(id);
+        let exe = model.fields().get("exe")?.as_str()?.to_string();
+        Some((install.config_path(id), exe))
+    });
+    let spec = terminal.options(engine.as_ref().map(|(config, _)| config.as_path()));
+    let key = OptionsKey {
+        version,
+        engine: engine.map(|(_, exe)| exe),
+    };
+    Some((key, spec))
+}
+
 /// The Terminal's version, whether `strata update --check` offers
 /// something newer and, if so, what the commits since the installed build
 /// bring.
@@ -1236,6 +1367,28 @@ async fn output(agent: &Agent, spec: &CommandSpec) -> Option<(i32, Vec<String>)>
     Some((run.wait().await?, lines))
 }
 
+/// The output of a command outside a job that ends within `limit`; one
+/// that takes longer is ended, with what it printed by then.
+async fn output_within(agent: &Agent, spec: &CommandSpec, limit: Duration) -> Option<Vec<String>> {
+    let mut run = agent.platform().run(spec).ok()?;
+    let cancel = run.canceller();
+    let mut lines = Vec::new();
+    let read = tokio::time::timeout(limit, async {
+        while let Some(line) = run.next_line().await {
+            lines.push(line);
+        }
+    })
+    .await;
+    if read.is_err() {
+        cancel();
+        tracing::warn!(
+            "{} took longer than {limit:?} and was ended",
+            spec.program.display()
+        );
+    }
+    Some(lines)
+}
+
 /// The folder as a `strata_processes` entry.
 fn kind_text(kind: StrataJobKind) -> &'static str {
     match kind {
@@ -1285,10 +1438,14 @@ pub fn view(agent: &Agent) -> StrataReport {
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
     let version = strata_version(agent, &install);
+    let options = (install.kind() == Kind::Terminal)
+        .then(|| agent.options.current(Terminal::of(cfg).build().as_deref()))
+        .flatten();
     let info = StrataInfo {
         installed: install.is_set_up(),
         install: install.is_set_up().then_some(install.kind().into()),
         version,
+        options,
         update_available: agent.updates.available(),
         models,
         families: catalog::FAMILIES

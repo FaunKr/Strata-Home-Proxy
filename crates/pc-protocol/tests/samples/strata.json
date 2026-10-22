@@ -248,5 +248,65 @@
       "error": "Strata did not answer"
     }
   ],
-  "job": null
+  "job": null,
+  "options": {
+    "version": "0.2.2",
+    "tuner": [
+      {
+        "flag": "--pcie-frac",
+        "takes_value": true,
+        "min": "0.0",
+        "max": "0.55",
+        "choices": [],
+        "answer": "placement"
+      },
+      {
+        "flag": "--spec",
+        "takes_value": true,
+        "min": null,
+        "max": null,
+        "choices": ["3", "4"],
+        "answer": "placement"
+      },
+      {
+        "flag": "--kv-grow",
+        "takes_value": false,
+        "min": null,
+        "max": null,
+        "choices": [],
+        "answer": "exact"
+      }
+    ],
+    "never": [
+      {
+        "setting": "STRATA_SH_STREAM",
+        "env": true,
+        "values": [],
+        "test": null,
+        "limit": null,
+        "when": ["gfx12"],
+        "families": [],
+        "reason": "it halves decode speed on this graphics card"
+      },
+      {
+        "setting": "--spec",
+        "env": false,
+        "values": [],
+        "test": "at_most",
+        "limit": "2",
+        "when": [],
+        "families": ["flash-next"],
+        "reason": "a 2-token window was 4% to 11% slower"
+      }
+    ],
+    "tries": [
+      {
+        "label": "Shorter speculative window (3 tokens)",
+        "answer": "placement",
+        "args": ["--spec", "3"],
+        "families": ["flash-next"]
+      }
+    ],
+    "engine_help": "strata generate --pack DIR --tokens \"1,2,3\" [options]\n\n  --pack DIR           the pack directory (default pack/full)"
+  }
 }

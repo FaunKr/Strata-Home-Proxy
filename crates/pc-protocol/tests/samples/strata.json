@@ -111,7 +111,10 @@
           "active": true,
           "state": "soft",
           "reasons": ["the graphics driver changed"],
-          "gain_pct": 12.4
+          "gain_pct": 12.4,
+          "settings": ["--kv-resident 65536", "--kv-grow"],
+          "decode_tps": 35.1,
+          "base_tps": 31.2
         },
         "other_context": false
       }

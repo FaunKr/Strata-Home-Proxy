@@ -139,7 +139,7 @@ What a Strata started by the PC service writes to its console; the PC service ke
 _Avoid_: Strata log, log entry (except `strata-log` and `strata.log` in code and file names), Strata-Ausgabe
 
 **Optimization prompt**:
-The English text per installed model that the web UI's *Optimization prompt* button shows for pasting into an AI chat: the PC, Strata's version, the model and its benchmarks, with the request for faster settings. The proxy builds it from the PC service's last report; it never holds a path, the MAC address, a key or the Git remote.
+The English text per installed model that the web UI's *Optimization prompt* button shows for pasting into an AI chat: the PC, Strata's version, the model with its preset and last tune, and its benchmarks, with the request for faster settings. An active preset is named with its settings, since it wins over the run config. The proxy builds it from the PC service's last report; it never holds a path, the MAC address, a key or the Git remote.
 _Avoid_: tuning prompt, export, Optimierungsprompt
 
 **Tune**:

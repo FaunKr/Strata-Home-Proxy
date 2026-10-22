@@ -537,6 +537,61 @@ impl Model {
         shareable_args(&self.started_args())
     }
 
+    /// Whether its Strata keeps engine options set by hand: since Strata
+    /// 8aaf188a, whose configs have `args_written`.
+    pub fn keeps_user_args(&self) -> bool {
+        self.fields.contains_key(WRITTEN_KEY)
+    }
+
+    /// Why `requested` cannot replace the engine options set by hand, if
+    /// it cannot: it starts with a value, or adds or changes an option with
+    /// a switch of its own or one the proxy needs ([`refused_group`]). Such
+    /// an option Strata put there itself may come back unchanged.
+    pub fn refused_user_args(&self, requested: &[String]) -> Option<String> {
+        if let Some(first) = requested.first().filter(|a| !a.starts_with("--")) {
+            return Some(format!(
+                "Engine options start with an option (--name), not \"{first}\""
+            ));
+        }
+        let kept = self.shareable_user_args().unwrap_or_default();
+        let kept = groups(&kept.into_iter().map(Value::from).collect::<Vec<_>>());
+        groups(&values(requested))
+            .into_iter()
+            .filter(|group| !kept.contains(group))
+            .find_map(|group| refused_group(&group))
+    }
+
+    /// Replaces the engine options set by hand with `requested`, which
+    /// comes as [`Self::shareable_user_args`] shows them; empty removes them.
+    /// A group equal to how an old one shows keeps the old one's whole
+    /// value, so a cut path stays whole; each old group serves once. A key
+    /// passed as `--api-key`, which never shows, stays.
+    pub fn set_user_args(&mut self, requested: &[String]) {
+        let mut old = self
+            .fields
+            .get(USER_KEY)
+            .and_then(Value::as_array)
+            .map_or_else(Vec::new, |user| groups(user));
+        let mut user = Vec::new();
+        for group in groups(&values(requested)) {
+            let shown: Vec<String> = group
+                .iter()
+                .filter_map(Value::as_str)
+                .map(Into::into)
+                .collect();
+            match old.iter().position(|g| shareable_args(g) == shown) {
+                Some(at) => user.extend(old.remove(at)),
+                None => user.extend(group),
+            }
+        }
+        user.extend(old.into_iter().filter(|g| is_key_group(g)).flatten());
+        if user.is_empty() {
+            self.fields.remove(USER_KEY);
+        } else {
+            self.fields.insert(USER_KEY.into(), Value::Array(user));
+        }
+    }
+
     /// The context it starts with (`--max-context`), if the config says.
     pub fn context(&self) -> Option<u32> {
         let args = self.started_args();
@@ -681,6 +736,40 @@ fn with_context(args: &mut Vec<Value>, context: u32) {
     *args = kept;
 }
 
+/// A key passed as `--api-key` (also `--api-key=…`), with its value.
+fn is_key_group(group: &[Value]) -> bool {
+    let flag = flag_of(group);
+    flag == "--api-key" || flag.starts_with("--api-key=")
+}
+
+/// Args as JSON values.
+fn values(args: &[String]) -> Vec<Value> {
+    args.iter().map(|a| Value::from(a.as_str())).collect()
+}
+
+/// Why this group of engine options cannot be set by hand, if it cannot:
+/// its option is one the service switches itself, or one the proxy needs to
+/// reach Strata.
+fn refused_group(group: &[Value]) -> Option<String> {
+    let flag = flag_of(group);
+    let flag = flag.split_once('=').map_or(flag, |(flag, _)| flag);
+    let switch = if flag == CONTEXT_FLAG || ROPE_FLAGS.contains(&flag) {
+        "Change context"
+    } else if flag == PROJECTION_VECTOR_FLAG
+        || flag == "--control-vector"
+        || PROJECTION_FLAGS.iter().any(|(f, _)| *f == flag)
+    {
+        "the speed projection switch"
+    } else if ["--host", "--port", "--api-key"].contains(&flag) {
+        return Some(format!(
+            "{flag} is set by the PC service, which the proxy reaches Strata through"
+        ));
+    } else {
+        return None;
+    };
+    Some(format!("{flag} has its own control: use {switch}"))
+}
+
 /// An argument list in Strata's groups (`strata_control/user_args.py`): an
 /// option and the values after it, up to the next `--option`.
 fn groups(args: &[Value]) -> Vec<Vec<Value>> {
@@ -710,10 +799,7 @@ fn flag_of(group: &[Value]) -> &str {
 fn shareable_args(args: &[Value]) -> Vec<String> {
     groups(args)
         .into_iter()
-        .filter(|g| {
-            let flag = flag_of(g);
-            flag != "--api-key" && !flag.starts_with("--api-key=")
-        })
+        .filter(|g| !is_key_group(g))
         .flatten()
         .map(|arg| match shareable(&arg) {
             Value::String(text) => text,

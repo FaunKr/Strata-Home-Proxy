@@ -45,6 +45,7 @@ impl Actions {
             tune_mode: None,
             tune_use: None,
             preset: None,
+            options: None,
         });
     }
 
@@ -59,6 +60,7 @@ impl Actions {
             tune_mode: None,
             tune_use: None,
             preset: None,
+            options: None,
         });
     }
 
@@ -73,6 +75,7 @@ impl Actions {
             tune_mode: None,
             tune_use: None,
             preset: None,
+            options: None,
         });
     }
 
@@ -87,6 +90,23 @@ impl Actions {
             tune_mode: None,
             tune_use: None,
             preset: None,
+            options: None,
+        });
+    }
+
+    /// Saves `options`, the field's text, as `model`'s engine options.
+    fn set_user_args(&self, model: String, options: String) {
+        self.start.dispatch(StartStrataJob {
+            kind: StrataJobKind::SetUserArgs,
+            family: None,
+            size: None,
+            context: None,
+            model: Some(model),
+            speed_projection: None,
+            tune_mode: None,
+            tune_use: None,
+            preset: None,
+            options: Some(options),
         });
     }
 
@@ -101,6 +121,7 @@ impl Actions {
             tune_mode: Some(mode),
             tune_use: Some(usage),
             preset: None,
+            options: None,
         });
     }
 
@@ -120,6 +141,7 @@ impl Actions {
             tune_mode: None,
             tune_use: None,
             preset: Some(preset),
+            options: None,
         });
     }
 }
@@ -755,6 +777,7 @@ fn ModelChoice(
             tune_mode: None,
             tune_use: None,
             preset: None,
+            options: None,
         });
     };
     let picker = format!("{kind:?}-size");
@@ -1021,7 +1044,17 @@ fn ModelRow(
     let options = model.user_args.clone().map(|user| {
         let started = model.started_args.clone().unwrap_or_default();
         let preset = presets.and_then(|p| p.latest.clone());
-        view! { <EngineOptions user started preset /> }
+        view! {
+            <EngineOptions
+                id=model.id.clone()
+                active=model.active
+                user
+                started
+                preset
+                actions
+                blocked
+            />
+        }
     });
     // Only with word from the PC service: an older one does not say.
     let tune = match (model.tunable, model.tune_unavailable.clone()) {
@@ -1078,15 +1111,20 @@ fn ModelRow(
     }
 }
 
-/// A model's engine options set by hand (`user_args`), one option per line,
-/// and the args Strata starts it with.
+/// A model's engine options set by hand (`user_args`), one option per line
+/// in a field with *Save*, and the args Strata starts it with.
 #[component]
 fn EngineOptions(
+    id: String,
+    active: bool,
     user: Vec<String>,
     started: Vec<String>,
     preset: Option<StrataPreset>,
+    actions: Actions,
+    blocked: Signal<bool>,
 ) -> impl IntoView {
-    let lines = option_lines(&user, '\n');
+    let saved = option_lines(&user, '\n');
+    let text = RwSignal::new(saved.clone());
     let preset_note = preset.filter(applied).map(|p| {
         view! {
             <p class="muted small">
@@ -1096,19 +1134,66 @@ fn EngineOptions(
     });
     let started_line = (!started.is_empty())
         .then(|| format!("Strata starts with: {}", option_lines(&started, ' ')));
+    let field = format!("{id}-engine-options");
+    let rows = (user.iter().filter(|a| a.starts_with("--")).count() + 1).clamp(2, 12);
+    let confirm = expect_context::<Confirm>();
+    let save = move |_| {
+        let (id, options) = (id.clone(), text.get());
+        if !active {
+            actions.set_user_args(id, options);
+            return;
+        }
+        let question = Question {
+            title: format!("Save the engine options of {id}?"),
+            text: "Strata restarts with them once no request is running. Requests wait meanwhile. If it does not start, the old ones come back."
+                .into(),
+            confirm: "Save",
+            danger: false,
+        };
+        confirm.ask(question, move || {
+            actions.set_user_args(id.clone(), options.clone())
+        });
+    };
     view! {
         <div class="engine-options">
-            <p class="muted small">
-                {if lines.is_empty() {
-                    "Engine options (user_args): none set by hand"
-                } else {
-                    "Engine options (user_args):"
-                }}
-            </p>
-            {(!lines.is_empty()).then(|| view! { <pre class="lines">{lines}</pre> })}
+            <label for=field.clone() class="muted small">
+                "Engine options (user_args), one per line"
+            </label>
+            <textarea
+                id=field
+                class="code text"
+                rows=rows.to_string()
+                spellcheck="false"
+                placeholder="none set by hand, e.g. --threads 8"
+                prop:value=move || text.get()
+                on:input=move |ev| text.set(as_lines(event_target_value(&ev)))
+            >
+                {saved.clone()}
+            </textarea>
+            <div class="model-actions">
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || blocked.get() || text.with(|t| *t == saved)
+                    on:click=save
+                >
+                    "Save engine options"
+                </button>
+            </div>
             {started_line.map(|text| view! { <p class="muted small started-args">{text}</p> })}
             {preset_note}
         </div>
+    }
+}
+
+/// The field's text, a pasted JSON list of strings turned into lines.
+fn as_lines(text: String) -> String {
+    if !text.trim_start().starts_with('[') {
+        return text;
+    }
+    match serde_json::from_str::<Vec<String>>(&text) {
+        Ok(args) => option_lines(&args, '\n'),
+        Err(_) => text,
     }
 }
 
@@ -1133,7 +1218,7 @@ fn option_lines(args: &[String], between: char) -> String {
         }
         if arg.is_empty() || arg.contains(char::is_whitespace) || arg.contains('"') {
             out.push('"');
-            out.push_str(&arg.replace('"', "\\\""));
+            out.push_str(&arg.replace('\\', "\\\\").replace('"', "\\\""));
             out.push('"');
         } else {
             out.push_str(arg);
@@ -2507,6 +2592,18 @@ mod tests {
             "--threads 8\n--x \"a b\" \"\" \"say \\\"hi\\\"\"\n--no-mmap"
         );
         assert_eq!(option_lines(&[], '\n'), "");
+        let path: Vec<String> = ["--x", "C:\\My Models\\"].map(Into::into).into();
+        assert_eq!(option_lines(&path, '\n'), "--x \"C:\\\\My Models\\\\\"");
+    }
+
+    #[test]
+    fn a_pasted_json_list_becomes_lines() {
+        assert_eq!(
+            as_lines(r#" ["--threads", "8", "--x", "a b"]"#.into()),
+            "--threads 8\n--x \"a b\""
+        );
+        assert_eq!(as_lines("[\"--threads\", ".into()), "[\"--threads\", ");
+        assert_eq!(as_lines("--threads 8".into()), "--threads 8");
     }
 
     fn speed(label: &str, tok_s: f64) -> TuneSpeed {

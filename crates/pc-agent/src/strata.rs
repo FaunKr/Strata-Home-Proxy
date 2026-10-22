@@ -129,6 +129,10 @@ enum Plan {
         mode: TuneMode,
         usage: TuneUse,
     },
+    SetUserArgs {
+        id: String,
+        user_args: Vec<String>,
+    },
     /// Applies `preset`, a preset of model `id`, or undoes it.
     Preset {
         id: String,
@@ -146,6 +150,7 @@ impl Plan {
             | Self::Benchmark { id }
             | Self::SetSpeedProjection { id, .. }
             | Self::SetContext { id, .. }
+            | Self::SetUserArgs { id, .. }
             | Self::SwitchToTerminal { id }
             | Self::Tune { id, .. }
             | Self::Preset { id, .. } => Some(id.clone()),
@@ -305,6 +310,19 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             }
             let id = installed_model(&install, &model)?;
             Ok(Plan::SetContext { id, context })
+        }
+        StrataJobRequest::SetUserArgs { model, user_args } => {
+            let id = installed_model(&install, &model)?;
+            let current = install.read_model(&id);
+            if !current.keeps_user_args() {
+                return Err(Refusal::Conflict(format!(
+                    "The Strata of {id} keeps no engine options set by hand; update Strata"
+                )));
+            }
+            if let Some(why) = current.refused_user_args(&user_args) {
+                return Err(Refusal::BadRequest(why));
+            }
+            Ok(Plan::SetUserArgs { id, user_args })
         }
         StrataJobRequest::CompareModels => {
             strata_installed(&install)?;
@@ -478,6 +496,7 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::SetKey => set_key(job).await,
         Plan::SetSpeedProjection { id, on } => set_speed_projection(job, &id, on).await,
         Plan::SetContext { id, context } => set_context(job, &id, context).await,
+        Plan::SetUserArgs { id, user_args } => set_user_args(job, &id, user_args).await,
         Plan::CompareModels { ids, active } => compare_models(job, &ids, &active).await,
         Plan::SwitchToTerminal { id } => switch_to_terminal(job, &id).await,
         Plan::RemoveOldStrataFolder => remove_old_strata_folder(job).await,
@@ -1327,14 +1346,52 @@ async fn set_speed_projection(
 }
 
 /// Sets a model's context in its config, without setup; the settings setup
-/// derived from the old one stay. The active model restarts with it once
-/// Strata has no request at work; if it does not come up, its old config
-/// comes back and Strata starts with that.
+/// derived from the old one stay. The active model restarts with it as
+/// [`change_and_restart`] does.
 async fn set_context(job: &JobContext, id: &str, context: u32) -> Result<Option<String>, Step> {
+    let failed = format!(
+        "Strata did not start with {}K context; the old context applies again",
+        context / 1024
+    );
+    change_and_restart(job, id, "Restoring the old context", failed, move |model| {
+        model.set_context(context)
+    })
+    .await
+}
+
+/// Replaces a model's engine options set by hand. The active model restarts
+/// with them as [`change_and_restart`] does.
+async fn set_user_args(
+    job: &JobContext,
+    id: &str,
+    user_args: Vec<String>,
+) -> Result<Option<String>, Step> {
+    let failed = "Strata did not start with the new engine options; the old ones apply again";
+    change_and_restart(
+        job,
+        id,
+        "Restoring the old engine options",
+        failed.into(),
+        move |model| model.set_user_args(&user_args),
+    )
+    .await
+}
+
+/// Changes a model's engine args in its config. The active model restarts
+/// with them once Strata has no request at work; if it does not come up,
+/// its old args come back (step `restoring`), Strata starts with those and
+/// the job fails with `failed`.
+async fn change_and_restart(
+    job: &JobContext,
+    id: &str,
+    restoring: &'static str,
+    failed: String,
+    change: impl FnOnce(&mut Model) + Send + 'static,
+) -> Result<Option<String>, Step> {
     let agent = job.agent();
     job.step("Changing the configuration");
     let before = change_model(agent, id, move |model| {
-        model.set_context(context);
+        change(model);
         Ok(())
     })
     .await?;
@@ -1343,7 +1400,7 @@ async fn set_context(job: &JobContext, id: &str, context: u32) -> Result<Option<
     }
     let applied = agent
         .strata()
-        .restart_or_roll_back(job, "Restoring the old context", || async move {
+        .restart_or_roll_back(job, restoring, || async move {
             change_model(agent, id, move |model| {
                 model.restore_args(&before);
                 Ok(())
@@ -1354,10 +1411,7 @@ async fn set_context(job: &JobContext, id: &str, context: u32) -> Result<Option<
         .await?;
     match applied {
         Applied::Kept => Ok(None),
-        Applied::RolledBack => Err(Step::Failed(format!(
-            "Strata did not start with {}K context; the old context applies again",
-            context / 1024
-        ))),
+        Applied::RolledBack => Err(Step::Failed(failed)),
     }
 }
 
@@ -2062,6 +2116,7 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SetKey => "Set Strata key",
         StrataJobKind::SetSpeedProjection => "Switch speed projection",
         StrataJobKind::SetContext => "Change context",
+        StrataJobKind::SetUserArgs => "Save engine options",
         StrataJobKind::CompareModels => "Compare models",
         StrataJobKind::SwitchToTerminal => "Switch to the Strata Terminal",
         StrataJobKind::RemoveOldStrataFolder => "Remove the old Strata folder",

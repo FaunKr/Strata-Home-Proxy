@@ -22,6 +22,20 @@ async fn prompt(b: &mut Browser, model: &str) -> String {
 }
 
 #[tokio::test]
+async fn asks_for_engine_options_as_the_field_takes_them() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    for part in [
+        "the `user_args` one option per line (`--name value`)",
+        "paste them into the model's *Engine options* field in my web UI",
+    ] {
+        assert!(text.contains(part), "{part} missing:\n{text}");
+    }
+}
+
+#[tokio::test]
 async fn carries_the_model_and_the_task() {
     let s = setup(true, |_| {}).await;
     *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
@@ -33,7 +47,7 @@ async fn carries_the_model_and_the_task() {
         "RAM: 64.0 GB",
         "IQ3_XXS",
         "81.0 GB",
-        "ready-to-paste `user_args` list and `sampling` block",
+        "ready-to-paste `sampling` block",
         "most tokens per second",
         "one reason for each change",
     ] {

@@ -130,6 +130,11 @@ fn jobs() {
     let running: StrataJob = same("strata-job-running.json");
     assert_eq!(running.kind, StrataJobKind::AddModel);
     assert_eq!(running.eta_secs, Some(321));
+    assert!(running.speeds.is_empty());
+    // A running tune with its measurements so far.
+    let tune: StrataJob = same("strata-job-tune.json");
+    assert_eq!(tune.speeds.len(), 2);
+    assert_eq!(tune.speeds[0].label, "base");
 }
 
 #[test]

@@ -128,7 +128,10 @@ http.createServer((req, res) => {
     res.end();
   }
   else if (req.url.startsWith('/status')) {
-    json({ ...status, gaming_mode: pcState === 'gaming', strata_running: pcState === 'awake' || pcState === 'loading' });
+    // Only a tune is reported as running, so its card shows.
+    const tuning = strataJob?.kind === 'tune' && strataJob.state === 'running';
+    json({ ...status, gaming_mode: pcState === 'gaming', strata_running: pcState === 'awake' || pcState === 'loading',
+      ...(tuning ? { strata_job: true, strata_job_kind: 'tune' } : {}) });
   }
   else if (req.url.startsWith('/strata/key')) {
     json(sample('strata-key.json'));
@@ -172,6 +175,20 @@ http.createServer((req, res) => {
       res.statusCode = 202;
       json(job);
     });
+  }
+  // A running tune with its step log and its measurements so far, for 8 s.
+  else if (req.method === 'POST' && req.url === '/fake/tune') {
+    const job = { id: 1, kind: 'tune', model: 'IQ3_XXS', state: 'running', percent: 8, eta_secs: 6569,
+      step: 'Trying: Run the control thread on the last CPU core (round 1 of 3)',
+      lines: ['[0m] Measuring your current settings', '[5m] Trying: Keep more of the conversation in graphics memory (round 1 of 3)',
+        '[10m] Trying: Run the control thread on the last CPU core (round 1 of 3)'],
+      speeds: [{ label: 'base', tok_s: 171.4 }, { label: 'Keep more of the conversation in graphics memory', tok_s: 172.2 }],
+      error: null, started: Math.floor(Date.now() / 1000), ended: null };
+    strataJob = job;
+    setTimeout(() => {
+      if (strataJob === job) strataJob = { ...job, state: 'done', ended: Math.floor(Date.now() / 1000) };
+    }, 8000);
+    res.end();
   }
   else if (req.url === '/strata/job') json(strataJob);
   else if (req.url.startsWith('/metrics')) res.end(idleMetrics);

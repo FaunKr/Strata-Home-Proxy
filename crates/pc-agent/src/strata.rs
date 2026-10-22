@@ -888,23 +888,35 @@ async fn tune(
     agent.strata().wait_idle(job).await?;
     agent.strata().stop();
     job.step("Starting the tuner");
+    let started = Instant::now();
     let ran = {
-        let run = job.command_output(terminal.tune(&config, mode, usage, &status));
+        let run = job.command_answer(terminal.tune(&config, mode, usage, &status));
         tokio::pin!(run);
-        loop {
+        let mut last_step = None;
+        // Shows the status file; one log line per new step, with the time
+        // since the start.
+        let mut show = async || {
+            let Some(p) = tokio::fs::read_to_string(&status)
+                .await
+                .ok()
+                .and_then(|text| terminal::tune_progress(&text))
+            else {
+                return;
+            };
+            let line = (last_step.as_ref() != Some(&p.step))
+                .then(|| format!("[{}] {}", since_text(started.elapsed()), p.step));
+            job.tune_status(line, &p.step, p.percent, p.eta_secs, p.speeds);
+            last_step = Some(p.step);
+        };
+        let ran = loop {
             tokio::select! {
                 ran = &mut run => break ran,
-                () = tokio::time::sleep(TUNE_STATUS_EVERY) => {
-                    if let Some(p) = tokio::fs::read_to_string(&status)
-                        .await
-                        .ok()
-                        .and_then(|text| terminal::tune_progress(&text))
-                    {
-                        job.progress(&p.step, p.percent, p.eta_secs);
-                    }
-                }
+                () = tokio::time::sleep(TUNE_STATUS_EVERY) => show().await,
             }
-        }
+        };
+        // What the tuner wrote just before it ended.
+        show().await;
+        ran
     };
     let (ran, output) = ran;
     let read = terminal::tune_result(&output, mode, usage, unix_now());
@@ -970,6 +982,15 @@ async fn change_preset(
         agent.strata().restart_when_idle(job).await?;
     }
     Ok(None)
+}
+
+/// A tune's time so far for its log: `7m`, from an hour on `1h 05m`.
+fn since_text(elapsed: Duration) -> String {
+    let minutes = elapsed.as_secs() / 60;
+    match minutes {
+        0..60 => format!("{minutes}m"),
+        _ => format!("{}h {:02}m", minutes / 60, minutes % 60),
+    }
 }
 
 /// The tune's result in a sentence: tok/s before and after and the changed
@@ -2173,4 +2194,17 @@ fn git_commit(dir: &Path) -> Option<String> {
             .to_string(),
     };
     (full.len() >= 7).then(|| full[..7].to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tunes_time_reads_in_minutes_and_from_an_hour_on_with_hours() {
+        assert_eq!(since_text(Duration::from_secs(59)), "0m");
+        assert_eq!(since_text(Duration::from_secs(10 * 60 + 5)), "10m");
+        assert_eq!(since_text(Duration::from_secs(65 * 60)), "1h 05m");
+        assert_eq!(since_text(Duration::from_secs(2 * 3600)), "2h 00m");
+    }
 }

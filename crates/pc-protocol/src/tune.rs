@@ -1,4 +1,5 @@
-//! A model's latest run of Strata's auto-tuner, in `GET /strata`.
+//! A model's latest run of Strata's auto-tuner and its preset, in
+//! `GET /strata`.
 
 use serde::{Deserialize, Serialize};
 
@@ -37,4 +38,48 @@ pub struct StrataTune {
     pub preset: Option<String>,
     #[serde(default)]
     pub preset_name: Option<String>,
+}
+
+/// A model's presets, from `strata presets status` for its run config: they
+/// belong to the model file and its choices (context among them).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StrataPresets {
+    /// The active preset, else the newest; `None` when there is none.
+    #[serde(default)]
+    pub latest: Option<StrataPreset>,
+    /// The model's last tune saved a preset for other choices: nothing
+    /// is tuned for its context now.
+    #[serde(default)]
+    pub other_context: bool,
+}
+
+/// One of Strata's saved tunings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StrataPreset {
+    pub id: String,
+    pub name: String,
+    /// Strata starts the model with it.
+    pub active: bool,
+    /// For the active one: whether it still fits this PC, engine and model
+    /// file.
+    #[serde(default)]
+    pub state: Option<PresetState>,
+    /// Strata's plain words on what changed, e.g. "the graphics driver
+    /// changed".
+    #[serde(default)]
+    pub reasons: Vec<String>,
+    #[serde(default)]
+    pub gain_pct: Option<f64>,
+}
+
+/// Strata's `staleness` (`strata_control/presets.py`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresetState {
+    Fresh,
+    /// Still applied; a re-check is offered (new driver, engine update).
+    Soft,
+    /// Not applied (new graphics card, new model file); a new tune is
+    /// offered.
+    Hard,
 }

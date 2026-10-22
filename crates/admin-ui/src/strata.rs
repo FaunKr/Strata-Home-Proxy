@@ -10,11 +10,11 @@ use crate::{
     api::{
         CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
         CodeBenchTaskInfo, ForceRestartStrata, ForcedRestart, GenerateUpdateSummary,
-        GetOptimizationPrompt, PcView, SamplingField, SamplingSource, SamplingSupport,
+        GetOptimizationPrompt, PcView, PresetState, SamplingField, SamplingSource, SamplingSupport,
         StartCodeBench, StartCodeBenchAll, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob,
-        StrataJobKind, StrataJobState, StrataModel, StrataPage, StrataSampling, StrataSize,
-        StrataTune, StrataUpdate, TuneMode, TuneUse, UpdateSummary, error_text, get_code_bench,
-        get_strata,
+        StrataJobKind, StrataJobState, StrataModel, StrataPage, StrataPreset, StrataPresets,
+        StrataSampling, StrataSize, StrataTune, StrataUpdate, TuneMode, TuneUse, UpdateSummary,
+        error_text, get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
     copy::CopyText,
@@ -44,6 +44,7 @@ impl Actions {
             speed_projection: None,
             tune_mode: None,
             tune_use: None,
+            preset: None,
         });
     }
 
@@ -57,6 +58,7 @@ impl Actions {
             speed_projection: None,
             tune_mode: None,
             tune_use: None,
+            preset: None,
         });
     }
 
@@ -70,6 +72,7 @@ impl Actions {
             speed_projection: Some(on),
             tune_mode: None,
             tune_use: None,
+            preset: None,
         });
     }
 
@@ -83,6 +86,7 @@ impl Actions {
             speed_projection: None,
             tune_mode: None,
             tune_use: None,
+            preset: None,
         });
     }
 
@@ -96,6 +100,26 @@ impl Actions {
             speed_projection: None,
             tune_mode: Some(mode),
             tune_use: Some(usage),
+            preset: None,
+        });
+    }
+
+    /// Applies `preset` of `model`, or undoes it.
+    fn preset(&self, model: String, preset: String, undo: bool) {
+        self.start.dispatch(StartStrataJob {
+            kind: if undo {
+                StrataJobKind::UndoPreset
+            } else {
+                StrataJobKind::ApplyPreset
+            },
+            family: None,
+            size: None,
+            context: None,
+            model: Some(model),
+            speed_projection: None,
+            tune_mode: None,
+            tune_use: None,
+            preset: Some(preset),
         });
     }
 }
@@ -684,6 +708,7 @@ fn ModelChoice(
             speed_projection: Some(takes_projection.get() && speed_projection.get()),
             tune_mode: None,
             tune_use: None,
+            preset: None,
         });
     };
     let picker = format!("{kind:?}-size");
@@ -940,6 +965,13 @@ fn ModelRow(
         .last_tune
         .as_ref()
         .map(|tune| view! { <p class="muted small">{last_tune_text(tune)}</p> });
+    let presets = model.presets.as_ref();
+    let preset_line = presets
+        .and_then(preset_text)
+        .map(|text| view! { <p class="muted small preset-line">{text}</p> });
+    let preset_button = presets
+        .and_then(|p| p.latest.clone())
+        .map(|preset| view! { <PresetButton model=model.id.clone() preset actions blocked /> });
     // Only with word from the PC service: an older one does not say.
     let tune = match (model.tunable, model.tune_unavailable.clone()) {
         (Some(true), _) => {
@@ -984,9 +1016,11 @@ fn ModelRow(
             <p class="muted small">{meta}</p>
             {sampling}
             {last_tune}
+            {preset_line}
             {switch}
             <div class="model-actions">
-                {activate}{projection}<OptimizationPrompt model=model.id.clone() />{tune}{delete}
+                {activate}{projection}<OptimizationPrompt model=model.id.clone() />{preset_button}{tune}
+                {delete}
             </div>
         </li>
     }
@@ -1063,10 +1097,10 @@ fn last_tune_text(tune: &StrataTune) -> String {
     };
     let found = match (tune.code.as_str(), tune.base_tps, tune.tuned_tps) {
         ("faster", Some(base), Some(tuned)) if tune.changed.is_empty() => {
-            format!("{base:.1} → {tuned:.1} tok/s; not applied")
+            format!("{base:.1} → {tuned:.1} tok/s")
         }
         ("faster", Some(base), Some(tuned)) => format!(
-            "{base:.1} → {tuned:.1} tok/s with {}; not applied",
+            "{base:.1} → {tuned:.1} tok/s with {}",
             tune.changed.join(", ")
         ),
         ("already_fastest", ..) => "your current settings are already the fastest".into(),
@@ -1076,6 +1110,81 @@ fn last_tune_text(tune: &StrataTune) -> String {
             .unwrap_or_else(|| format!("no result ({})", tune.code)),
     };
     format!("Last tune ({mode}, {usage}): {found}")
+}
+
+/// The model's preset line: the preset Strata starts it with and Strata's
+/// verdict on it, one that waits for *Apply*, or none for its context.
+fn preset_text(presets: &StrataPresets) -> Option<String> {
+    let Some(preset) = &presets.latest else {
+        return presets
+            .other_context
+            .then(|| "No tuning for this context".into());
+    };
+    let name = match preset.gain_pct {
+        Some(gain) => format!("{} (+{gain:.0}%)", preset.name),
+        None => preset.name.clone(),
+    };
+    let reasons = preset.reasons.join(", ");
+    Some(match (preset.active, preset.state) {
+        (false, _) => format!("Preset {name}: not applied"),
+        (true, Some(PresetState::Hard)) => {
+            format!("Preset {name}: not applied, because {reasons}; tune again")
+        }
+        (true, Some(PresetState::Soft)) => {
+            format!("Preset {name}: active; re-check offered, because {reasons}")
+        }
+        (true, _) => format!("Preset {name}: active"),
+    })
+}
+
+/// *Apply* for a preset that is not active, *Undo* for the active one;
+/// either restarts Strata when the model is the one running.
+#[component]
+fn PresetButton(
+    model: String,
+    preset: StrataPreset,
+    actions: Actions,
+    blocked: Signal<bool>,
+) -> impl IntoView {
+    let undo = preset.active;
+    let question = if undo {
+        Question {
+            title: format!("Undo the preset for {model}?"),
+            text: format!(
+                "Strata goes back to the settings it ran {model} with before \"{}\". \
+                 If {model} is running, Strata restarts.",
+                preset.name
+            ),
+            confirm: "Undo",
+            danger: false,
+        }
+    } else {
+        Question {
+            title: format!("Apply the preset for {model}?"),
+            text: format!(
+                "Strata starts {model} with the tuned settings of \"{}\"; Undo brings the \
+                 old ones back. If {model} is running, Strata restarts.",
+                preset.name
+            ),
+            confirm: "Apply",
+            danger: false,
+        }
+    };
+    let confirm = expect_context::<Confirm>();
+    let id = preset.id;
+    view! {
+        <button
+            type="button"
+            class="secondary"
+            disabled=move || blocked.get()
+            on:click=move |_| {
+                let (model, id) = (model.clone(), id.clone());
+                confirm.ask(question.clone(), move || actions.preset(model.clone(), id.clone(), undo));
+            }
+        >
+            {if undo { "Undo preset" } else { "Apply preset" }}
+        </button>
+    }
 }
 
 /// *Tune* for one model: a dialog with how long and for what, then Strata's
@@ -2257,5 +2366,67 @@ fn StrataKey(unreported: bool) -> impl IntoView {
             </p>
             {unreported.then(|| view! { <p class="warning" role="status">{TOO_OLD_FOR_KEY}</p> })}
         </section>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn presets(active: bool, state: Option<PresetState>, reasons: &[&str]) -> StrataPresets {
+        StrataPresets {
+            latest: Some(StrataPreset {
+                id: "3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6".into(),
+                name: "IQ3_XXS 64K – Full speed".into(),
+                active,
+                state,
+                reasons: reasons.iter().map(|r| r.to_string()).collect(),
+                gain_pct: Some(12.4),
+            }),
+            other_context: false,
+        }
+    }
+
+    #[test]
+    fn the_preset_line_says_each_state() {
+        let line = |p: &StrataPresets| preset_text(p).unwrap();
+        assert_eq!(
+            line(&presets(true, Some(PresetState::Fresh), &[])),
+            "Preset IQ3_XXS 64K – Full speed (+12%): active"
+        );
+        assert_eq!(
+            line(&presets(
+                true,
+                Some(PresetState::Soft),
+                &["the graphics driver changed"]
+            )),
+            "Preset IQ3_XXS 64K – Full speed (+12%): active; re-check offered, because the graphics driver changed"
+        );
+        assert_eq!(
+            line(&presets(
+                true,
+                Some(PresetState::Hard),
+                &["the graphics card changed", "the model file changed"]
+            )),
+            "Preset IQ3_XXS 64K – Full speed (+12%): not applied, because the graphics card changed, the model file changed; tune again"
+        );
+        assert_eq!(
+            line(&presets(false, None, &[])),
+            "Preset IQ3_XXS 64K – Full speed (+12%): not applied"
+        );
+    }
+
+    #[test]
+    fn after_a_context_switch_nothing_is_tuned_for_it() {
+        let other = StrataPresets {
+            latest: None,
+            other_context: true,
+        };
+        assert_eq!(preset_text(&other).unwrap(), "No tuning for this context");
+        let never = StrataPresets {
+            latest: None,
+            other_context: false,
+        };
+        assert_eq!(preset_text(&never), None);
     }
 }

@@ -5,9 +5,10 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 // What the PC service reports, shown as it comes (docs/adr/0002).
 pub use strata_pc_protocol::{
-    Cpu, ForcedRestart, Gpu, Hardware, SamplingField, SamplingSource, SamplingSupport,
+    Cpu, ForcedRestart, Gpu, Hardware, PresetState, SamplingField, SamplingSource, SamplingSupport,
     StrataBenchmark, StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
-    StrataModel, StrataSampling, StrataSize, StrataTune, TuneMode, TuneUse,
+    StrataModel, StrataPreset, StrataPresets, StrataSampling, StrataSize, StrataTune, TuneMode,
+    TuneUse,
 };
 
 #[cfg(feature = "ssr")]
@@ -425,6 +426,9 @@ pub enum EventKind {
     StrataJobDone,
     StrataJobFailed,
     StrataJobCancelled,
+    /// A preset applied or undone by its job; detail: the model.
+    PresetApplied,
+    PresetUndone,
     /// The PC service started Strata with a new key and the proxy took it
     /// over.
     StrataKeyChanged,
@@ -685,6 +689,7 @@ mod strata_job {
         speed_projection: Option<bool>,
         tune_mode: Option<TuneMode>,
         tune_use: Option<TuneUse>,
+        preset: Option<String>,
     ) -> Result<(), ServerFnError> {
         require_login(false).await?;
         let form = StrataJobForm {
@@ -696,6 +701,7 @@ mod strata_job {
             speed_projection: speed_projection.unwrap_or(false),
             tune_mode: tune_mode.unwrap_or_default(),
             tune_use: tune_use.unwrap_or_default(),
+            preset,
         };
         backend()?.start_strata_job(form).await.map_err(bad_request)
     }
@@ -911,6 +917,8 @@ pub struct StrataJobForm {
     /// How a tune looks and what it judges speed by.
     pub tune_mode: TuneMode,
     pub tune_use: TuneUse,
+    /// The preset to apply or undo, by its id.
+    pub preset: Option<String>,
 }
 
 // --- History: the PC's states over a range of days ---

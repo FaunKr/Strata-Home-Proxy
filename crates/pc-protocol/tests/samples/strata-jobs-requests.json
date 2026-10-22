@@ -69,5 +69,15 @@
     "model": "IQ3_XXS",
     "mode": "quick",
     "use": "coding"
+  },
+  {
+    "kind": "apply_preset",
+    "model": "IQ3_XXS",
+    "preset": "3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6"
+  },
+  {
+    "kind": "undo_preset",
+    "model": "IQ3_XXS",
+    "preset": "3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6"
   }
 ]

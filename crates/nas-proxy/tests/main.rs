@@ -18,6 +18,7 @@ mod pc_service_update;
 mod pc_setup;
 mod power;
 mod power_samples;
+mod presets;
 mod proxy;
 mod reported_mac;
 mod settings;

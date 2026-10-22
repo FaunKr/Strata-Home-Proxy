@@ -100,6 +100,14 @@ fn strata_report_splits_into_the_page_and_the_incoming_commits() {
     let tune = info.models[0].last_tune.as_ref().unwrap();
     assert_eq!(tune.mode, TuneMode::Quick);
     assert_eq!(info.models[1].tunable, Some(false));
+    let latest = info.models[0]
+        .presets
+        .as_ref()
+        .unwrap()
+        .latest
+        .as_ref()
+        .unwrap();
+    assert_eq!(latest.state, Some(PresetState::Soft));
     let sampling = info.models[0].sampling.as_ref().unwrap();
     assert_eq!(sampling.support, SamplingSupport::ModelCard);
     assert_eq!(sampling.thinking[2].source, SamplingSource::ChatSettings);

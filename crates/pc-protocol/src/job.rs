@@ -23,10 +23,14 @@ pub enum StrataJobKind {
     RemoveOldStrataFolder,
     /// Strata's auto-tuner for one model.
     Tune,
+    /// Makes a preset the one Strata starts the model with.
+    ApplyPreset,
+    /// Back to the preset that was active before (or the standard settings).
+    UndoPreset,
 }
 
 impl StrataJobKind {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 15] = [
         Self::Install,
         Self::AddModel,
         Self::Activate,
@@ -40,6 +44,8 @@ impl StrataJobKind {
         Self::SwitchToTerminal,
         Self::RemoveOldStrataFolder,
         Self::Tune,
+        Self::ApplyPreset,
+        Self::UndoPreset,
     ];
 }
 
@@ -167,6 +173,16 @@ pub enum StrataJobRequest {
         #[serde(rename = "use")]
         usage: TuneUse,
     },
+    /// `preset`: a preset of `model`, by its id.
+    ApplyPreset {
+        model: String,
+        preset: String,
+    },
+    /// Undoes `preset`, the model's active preset.
+    UndoPreset {
+        model: String,
+        preset: String,
+    },
 }
 
 impl StrataJobRequest {
@@ -185,6 +201,8 @@ impl StrataJobRequest {
             Self::SwitchToTerminal => StrataJobKind::SwitchToTerminal,
             Self::RemoveOldStrataFolder => StrataJobKind::RemoveOldStrataFolder,
             Self::Tune { .. } => StrataJobKind::Tune,
+            Self::ApplyPreset { .. } => StrataJobKind::ApplyPreset,
+            Self::UndoPreset { .. } => StrataJobKind::UndoPreset,
         }
     }
 }

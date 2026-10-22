@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use strata_pc_protocol::{
-    NeverRule, StrataOptions, StrataTune, TuneMode, TuneUse, TunerOption, TunerTry,
+    NeverRule, PresetState, StrataOptions, StrataPreset, StrataPresets, StrataTune, TuneMode,
+    TuneUse, TunerOption, TunerTry,
 };
 
 use crate::command::CommandSpec;
@@ -230,6 +231,19 @@ impl Terminal {
     /// [`preset_answer`].
     pub fn undo_preset(&self, preset: &str) -> CommandSpec {
         self.command(&["presets", "undo", preset, "--output", "json"])
+    }
+
+    /// Makes `preset` the active one for its model and choices, keeping the
+    /// one before for undo; read the output with [`preset_answer`].
+    pub fn apply_preset(&self, preset: &str) -> CommandSpec {
+        self.command(&["presets", "apply", preset, "--output", "json"])
+    }
+
+    /// The presets of the model and choices of run config `config`; read
+    /// the output with [`read_presets`].
+    pub fn presets_status(&self, config: &Path) -> CommandSpec {
+        let config = config.display().to_string();
+        self.command(&["presets", "status", &config, "--output", "json"])
     }
 
     /// What makes up a running Strata: every program from the Terminal's
@@ -579,6 +593,51 @@ pub fn preset_answer(output: &[String]) -> Result<(), String> {
     refused(&answer, "Strata refused the preset change")
 }
 
+/// Reads what `strata presets status --output json` printed (`_status`
+/// in `strata_cli/tune_commands.py`): the active preset with Strata's
+/// verdict on it, else the newest one (Strata lists them newest first).
+/// `last_tuned` is the preset the model's last tune saved: missing here, it
+/// belongs to other choices. `None` without an answer or when Strata
+/// refused.
+pub fn read_presets(output: &[String], last_tuned: Option<&str>) -> Option<StrataPresets> {
+    let answer = json_answer(output)?;
+    refused(&answer, "").ok()?;
+    let listed = list(&answer["presets"]);
+    let active = &answer["active"];
+    let latest = if active.is_object() {
+        preset(active).map(|mut p| {
+            p.state = match answer["state"].as_str() {
+                Some("fresh") => Some(PresetState::Fresh),
+                Some("soft") => Some(PresetState::Soft),
+                Some("hard") => Some(PresetState::Hard),
+                _ => None,
+            };
+            p.reasons = values(&answer["reasons"]);
+            p
+        })
+    } else {
+        listed.first().and_then(preset)
+    };
+    let other_context =
+        last_tuned.is_some_and(|id| !listed.iter().any(|p| text(&p["id"]) == Some(id)));
+    Some(StrataPresets {
+        latest,
+        other_context,
+    })
+}
+
+/// A preset as `_summary` in `strata_cli/tune_commands.py` writes it.
+fn preset(summary: &Value) -> Option<StrataPreset> {
+    Some(StrataPreset {
+        id: text(&summary["id"])?.to_string(),
+        name: text(&summary["name"])?.to_string(),
+        active: summary["active"].as_bool().unwrap_or(false),
+        state: None,
+        reasons: Vec::new(),
+        gain_pct: summary["gain_pct"].as_f64(),
+    })
+}
+
 /// Reads what [`Terminal::options`] printed for Terminal build `version`: `None`
 /// without its answer. The engine's help counts only with a flag in it,
 /// as in Strata's own read (`strata_cli/launch/params.py`).
@@ -926,6 +985,64 @@ mod tests {
     /// with `TuneResult.to_dict()` from strata_control/autotune.py, the saved
     /// preset and `finalize`'s `code` and `values`.
     const TUNED: &str = include_str!("../fixtures/strata-tune.json");
+    /// `strata presets status --output json` with an active preset Strata
+    /// offers to re-check, in the shape of `_status` and `_summary` in
+    /// `strata_cli/tune_commands.py`; the reason is one of `staleness` in
+    /// `strata_control/presets.py`.
+    const PRESETS: &str = include_str!("../fixtures/strata-presets-status.json");
+    const ACTIVE: &str = "3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6";
+
+    #[test]
+    fn the_active_preset_comes_with_strata_s_verdict() {
+        let read = read_presets(&lines(&[PRESETS.trim_end()]), Some(ACTIVE)).unwrap();
+        let latest = read.latest.unwrap();
+        assert_eq!(latest.id, ACTIVE);
+        assert_eq!(latest.name, "IQ3_XXS 64K – Full speed");
+        assert!(latest.active);
+        assert_eq!(latest.state, Some(PresetState::Soft));
+        assert_eq!(latest.reasons, ["the graphics driver changed"]);
+        assert_eq!(latest.gain_pct, Some(12.4));
+        assert!(!read.other_context);
+    }
+
+    #[test]
+    fn without_an_active_preset_the_newest_is_the_latest() {
+        let mut answer: Value = serde_json::from_str(PRESETS).unwrap();
+        answer["active"] = Value::Null;
+        answer["state"] = Value::Null;
+        answer["reasons"] = serde_json::json!([]);
+        for p in answer["presets"].as_array_mut().unwrap() {
+            p["active"] = false.into();
+        }
+        let read = read_presets(&[answer.to_string()], Some(ACTIVE)).unwrap();
+        let latest = read.latest.unwrap();
+        assert_eq!((latest.id.as_str(), latest.active), (ACTIVE, false));
+        assert_eq!((latest.state, latest.reasons.len()), (None, 0));
+    }
+
+    #[test]
+    fn a_tune_for_other_choices_means_none_for_this_context() {
+        let mut answer: Value = serde_json::from_str(PRESETS).unwrap();
+        answer["active"] = Value::Null;
+        answer["presets"] = serde_json::json!([]);
+        let read = read_presets(&[answer.to_string()], Some(ACTIVE)).unwrap();
+        assert_eq!(read.latest, None);
+        assert!(read.other_context);
+        assert!(
+            !read_presets(&[answer.to_string()], None)
+                .unwrap()
+                .other_context
+        );
+    }
+
+    #[test]
+    fn a_refused_status_reads_as_none() {
+        let out = lines(&[
+            r#"{"schema_version": 1, "ok": false, "error": {"code": 2, "message": "no such profile"}}"#,
+        ]);
+        assert_eq!(read_presets(&out, None), None);
+        assert_eq!(read_presets(&lines(&["Traceback"]), None), None);
+    }
 
     #[test]
     fn a_faster_tune_gives_its_speeds_changes_and_preset() {

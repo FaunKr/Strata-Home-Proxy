@@ -284,6 +284,7 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
     let need = |what: &str| format!("The job needs a {what}.");
     let model = || form.model.clone().ok_or_else(|| need("model"));
     let context = || form.context.ok_or_else(|| need("context"));
+    let preset = || form.preset.clone().ok_or_else(|| need("preset"));
     Ok(match form.kind {
         StrataJobKind::Install | StrataJobKind::AddModel => {
             let family = form.family.clone().ok_or_else(|| need("family"))?;
@@ -332,6 +333,14 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
             mode: form.tune_mode,
             usage: form.tune_use,
         },
+        StrataJobKind::ApplyPreset => StrataJobRequest::ApplyPreset {
+            model: model()?,
+            preset: preset()?,
+        },
+        StrataJobKind::UndoPreset => StrataJobRequest::UndoPreset {
+            model: model()?,
+            preset: preset()?,
+        },
     })
 }
 
@@ -362,6 +371,15 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
         return;
     }
     let (kind, detail) = match job.state {
+        // What a preset job did is its own event.
+        StrataJobState::Done if job.kind == StrataJobKind::ApplyPreset => (
+            EventKind::PresetApplied,
+            job.model.clone().unwrap_or_default(),
+        ),
+        StrataJobState::Done if job.kind == StrataJobKind::UndoPreset => (
+            EventKind::PresetUndone,
+            job.model.clone().unwrap_or_default(),
+        ),
         StrataJobState::Done => (EventKind::StrataJobDone, detail(&job)),
         StrataJobState::Cancelled => (EventKind::StrataJobCancelled, detail(&job)),
         StrataJobState::Failed => (

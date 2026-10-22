@@ -12,7 +12,9 @@
 //! switch to the Terminal, which may then delete the old folder.
 
 use std::{
+    collections::HashMap,
     future::Future,
+    hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -32,7 +34,8 @@ use crate::{
 pub use strata_pc_protocol::{
     BenchTool, ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, StrataBenchmark,
     StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState,
-    StrataModel, StrataOptions, StrataReport, StrataSize, StrataTune, TuneMode, TuneUse,
+    StrataModel, StrataOptions, StrataPresets, StrataReport, StrataSize, StrataTune, TuneMode,
+    TuneUse,
 };
 
 /// The last benchmark run, as older services kept it alone.
@@ -57,6 +60,11 @@ const OPTIONS_RETRY: Duration = Duration::from_secs(600);
 /// How long reading Strata's options may take; the engine's `--help` alone
 /// may take 20 s in Strata's own read.
 const OPTIONS_TIMEOUT: Duration = Duration::from_secs(60);
+/// How often a model's presets are read again: Strata's verdict follows
+/// driver and engine changes.
+const PRESETS_EVERY: Duration = Duration::from_secs(1800);
+/// How long `strata presets status` may take.
+const PRESETS_TIMEOUT: Duration = Duration::from_secs(60);
 /// How often the page's visits ask the Strata Terminal for an update.
 const TERMINAL_CHECK_EVERY: Duration = Duration::from_secs(24 * 3600);
 /// How long a benchmark waits for Strata to load its model.
@@ -121,6 +129,12 @@ enum Plan {
         mode: TuneMode,
         usage: TuneUse,
     },
+    /// Applies `preset`, a preset of model `id`, or undoes it.
+    Preset {
+        id: String,
+        preset: String,
+        undo: bool,
+    },
 }
 
 impl Plan {
@@ -133,7 +147,8 @@ impl Plan {
             | Self::SetSpeedProjection { id, .. }
             | Self::SetContext { id, .. }
             | Self::SwitchToTerminal { id }
-            | Self::Tune { id, .. } => Some(id.clone()),
+            | Self::Tune { id, .. }
+            | Self::Preset { id, .. } => Some(id.clone()),
             Self::Update
             | Self::SetKey
             | Self::CompareModels { .. }
@@ -346,7 +361,34 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             }
             Ok(Plan::Tune { id, mode, usage })
         }
+        StrataJobRequest::ApplyPreset { model, preset } => {
+            preset_plan(&install, &model, preset, false)
+        }
+        StrataJobRequest::UndoPreset { model, preset } => {
+            preset_plan(&install, &model, preset, true)
+        }
     }
+}
+
+/// Applying or undoing a preset of `model`: only on the Strata Terminal,
+/// which keeps them, and only for a preset id as Strata makes them.
+fn preset_plan(
+    install: &Installation,
+    model: &str,
+    preset: String,
+    undo: bool,
+) -> Result<Plan, Refusal> {
+    let id = installed_model(install, model)?;
+    if install.kind() != Kind::Terminal {
+        return Err(Refusal::Conflict(
+            "Presets need the Strata Terminal; this Strata is a folder from source".into(),
+        ));
+    }
+    let hex = preset.len() == 32 && preset.bytes().all(|b| b.is_ascii_hexdigit());
+    if !hex {
+        return Err(Refusal::BadRequest(format!("{preset} is not a preset")));
+    }
+    Ok(Plan::Preset { id, preset, undo })
 }
 
 /// Why Strata's tuner cannot tune model `id`, if it cannot: it runs only
@@ -440,6 +482,7 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::SwitchToTerminal { id } => switch_to_terminal(job, &id).await,
         Plan::RemoveOldStrataFolder => remove_old_strata_folder(job).await,
         Plan::Tune { id, mode, usage } => tune(job, &id, mode, usage).await,
+        Plan::Preset { id, preset, undo } => change_preset(job, &id, &preset, undo).await,
     }
 }
 
@@ -583,6 +626,7 @@ async fn delete(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
     let id = catalog::by_id(&id).map_or(id, Size::id);
     job.agent().output.forget_load(&id);
     keep_tune(job.agent(), &id, None);
+    job.agent().presets.forget(&id);
     Ok(None)
 }
 
@@ -892,6 +936,7 @@ async fn tune(
     };
     let text = tune_text(&found);
     keep_tune(agent, id, found);
+    agent.presets.forget(id);
     restored.map_err(|e| match e {
         Step::Failed(why) => {
             Step::Failed(format!("{text}, but the tuned settings stay active: {why}"))
@@ -899,6 +944,33 @@ async fn tune(
         other => other,
     })?;
     Ok(Some(text))
+}
+
+/// Applies or undoes a preset with Strata's `strata presets`. Strata puts
+/// the active preset over the run config when the model starts, so the
+/// active model starts again.
+async fn change_preset(
+    job: &JobContext,
+    id: &str,
+    preset: &str,
+    undo: bool,
+) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    let terminal = Terminal::of(&agent.cfg);
+    let spec = if undo {
+        job.step("Undoing the preset");
+        terminal.undo_preset(preset)
+    } else {
+        job.step("Applying the preset");
+        terminal.apply_preset(preset)
+    };
+    let changed = ask_terminal(job, spec, terminal::preset_answer).await;
+    agent.presets.forget(id);
+    changed?;
+    if active_model(agent).as_deref() == Some(id) {
+        agent.strata().restart_when_idle(job).await?;
+    }
+    Ok(None)
 }
 
 /// The tune's result in a sentence: tok/s before and after and the changed
@@ -1507,6 +1579,139 @@ pub fn check_options(agent: &Arc<Agent>) {
     });
 }
 
+/// Each model's presets (`StrataModel.presets`), read in the background
+/// when the page is looked at: again when the model's run config, its last
+/// tune or the Terminal's build changed, after a job changed them, and every
+/// [`PRESETS_EVERY`].
+#[derive(Default)]
+pub struct PresetsCheck {
+    inner: Mutex<PresetsState>,
+}
+
+#[derive(Default)]
+struct PresetsState {
+    asking: bool,
+    read: HashMap<String, PresetsRead>,
+}
+
+struct PresetsRead {
+    key: u64,
+    presets: Option<StrataPresets>,
+    at: Instant,
+}
+
+impl PresetsCheck {
+    /// What was read for model `id` with `key`, if it was.
+    fn current(&self, id: &str, key: u64) -> Option<StrataPresets> {
+        let state = self.inner.lock().unwrap();
+        let read = state.read.get(id).filter(|read| read.key == key)?;
+        read.presets.clone()
+    }
+
+    /// Model `id`'s presets changed: read them at the next visit.
+    pub fn forget(&self, id: &str) {
+        self.inner.lock().unwrap().read.remove(id);
+    }
+
+    fn claim(&self) -> bool {
+        let mut state = self.inner.lock().unwrap();
+        !std::mem::replace(&mut state.asking, true)
+    }
+
+    fn due(&self, id: &str, key: u64) -> bool {
+        let state = self.inner.lock().unwrap();
+        state.read.get(id).is_none_or(|read| {
+            let every = if read.presets.is_some() {
+                PRESETS_EVERY
+            } else {
+                OPTIONS_RETRY
+            };
+            read.key != key || read.at.elapsed() >= every
+        })
+    }
+
+    fn keep(&self, id: String, key: u64, presets: Option<StrataPresets>) {
+        let read = PresetsRead {
+            key,
+            presets,
+            at: Instant::now(),
+        };
+        self.inner.lock().unwrap().read.insert(id, read);
+    }
+
+    fn done(&self) {
+        self.inner.lock().unwrap().asking = false;
+    }
+}
+
+/// What a model's presets are read for: the Terminal's build, the run
+/// config as it is, and the preset of the model's last tune.
+fn presets_key(install: &Installation, id: &str, build: &str, tune: Option<&StrataTune>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    build.hash(&mut hasher);
+    std::fs::read(install.config_path(id))
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    tune.and_then(|t| t.preset.as_deref()).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Reads the presets of each model whose read is due, one after the
+/// other, from the Strata Terminal; the page shows them at its next visit.
+pub fn check_presets(agent: &Arc<Agent>) {
+    if agent.gaming() || agent.jobs.running() || !agent.presets.claim() {
+        return;
+    }
+    let agent = Arc::clone(agent);
+    tokio::spawn(async move {
+        let wanted = {
+            let agent = Arc::clone(&agent);
+            tokio::task::spawn_blocking(move || presets_wanted(&agent))
+                .await
+                .unwrap_or_default()
+        };
+        for (id, key, spec, last_tuned) in wanted {
+            if !agent.presets.due(&id, key) {
+                continue;
+            }
+            let presets = output_within(&agent, &spec, PRESETS_TIMEOUT)
+                .await
+                .and_then(|lines| terminal::read_presets(&lines, last_tuned.as_deref()));
+            agent.presets.keep(id, key, presets);
+        }
+        agent.presets.done();
+    });
+}
+
+/// Each model with what its presets are read for and how; only from a
+/// Terminal.
+fn presets_wanted(agent: &Agent) -> Vec<(String, u64, CommandSpec, Option<String>)> {
+    let install = Installation::of(&agent.cfg);
+    if install.kind() != Kind::Terminal {
+        return Vec::new();
+    }
+    let terminal = Terminal::of(&agent.cfg);
+    let Some(build) = terminal.build() else {
+        return Vec::new();
+    };
+    let tunes = load_tunes(agent);
+    install
+        .models()
+        .into_iter()
+        .map(|id| {
+            let id = catalog::by_id(&id).map_or(id, Size::id);
+            let tune = tunes
+                .iter()
+                .find(|(model, _)| model.eq_ignore_ascii_case(&id))
+                .map(|(_, tune)| tune);
+            let key = presets_key(&install, &id, &build, tune);
+            let spec = terminal.presets_status(&install.config_path(&id));
+            let last_tuned = tune.and_then(|t| t.preset.clone());
+            (id, key, spec, last_tuned)
+        })
+        .collect()
+}
+
 /// What to read the options for and how, with the engine of the active
 /// model's run config or else the first model's; only from a Terminal.
 fn options_wanted(agent: &Agent) -> Option<(OptionsKey, CommandSpec)> {
@@ -1821,6 +2026,8 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SwitchToTerminal => "Switch to the Strata Terminal",
         StrataJobKind::RemoveOldStrataFolder => "Remove the old Strata folder",
         StrataJobKind::Tune => "Tune",
+        StrataJobKind::ApplyPreset => "Apply preset",
+        StrataJobKind::UndoPreset => "Undo preset",
     }
 }
 
@@ -1833,6 +2040,9 @@ pub fn view(agent: &Agent) -> StrataReport {
     let install = Installation::of(cfg);
     let support = install.support();
     let tunes = load_tunes(agent);
+    let build = (install.kind() == Kind::Terminal)
+        .then(|| Terminal::of(cfg).build())
+        .flatten();
     let mut models: Vec<StrataModel> = install
         .models()
         .into_iter()
@@ -1841,6 +2051,10 @@ pub fn view(agent: &Agent) -> StrataReport {
             let id = size.map_or(id, |s| s.id());
             let model = install.read_model(&id);
             let no_tune = tune_unavailable(&install, &id);
+            let last_tune = tunes
+                .iter()
+                .find(|(model, _)| model.eq_ignore_ascii_case(&id))
+                .map(|(_, tune)| tune.clone());
             StrataModel {
                 disk_bytes: install.disk_bytes(&id),
                 active: active.as_deref() == Some(id.as_str()),
@@ -1853,10 +2067,11 @@ pub fn view(agent: &Agent) -> StrataReport {
                 load_lines: agent.output.load_lines(&id),
                 tunable: Some(no_tune.is_none()),
                 tune_unavailable: no_tune,
-                last_tune: tunes
-                    .iter()
-                    .find(|(model, _)| model.eq_ignore_ascii_case(&id))
-                    .map(|(_, tune)| tune.clone()),
+                presets: build.as_deref().and_then(|build| {
+                    let key = presets_key(&install, &id, build, last_tune.as_ref());
+                    agent.presets.current(&id, key)
+                }),
+                last_tune,
                 family: size.map(|s| s.family.to_string()),
                 size: size.map(|s| s.size.to_string()),
                 id,

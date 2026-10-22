@@ -141,6 +141,10 @@ pub struct StrataModel {
     /// Its latest tune; `None` before one, or from older services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_tune: Option<crate::StrataTune>,
+    /// Its presets for its current choices; `None` before Strata was asked,
+    /// without the Strata Terminal, or from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presets: Option<crate::StrataPresets>,
 }
 
 /// Which defaults the PC's Strata applies to a request without sampling

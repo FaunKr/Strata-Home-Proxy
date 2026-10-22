@@ -1029,7 +1029,7 @@ async fn other_keys_wait_for_a_run_over_all_models_and_its_own_key_passes() {
     // Still held while the active model is brought back.
     wait_for_activate(&s, ids[1]).await;
     assert!(!waiting.is_finished(), "released before the run ended");
-    end_activate(&s, ids[1]).await;
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
     let status = tokio::time::timeout(Duration::from_secs(10), waiting)
         .await
         .expect("still held after the run ended")

@@ -207,7 +207,10 @@ async fn without_a_page_nobody_asks_for_progress() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     // At most one look at the job: a status asked for just before the job
     // started says "no job", and the job itself tells whether it ended.
-    assert!(s.pc.job_polls.load(Ordering::SeqCst) <= 1);
+    let polls = s.pc.job_polls.load(Ordering::SeqCst);
+    assert!(polls <= 1, "{polls}");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(s.pc.job_polls.load(Ordering::SeqCst), polls);
 }
 
 #[tokio::test]

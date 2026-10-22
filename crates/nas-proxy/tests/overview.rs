@@ -308,6 +308,7 @@ async fn shows_why_the_pc_refused_to_sleep() {
     // The next attempt waits the retry time from the refusal, which may lie
     // seconds back under load.
     assert!(retry >= started + 60, "{v}");
+    assert!(retry > v["now"].as_u64().unwrap(), "{v}");
 }
 
 // --- Events (#18) ---

@@ -410,18 +410,21 @@ pub async fn metrics(
     if !pc.strata_up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    if !query.unwrap_or_default().contains("format=prometheus") {
-        return Json(json!({})).into_response();
+    let prometheus = query.unwrap_or_default().contains("format=prometheus");
+    if prometheus {
+        pc.metrics_requests.fetch_add(1, Ordering::SeqCst);
+        *pc.metrics_auth.lock().unwrap() = headers
+            .get("authorization")
+            .map(|v| v.to_str().unwrap().to_string());
     }
-    pc.metrics_requests.fetch_add(1, Ordering::SeqCst);
-    *pc.metrics_auth.lock().unwrap() = headers
-        .get("authorization")
-        .map(|v| v.to_str().unwrap().to_string());
     // Like Strata, the metrics need the key (docs/strata-api.md).
     if let Some(key) = pc.strata_key.lock().unwrap().clone()
         && SeenCredentials::of(&headers).authorization != Some(format!("Bearer {key}"))
     {
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !prometheus {
+        return Json(json!({})).into_response();
     }
     match pc.metrics.lock().unwrap().clone() {
         Some(body) => body.into_response(),

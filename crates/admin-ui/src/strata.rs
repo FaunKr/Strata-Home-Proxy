@@ -4,7 +4,7 @@
 
 use leptos::{html::Dialog, prelude::*};
 use leptos_router::components::{A, Outlet};
-use strata_pc_protocol::MAX_SWITCHED_CONTEXT;
+use strata_pc_protocol::{BenchTool, MAX_SWITCHED_CONTEXT, StrataInstall};
 
 use crate::{
     api::{
@@ -1713,8 +1713,17 @@ fn Benchmarks(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl
     });
     let active = info.models.iter().find(|m| m.active).map(|m| m.id.clone());
     let installed: Vec<String> = info.models.iter().map(|m| m.id.clone()).collect();
+    // On the Strata Terminal, results from the old folder's BENCH.bat
+    // measured differently: they are marked and never the fastest.
+    let terminal = info.install == Some(StrataInstall::Terminal);
+    let comparable =
+        move |row: &StrataBenchmark| !terminal || row.tool == Some(BenchTool::StrataBench);
+    let older = rows
+        .iter()
+        .any(|r| r.decode_tps.is_some() && !comparable(r));
     let fastest = rows
-        .first()
+        .iter()
+        .find(|r| comparable(r))
         .filter(|r| r.decode_tps.is_some())
         .map(|r| r.model.clone());
     let list = if rows.is_empty() {
@@ -1727,7 +1736,8 @@ fn Benchmarks(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl
                 let is_fastest = fastest.as_deref() == Some(row.model.as_str());
                 let can_activate =
                     !is_active && row.decode_tps.is_some() && installed.contains(&row.model);
-                view! { <BenchRow row is_active is_fastest can_activate actions blocked /> }
+                let older = row.decode_tps.is_some() && !comparable(&row);
+                view! { <BenchRow row is_active is_fastest can_activate older actions blocked /> }
             })
             .collect_view();
         view! { <ul class="list">{items}</ul> }.into_any()
@@ -1749,6 +1759,14 @@ fn Benchmarks(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl
         <section class="card">
             <h2>"Benchmark"</h2>
             {list}
+            {older
+                .then(|| {
+                    view! {
+                        <p class="muted small">
+                            "Results marked BENCH.bat came from the old Strata folder. Strata's standard benchmark measures differently, so they are not comparable; run the benchmark again."
+                        </p>
+                    }
+                })}
             <p class="muted small">
                 "Run benchmark measures the active model. Requests wait while it runs."
             </p>
@@ -1905,6 +1923,8 @@ fn BenchRow(
     is_active: bool,
     is_fastest: bool,
     can_activate: bool,
+    /// Measured with the old folder's BENCH.bat, not comparable.
+    older: bool,
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
@@ -1941,6 +1961,9 @@ fn BenchRow(
     }
     if let Some(version) = &row.version {
         with.push(format!("Strata {version}"));
+    }
+    if older {
+        with.push("BENCH.bat, not comparable".into());
     }
     with.push(row.at_text.clone());
     let id = row.model.clone();

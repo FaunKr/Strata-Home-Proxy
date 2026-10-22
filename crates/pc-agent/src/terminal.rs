@@ -21,6 +21,9 @@ const CURRENT: [&str; 2] = ["terminal", "current"];
 const INSTALL: &str = "install";
 /// The `strata` command in the Terminal's own files.
 const PROGRAM: [&str; 2] = ["bin", "strata.cmd"];
+/// Where `strata update` keeps the engines and newer Terminal files
+/// ("Control"); Strata's own default beside `install`.
+const COMPONENTS: &str = "components";
 
 /// The Strata Terminal in its folder (`strata_home`).
 #[derive(Clone, Debug)]
@@ -37,16 +40,47 @@ impl Terminal {
         Self::new(&cfg.strata_home)
     }
 
-    /// The Terminal's own files: `strata.py`, `setup.py`, `serve`, `data`.
-    pub fn root(&self) -> PathBuf {
+    /// The Terminal as the install script left it.
+    fn current(&self) -> PathBuf {
         CURRENT
             .iter()
             .fold(self.home.clone(), |p, part| p.join(part))
     }
 
-    /// The `strata` command.
+    /// The Terminal's own files that run: `strata.py`, `setup.py`, `serve`,
+    /// `data`. After `strata update` installed newer ones ("Control" in
+    /// `components\control`), those, as the `strata` command hands over to
+    /// them (`strata_cli/handover.py`, `find_target`).
+    pub fn root(&self) -> PathBuf {
+        let current = self.current();
+        self.updated_root(&current).unwrap_or(current)
+    }
+
+    /// The newer Terminal files `components\control\active.json` names,
+    /// if they are whole.
+    fn updated_root(&self, current: &Path) -> Option<PathBuf> {
+        let base = self.home.join(COMPONENTS).join("control");
+        let pointer: Value =
+            serde_json::from_str(&std::fs::read_to_string(base.join("active.json")).ok()?).ok()?;
+        let name = pointer["folder"].as_str()?;
+        let plain = |c: char| c.is_ascii_alphanumeric() || "._+-".contains(c);
+        if name.is_empty() || name == "." || name == ".." || !name.chars().all(plain) {
+            return None;
+        }
+        let folder = base.join(name);
+        let have = version_key(&read_version(current)?)?;
+        let want = version_key(
+            &read_version(&folder).or_else(|| text(&pointer["version"]).map(String::from))?,
+        )?;
+        let whole = folder.join("python").join("python.exe").is_file()
+            && folder.join("strata.py").is_file()
+            && folder.join("strata_control").is_dir();
+        (want > have && whole).then_some(folder)
+    }
+
+    /// The `strata` command; it hands over to newer files by itself.
     pub fn program(&self) -> PathBuf {
-        Self::program_in(&self.root())
+        Self::program_in(&self.current())
     }
 
     /// The `strata` command among the Terminal's own files in `root`.
@@ -66,11 +100,48 @@ impl Terminal {
         self.home.join(INSTALL)
     }
 
-    /// The Terminal's version as its `VERSION` file says, which is what
-    /// `strata --version` prints as the build.
-    pub fn version(&self) -> Option<String> {
-        let text = std::fs::read_to_string(self.root().join("VERSION")).ok()?;
-        Some(text.trim().to_string()).filter(|v| !v.is_empty())
+    /// The build of the files that run, as their `VERSION` file says;
+    /// `strata --version` prints it as the build.
+    pub fn build(&self) -> Option<String> {
+        read_version(&self.root())
+    }
+
+    /// The Strata commit the files that run were built from (`COMMIT`,
+    /// which `packaging/package_terminal.py` writes).
+    pub fn commit(&self) -> Option<String> {
+        let text = std::fs::read_to_string(self.root().join("COMMIT")).ok()?;
+        Some(text.trim().to_string()).filter(|c| !c.is_empty())
+    }
+
+    /// `strata --version`; read it with [`version_text`].
+    pub fn version(&self) -> CommandSpec {
+        self.command(&["--version"])
+    }
+
+    /// The engine and the Terminal's files from the signed feed, each only
+    /// after a test start. Read the output with [`updated`].
+    pub fn update(&self) -> CommandSpec {
+        self.command(&["update", "--output", "json"])
+    }
+
+    /// What `strata update` would change, without downloading. Read the
+    /// output with [`update_available`].
+    pub fn check_update(&self) -> CommandSpec {
+        self.command(&["update", "--check", "--output", "json"])
+    }
+
+    /// Strata's standard benchmark against the Strata serving on `url`,
+    /// with the key in `STRATA_API_KEY`, its report in `out` (a new
+    /// folder). Read the output with [`bench_speeds`].
+    pub fn bench(&self, url: &str, key: Option<&str>, out: &Path) -> CommandSpec {
+        let out = out.display().to_string();
+        let mut spec = self.command(&[
+            "bench", "run", "--url", url, "--out", &out, "--output", "json",
+        ]);
+        if let Some(key) = key {
+            spec.env.push(("STRATA_API_KEY".into(), key.into()));
+        }
+        spec
     }
 
     /// What makes up a running Strata: every program from the Terminal's
@@ -162,7 +233,7 @@ impl Terminal {
     /// Writes the Terminal's own files as `install.ps1` leaves them, empty,
     /// with `version` in `VERSION`; for tests.
     pub fn fake_install(&self, version: &str) {
-        let root = self.root();
+        let root = self.current();
         for (file, text) in [
             (root.join("strata.py"), ""),
             (root.join("setup.py"), ""),
@@ -187,15 +258,8 @@ impl Terminal {
 /// for this PC is in place, else Strata's reason. The answer is the last
 /// line that is a JSON object (`strata_cli/update_cmd.py`, `run`).
 pub fn engine_installed(output: &[String]) -> Result<(), String> {
-    let answer = output
-        .iter()
-        .rev()
-        .find_map(|line| {
-            serde_json::from_str::<Value>(line.trim())
-                .ok()
-                .filter(Value::is_object)
-        })
-        .ok_or("The Strata Terminal gave no answer about the engine")?;
+    let answer =
+        json_answer(output).ok_or("The Strata Terminal gave no answer about the engine")?;
     if let Some(error) = answer.get("error") {
         return Err(text(&error["message"])
             .unwrap_or("The engine update failed")
@@ -205,26 +269,154 @@ pub fn engine_installed(output: &[String]) -> Result<(), String> {
         .as_array()
         .and_then(|r| r.iter().find(|r| r["component"] == "engine"))
         .ok_or("The Strata Terminal's answer names no engine")?;
-    match text(&engine["status"]) {
-        Some("updated" | "current") => Ok(()),
-        Some("failed") => Err(text(&engine["error"])
-            .unwrap_or("The engine could not be installed")
-            .to_string()),
-        status => {
-            let mut why = text(&engine["note"])
+    part_problem(engine).map_or(Ok(()), Err)
+}
+
+fn read_version(folder: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(folder.join("VERSION")).ok()?;
+    Some(text.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+/// `0.2.2`, `0.1.44.1` or `0.2.2-rc1` in an order to compare: a
+/// pre-release comes before the same number without one.
+fn version_key(text: &str) -> Option<([u64; 4], bool, String)> {
+    let (base, pre) = match text.trim().split_once('-') {
+        Some((base, pre)) => (base, Some(pre)),
+        None => (text.trim(), None),
+    };
+    let parts: Vec<u64> = base
+        .split('.')
+        .map(|p| p.parse().ok())
+        .collect::<Option<_>>()?;
+    if !(2..=4).contains(&parts.len()) {
+        return None;
+    }
+    let mut key = [0; 4];
+    key[..parts.len()].copy_from_slice(&parts);
+    Some((key, pre.is_none(), pre.unwrap_or_default().to_string()))
+}
+
+/// The version and build from `strata --version`, e.g. `0.2.2 (build
+/// 0.1.44.1)`, without the Python it names.
+pub fn version_text(output: &[String]) -> Option<String> {
+    output.iter().find_map(|line| {
+        let rest = line.trim().strip_prefix("strata ")?;
+        let (version, rest) = rest.split_once(" (build ")?;
+        let build = rest.split([';', ')']).next()?.trim();
+        Some(format!("{version} (build {build})"))
+    })
+}
+
+/// The last line of `output` that is a JSON object: what `--output json`
+/// answers.
+fn json_answer(output: &[String]) -> Option<Value> {
+    output.iter().rev().find_map(|line| {
+        serde_json::from_str::<Value>(line.trim())
+            .ok()
+            .filter(Value::is_object)
+    })
+}
+
+/// Reads what `strata update --check --output json` printed: whether the
+/// engine or the Terminal's files have something newer for this PC
+/// (`check` in `strata_control/updater.py`).
+pub fn update_available(output: &[String]) -> Result<bool, String> {
+    let answer = json_answer(output).ok_or("The Strata Terminal gave no answer about updates")?;
+    if let Some(error) = answer.get("error") {
+        return Err(text(&error["message"])
+            .unwrap_or("The update check failed")
+            .to_string());
+    }
+    Ok(matches!(
+        text(&answer["engine"]["status"]),
+        Some("available" | "install")
+    ) || text(&answer["control"]["status"]) == Some("available"))
+}
+
+/// Reads what `strata update --output json` printed: `Ok` when every part
+/// is in place, else Strata's reasons (`run` in `strata_cli/update_cmd.py`).
+pub fn updated(output: &[String]) -> Result<(), String> {
+    let answer =
+        json_answer(output).ok_or("The Strata Terminal gave no answer about the update")?;
+    if let Some(error) = answer.get("error") {
+        return Err(text(&error["message"])
+            .unwrap_or("The update failed")
+            .to_string());
+    }
+    let results = answer["results"]
+        .as_array()
+        .ok_or("The Strata Terminal's answer names no parts")?;
+    let problems: Vec<String> = results.iter().filter_map(part_problem).collect();
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("; "))
+    }
+}
+
+/// What keeps one part of an update answer from being in place.
+fn part_problem(result: &Value) -> Option<String> {
+    let status = text(&result["status"]);
+    let control = result["component"] == "control";
+    match status {
+        Some("updated" | "current") => None,
+        Some("not-in-feed") if control => None,
+        Some("failed") => Some(
+            text(&result["error"])
+                .unwrap_or("A part could not be installed")
+                .to_string(),
+        ),
+        _ => {
+            let mut why = text(&result["note"])
                 .or(status)
                 .unwrap_or("No engine for this PC")
                 .to_string();
-            let reasons: Vec<&str> = engine["reasons"]
+            let reasons: Vec<&str> = result["reasons"]
                 .as_array()
                 .map(|r| r.iter().filter_map(text).collect())
                 .unwrap_or_default();
             if !reasons.is_empty() {
                 why = format!("{why} ({})", reasons.join("; "));
             }
-            Err(why)
+            Some(why)
         }
     }
+}
+
+/// Tokens/s from the standard benchmark's answer
+/// (`strata bench run --output json`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BenchSpeeds {
+    /// Median decode speed of the short requests.
+    pub decode: f64,
+    /// Median prompt speed of the 4K prompts, if there is one.
+    pub prompt: Option<f64>,
+}
+
+/// Reads the standard benchmark's answer: the medians of its performance
+/// phase (`summaries_of` in `strata_cli/bench_standard.py`).
+pub fn bench_speeds(output: &[String]) -> Result<BenchSpeeds, String> {
+    let answer = json_answer(output).ok_or("The benchmark gave no answer")?;
+    if let Some(error) = answer.get("error") {
+        return Err(text(&error["message"])
+            .unwrap_or("The benchmark failed")
+            .to_string());
+    }
+    let median = |case: &str, metric: &str| {
+        answer["summaries"].as_array()?.iter().find_map(|row| {
+            (row["phase"] == "performance" && row["case_id"] == case && row["metric"] == metric)
+                .then(|| row["median"].as_f64())
+                .flatten()
+        })
+    };
+    let decode = median("short", "decode_tps").ok_or_else(|| {
+        let status = text(&answer["status"]).unwrap_or("unknown");
+        format!("The benchmark reported no tokens/s (run {status})")
+    })?;
+    Ok(BenchSpeeds {
+        decode,
+        prompt: median("prompt-4k", "prompt_tps"),
+    })
 }
 
 fn text(v: &Value) -> Option<&str> {
@@ -296,16 +488,166 @@ mod tests {
     }
 
     #[test]
-    fn the_version_is_the_version_file_s_line() {
+    fn the_build_is_the_version_file_s_line() {
         let home = std::env::temp_dir().join(format!("terminal-version-{}", std::process::id()));
         let terminal = Terminal::new(&home);
-        assert_eq!(terminal.version(), None);
+        assert_eq!(terminal.build(), None);
         terminal.fake_install("0.2.2");
         assert!(terminal.is_installed());
-        assert_eq!(terminal.version().as_deref(), Some("0.2.2"));
+        assert_eq!(terminal.build().as_deref(), Some("0.2.2"));
         std::fs::write(terminal.root().join("VERSION"), " \n").unwrap();
-        assert_eq!(terminal.version(), None);
+        assert_eq!(terminal.build(), None);
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn the_version_line_gives_version_and_build() {
+        // `_VersionAction` in strata_cli/cli.py.
+        let out = lines(&[
+            r"strata 0.2.2 (build 0.1.44.1; python 3.12.15 at C:\Users\me\AppData\Local\Strata\terminal\current\python\python.exe)",
+        ]);
+        assert_eq!(
+            version_text(&out).as_deref(),
+            Some("0.2.2 (build 0.1.44.1)")
+        );
+        assert_eq!(version_text(&lines(&["usage: strata"])), None);
+    }
+
+    // `check` in strata_control/updater.py, printed by `run` in
+    // strata_cli/update_cmd.py as `{"schema_version": 1, "ok": true, **report}`.
+    fn check_answer(engine: &str, control: &str) -> Vec<String> {
+        lines(&[&format!(
+            r#"{{"schema_version": 1, "ok": true, "feed": {{"source": "https://github.com/Niko1221/Strata/releases/latest/download/strata-feed.json", "sequence": 42, "channel": "stable", "key_id": "5d1bc23abbeffd0d", "generated_at": "2026-10-21T09:00:00Z", "trusted_by": "built-in keys"}}, "engine": {{"installed": {{"version": "0.1.44.1", "platform": "windows-x64", "backend": "hip", "variant": "gfx1030", "build_id": "b1", "folder": "strata-engine-0.1.44.1-hip", "signed": true}}, "offered": null, "reasons": [], "status": "{engine}", "download_bytes": 0, "previous": null, "pinned": null, "problem": null}}, "control": {{"installed": "0.1.44.1", "offered": "0.1.45", "status": "{control}", "download_bytes": 81234567}}, "app": {{"installed": null, "offered": null, "status": "not-in-feed", "notes": "", "download_bytes": 0}}, "serving": [], "hardware": {{"platform": "windows-x64", "backend": "hip"}}}}"#
+        )])
+    }
+
+    #[test]
+    fn an_update_is_available_when_the_engine_or_the_files_are_newer() {
+        assert_eq!(
+            update_available(&check_answer("current", "current")),
+            Ok(false)
+        );
+        assert_eq!(
+            update_available(&check_answer("available", "current")),
+            Ok(true)
+        );
+        assert_eq!(
+            update_available(&check_answer("current", "available")),
+            Ok(true)
+        );
+        assert_eq!(
+            update_available(&check_answer("failed-before", "not-in-feed")),
+            Ok(false)
+        );
+        let error = lines(&[
+            r#"{"schema_version": 1, "ok": false, "error": {"code": 6, "message": "the feed could not be read: timed out"}}"#,
+        ]);
+        assert_eq!(
+            update_available(&error),
+            Err("the feed could not be read: timed out".into())
+        );
+    }
+
+    #[test]
+    fn an_update_is_done_when_every_part_is_in_place() {
+        // `run_update` in strata_control/updater.py: one result per part.
+        let answer = |control: &str| {
+            lines(&[&format!(
+                r#"{{"schema_version": 1, "ok": true, "feed": {{"source": "f", "sequence": 42, "channel": "stable", "key_id": "k"}}, "results": [{{"component": "engine", "status": "current", "installed_before": {{"version": "0.1.44.1"}}, "changed": false}}, {control}], "exit_code": 0}}"#
+            )])
+        };
+        let updated_control = r#"{"component": "control", "status": "updated", "changed": true, "installed_before": "0.1.44.1", "installed_after": "0.1.45", "note": "the Terminal hands over to it from the next command; the app uses it from its next start"}"#;
+        assert_eq!(updated(&answer(updated_control)), Ok(()));
+        let not_in_feed = r#"{"component": "control", "status": "not-in-feed", "changed": false, "installed_before": "0.1.44.1"}"#;
+        assert_eq!(updated(&answer(not_in_feed)), Ok(()));
+        let failed = r#"{"component": "control", "status": "failed", "changed": false, "installed_before": "0.1.44.1", "error": "Control 0.1.45: --version said '' (exit 1)"}"#;
+        assert_eq!(
+            updated(&answer(failed)),
+            Err("Control 0.1.45: --version said '' (exit 1)".into())
+        );
+        let busy = lines(&[
+            r#"{"schema_version": 1, "ok": false, "error": {"code": 7, "message": "an engine is serving (strata-iq3_xxs)"}}"#,
+        ]);
+        assert_eq!(
+            updated(&busy),
+            Err("an engine is serving (strata-iq3_xxs)".into())
+        );
+    }
+
+    #[test]
+    fn the_benchmark_speeds_are_the_performance_medians() {
+        // `_bench_standard` in strata_cli/cli.py with the rows of
+        // `summaries_of` in strata_cli/bench_standard.py.
+        let row = |case: &str, metric: &str, median: &str| {
+            format!(
+                r#"{{"phase": "performance", "case_id": "{case}", "concurrency": 1, "metric": "{metric}", "unit": "tokens/s", "median": {median}, "min": null, "max": null, "n": 3, "included_request_ids": [], "excluded": []}}"#
+            )
+        };
+        let answer = |status: &str, rows: &[String]| {
+            lines(&[&format!(
+                r#"{{"schema_version": 1, "ok": {}, "path": "C:\\bench\\results.json", "status": "{status}", "quality": {{"instruction": {{"passed": 4, "total": 4}}}}, "summaries": [{}]}}"#,
+                status == "complete",
+                rows.join(", ")
+            )])
+        };
+        let full = answer(
+            "complete",
+            &[
+                row("short", "prompt_tps", "210.4"),
+                row("short", "decode_tps", "38.5"),
+                row("prompt-4k", "prompt_tps", "512.3"),
+                row("prompt-4k", "decode_tps", "36.1"),
+            ],
+        );
+        assert_eq!(
+            bench_speeds(&full),
+            Ok(BenchSpeeds {
+                decode: 38.5,
+                prompt: Some(512.3)
+            })
+        );
+        let short_only = answer("complete", &[row("short", "decode_tps", "38.5")]);
+        assert_eq!(bench_speeds(&short_only).unwrap().prompt, None);
+        let nothing = answer("failed", &[row("short", "decode_tps", "null")]);
+        assert_eq!(
+            bench_speeds(&nothing),
+            Err("The benchmark reported no tokens/s (run failed)".into())
+        );
+    }
+
+    #[test]
+    fn newer_files_from_an_update_run_once_they_are_whole() {
+        let home = std::env::temp_dir().join(format!("terminal-control-{}", std::process::id()));
+        let terminal = Terminal::new(&home);
+        terminal.fake_install("0.1.44.1");
+        let current = terminal.current();
+        assert_eq!(terminal.root(), current);
+        let control = home.join("components").join("control");
+        let newer = control.join("0.1.45");
+        std::fs::create_dir_all(newer.join("strata_control")).unwrap();
+        std::fs::write(newer.join("VERSION"), "0.1.45\n").unwrap();
+        std::fs::write(
+            control.join("active.json"),
+            r#"{"version": "0.1.45", "folder": "0.1.45", "sha256": "ab"}"#,
+        )
+        .unwrap();
+        assert_eq!(terminal.root(), current, "no interpreter yet");
+        std::fs::create_dir_all(newer.join("python")).unwrap();
+        std::fs::write(newer.join("python").join("python.exe"), "").unwrap();
+        std::fs::write(newer.join("strata.py"), "").unwrap();
+        assert_eq!(terminal.root(), newer);
+        assert_eq!(terminal.build().as_deref(), Some("0.1.45"));
+        assert_eq!(terminal.program(), current.join("bin").join("strata.cmd"));
+        std::fs::write(newer.join("VERSION"), "0.1.44.1\n").unwrap();
+        assert_eq!(terminal.root(), current, "never an equal one");
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn versions_compare_by_number_and_a_pre_release_comes_first() {
+        assert!(version_key("0.1.45") > version_key("0.1.44.1"));
+        assert!(version_key("0.2.2") > version_key("0.2.2-rc1"));
+        assert_eq!(version_key("unknown"), None);
     }
 
     #[test]

@@ -595,6 +595,7 @@ pub fn benchmark(model: &str, result: &str) -> StrataBenchmark {
         speed_projection: None,
         version: None,
         error: None,
+        tool: None,
     }
 }
 

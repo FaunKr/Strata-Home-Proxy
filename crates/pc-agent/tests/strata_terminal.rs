@@ -4,7 +4,7 @@
 
 use crate::common;
 
-use std::sync::atomic::Ordering;
+use std::{sync::atomic::Ordering, time::Duration};
 
 use common::*;
 use serde_json::{Value, json};
@@ -58,7 +58,7 @@ async fn the_page_shows_the_terminal_and_the_served_model() {
     let view = get(&s, "/strata").await;
     assert_eq!(view["installed"], true);
     assert_eq!(view["install"], "terminal");
-    assert_eq!(view["version"], "0.2.2");
+    assert_eq!(view["version"], "build 0.2.2", "before the first check");
     assert_eq!(model(&view, "IQ3_XXS")["active"], true);
     assert_eq!(model(&view, "coder-IQ1_M")["active"], false);
     assert_eq!(model(&view, "IQ3_XXS")["disk_bytes"], 10);
@@ -185,24 +185,6 @@ async fn a_context_change_lands_in_the_run_config_and_restarts_strata() {
 }
 
 #[tokio::test]
-async fn update_benchmark_and_comparison_are_not_offered_yet() {
-    let s = setup("terminal-not-yet").await;
-    installed(&s);
-    for kind in ["update", "benchmark", "compare_models"] {
-        let (code, answer) = post(&s, "/strata/jobs", json!({"kind": kind})).await;
-        assert_eq!(code, 409, "{kind}: {answer}");
-        assert!(
-            answer["reason"]
-                .as_str()
-                .unwrap()
-                .contains("Strata Terminal"),
-            "{kind}: {answer}"
-        );
-    }
-    assert!(s.fake.ran.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
 async fn the_speed_projection_takes_the_terminal_s_own_vector() {
     let s = setup("terminal-esp").await;
     let leaves = installed(&s);
@@ -266,4 +248,250 @@ async fn gaming_mode_stops_every_program_from_the_terminal_s_folder() {
     assert_eq!(code, 200, "{answer}");
     let stopped = s.fake.stopped.lock().unwrap().clone().unwrap();
     assert_eq!(stopped, Terminal::of(&s.agent.cfg).processes());
+}
+
+/// What `strata update --output json` answers (`run` in
+/// strata_cli/update_cmd.py), with the Terminal's files at `control`.
+fn update_answer(control: &str) -> String {
+    format!(
+        r#"{{"schema_version": 1, "ok": true, "feed": {{"source": "f", "sequence": 42, "channel": "stable", "key_id": "k"}}, "results": [{{"component": "engine", "status": "current", "installed_before": {{"version": "0.1.44.1"}}, "changed": false}}, {control}], "exit_code": 0}}"#
+    )
+}
+
+fn answers(s: &Setup, name: &str, lines: &[&str], exit: Option<i32>) {
+    s.fake.command(
+        name,
+        FakeCommand {
+            lines: lines.iter().map(|l| l.to_string()).collect(),
+            exit,
+            ..FakeCommand::default()
+        },
+    );
+}
+
+#[tokio::test]
+async fn an_update_runs_strata_update_with_strata_stopped() {
+    let s = setup("terminal-update").await;
+    installed(&s);
+    let control = r#"{"component": "control", "status": "updated", "changed": true, "installed_before": "0.1.44.1", "installed_after": "0.1.45"}"#;
+    answers(&s, "strata.cmd update", &[&update_answer(control)], None);
+    answers(
+        &s,
+        "strata.cmd --version",
+        &[r"strata 0.2.3 (build 0.1.45; python 3.12.15 at C:\Strata\python\python.exe)"],
+        None,
+    );
+    let done = job(&s, json!({"kind": "update"})).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let update = &s.fake.runs_of("strata.cmd")[0];
+    assert_eq!(update.args, ["update", "--output", "json"]);
+    assert!(update.env.iter().any(|(k, _)| k == "STRATA_INSTALL_DIR"));
+    assert_eq!(
+        s.fake.stops.load(Ordering::SeqCst),
+        1,
+        "stopped for the update"
+    );
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1, "and started again");
+    assert!(s.fake.runs_of("git").is_empty());
+    let view = get(&s, "/strata").await;
+    assert_eq!(view["version"], "0.2.3 (build 0.1.45)");
+    assert_eq!(view["update_available"], false);
+}
+
+#[tokio::test]
+async fn a_failed_update_says_why_and_strata_runs_again() {
+    let s = setup("terminal-update-failed").await;
+    installed(&s);
+    let control = r#"{"component": "control", "status": "failed", "changed": false, "installed_before": "0.1.44.1", "error": "Control 0.1.45: the test start failed"}"#;
+    answers(&s, "strata.cmd update", &[&update_answer(control)], Some(6));
+    let done = job(&s, json!({"kind": "update"})).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(
+        done["error"]
+            .as_str()
+            .unwrap()
+            .contains("Control 0.1.45: the test start failed"),
+        "{done}"
+    );
+    assert_eq!(
+        s.fake.starts.load(Ordering::SeqCst),
+        1,
+        "the old Strata runs again"
+    );
+}
+
+/// What `strata update --check --output json` answers (`check` in
+/// strata_control/updater.py).
+fn check_answer(control: &str) -> String {
+    format!(
+        r#"{{"schema_version": 1, "ok": true, "feed": {{"source": "f", "sequence": 42, "channel": "stable", "key_id": "k", "generated_at": "2026-10-21T09:00:00Z", "trusted_by": "built-in keys"}}, "engine": {{"installed": {{"version": "0.1.44.1"}}, "offered": null, "reasons": [], "status": "current", "download_bytes": 0}}, "control": {{"installed": "0.1.44.1", "offered": "0.1.45", "status": "{control}", "download_bytes": 81234567}}, "app": {{"installed": null, "offered": null, "status": "not-in-feed", "notes": "", "download_bytes": 0}}, "serving": [], "hardware": {{}}}}"#
+    )
+}
+
+const API: &str = "https://api.github.com/repos/Niko1221/Strata";
+
+async fn view_once_checked(s: &Setup) -> Value {
+    let mut view = get(s, "/strata").await;
+    for _ in 0..100 {
+        if view["update_available"] != Value::Null {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        view = get(s, "/strata").await;
+    }
+    view
+}
+
+fn installed_build(s: &Setup, commit: &str) {
+    let root = Terminal::of(&s.agent.cfg).root();
+    std::fs::write(root.join("COMMIT"), format!("{commit}\n")).unwrap();
+}
+
+#[tokio::test]
+async fn the_update_check_asks_the_terminal_and_github_for_the_summary() {
+    let s = setup("terminal-check").await;
+    installed(&s);
+    installed_build(&s, "76f90e58aaaa");
+    answers(
+        &s,
+        "strata.cmd update --check",
+        &[&check_answer("available")],
+        None,
+    );
+    answers(
+        &s,
+        "strata.cmd --version",
+        &[r"strata 0.2.2 (build 0.1.44.1; python 3.12.15 at C:\Strata\python\python.exe)"],
+        None,
+    );
+    answers(
+        &s,
+        &format!("curl {API}/releases/latest"),
+        &["{", r#"  "tag_name": "v0.2.3""#, "}"],
+        None,
+    );
+    answers(
+        &s,
+        &format!("curl {API}/compare/76f90e58aaaa...v0.2.3"),
+        &[
+            "{",
+            r#"  "status": "ahead", "total_commits": 1,"#,
+            r#"  "commits": [{"sha": "011c9e60bbbb", "commit": {"committer": {"date": "2026-10-21T09:07:39Z"}, "message": "README: RX 6000 cards\n\nbuilt, not tested"}}],"#,
+            r#"  "files": [{"filename": "README.md", "additions": 3, "deletions": 1}]"#,
+            "}",
+        ],
+        None,
+    );
+    let view = view_once_checked(&s).await;
+    assert_eq!(view["update_available"], true, "{view}");
+    assert_eq!(view["version"], "0.2.2 (build 0.1.44.1)");
+    let update = &view["update"];
+    assert_eq!(update["upstream"], "011c9e60bbbb", "{view}");
+    assert_eq!(update["total"], 1);
+    assert_eq!(update["remote"], "https://github.com/Niko1221/Strata");
+    assert_eq!(update["commits"][0]["subject"], "README: RX 6000 cards");
+    assert_eq!(update["commits"][0]["time"], 1_792_573_659);
+    assert_eq!(update["files"][0]["path"], "README.md");
+    assert!(s.fake.runs_of("git").is_empty());
+}
+
+#[tokio::test]
+async fn without_github_the_update_stays_available_without_a_summary() {
+    let s = setup("terminal-check-offline").await;
+    installed(&s);
+    installed_build(&s, "76f90e58aaaa");
+    answers(
+        &s,
+        "strata.cmd update --check",
+        &[&check_answer("available")],
+        None,
+    );
+    answers(
+        &s,
+        &format!("curl {API}/releases/latest"),
+        &["curl: (6) Could not resolve host: api.github.com"],
+        Some(6),
+    );
+    let view = view_once_checked(&s).await;
+    assert_eq!(view["update_available"], true, "{view}");
+    assert_eq!(view["update"], Value::Null);
+}
+
+#[tokio::test]
+async fn nothing_new_asks_github_nothing() {
+    let s = setup("terminal-check-current").await;
+    installed(&s);
+    answers(
+        &s,
+        "strata.cmd update --check",
+        &[&check_answer("current")],
+        None,
+    );
+    let view = view_once_checked(&s).await;
+    assert_eq!(view["update_available"], false, "{view}");
+    assert!(s.fake.runs_of("curl").is_empty());
+}
+
+/// What `strata bench run --output json` answers for the standard suite
+/// (`_bench_standard` in strata_cli/cli.py, rows of `summaries_of` in
+/// strata_cli/bench_standard.py).
+const BENCH_ANSWER: &str = r#"{"schema_version": 1, "ok": true, "path": "C:\\bench\\results.json", "status": "complete", "quality": {}, "summaries": [{"phase": "performance", "case_id": "short", "concurrency": 1, "metric": "decode_tps", "unit": "tokens/s", "median": 38.54, "min": 37.1, "max": 39.2, "n": 3, "included_request_ids": [], "excluded": []}, {"phase": "performance", "case_id": "prompt-4k", "concurrency": 1, "metric": "prompt_tps", "unit": "tokens/s", "median": 612.0, "min": 600.0, "max": 620.0, "n": 3, "included_request_ids": [], "excluded": []}]}"#;
+
+#[tokio::test]
+async fn the_benchmark_is_strata_s_standard_one_against_the_running_strata() {
+    let s = setup("terminal-bench").await;
+    let leaves = installed(&s);
+    answers(&s, "strata.cmd bench", &[BENCH_ANSWER], None);
+    let done = job(&s, json!({"kind": "benchmark"})).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let run = &s.fake.runs_of("strata.cmd")[0];
+    assert_eq!(
+        run.args[..4],
+        ["bench", "run", "--url", s.agent.cfg.strata_url.as_str()]
+    );
+    let out = &run.args[run.args.iter().position(|a| a == "--out").unwrap() + 1];
+    assert!(
+        out.starts_with(&s.agent.cfg.state_dir().display().to_string()),
+        "{out}"
+    );
+    assert!(
+        !std::path::Path::new(out).exists(),
+        "Strata makes the folder itself"
+    );
+    // The key the served run config holds, so the benchmark gets in.
+    let key = leaves.installation().model("iq3_xxs").unwrap().fields()["api_key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(run.env.contains(&("STRATA_API_KEY".into(), key.clone())));
+    assert!(!done.to_string().contains(key.as_str()));
+    let result = &get(&s, "/strata").await["benchmark"];
+    assert_eq!(result["result"], "38.5 Token/s");
+    assert_eq!(result["prompt_tps"], 612.0);
+    assert_eq!(result["tool"], "strata_bench");
+    assert_eq!(result["version"], "build 0.2.2");
+    assert!(s.fake.runs_of("BENCH.bat").is_empty());
+}
+
+#[tokio::test]
+async fn a_benchmark_without_speeds_fails() {
+    let s = setup("terminal-bench-none").await;
+    installed(&s);
+    answers(
+        &s,
+        "strata.cmd bench",
+        &[
+            r#"{"schema_version": 1, "ok": false, "error": {"code": 5, "message": "no server is answering at http://127.0.0.1:8080"}}"#,
+        ],
+        Some(5),
+    );
+    let done = job(&s, json!({"kind": "benchmark"})).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(
+        done["error"]
+            .as_str()
+            .unwrap()
+            .contains("no server is answering"),
+        "{done}"
+    );
 }

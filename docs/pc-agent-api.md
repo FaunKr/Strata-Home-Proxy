@@ -239,15 +239,23 @@ free space, last benchmark and the running or last job.
 Never contains the Strata key. `install` says how Strata is installed:
 `terminal` (the Strata Terminal in `strata_home`) or `source` (a Strata folder
 from source in `strata_dir`); missing when Strata is not installed and from an
-older PC service. `version` is the Terminal's version or the folder's short
-commit. Along the way it asks Git at most once per
-hour whether there is a newer Strata version (`update_available`).
+older PC service. `version` is the folder's short commit, or for the
+Terminal its version and build from `strata --version` (`0.2.2 (build
+0.1.44.1)`; before the first check only `build 0.1.44.1` from its `VERSION`
+file). Along the way it asks whether there is a newer Strata version
+(`update_available`): for a Strata folder from source Git, at most once per
+hour; for the Terminal `strata update --check --output json`, at most once a
+day, which counts a newer engine or newer Terminal files.
 
 If commits are incoming, `update` (`Incoming`) says what they bring; without
 an update, before the first check and with an older PC service the field is
 missing. `commits` are newest first, at most 200 (`total` counts all).
-`files` comes from `git diff --numstat HEAD..@{u}`; binary files count 0
-lines. The proxy keeps all of this on the NAS; the web UI only gets
+For a Strata folder from source, `files` comes from `git diff --numstat
+HEAD..@{u}`; binary files count 0 lines. For the Terminal, commits and files
+come from GitHub's compare API (no token, asked with Windows' `curl.exe`)
+between the build's commit (`COMMIT` in its files) and the latest release's
+tag; `remote` is Strata's repository. If GitHub does not answer, `update`
+is missing and `update_available` stays. The proxy keeps all of this on the NAS; the web UI only gets
 short hash, subject and date.
 
 In the catalog, `memory_with_vram` says that `ram_gb` is RAM and VRAM
@@ -309,8 +317,12 @@ before a load of the model was seen, and from an older PC service.
 
 `benchmarks` holds the last run of each model: `decode_tps` (`chat decode
 tok/s`), `prompt_tps` (`4K prompt tok/s`, missing if the benchmark does not
-print the line), plus `context`, `speed_projection` and `version` (Strata commit)
-at the time of the run. A model that did not start in the comparison or
+print the line), plus `context`, `speed_projection` and `version` (Strata commit,
+or the Terminal's version) at the time of the run. `tool` says what measured
+it: `bench_bat` or `strata_bench` (the Terminal's standard benchmark, which
+measures differently); older records leave it out and came from `BENCH.bat`.
+For `strata_bench`, `decode_tps` is the median decode speed of the short
+requests and `prompt_tps` the median prompt speed of the 4K prompts. A model that did not start in the comparison or
 reported nothing has `error` instead of the values. `benchmark` stays the last
 successful run, for proxies that only know one. An older PC service
 leaves out `benchmarks`.
@@ -367,9 +379,9 @@ little space, deleting the active model).
 | `add_model` | `family`, `size`, `context`, optional `api_key` and `experimental_speed_projection` | setup with `--setup` (for the Strata Terminal in its install mode) and the key Strata runs with, the active model stays active |
 | `activate` | `model` | waits until Strata is not handling a request, restarts with the other run config (`strata serve --profile`) or start script |
 | `delete` | `model` | deletes this model's model folder, pack, configuration, start script and log |
-| `update` | – | `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts; `409` for the Strata Terminal for now |
-| `benchmark` | – | `BENCH.bat --config <active model>`, keeps tokens/s with model and date; `409` for the Strata Terminal for now |
-| `compare_models` | – | `benchmark` for each installed model in turn, each as it is set up; activates each model for this and at the end (also after cancelling) the previously active one again; `409` for the Strata Terminal for now |
+| `update` | – | Terminal: `strata update --output json` (engine and Terminal files, each after a test start) with Strata stopped, restarts; a part that is not in place fails the job with Strata's reason. Folder from source: `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts |
+| `benchmark` | – | Terminal: `strata bench run --url <strata_url> --out <new folder> --output json` with the Strata key in `STRATA_API_KEY`. Folder from source: `BENCH.bat --config <active model>`. Keeps tokens/s with model, date and tool |
+| `compare_models` | – | `benchmark` for each installed model in turn, each as it is set up; activates each model for this and at the end (also after cancelling) the previously active one again |
 | `set_key` | `api_key` | waits until Strata is not handling a request and restarts it, which brings a new key |
 | `set_speed_projection` | `model`, `on` | turns speed projection on or off in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |

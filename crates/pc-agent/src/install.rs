@@ -543,45 +543,48 @@ impl Model {
         self.fields.contains_key(WRITTEN_KEY)
     }
 
-    /// Why `shown` cannot replace the engine options set by hand, if it
-    /// cannot: it starts with a value, or adds or changes an option with a
-    /// switch of its own or one the proxy needs ([`refused_group`]). Such an
-    /// option Strata put there itself may come back unchanged.
-    pub fn refused_user_args(&self, shown: &[String]) -> Option<String> {
-        if let Some(first) = shown.first().filter(|a| !a.starts_with("--")) {
+    /// Why `requested` cannot replace the engine options set by hand, if
+    /// it cannot: it starts with a value, or adds or changes an option with
+    /// a switch of its own or one the proxy needs ([`refused_group`]). Such
+    /// an option Strata put there itself may come back unchanged.
+    pub fn refused_user_args(&self, requested: &[String]) -> Option<String> {
+        if let Some(first) = requested.first().filter(|a| !a.starts_with("--")) {
             return Some(format!(
                 "Engine options start with an option (--name), not \"{first}\""
             ));
         }
         let kept = self.shareable_user_args().unwrap_or_default();
         let kept = groups(&kept.into_iter().map(Value::from).collect::<Vec<_>>());
-        let shown: Vec<Value> = shown.iter().map(|a| Value::from(a.as_str())).collect();
-        groups(&shown)
+        groups(&values(requested))
             .into_iter()
             .filter(|group| !kept.contains(group))
             .find_map(|group| refused_group(&group))
     }
 
-    /// Replaces the engine options set by hand with `shown`, as the page
-    /// shows them; empty removes them. An option that comes back as
-    /// [`Self::shareable_user_args`] showed it keeps its whole value, so a
-    /// cut path stays whole.
-    pub fn set_user_args(&mut self, shown: &[String]) {
-        let old = self
+    /// Replaces the engine options set by hand with `requested`, which
+    /// comes as [`Self::shareable_user_args`] shows them; empty removes them.
+    /// A group equal to how an old one shows keeps the old one's whole
+    /// value, so a cut path stays whole; each old group serves once. A key
+    /// passed as `--api-key`, which never shows, stays.
+    pub fn set_user_args(&mut self, requested: &[String]) {
+        let mut old = self
             .fields
             .get(USER_KEY)
             .and_then(Value::as_array)
             .map_or_else(Vec::new, |user| groups(user));
-        let shown: Vec<Value> = shown.iter().map(|a| Value::from(a.as_str())).collect();
-        let user: Vec<Value> = groups(&shown)
-            .into_iter()
-            .flat_map(|group| {
-                old.iter()
-                    .find(|g| shareable_args(g) == shareable_args(&group))
-                    .cloned()
-                    .unwrap_or(group)
-            })
-            .collect();
+        let mut user = Vec::new();
+        for group in groups(&values(requested)) {
+            let shown: Vec<String> = group
+                .iter()
+                .filter_map(Value::as_str)
+                .map(Into::into)
+                .collect();
+            match old.iter().position(|g| shareable_args(g) == shown) {
+                Some(at) => user.extend(old.remove(at)),
+                None => user.extend(group),
+            }
+        }
+        user.extend(old.into_iter().filter(|g| is_key_group(g)).flatten());
         if user.is_empty() {
             self.fields.remove(USER_KEY);
         } else {
@@ -733,6 +736,17 @@ fn with_context(args: &mut Vec<Value>, context: u32) {
     *args = kept;
 }
 
+/// A key passed as `--api-key` (also `--api-key=…`), with its value.
+fn is_key_group(group: &[Value]) -> bool {
+    let flag = flag_of(group);
+    flag == "--api-key" || flag.starts_with("--api-key=")
+}
+
+/// Args as JSON values.
+fn values(args: &[String]) -> Vec<Value> {
+    args.iter().map(|a| Value::from(a.as_str())).collect()
+}
+
 /// Why this group of engine options cannot be set by hand, if it cannot:
 /// its option is one the service switches itself, or one the proxy needs to
 /// reach Strata.
@@ -785,10 +799,7 @@ fn flag_of(group: &[Value]) -> &str {
 fn shareable_args(args: &[Value]) -> Vec<String> {
     groups(args)
         .into_iter()
-        .filter(|g| {
-            let flag = flag_of(g);
-            flag != "--api-key" && !flag.starts_with("--api-key=")
-        })
+        .filter(|g| !is_key_group(g))
         .flatten()
         .map(|arg| match shareable(&arg) {
             Value::String(text) => text,

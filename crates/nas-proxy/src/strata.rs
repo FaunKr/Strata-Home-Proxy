@@ -350,7 +350,8 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
 
 /// The engine options as the field holds them: a pasted JSON list of
 /// strings as it is, else one option per line with its values apart by
-/// spaces, a value in double quotes (`\"` inside) as one.
+/// spaces; a value that starts with a double quote runs to the closing one
+/// (`\"` and `\\` inside for a quote and a backslash).
 fn engine_options(text: &str) -> Result<Vec<String>, String> {
     if text.trim_start().starts_with('[') {
         return serde_json::from_str(text)
@@ -391,7 +392,7 @@ fn words(line: &str) -> Option<Vec<String>> {
             loop {
                 match chars.next()? {
                     '"' => break,
-                    '\\' if chars.peek() == Some(&'"') => word.push(chars.next()?),
+                    '\\' if matches!(chars.peek(), Some('"' | '\\')) => word.push(chars.next()?),
                     c => word.push(c),
                 }
             }

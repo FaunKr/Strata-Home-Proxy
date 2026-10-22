@@ -520,8 +520,9 @@ stays. A model from the catalog that is not installed is a
 `set_user_args` replaces `user_args` with the list as given (an empty
 list removes the key); `args`, `args_written` and the modification time
 stay. The list comes as `GET /strata` shows it: a group (an option and its
-values) equal to one there keeps its whole value, so a cut path stays
-whole. A list that starts with a value is a `400`, as is a group that adds
+values) equal to how one shows there keeps that one's whole value, so a
+cut path stays whole; each one serves once. An `--api-key` there, which
+`GET /strata` never shows, stays. A list that starts with a value is a `400`, as is a group that adds
 or changes `--max-context`, the rope flags, the speed projection flags
 with `--control-vector`, `--host`, `--port` or `--api-key` (also as
 `--flag=value`): context and speed projection have their own jobs, and the

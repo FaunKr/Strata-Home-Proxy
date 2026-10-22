@@ -1166,7 +1166,7 @@ fn EngineOptions(
                 spellcheck="false"
                 placeholder="none set by hand, e.g. --threads 8"
                 prop:value=move || text.get()
-                on:input=move |ev| text.set(event_target_value(&ev))
+                on:input=move |ev| text.set(as_lines(event_target_value(&ev)))
             >
                 {saved.clone()}
             </textarea>
@@ -1183,6 +1183,17 @@ fn EngineOptions(
             {started_line.map(|text| view! { <p class="muted small started-args">{text}</p> })}
             {preset_note}
         </div>
+    }
+}
+
+/// The field's text, a pasted JSON list of strings turned into lines.
+fn as_lines(text: String) -> String {
+    if !text.trim_start().starts_with('[') {
+        return text;
+    }
+    match serde_json::from_str::<Vec<String>>(&text) {
+        Ok(args) => option_lines(&args, '\n'),
+        Err(_) => text,
     }
 }
 
@@ -1207,7 +1218,7 @@ fn option_lines(args: &[String], between: char) -> String {
         }
         if arg.is_empty() || arg.contains(char::is_whitespace) || arg.contains('"') {
             out.push('"');
-            out.push_str(&arg.replace('"', "\\\""));
+            out.push_str(&arg.replace('\\', "\\\\").replace('"', "\\\""));
             out.push('"');
         } else {
             out.push_str(arg);
@@ -2581,6 +2592,18 @@ mod tests {
             "--threads 8\n--x \"a b\" \"\" \"say \\\"hi\\\"\"\n--no-mmap"
         );
         assert_eq!(option_lines(&[], '\n'), "");
+        let path: Vec<String> = ["--x", "C:\\My Models\\"].map(Into::into).into();
+        assert_eq!(option_lines(&path, '\n'), "--x \"C:\\\\My Models\\\\\"");
+    }
+
+    #[test]
+    fn a_pasted_json_list_becomes_lines() {
+        assert_eq!(
+            as_lines(r#" ["--threads", "8", "--x", "a b"]"#.into()),
+            "--threads 8\n--x \"a b\""
+        );
+        assert_eq!(as_lines("[\"--threads\", ".into()), "[\"--threads\", ");
+        assert_eq!(as_lines("--threads 8".into()), "--threads 8");
     }
 
     fn speed(label: &str, tok_s: f64) -> TuneSpeed {

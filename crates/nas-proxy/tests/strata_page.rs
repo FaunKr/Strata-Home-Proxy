@@ -1149,15 +1149,14 @@ async fn save_options(b: &mut Browser, text: &str) -> reqwest::Response {
 async fn saved_engine_options_go_to_the_pc_service_as_a_list() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
-    let text =
-        "--threads 8\n\n  --control-vector \"my vector.gguf\" 1.0\r\n--say \"a \\\"b\\\"\" \"\"\n";
+    let text = "--threads 8\n\n  --control-vector \"my vector.gguf\" 1.0\r\n--say \"a \\\"b\\\"\" \"\"\n--dir \"C:\\\\My Models\\\\\" C:\\x\n";
     let resp = save_options(&mut b, text).await;
     assert_eq!(resp.status(), 200);
     assert_eq!(
         last_body(&s),
         json!({"kind": "set_user_args", "model": "IQ3_XXS", "user_args": [
             "--threads", "8", "--control-vector", "my vector.gguf", "1.0",
-            "--say", "a \"b\"", ""
+            "--say", "a \"b\"", "", "--dir", "C:\\My Models\\", "C:\\x"
         ]})
     );
 }

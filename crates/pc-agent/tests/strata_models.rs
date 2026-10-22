@@ -1964,6 +1964,74 @@ async fn an_unchanged_option_with_a_cut_path_keeps_its_whole_path() {
 }
 
 #[tokio::test]
+async fn a_new_whole_path_with_the_same_file_name_is_taken_as_it_is() {
+    let s = setup("models-user-new-path").await;
+    installed(&s);
+    let args = json!(["--native", "b.gguf"]);
+    config_with_user_args(
+        &s,
+        "coder-iq1_m",
+        args.clone(),
+        args,
+        json!(["--lora", "D:/old/x.gguf"]),
+    );
+    let user = json!(["--lora", "E:/new/x.gguf"]);
+    let done = job(
+        &s,
+        json!({"kind": "set_user_args", "model": "coder-IQ1_M", "user_args": user}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(read_config(&s, "coder-iq1_m")["user_args"], user);
+}
+
+#[tokio::test]
+async fn options_that_show_alike_each_keep_their_own_path() {
+    let s = setup("models-user-alike").await;
+    installed(&s);
+    let args = json!(["--native", "b.gguf"]);
+    let user = json!(["--lora", "C:/a/x.gguf", "--lora", "D:/b/x.gguf"]);
+    config_with_user_args(&s, "coder-iq1_m", args.clone(), args, user.clone());
+    let shown = json!(["--lora", "x.gguf", "--lora", "x.gguf", "--threads", "8"]);
+    let done = job(
+        &s,
+        json!({"kind": "set_user_args", "model": "coder-IQ1_M", "user_args": shown}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(
+        read_config(&s, "coder-iq1_m")["user_args"],
+        json!([
+            "--lora",
+            "C:/a/x.gguf",
+            "--lora",
+            "D:/b/x.gguf",
+            "--threads",
+            "8"
+        ])
+    );
+}
+
+#[tokio::test]
+async fn a_key_among_the_engine_options_stays_when_others_are_saved() {
+    let s = setup("models-user-key-stays").await;
+    installed(&s);
+    let args = json!(["--native", "b.gguf"]);
+    let user = json!(["--api-key", "own-key", "--threads", "8"]);
+    config_with_user_args(&s, "coder-iq1_m", args.clone(), args, user);
+    let done = job(
+        &s,
+        json!({"kind": "set_user_args", "model": "coder-IQ1_M", "user_args": ["--threads", "4"]}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(
+        read_config(&s, "coder-iq1_m")["user_args"],
+        json!(["--threads", "4", "--api-key", "own-key"])
+    );
+}
+
+#[tokio::test]
 async fn saving_no_engine_options_removes_them() {
     let s = setup("models-user-clear").await;
     with_own_options(&s);
@@ -2011,7 +2079,7 @@ async fn a_strata_that_keeps_no_options_by_hand_takes_none() {
     let s = setup("models-user-older-save").await;
     installed(&s);
     let body =
-        json!({"kind": "set_user_args", "model": "coder-IQ1_M", "user_args": ["--threads", "8"]});
+        json!({"kind": "set_user_args", "model": "coder-IQ1_M", "user_args": ["--host", "x"]});
     let (code, answer) = post(&s, "/strata/jobs", body).await;
     assert_eq!(code, 409, "{answer}");
     let body = json!({"kind": "set_user_args", "model": "swift-IQ2_XS", "user_args": []});

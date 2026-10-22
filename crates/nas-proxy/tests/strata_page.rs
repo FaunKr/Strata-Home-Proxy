@@ -1088,6 +1088,15 @@ async fn an_installed_model_shows_its_engine_options_one_per_line() {
         "{html}"
     );
     assert!(html.contains("none set by hand"), "{html}");
+}
+
+#[tokio::test]
+async fn an_installed_model_shows_its_engine_environment_one_per_line() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_engine_options());
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
     assert!(
         html.contains("STRATA_NOTE=a b=c\nSTRATA_PIN_BY_NEED=1"),
         "one NAME=value per line: {html}"
@@ -1097,8 +1106,23 @@ async fn an_installed_model_shows_its_engine_options_one_per_line() {
         "{html}"
     );
     assert!(
-        html.contains("Save and restart"),
-        "the active model: {html}"
+        html.contains("do not show here"),
+        "secrets stay on the PC: {html}"
+    );
+}
+
+#[tokio::test]
+async fn the_active_models_engine_settings_say_strata_restarts() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_engine_options());
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(html.matches("Save and restart").count(), 1, "{html}");
+    assert_eq!(
+        html.matches("Strata restarts with them").count(),
+        1,
+        "{html}"
     );
 }
 
@@ -1260,14 +1284,14 @@ async fn save_settings(b: &mut Browser, options: Option<&str>, env: &str) -> req
 async fn saved_engine_settings_go_to_the_pc_service_together() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
-    let env = "STRATA_PIN_BY_NEED=1\n\n  STRATA_NOTE = a b=c \r\nSTRATA_EMPTY=\n";
+    let env = "STRATA_PIN_BY_NEED=1\n\n  STRATA_NOTE =a b=c \r\nSTRATA_EMPTY=\n";
     let resp = save_settings(&mut b, Some("--threads 8"), env).await;
     assert_eq!(resp.status(), 200);
     assert_eq!(
         last_body(&s),
         json!({"kind": "set_engine_settings", "model": "IQ3_XXS",
             "user_args": ["--threads", "8"],
-            "env": {"STRATA_PIN_BY_NEED": "1", "STRATA_NOTE": " a b=c", "STRATA_EMPTY": ""}})
+            "env": {"STRATA_PIN_BY_NEED": "1", "STRATA_NOTE": "a b=c ", "STRATA_EMPTY": ""}})
     );
 }
 
@@ -1293,6 +1317,7 @@ async fn a_bad_environment_line_is_refused_and_nothing_is_sent() {
         ("A-B=1", "not a variable name"),
         ("X=1\nX=2", "Line 2: X is given twice"),
         ("{\"X\": 1}", "object"),
+        ("{\"A-B\": \"1\"}", "not a variable name"),
     ] {
         let resp = save_settings(&mut b, Some(""), env).await;
         assert_eq!(resp.status(), 400, "{env}");

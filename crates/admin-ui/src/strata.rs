@@ -215,10 +215,18 @@ pub fn StrataArea() -> impl IntoView {
         }
         now
     });
+    // Counts the jobs the PC service took: a refused one changes nothing, and
+    // asking again would build the models anew and drop an open dialog's text.
+    let started = RwSignal::new(0u32);
+    Effect::new(move || {
+        if matches!(actions.start.value().get(), Some(Ok(()))) {
+            started.update(|n| *n += 1);
+        }
+    });
     let page = Resource::new(
         move || {
             (
-                actions.start.version().get(),
+                started.get(),
                 actions.cancel.version().get(),
                 actions.summarize.version().get(),
                 job_ended.get(),
@@ -1127,7 +1135,9 @@ fn ModelRow(
 /// *Engine settings* for one model: a dialog with its engine options set by
 /// hand (`user_args`, one option per line) and its engine environment
 /// (`env`, one `NAME=value` per line), the args Strata starts it with and
-/// one *Save* for both. Opened, it shows what the PC service reported.
+/// one *Save* for both. Opened, it shows what the PC service reported; it
+/// stays open with the reason when the save is refused, so nothing typed
+/// is lost.
 #[component]
 fn EngineSettings(
     id: String,
@@ -1179,8 +1189,26 @@ fn EngineSettings(
             d.close();
         }
     };
+    // The save's way: sent, then seen pending, then its answer.
+    let saving = RwSignal::new(Saving::Idle);
+    let refused = RwSignal::new(None::<String>);
+    Effect::new(move || {
+        let pending = actions.start.pending().get();
+        match saving.get() {
+            Saving::Sent if pending => saving.set(Saving::Pending),
+            Saving::Pending if !pending => {
+                saving.set(Saving::Idle);
+                match actions.start.value().get_untracked() {
+                    Some(Err(e)) => refused.set(Some(error_text(&e))),
+                    _ => close(),
+                }
+            }
+            _ => {}
+        }
+    });
     let (open_options, open_env) = (saved_options.clone(), saved_env.clone());
     let open = move |_| {
+        refused.set(None);
         options.set(open_options.clone().unwrap_or_default());
         env_text.set(open_env.clone());
         if let Some(d) = dialog.get() {
@@ -1198,8 +1226,9 @@ fn EngineSettings(
     let save_id = id.clone();
     let save = move |_| {
         let options = keeps_options.then(|| options.get());
+        refused.set(None);
+        saving.set(Saving::Sent);
         actions.set_engine_settings(save_id.clone(), options, env_text.get());
-        close();
     };
     let options_field = if keeps_options {
         view! {
@@ -1251,7 +1280,9 @@ fn EngineSettings(
                     >
                         {saved_env.clone()}
                     </textarea>
-                    <p class="muted small">"Setup sets its own variables again when it runs."</p>
+                    <p class="muted small">
+                        "Setup sets its own variables again when it runs. Variables whose name ends in KEY, TOKEN, SECRET or PASSWORD stay on the PC and do not show here."
+                    </p>
                 </div>
             </div>
             {started_line.map(|text| view! { <p class="muted small started-args">{text}</p> })}
@@ -1264,13 +1295,14 @@ fn EngineSettings(
                         </p>
                     }
                 })}
+            {move || refused.get().map(|e| view! { <p class="error" role="alert">{e}</p> })}
             <div class="actions">
                 <button type="button" class="secondary" on:click=move |_| close()>
                     "Cancel"
                 </button>
                 <button
                     type="button"
-                    disabled=move || blocked.get() || unchanged()
+                    disabled=move || blocked.get() || unchanged() || saving.get() != Saving::Idle
                     on:click=save
                 >
                     {if active { "Save and restart" } else { "Save" }}
@@ -1278,6 +1310,14 @@ fn EngineSettings(
             </div>
         </dialog>
     }
+}
+
+/// Where a save of *Engine settings* is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Saving {
+    Idle,
+    Sent,
+    Pending,
 }
 
 /// The engine environment as its field holds it: one `NAME=value` per line.

@@ -2242,6 +2242,8 @@ async fn variables_the_gpu_choice_sets_are_refused_unless_unchanged() {
         (json!({"CUDA_VISIBLE_DEVICES": "0"}), "GPU choice"),
         (json!({"HIP_VISIBLE_DEVICES": "0"}), "GPU choice"),
         (json!({"CUDA_DEVICE_ORDER": "FASTEST_FIRST"}), "GPU choice"),
+        (json!({"Path": "C:/x"}), "GPU choice"),
+        (json!({"cuda_visible_devices": "0"}), "GPU choice"),
         (json!({"9LIVES": "1"}), "not a variable name"),
         (json!({"A-B": "1"}), "not a variable name"),
     ] {

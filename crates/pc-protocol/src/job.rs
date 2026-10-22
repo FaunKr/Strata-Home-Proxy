@@ -242,3 +242,10 @@ impl StrataJobRequest {
 fn is_false(b: &bool) -> bool {
     !b
 }
+
+/// A name `set_engine_settings` takes for the engine environment: letters,
+/// digits and `_`, not starting with a digit.
+pub fn is_env_name(name: &str) -> bool {
+    name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && name.chars().next().is_some_and(|c| !c.is_ascii_digit())
+}

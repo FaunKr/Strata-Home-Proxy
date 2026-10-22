@@ -237,7 +237,8 @@ async function oldFolder(page, errors, name) {
 }
 
 // Opens the active model's Engine settings: both fields as the PC service
-// reported them, Save and restart once changed; Cancel drops the edits.
+// reported them, Save and restart once changed; a refused save keeps the
+// dialog open; Cancel drops the edits.
 // Returns the number of findings.
 async function engineOptions(page, errors, name) {
   const wait = { timeout: 15000 };
@@ -260,6 +261,13 @@ async function engineOptions(page, errors, name) {
     if (process.env.SHOTS === '1') {
       await page.screenshot({ path: `${process.env.OUT}/${name}_engine-settings.jpg`, type: 'jpeg', quality: 60 });
     }
+    // A refused save keeps the dialog open with the reason and what was typed.
+    await env.fill('9X=1');
+    await save.click(wait);
+    // The proxy's own refusal, or on the phone pass the PC's (a code
+    // benchmark from the desk pass still runs).
+    await dialog.getByRole('alert').waitFor(wait);
+    if ((await env.inputValue()) !== '9X=1') throw new Error('the refused text is gone');
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await page.locator('dialog[open]').waitFor({ state: 'detached', ...wait });
     await page.getByRole('button', { name: 'Engine settings' }).first().click(wait);

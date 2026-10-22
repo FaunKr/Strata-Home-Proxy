@@ -41,7 +41,8 @@ const USER_KEY: &str = "user_args";
 /// every start (`serve/server.py`).
 const ENV_KEY: &str = "env";
 /// Environment variables the GPU choice in Strata's setup sets for the
-/// engine, and its search path for the engine's libraries.
+/// engine, and its search path for the engine's libraries; Windows reads
+/// names without case.
 const REFUSED_ENV: [&str; 4] = [
     "PATH",
     "CUDA_VISIBLE_DEVICES",
@@ -627,11 +628,13 @@ impl Model {
     pub fn refused_env(&self, requested: &BTreeMap<String, String>) -> Option<String> {
         let kept = self.shareable_env();
         requested.iter().find_map(|(name, value)| {
-            if !is_env_name(name) {
+            if !strata_pc_protocol::is_env_name(name) {
                 Some(format!(
                     "\"{name}\" is not a variable name: letters, digits and _, not starting with a digit"
                 ))
-            } else if REFUSED_ENV.contains(&name.as_str()) && kept.get(name) != Some(value) {
+            } else if REFUSED_ENV.iter().any(|r| r.eq_ignore_ascii_case(name))
+                && kept.get(name) != Some(value)
+            {
                 Some(format!(
                     "{name} is set by the GPU choice: change it in Strata's setup"
                 ))
@@ -890,13 +893,6 @@ fn shown(value: &Value) -> String {
         Value::String(text) => text,
         other => other.to_string(),
     }
-}
-
-/// A name the environment takes: letters, digits and `_`, not starting
-/// with a digit.
-fn is_env_name(name: &str) -> bool {
-    name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && name.chars().next().is_some_and(|c| !c.is_ascii_digit())
 }
 
 /// `fields` as JSON text without secrets and with every path cut to its

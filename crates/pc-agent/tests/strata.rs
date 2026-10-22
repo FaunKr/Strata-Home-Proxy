@@ -208,7 +208,7 @@ async fn install_sets_up_the_strata_terminal_and_serves_the_new_model() {
     let view = get(&s, "/strata").await;
     assert_eq!(view["installed"], true);
     assert_eq!(view["install"], "terminal");
-    assert_eq!(view["version"], "0.2.2");
+    assert_eq!(view["version"], "build 0.2.2", "before the first check");
     assert_eq!(view["models"][0]["id"], "IQ3_XXS");
     assert_eq!(view["models"][0]["active"], true);
     assert_eq!(view["models"][0]["disk_bytes"], 10);

@@ -109,6 +109,18 @@ from source, its start script and the folder `strata_dir`. These values take pre
 itself stays unchanged. Without this file the TOML applies as before. Anyone who
 wants to set up by hand again deletes the file and restarts the service.
 
+## Updating Strata
+
+On the Strata Terminal, **Update Strata** (tab *Version & benchmark*) stops
+Strata, runs `strata update` (the engine and newer Terminal files, each only
+after a test start) and starts Strata again; if a part fails, the old one
+stays and the job names Strata's reason. Once a day a visit of the page asks
+`strata update --check`, and when something is newer the service asks GitHub
+with Windows' own `curl.exe` what the commits since the installed build bring.
+**Run benchmark** runs Strata's standard benchmark (`strata bench run`); its
+last report stays in `strata-bench` next to the TOML. Results from the old
+Strata folder's `BENCH.bat` are marked as not comparable.
+
 ## Notes
 
 - The service runs in the user account, not as a Windows service: only this way does it see

@@ -260,10 +260,13 @@ impl Platform for FakePlatform {
         if name == "winget" {
             fake.git_missing.store(false, Ordering::SeqCst);
         }
-        if let Some(sub) = spec.args.first().map(|a| format!("{name} {a}"))
-            && fake.commands.lock().unwrap().contains_key(&sub)
-        {
-            return Ok(self.fake_run(&sub));
+        // The most specific fake first: "strata.cmd update --check", then
+        // "strata.cmd update", then "strata.cmd".
+        for n in (1..=spec.args.len().min(2)).rev() {
+            let sub = format!("{name} {}", spec.args[..n].join(" "));
+            if fake.commands.lock().unwrap().contains_key(&sub) {
+                return Ok(self.fake_run(&sub));
+            }
         }
         Ok(self.fake_run(&name))
     }
@@ -382,6 +385,7 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         strata_dir: dir.join("Strata"),
         strata_installer: "https://example.org/install.ps1".into(),
         strata_home: dir.join("StrataTerminal"),
+        strata_components: dir.join("StrataTerminal").join("components"),
         strata_data_dir: dir.join("Strata-data"),
     }
 }

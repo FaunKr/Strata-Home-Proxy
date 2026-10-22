@@ -44,7 +44,8 @@ const strata = {
   // The page's benchmark rows come from `benchmarks`.
   benchmark: undefined,
   installed: true,
-  version: '477ac13',
+  install: 'terminal',
+  version: '0.2.2 (build 0.1.44.1)',
   update_available: true,
   update: {
     upstream: firstUpstream,
@@ -84,7 +85,7 @@ const strata = {
   disk_free_gb: 412,
   data_dir: 'D:\\Strata-data',
   benchmarks: [
-    { model: 'IQ3_XXS', result: '38.5 Token/s', at, decode_tps: 38.5, prompt_tps: 612, context: 65536, speed_projection: false, version: '477ac13' },
+    { model: 'IQ3_XXS', result: '38.5 Token/s', at, decode_tps: 38.5, prompt_tps: 612, context: 65536, speed_projection: false, version: '0.2.2 (build 0.1.44.1)', tool: 'strata_bench' },
     { model: 'coder-IQ1_M', result: '52.3 Token/s', at, decode_tps: 52.3, prompt_tps: 845.5, context: 65536, speed_projection: true, version: '477ac13' },
     { model: 'swift-IQ2_XS', result: '', at, context: 32768, speed_projection: false, version: '477ac13', error: 'BENCH.bat ended with code 1' },
   ],

@@ -24,21 +24,26 @@ use crate::{
     install::{Installation, Kind, Model},
     job::{JobContext, POLL, Step, unix_now},
     managed::Managed,
+    releases,
     strata_process::Applied,
     terminal::{self, Terminal},
 };
 pub use strata_pc_protocol::{
-    ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, StrataBenchmark, StrataFamily,
-    StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState, StrataModel,
-    StrataReport, StrataSize,
+    BenchTool, ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, StrataBenchmark,
+    StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState,
+    StrataModel, StrataReport, StrataSize,
 };
 
 /// The last benchmark run, as older services kept it alone.
 const BENCH_FILE: &str = "strata-benchmark.json";
 /// The last benchmark of each model.
 const BENCHES_FILE: &str = "strata-benchmarks.json";
+/// What `strata --version` said last, with the build it was for.
+const VERSION_FILE: &str = "strata-version.json";
 /// How often the page's visits ask Git whether Strata has a newer version.
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
+/// How often the page's visits ask the Strata Terminal for an update.
+const TERMINAL_CHECK_EVERY: Duration = Duration::from_secs(24 * 3600);
 /// How long a benchmark waits for Strata to load its model.
 const READY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// Strata's port and network access, as the proxy expects them.
@@ -220,8 +225,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         }
         StrataJobRequest::Update => {
             strata_installed(&install)?;
-            from_source(&install, "Updating")?;
-            if !dir.join(".git").exists() {
+            if install.kind() == Kind::Source && !dir.join(".git").exists() {
                 return Err(Refusal::Conflict(format!(
                     "{} is no Git clone and can only be updated by hand",
                     dir.display()
@@ -231,7 +235,6 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         }
         StrataJobRequest::Benchmark => {
             strata_installed(&install)?;
-            from_source(&install, "The benchmark")?;
             let id = active_model(agent).ok_or_else(|| {
                 Refusal::Conflict("No active model known; activate a model first".into())
             })?;
@@ -259,7 +262,6 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         }
         StrataJobRequest::CompareModels => {
             strata_installed(&install)?;
-            from_source(&install, "Comparing models")?;
             let active = active_model(agent).ok_or_else(|| {
                 Refusal::Conflict("No active model known; activate a model first".into())
             })?;
@@ -279,16 +281,6 @@ fn strata_installed(install: &Installation) -> Result<(), Refusal> {
         Ok(())
     } else {
         Err(Refusal::Conflict("Strata is not set up yet".into()))
-    }
-}
-
-/// Refuses what the web UI does only for a Strata folder from source yet.
-fn from_source(install: &Installation, what: &str) -> Result<(), Refusal> {
-    match install.kind() {
-        Kind::Source => Ok(()),
-        Kind::Terminal => Err(Refusal::Conflict(format!(
-            "{what} from the web UI is not there yet for the Strata Terminal"
-        ))),
     }
 }
 
@@ -403,11 +395,21 @@ async fn install_terminal(job: &JobContext) -> Result<(), Step> {
         }
     }
     job.step("Installing the engine for this PC");
-    let (ran, output) = job.command_output(terminal.install_engine()).await;
+    ask_terminal(job, terminal.install_engine(), terminal::engine_installed).await
+}
+
+/// Runs a Terminal command in the job and reads its answer, which says why
+/// also when the command fails.
+async fn ask_terminal<T>(
+    job: &JobContext,
+    spec: CommandSpec,
+    read: fn(&[String]) -> Result<T, String>,
+) -> Result<T, Step> {
+    let (ran, output) = job.command_output(spec).await;
     if let Err(Step::Cancelled) = ran {
         return Err(Step::Cancelled);
     }
-    terminal::engine_installed(&output).map_err(Step::Failed)
+    read(&output).map_err(Step::Failed)
 }
 
 /// What starts model `id` from now on, and what makes up the running
@@ -493,6 +495,9 @@ async fn delete(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
 /// with Strata ended, so the engine can be replaced. Model files stay.
 async fn update(job: &JobContext) -> Result<Option<String>, Step> {
     let agent = job.agent();
+    if Installation::of(&agent.cfg).kind() == Kind::Terminal {
+        return update_terminal(job).await;
+    }
     let dir = agent.cfg.strata_dir.clone();
     let git = git(job).await?;
     job.step("Fetching the new version");
@@ -521,12 +526,66 @@ async fn update(job: &JobContext) -> Result<Option<String>, Step> {
     Ok(None)
 }
 
+/// `strata update` with Strata stopped: the update refuses while an engine
+/// serves, and the new engine's test start needs the card.
+async fn update_terminal(job: &JobContext) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    let terminal = Terminal::of(&agent.cfg);
+    agent.strata().wait_idle(job).await?;
+    agent.strata().stop();
+    job.step("Updating the engine and the Strata Terminal (download and test start)");
+    let updated = ask_terminal(job, terminal.update(), terminal::updated).await;
+    if updated.is_ok() {
+        manage(agent).await;
+    }
+    agent.strata().start_again().await;
+    updated?;
+    terminal_version(agent, &terminal).await;
+    agent.updates.found(Some(false), None);
+    Ok(None)
+}
+
+/// Asks `strata --version` and keeps the answer with the build it is for,
+/// also over a restart: the update summary is kept per version.
+async fn terminal_version(agent: &Agent, terminal: &Terminal) {
+    let Some(version) = output(agent, &terminal.version())
+        .await
+        .and_then(|(_, lines)| terminal::version_text(&lines))
+    else {
+        return;
+    };
+    let kept = serde_json::json!({"build": terminal.build(), "version": version});
+    if let Err(e) =
+        crate::write_replacing(&agent.cfg.state_dir().join(VERSION_FILE), &kept.to_string())
+    {
+        tracing::warn!("{VERSION_FILE} not saved: {e}");
+    }
+}
+
+/// Strata's version for the page and the benchmarks: the Terminal's
+/// version and build as `strata --version` said it for the build that
+/// runs, else only the build; or the Strata folder's short commit.
+fn strata_version(agent: &Agent, install: &Installation) -> Option<String> {
+    match install.kind() {
+        Kind::Terminal => {
+            let build = Terminal::of(&agent.cfg).build()?;
+            std::fs::read_to_string(agent.cfg.state_dir().join(VERSION_FILE))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .filter(|kept| kept["build"] == build.as_str())
+                .and_then(|kept| kept["version"].as_str().map(String::from))
+                .or_else(|| Some(format!("build {build}")))
+        }
+        Kind::Source => git_commit(&agent.cfg.strata_dir),
+    }
+}
+
 fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
-/// Runs Strata's `BENCH.bat` against the running Strata and keeps its
-/// speeds for the model.
+/// Runs Strata's benchmark against the running Strata and keeps its speeds
+/// for the model.
 async fn benchmark(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
     let record = measure(job, id).await?;
     let result = record.result.clone();
@@ -547,20 +606,31 @@ async fn measure(job: &JobContext, id: &str) -> Result<StrataBenchmark, Step> {
     })
     .await?;
     job.step("Running the benchmark (about 10 min)");
-    let dir = agent.cfg.strata_dir.clone();
     let install = Installation::of(&agent.cfg);
-    let config = install.config_path(id);
-    let spec = CommandSpec {
-        program: dir.join("BENCH.bat"),
-        args: vec!["--config".into(), config.display().to_string()],
-        dir: Some(dir.clone()),
-        ..Default::default()
+    let (tool, tps, prompt) = match install.kind() {
+        Kind::Terminal => {
+            let speeds = ask_terminal(job, strata_bench(agent), terminal::bench_speeds).await?;
+            (BenchTool::StrataBench, speeds.decode, speeds.prompt)
+        }
+        Kind::Source => {
+            let dir = agent.cfg.strata_dir.clone();
+            let spec = CommandSpec {
+                program: dir.join("BENCH.bat"),
+                args: vec![
+                    "--config".into(),
+                    install.config_path(id).display().to_string(),
+                ],
+                dir: Some(dir),
+                ..Default::default()
+            };
+            job.command(spec, false).await?;
+            let reading = job.bench();
+            let tps = reading
+                .decode
+                .ok_or_else(|| "The benchmark reported no tokens/s".to_string())?;
+            (BenchTool::BenchBat, tps, reading.prompt)
+        }
     };
-    job.command(spec, false).await?;
-    let reading = job.bench();
-    let tps = reading
-        .decode
-        .ok_or_else(|| "The benchmark reported no tokens/s".to_string())?;
     let model = install.read_model(id);
     Ok(StrataBenchmark {
         model: id.to_string(),
@@ -568,12 +638,29 @@ async fn measure(job: &JobContext, id: &str) -> Result<StrataBenchmark, Step> {
         at: unix_now(),
         at_text: String::new(),
         decode_tps: Some(round1(tps)),
-        prompt_tps: reading.prompt.map(round1),
+        prompt_tps: prompt.map(round1),
         context: model.context(),
         speed_projection: Some(model.speed_projection()),
-        version: git_commit(&dir),
+        version: strata_version(agent, &install),
         error: None,
+        tool: Some(tool),
     })
+}
+
+/// `strata bench run` against the running Strata. Its report goes to a new
+/// folder in the service's folder; only the last one stays.
+fn strata_bench(agent: &Agent) -> CommandSpec {
+    let reports = agent.cfg.state_dir().join("strata-bench");
+    let _ = std::fs::remove_dir_all(&reports);
+    if let Err(e) = std::fs::create_dir_all(&reports) {
+        tracing::warn!("{} not created: {e}", reports.display());
+    }
+    let key = agent.strata_key.key(&agent.cfg);
+    Terminal::of(&agent.cfg).bench(
+        &agent.cfg.strata_url,
+        key.as_deref(),
+        &reports.join(unix_now().to_string()),
+    )
 }
 
 /// Benchmarks each model in turn, each as it is set up, and makes `active`
@@ -615,8 +702,9 @@ async fn compare_models(
                         prompt_tps: None,
                         context: model.context(),
                         speed_projection: Some(model.speed_projection()),
-                        version: git_commit(&agent.cfg.strata_dir),
+                        version: strata_version(agent, &Installation::of(&agent.cfg)),
                         error: Some(error),
+                        tool: None,
                     },
                 );
             }
@@ -826,8 +914,10 @@ pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output =
     }
 }
 
-/// Whether Strata's Git source has commits this folder lacks; asked in the
-/// background at most once an hour, when the page is looked at.
+/// Whether Strata has an update: for a Strata folder from source, whether
+/// its Git source has commits the folder lacks, asked at most once an hour;
+/// for the Strata Terminal, what `strata update --check` says, asked at
+/// most once a day. Asked in the background when the page is looked at.
 #[derive(Default)]
 pub struct UpdateCheck {
     inner: Mutex<UpdateState>,
@@ -841,9 +931,6 @@ struct UpdateState {
     incoming: Option<Incoming>,
 }
 
-/// Most incoming commits the page carries.
-const MAX_COMMITS: usize = 200;
-
 impl UpdateCheck {
     pub fn available(&self) -> Option<bool> {
         self.inner.lock().unwrap().available
@@ -853,14 +940,10 @@ impl UpdateCheck {
         self.inner.lock().unwrap().incoming.clone()
     }
 
-    /// Claims the next check, if one is due.
-    fn claim(&self) -> bool {
+    /// Claims the next check, if one is due after `every`.
+    fn claim(&self, every: Duration) -> bool {
         let mut state = self.inner.lock().unwrap();
-        if state.asking
-            || state
-                .checked
-                .is_some_and(|t| t.elapsed() < UPDATE_CHECK_EVERY)
-        {
+        if state.asking || state.checked.is_some_and(|t| t.elapsed() < every) {
             return false;
         }
         state.asking = true;
@@ -876,19 +959,63 @@ impl UpdateCheck {
     }
 }
 
-/// Asks Git in the background whether an update is available, if it is
-/// time to; the page shows the answer at its next visit.
+/// Asks in the background whether an update is available, if it is time
+/// to; the page shows the answer at its next visit.
 pub fn check_for_update(agent: &Arc<Agent>) {
-    if !agent.cfg.strata_dir.join(".git").exists() || agent.jobs.running() || !agent.updates.claim()
-    {
+    let install = Installation::of(&agent.cfg);
+    let (askable, every) = match install.kind() {
+        Kind::Terminal => (install.is_set_up(), TERMINAL_CHECK_EVERY),
+        Kind::Source => (
+            agent.cfg.strata_dir.join(".git").exists(),
+            UPDATE_CHECK_EVERY,
+        ),
+    };
+    if !askable || agent.jobs.running() || !agent.updates.claim(every) {
         return;
     }
     let agent = Arc::clone(agent);
     tokio::spawn(async move {
-        let found = incoming_commits(&agent).await;
-        let available = found.as_ref().map(|i| i.is_some());
-        agent.updates.found(available, found.flatten());
+        let (available, incoming) = match install.kind() {
+            Kind::Terminal => terminal_update(&agent).await,
+            Kind::Source => {
+                let found = incoming_commits(&agent).await;
+                (found.as_ref().map(|i| i.is_some()), found.flatten())
+            }
+        };
+        agent.updates.found(available, incoming);
     });
+}
+
+/// The Terminal's version, whether `strata update --check` offers
+/// something newer and, if so, what the commits since the installed build
+/// bring.
+async fn terminal_update(agent: &Agent) -> (Option<bool>, Option<Incoming>) {
+    let terminal = Terminal::of(&agent.cfg);
+    terminal_version(agent, &terminal).await;
+    let available = output(agent, &terminal.check_update())
+        .await
+        .and_then(|(_, lines)| {
+            terminal::update_available(&lines)
+                .inspect_err(|e| tracing::warn!("Update check: {e}"))
+                .ok()
+        });
+    let incoming = match available {
+        Some(true) => release_summary(agent, &terminal).await,
+        _ => None,
+    };
+    (available, incoming)
+}
+
+/// The commits and files from the installed build to the latest release,
+/// from GitHub; `None` if GitHub does not answer.
+async fn release_summary(agent: &Agent, terminal: &Terminal) -> Option<Incoming> {
+    let ask = |spec: CommandSpec| async move {
+        let (code, lines) = output(agent, &spec).await?;
+        (code == 0).then_some(lines)
+    };
+    let commit = terminal.commit()?;
+    let tag = releases::latest_tag(&ask(releases::latest_release()).await?)?;
+    releases::incoming(&ask(releases::compare(&commit, &tag)).await?, &tag).flatten()
 }
 
 /// `None` if Git cannot tell; `Some(None)` when nothing is incoming.
@@ -920,7 +1047,7 @@ async fn incoming_commits(agent: &Agent) -> Option<Option<Incoming>> {
         .first()?
         .trim()
         .to_string();
-    let max = MAX_COMMITS.to_string();
+    let max = releases::MAX_COMMITS.to_string();
     let log = run(&[
         "log",
         "-n",
@@ -1128,7 +1255,6 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
 /// `GET /strata`.
 pub fn view(agent: &Agent) -> StrataReport {
     let cfg = &agent.cfg;
-    let dir = &cfg.strata_dir;
     let ram_gb = agent.platform().ram_bytes() as f64 / (1u64 << 30) as f64;
     let vram_gb = agent.platform().vram_bytes() as f64 / (1u64 << 30) as f64;
     let active = active_model(agent);
@@ -1158,10 +1284,7 @@ pub fn view(agent: &Agent) -> StrataReport {
         })
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
-    let version = match install.kind() {
-        Kind::Terminal => Terminal::of(cfg).version(),
-        Kind::Source => git_commit(dir),
-    };
+    let version = strata_version(agent, &install);
     let info = StrataInfo {
         installed: install.is_set_up(),
         install: install.is_set_up().then_some(install.kind().into()),

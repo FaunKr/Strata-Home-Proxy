@@ -14,6 +14,7 @@ pub mod machine;
 pub mod managed;
 pub mod output;
 pub mod platform;
+pub mod releases;
 pub mod sampling;
 pub mod strata;
 mod strata_key;

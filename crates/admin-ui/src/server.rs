@@ -41,15 +41,16 @@ const COOKIE_MAX_AGE_SECS: u64 = 30 * 24 * 3600;
 pub trait Backend: Send + Sync + 'static {
     fn session(&self, token: Option<&str>) -> Session;
     /// A session token, or a message for the user.
-    fn login(&self, password: &str, client: IpAddr) -> Result<String, String>;
+    fn login(&self, password: String, client: IpAddr)
+    -> BoxFuture<'static, Result<String, String>>;
     /// A new session token, or a message for the user.
     fn change_password(
         &self,
-        token: &str,
-        current: &str,
-        new: &str,
+        token: String,
+        current: String,
+        new: String,
         client: IpAddr,
-    ) -> Result<String, String>;
+    ) -> BoxFuture<'static, Result<String, String>>;
     /// Ends the session of this token, also for copies of the cookie.
     fn logout(&self, token: &str);
     fn settings(&self) -> SettingsView;

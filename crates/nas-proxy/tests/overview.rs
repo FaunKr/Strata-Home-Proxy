@@ -263,12 +263,19 @@ async fn counts_open_requests_without_metrics() {
 
 #[tokio::test]
 async fn counts_down_to_sleep_and_follows_the_setting() {
+    // The idle time runs from the proxy's start; under load the login alone
+    // can take many seconds of it.
+    let started = unix_now();
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     let mut live = Live::open(&b).await;
     let v = live.until("Countdown", |v| countdown(v).is_some()).await;
     let left = countdown(&v).unwrap();
-    assert!((3590..=3600).contains(&left), "{left}");
+    let passed = (v["now"].as_u64().unwrap() - started) as i64;
+    assert!(
+        (3600 - passed - 1..=3600).contains(&left),
+        "{left} after {passed} s"
+    );
 
     let resp = save_settings(&mut b, &[("IDLE_TIMEOUT_SECS", "600")]).await;
     assert_eq!(resp.status(), 200);
@@ -277,11 +284,14 @@ async fn counts_down_to_sleep_and_follows_the_setting() {
             countdown(v).is_some_and(|l| l <= 600)
         })
         .await;
-    assert!(countdown(&v).unwrap() >= 590);
+    let left = countdown(&v).unwrap();
+    let passed = (v["now"].as_u64().unwrap() - started) as i64;
+    assert!(left >= 600 - passed - 1, "{left} after {passed} s");
 }
 
 #[tokio::test]
 async fn shows_why_the_pc_refused_to_sleep() {
+    let started = unix_now();
     let s = setup(true, |c| {
         c.idle_timeout = Duration::from_millis(300);
         c.sleep_retry = Duration::from_secs(60);
@@ -295,7 +305,9 @@ async fn shows_why_the_pc_refused_to_sleep() {
         .await;
     assert_eq!(v["sleep"]["Refused"]["reason"], "User active");
     let retry = v["sleep"]["Refused"]["retry_at"].as_u64().unwrap();
-    assert!(retry > unix_now() + 50, "{v}");
+    // The next attempt waits the retry time from the refusal, which may lie
+    // seconds back under load.
+    assert!(retry >= started + 60, "{v}");
 }
 
 // --- Events (#18) ---
@@ -467,13 +479,15 @@ async fn gaming_on_reports_a_failed_wake() {
 
 #[tokio::test]
 async fn keep_awake_holds_off_sleep_until_ended() {
-    // Long enough for the login before the button, short enough to wait out.
-    let s = setup(true, |c| c.idle_timeout = Duration::from_secs(2)).await;
+    let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(
         b.call("keep-awake", &[("choice", "1h")]).await.status(),
         200
     );
+    // Only now the idle time runs out: the login can take longer than any
+    // short timeout under load.
+    s.state.settings.set("IDLE_TIMEOUT_SECS", "1").unwrap();
     let mut live = Live::open(&b).await;
     let v = live
         .until("kept awake", |v| v["sleep"]["KeptAwake"].is_object())

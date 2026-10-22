@@ -401,7 +401,7 @@ pub async fn agent_update(State(pc): State<Pc>) -> Response {
 }
 
 /// Strata's `/metrics`: the text set in `metrics` when asked for Prometheus'
-/// format, like Strata.
+/// format, like Strata; 401 without its key.
 pub async fn metrics(
     State(pc): State<Pc>,
     axum::extract::RawQuery(query): axum::extract::RawQuery,
@@ -417,6 +417,12 @@ pub async fn metrics(
     *pc.metrics_auth.lock().unwrap() = headers
         .get("authorization")
         .map(|v| v.to_str().unwrap().to_string());
+    // Like Strata, the metrics need the key (docs/strata-api.md).
+    if let Some(key) = pc.strata_key.lock().unwrap().clone()
+        && SeenCredentials::of(&headers).authorization != Some(format!("Bearer {key}"))
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     match pc.metrics.lock().unwrap().clone() {
         Some(body) => body.into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
@@ -861,7 +867,9 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         plug_sample: Duration::from_millis(100),
         sleep_retry: Duration::from_millis(300),
         sleep_settle: Duration::from_millis(200),
-        probe_timeout: Duration::from_millis(500),
+        // The default: answers the simulated PC gives must not miss it under
+        // load. A test that waits for a probe to run out sets a shorter one.
+        probe_timeout: Duration::from_secs(2),
         force_timeout: Duration::from_secs(10),
         max_body_bytes: 1 << 20,
         power_awake_watts: 75.0,

@@ -205,7 +205,9 @@ async fn without_a_page_nobody_asks_for_progress() {
     let mut b = logged_in(&s.url).await;
     assert_eq!(install(&mut b).await.status(), 200);
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(s.pc.job_polls.load(Ordering::SeqCst), 0);
+    // At most one look at the job: a status asked for just before the job
+    // started says "no job", and the job itself tells whether it ended.
+    assert!(s.pc.job_polls.load(Ordering::SeqCst) <= 1);
 }
 
 #[tokio::test]

@@ -39,8 +39,12 @@ const BENCH_FILE: &str = "strata-benchmark.json";
 const BENCHES_FILE: &str = "strata-benchmarks.json";
 /// How often the page's visits ask Git whether Strata has a newer version.
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
-/// How soon Strata's options are read again after a read that failed.
+/// How soon Strata's options are read again after a read that failed or
+/// lacked a part.
 const OPTIONS_RETRY: Duration = Duration::from_secs(600);
+/// How long reading Strata's options may take; the engine's `--help` alone
+/// may take 20 s in Strata's own read.
+const OPTIONS_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a benchmark waits for Strata to load its model.
 const READY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// Strata's port and network access, as the proxy expects them.
@@ -912,6 +916,15 @@ struct OptionsRead {
     at: Instant,
 }
 
+impl OptionsRead {
+    /// With the tuner's table, and the engine's help if there is an engine.
+    fn is_whole(&self) -> bool {
+        self.options.as_ref().is_some_and(|o| {
+            !o.tuner.is_empty() && (self.key.engine.is_none() || o.engine_help.is_some())
+        })
+    }
+}
+
 /// What the options are read for: the Terminal's version and the engine
 /// the run config starts, as it names it.
 #[derive(Clone, PartialEq, Eq)]
@@ -938,7 +951,7 @@ impl OptionsCheck {
     fn due(&self, key: &OptionsKey) -> bool {
         let state = self.inner.lock().unwrap();
         state.read.as_ref().is_none_or(|read| {
-            read.key != *key || (read.options.is_none() && read.at.elapsed() >= OPTIONS_RETRY)
+            read.key != *key || (!read.is_whole() && read.at.elapsed() >= OPTIONS_RETRY)
         })
     }
 
@@ -959,7 +972,7 @@ impl OptionsCheck {
 /// the engine changed since the last read; the page shows them at its next
 /// visit.
 pub fn check_options(agent: &Arc<Agent>) {
-    if agent.jobs.running() || !agent.options.claim() {
+    if agent.gaming() || agent.jobs.running() || !agent.options.claim() {
         return;
     }
     let agent = Arc::clone(agent);
@@ -973,9 +986,9 @@ pub fn check_options(agent: &Arc<Agent>) {
         };
         let read = match wanted {
             Some((key, spec)) if agent.options.due(&key) => {
-                let options = output(&agent, &spec)
+                let options = output_within(&agent, &spec, OPTIONS_TIMEOUT)
                     .await
-                    .and_then(|(_, lines)| terminal::read_options(&lines, &key.version));
+                    .and_then(|lines| terminal::read_options(&lines, &key.version));
                 Some((key, options))
             }
             _ => None,
@@ -1225,6 +1238,28 @@ async fn output(agent: &Agent, spec: &CommandSpec) -> Option<(i32, Vec<String>)>
         lines.push(line);
     }
     Some((run.wait().await?, lines))
+}
+
+/// The output of a command outside a job that ends within `limit`; one
+/// that takes longer is ended, with what it printed by then.
+async fn output_within(agent: &Agent, spec: &CommandSpec, limit: Duration) -> Option<Vec<String>> {
+    let mut run = agent.platform().run(spec).ok()?;
+    let cancel = run.canceller();
+    let mut lines = Vec::new();
+    let read = tokio::time::timeout(limit, async {
+        while let Some(line) = run.next_line().await {
+            lines.push(line);
+        }
+    })
+    .await;
+    if read.is_err() {
+        cancel();
+        tracing::warn!(
+            "{} took longer than {limit:?} and was ended",
+            spec.program.display()
+        );
+    }
+    Some(lines)
 }
 
 /// The folder as a `strata_processes` entry.

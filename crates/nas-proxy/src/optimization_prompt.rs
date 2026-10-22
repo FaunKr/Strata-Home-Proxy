@@ -8,7 +8,7 @@ use std::{fmt::Write, sync::Arc};
 use strata_admin_ui::api::{CodeBenchRun, CodeBenchState};
 use strata_pc_protocol::{
     LOAD_LINES, MachineFacts, NeverRule, SamplingField, SamplingSource, SamplingSupport,
-    StrataBenchmark, StrataInfo, StrataModel, StrataOptions, TunerOption,
+    StrataBenchmark, StrataInfo, StrataModel, StrataOptions, TunerOption, TunerTry,
 };
 
 use crate::{clock, state::AppState};
@@ -159,17 +159,22 @@ fn options_lines(out: &mut String, options: &StrataOptions) {
              option, `placement` the same model with other numbers on the GPU, `quality` can \
              change the answers, `nonrepeatable` differs from run to run.\n"
         );
-        let _ = writeln!(out, "| Option | Values | Answers | Tuner tries |");
-        let _ = writeln!(out, "|---|---|---|---|");
+        let _ = writeln!(out, "| Option | Values | Answers |");
+        let _ = writeln!(out, "|---|---|---|");
         for option in &options.tuner {
             let _ = writeln!(
                 out,
-                "| `{}` | {} | {} | {} |",
-                option.flag,
-                option_values(option),
-                option.answer,
-                option.tried.join(", ")
+                "| {} | {} | {} |",
+                cell(&format!("`{}`", option.flag)),
+                cell(&option_values(option)),
+                cell(&option.answer)
             );
+        }
+    }
+    if !options.tries.is_empty() {
+        let _ = writeln!(out, "\n### The tuner's own tries\n");
+        for one in &options.tries {
+            let _ = writeln!(out, "- {}", one_line(&try_text(one)));
         }
     }
     if !options.never.is_empty() {
@@ -178,7 +183,11 @@ fn options_lines(out: &mut String, options: &StrataOptions) {
             "\n### Settings the tuner never picks\n\nEach with Strata's reason:\n"
         );
         for rule in &options.never {
-            let _ = writeln!(out, "- {}: {}", never_text(rule), rule.reason);
+            let _ = writeln!(
+                out,
+                "- {}",
+                one_line(&format!("{}: {}", never_text(rule), rule.reason))
+            );
         }
     }
     if let Some(help) = &options.engine_help {
@@ -205,6 +214,29 @@ fn option_values(option: &TunerOption) -> String {
     }
 }
 
+/// `Label (`--spec 3`), for flash-next: placement`.
+fn try_text(one: &TunerTry) -> String {
+    let mut text = one.label.clone();
+    if !one.args.is_empty() {
+        let _ = write!(text, " (`{}`)", one.args.join(" "));
+    }
+    if !one.families.is_empty() {
+        let _ = write!(text, ", for {}", one.families.join(", "));
+    }
+    let _ = write!(text, ": {}", one.answer);
+    text
+}
+
+/// Text from the PC on one line, so it cannot start a heading or list.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Text from the PC in a table cell, so it cannot end the cell.
+fn cell(text: &str) -> String {
+    one_line(text).replace('|', "\\|")
+}
+
 /// The setting and when the rule holds, e.g. `` `--spec` at_most 2, for flash-next ``.
 fn never_text(rule: &NeverRule) -> String {
     let mut text = if rule.env {
@@ -217,9 +249,9 @@ fn never_text(rule: &NeverRule) -> String {
     }
     if let Some(test) = &rule.test {
         let _ = write!(text, " {test}");
-        if let Some(limit) = &rule.limit {
-            let _ = write!(text, " {limit}");
-        }
+    }
+    if let Some(limit) = &rule.limit {
+        let _ = write!(text, " {limit}");
     }
     if !rule.when.is_empty() {
         let _ = write!(text, ", on PCs with {}", rule.when.join(", "));

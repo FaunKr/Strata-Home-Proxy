@@ -256,8 +256,7 @@
         "min": "0.0",
         "max": "0.55",
         "choices": [],
-        "answer": "placement",
-        "tried": ["0.2"]
+        "answer": "placement"
       },
       {
         "flag": "--spec",
@@ -265,8 +264,7 @@
         "min": null,
         "max": null,
         "choices": ["3", "4"],
-        "answer": "placement",
-        "tried": ["3"]
+        "answer": "placement"
       },
       {
         "flag": "--kv-grow",
@@ -274,8 +272,7 @@
         "min": null,
         "max": null,
         "choices": [],
-        "answer": "exact",
-        "tried": []
+        "answer": "exact"
       }
     ],
     "never": [
@@ -298,6 +295,14 @@
         "when": [],
         "families": ["flash-next"],
         "reason": "a 2-token window was 4% to 11% slower"
+      }
+    ],
+    "tries": [
+      {
+        "label": "Shorter speculative window (3 tokens)",
+        "answer": "placement",
+        "args": ["--spec", "3"],
+        "families": ["flash-next"]
       }
     ],
     "engine_help": "strata generate --pack DIR --tokens \"1,2,3\" [options]\n\n  --pack DIR           the pack directory (default pack/full)"

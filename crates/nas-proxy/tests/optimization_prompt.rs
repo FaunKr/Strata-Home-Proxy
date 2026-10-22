@@ -9,7 +9,8 @@ use common::*;
 use serde_json::json;
 use strata_pc_protocol::{
     CpuFacts, GpuFacts, Incoming, LoadLines, MachineFacts, NeverRule, RamStick, SamplingField,
-    SamplingSource, SamplingSupport, StrataOptions, StrataSampling, TunerOption, WindowsFacts,
+    SamplingSource, SamplingSupport, StrataOptions, StrataSampling, TunerOption, TunerTry,
+    WindowsFacts,
 };
 
 async fn prompt(b: &mut Browser, model: &str) -> String {
@@ -445,7 +446,6 @@ async fn carries_strata_s_options_when_the_pc_service_read_them() {
             TunerOption {
                 min: Some("0.0".into()),
                 max: Some("0.55".into()),
-                tried: vec!["0.2".into()],
                 ..option("--pcie-frac", "placement")
             },
             TunerOption {
@@ -455,6 +455,10 @@ async fn carries_strata_s_options_when_the_pc_service_read_them() {
             TunerOption {
                 takes_value: false,
                 ..option("--kv-grow", "exact")
+            },
+            TunerOption {
+                choices: vec!["a|b".into()],
+                ..option("--odd", "exact\n## not a heading")
             },
         ],
         never: vec![
@@ -474,14 +478,22 @@ async fn carries_strata_s_options_when_the_pc_service_read_them() {
                 ..Default::default()
             },
         ],
+        tries: vec![TunerTry {
+            label: "Shorter speculative window (3 tokens)".into(),
+            answer: "placement".into(),
+            args: vec!["--spec".into(), "3".into()],
+            families: vec!["flash-next".into()],
+        }],
         engine_help: Some("strata generate --pack DIR [options]\n  --kv-grow  grow".into()),
     });
     *s.pc.strata_info.lock().unwrap() = Some(report);
     let text = prompt(&mut b, "IQ3_XXS").await;
     for part in [
-        "| `--pcie-frac` | 0.0 to 0.55 | placement | 0.2 |",
-        "| `--spec` | 3, 4 | placement |  |",
-        "| `--kv-grow` | on or off | exact |  |",
+        "| `--pcie-frac` | 0.0 to 0.55 | placement |",
+        "| `--spec` | 3, 4 | placement |",
+        "| `--kv-grow` | on or off | exact |",
+        "| `--odd` | a\\|b | exact ## not a heading |",
+        "- Shorter speculative window (3 tokens) (`--spec 3`), for flash-next: placement",
         "- environment variable `STRATA_SH_STREAM`, on PCs with gfx12: it halves decode speed",
         "- `--spec` at_most 2, for flash-next: a 2-token window",
         "```text\nstrata generate --pack DIR [options]\n  --kv-grow  grow\n```",

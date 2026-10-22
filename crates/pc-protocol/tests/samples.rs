@@ -96,6 +96,7 @@ fn strata_report_splits_into_the_page_and_the_incoming_commits() {
     let options = info.options.as_ref().unwrap();
     assert_eq!(options.tuner[1].choices, ["3", "4"]);
     assert!(options.never[0].env);
+    assert_eq!(options.tries[0].args, ["--spec", "3"]);
     let sampling = info.models[0].sampling.as_ref().unwrap();
     assert_eq!(sampling.support, SamplingSupport::ModelCard);
     assert_eq!(sampling.thinking[2].source, SamplingSource::ChatSettings);

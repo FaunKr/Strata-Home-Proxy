@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use strata_pc_protocol::{NeverRule, StrataOptions, TunerOption};
+use strata_pc_protocol::{NeverRule, StrataOptions, TunerOption, TunerTry};
 
 use crate::command::CommandSpec;
 
@@ -293,6 +293,7 @@ pub fn read_options(output: &[String], version: &str) -> Option<StrataOptions> {
         version: version.to_string(),
         tuner: tuner_options(tuner),
         never: never_rules(&tuner["never"]),
+        tries: tuner_tries(&tuner["arms"]),
         engine_help,
     })
 }
@@ -324,27 +325,17 @@ fn tuner_options(tuner: &Value) -> Vec<TunerOption> {
         .map(|flag| {
             let bound = bounds.and_then(|b| b.get(flag)).unwrap_or(&Value::Null);
             let takes_value = !switches.contains(&flag);
-            let mut tried: Vec<String> = Vec::new();
-            if takes_value {
-                for value in arms.iter().filter_map(|a| a["set_args"].get(flag)) {
-                    let value = value_text(value);
-                    if !tried.contains(&value) {
-                        tried.push(value);
-                    }
-                }
-            }
             TunerOption {
                 flag: flag.to_string(),
                 takes_value,
-                min: bound.get("min").map(value_text),
-                max: bound.get("max").map(value_text),
+                min: value(&bound["min"]),
+                max: value(&bound["max"]),
                 choices: values(&bound["choices"]),
                 answer: answers
                     .and_then(|a| a.get(flag))
                     .and_then(Value::as_str)
                     .unwrap_or("exact")
                     .to_string(),
-                tried,
             }
         })
         .collect()
@@ -360,16 +351,38 @@ fn never_rules(never: &Value) -> Vec<NeverRule> {
                 (None, None) => return None,
             };
             let mut values = values(&rule["values"]);
-            values.extend(rule.get("value").map(value_text));
+            values.extend(value(&rule["value"]));
             Some(NeverRule {
                 setting: setting.to_string(),
                 env,
                 values,
                 test: text(&rule["test"]).map(String::from),
-                limit: rule.get("limit").map(value_text),
+                limit: value(&rule["limit"]),
                 when: self::values(&rule["when"]),
                 families: self::values(&rule["families"]),
                 reason: text(&rule["reason"]).unwrap_or_default().to_string(),
+            })
+        })
+        .collect()
+}
+
+fn tuner_tries(arms: &Value) -> Vec<TunerTry> {
+    list(arms)
+        .iter()
+        .filter_map(|arm| {
+            let mut args = Vec::new();
+            for (flag, set) in arm["set_args"].as_object().into_iter().flatten() {
+                match set {
+                    Value::Bool(false) | Value::Null => {}
+                    Value::Bool(true) => args.push(flag.clone()),
+                    other => args.extend([flag.clone(), value_text(other)]),
+                }
+            }
+            Some(TunerTry {
+                label: text(&arm["label"])?.to_string(),
+                answer: text(&arm["answer"]).unwrap_or("exact").to_string(),
+                args,
+                families: values(&arm["families"]),
             })
         })
         .collect()
@@ -380,7 +393,12 @@ fn list(v: &Value) -> &[Value] {
 }
 
 fn values(v: &Value) -> Vec<String> {
-    list(v).iter().map(value_text).collect()
+    list(v).iter().filter_map(value).collect()
+}
+
+/// A value Strata gave, `None` for none or `null`.
+fn value(v: &Value) -> Option<String> {
+    (!v.is_null()).then(|| value_text(v))
 }
 
 /// A value as Strata writes it on the command line.
@@ -472,26 +490,21 @@ mod tests {
         let spec = option("--spec");
         assert_eq!(spec.choices, ["3", "4"]);
         assert_eq!(spec.answer, "placement");
-        assert_eq!(spec.tried, ["3"]);
         assert!(spec.takes_value);
         let pcie = option("--pcie-frac");
         assert_eq!(
             (pcie.min.as_deref(), pcie.max.as_deref()),
             (Some("0.0"), Some("0.55"))
         );
-        assert_eq!(pcie.tried, ["0.2"]);
         assert_eq!(
             option("--prefill").choices,
             ["auto", "auto:16384", "auto:32768", "2048", "4096"]
         );
-        assert_eq!(option("--prefill").tried, ["auto:32768", "4096"]);
-        assert_eq!(option("--adapt-decay").tried, ["0.97", "0.9"]);
         assert_eq!(option("--kv").answer, "quality");
         assert_eq!(option("--adapt-async").answer, "nonrepeatable");
         let switch = option("--kv-grow");
         assert!(!switch.takes_value);
         assert_eq!(switch.answer, "exact");
-        assert!(switch.tried.is_empty());
         let mut sorted = options.tuner.clone();
         sorted.sort_by(|a, b| a.flag.cmp(&b.flag));
         assert_eq!(sorted, options.tuner);
@@ -520,6 +533,26 @@ mod tests {
             ),
             ("--spec", Some("at_most"), Some("2"))
         );
+
+        assert_eq!(options.tries.len(), 16);
+        let rebalance = &options.tries[3];
+        assert_eq!(rebalance.label, "Re-balance the expert cache faster");
+        assert_eq!(rebalance.answer, "placement");
+        assert_eq!(
+            rebalance.args,
+            [
+                "--adapt-every",
+                "1",
+                "--adapt-swaps",
+                "80",
+                "--adapt-decay",
+                "0.97"
+            ]
+        );
+        assert_eq!(rebalance.families, ["flash-next"]);
+        assert_eq!(options.tries[6].args, ["--trim-stage-weights"]);
+        assert!(options.tries[8].args.is_empty());
+        assert_eq!(options.tries[9].families, ["qwen36"]);
 
         let help = options.engine_help.unwrap();
         assert!(help.starts_with("strata generate --pack DIR"), "{help}");

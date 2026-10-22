@@ -16,6 +16,9 @@ pub struct StrataOptions {
     /// Settings the tuner never picks, with Strata's reason.
     #[serde(default)]
     pub never: Vec<NeverRule>,
+    /// The tries the tuner makes beyond its ranges.
+    #[serde(default)]
+    pub tries: Vec<TunerTry>,
     /// What the engine prints for `--help`; `None` without a model's engine
     /// that runs.
     #[serde(default)]
@@ -41,9 +44,22 @@ pub struct TunerOption {
     /// answers), `placement` (the same model, other numbers on the GPU),
     /// `quality` (can change answers) or `nonrepeatable`.
     pub answer: String,
-    /// The values the tuner's own tries set.
+}
+
+/// One of the tuner's own tries (`ARMS` in `tune_knobs.py`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TunerTry {
+    /// Strata's words for it.
+    pub label: String,
+    /// As in [`TunerOption::answer`].
+    pub answer: String,
+    /// The engine arguments it sets, e.g. `["--spec", "3", "--kv-grow"]`;
+    /// empty for a try that sets something else.
     #[serde(default)]
-    pub tried: Vec<String>,
+    pub args: Vec<String>,
+    /// Only for these model families; all when empty.
+    #[serde(default)]
+    pub families: Vec<String>,
 }
 
 /// A setting the tuner never picks (`NEVER` in `tune_knobs.py`).

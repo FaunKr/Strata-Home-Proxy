@@ -322,6 +322,15 @@ async fn a_tuner_that_fails_without_an_answer_gives_its_reason() {
     let done = finished(&s).await;
     assert_eq!(done["state"], "failed", "{done}");
     assert_ne!(done["error"], "The tuner gave no answer", "{done}");
+    // Its own words stay readable.
+    assert!(
+        done["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l == "Traceback: engine missing"),
+        "{done}"
+    );
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
 }
 
@@ -329,8 +338,8 @@ async fn a_tuner_that_fails_without_an_answer_gives_its_reason() {
 async fn a_running_tune_logs_each_new_step_and_shows_its_speeds() {
     let s = setup("tune-log").await;
     installed(&s);
-    // The answer comes once the status files below are read.
-    tuner_says(&s, &[TUNED.trim_end()], Duration::from_secs(6), false);
+    // The answer comes at once; the tuner runs on until cancelled.
+    tuner_says(&s, &[TUNED.trim_end()], Duration::ZERO, true);
     let (code, answer) = post(&s, "/strata/jobs", tune("IQ3_XXS")).await;
     assert_eq!(code, 202, "{answer}");
     let status = s.agent.cfg.state_dir().join("strata-tune-status.json");
@@ -380,8 +389,10 @@ async fn a_running_tune_logs_each_new_step_and_shows_its_speeds() {
         ])
     );
 
+    let (code, _) = post(&s, "/strata/job/cancel", json!({})).await;
+    assert_eq!(code, 202);
     let done = finished(&s).await;
-    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(done["state"], "cancelled", "{done}");
     // The tuner's answer is no line to read.
     let lines = done["lines"].as_array().unwrap();
     assert!(

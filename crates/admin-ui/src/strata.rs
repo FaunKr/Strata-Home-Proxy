@@ -524,10 +524,19 @@ fn eta_text(secs: u64) -> String {
 /// them, and the fastest marked.
 fn speed_rows(speeds: &[TuneSpeed]) -> Vec<String> {
     let base = speeds.iter().find(|s| s.label == "base").map(|s| s.tok_s);
-    let fastest = speeds.iter().map(|s| s.tok_s).fold(f64::MIN, f64::max);
+    // The first of equally fast ones.
+    let fastest = speeds
+        .iter()
+        .enumerate()
+        .fold(None, |best: Option<(usize, f64)>, (i, s)| match best {
+            Some((_, tok_s)) if tok_s >= s.tok_s => best,
+            _ => Some((i, s.tok_s)),
+        })
+        .map(|(i, _)| i);
     speeds
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(i, s)| {
             let mut row = if s.label == "base" {
                 format!("Your current settings: {:.1} tok/s", s.tok_s)
             } else {
@@ -538,7 +547,7 @@ fn speed_rows(speeds: &[TuneSpeed]) -> Vec<String> {
             {
                 row.push_str(&format!(" ({:+.1} %)", (s.tok_s / base - 1.0) * 100.0));
             }
-            if s.tok_s == fastest && speeds.len() > 1 {
+            if fastest == Some(i) && speeds.len() > 1 {
                 row.push_str(" · fastest so far");
             }
             row
@@ -2446,6 +2455,14 @@ mod tests {
             [
                 "Shorter speculative window: 30.0 tok/s · fastest so far",
                 "Longer: 29.0 tok/s"
+            ]
+        );
+        // Of equally fast ones, the first leads.
+        assert_eq!(
+            speed_rows(&[speed("base", 171.4), speed("Longer", 171.4)]),
+            [
+                "Your current settings: 171.4 tok/s · fastest so far",
+                "Longer: 171.4 tok/s (+0.0 %)"
             ]
         );
         assert!(speed_rows(&[]).is_empty());

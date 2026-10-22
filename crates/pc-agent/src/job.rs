@@ -6,7 +6,6 @@
 //! handlers (status, current job, cancel) see the state, through [`Jobs`].
 
 use std::{
-    collections::VecDeque,
     future::Future,
     path::Path,
     sync::{Arc, Mutex},
@@ -292,26 +291,29 @@ impl JobContext {
         self.with(|inner| inner.bench)
     }
 
-    /// Adds `line` to the job's output, which keeps the last
-    /// [`KEPT_LINES`].
-    pub fn add_line(&self, line: String) {
-        let added = self.with(|inner| {
-            let job = inner.current.as_mut()?;
-            job.lines.push(line);
-            let over = job.lines.len().saturating_sub(KEPT_LINES);
-            job.lines.drain(..over);
-            Some(())
-        });
-        if added.is_some() {
-            self.save();
-        }
-    }
-
-    /// Shows a running tune's measurements so far.
-    pub fn show_speeds(&self, speeds: Vec<TuneSpeed>) {
+    /// A running tune's state from Strata's status file: its step, share
+    /// and time left, a new line for the log when the step is new, and the
+    /// measurements so far.
+    pub fn tune_status(
+        &self,
+        line: Option<String>,
+        step: &str,
+        percent: Option<u8>,
+        eta_secs: Option<u64>,
+        speeds: Vec<TuneSpeed>,
+    ) {
         let changed = self.with(|inner| {
             let job = inner.current.as_mut()?;
-            let changed = job.speeds != speeds;
+            let changed = line.is_some()
+                || job.step.as_deref() != Some(step)
+                || job.percent != percent
+                || job.speeds != speeds;
+            if let Some(line) = line {
+                keep_line(&mut job.lines, line);
+            }
+            job.step = Some(step.to_string());
+            job.percent = percent;
+            job.eta_secs = eta_secs;
             job.speeds = speeds;
             Some(changed)
         });
@@ -357,8 +359,8 @@ impl JobContext {
         (ran, output)
     }
 
-    /// Like [`command_output`](Self::command_output), but the output stays
-    /// out of the job's lines: a machine's answer, not for reading.
+    /// Like [`command_output`](Self::command_output), but a line holding a
+    /// JSON object, the command's answer, stays out of the job's lines.
     pub(crate) async fn command_answer(
         &self,
         spec: CommandSpec,
@@ -375,7 +377,7 @@ impl JobContext {
         spec: CommandSpec,
         progress: bool,
         mut output: Option<&mut Vec<String>>,
-        show: bool,
+        show_answers: bool,
     ) -> Result<(), Step> {
         let mut run = self
             .agent
@@ -398,7 +400,10 @@ impl JobContext {
             if let Some(output) = output.as_mut() {
                 output.push(line.clone());
             }
-            if !show {
+            if !show_answers
+                && serde_json::from_str::<serde_json::Value>(line.trim())
+                    .is_ok_and(|v| v.is_object())
+            {
                 continue;
             }
             let step_changed = self.with(|inner| {
@@ -429,12 +434,7 @@ impl JobContext {
                         *step = format!("{prefix} · {step}");
                     }
                 }
-                let mut lines: VecDeque<String> = std::mem::take(&mut job.lines).into();
-                lines.push_back(line);
-                while lines.len() > KEPT_LINES {
-                    lines.pop_front();
-                }
-                job.lines = lines.into();
+                keep_line(&mut job.lines, line);
                 Some(job.step != before)
             });
             if step_changed == Some(true) {
@@ -666,6 +666,13 @@ fn parse_download(line: &str) -> Option<(&str, u64, u64, u8)> {
     let (done, total) = amounts.split_once(" / ")?;
     let gb = |s: &str| s.trim().parse::<f64>().ok().map(|v| (v * 1e9) as u64);
     Some((label, gb(done)?, gb(total)?, percent.trim().parse().ok()?))
+}
+
+/// Adds `line` to a job's output, which keeps the last [`KEPT_LINES`].
+fn keep_line(lines: &mut Vec<String>, line: String) {
+    lines.push(line);
+    let over = lines.len().saturating_sub(KEPT_LINES);
+    lines.drain(..over);
 }
 
 #[cfg(test)]

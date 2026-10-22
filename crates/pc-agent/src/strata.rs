@@ -893,26 +893,30 @@ async fn tune(
         let run = job.command_answer(terminal.tune(&config, mode, usage, &status));
         tokio::pin!(run);
         let mut last_step = None;
-        loop {
+        // Shows the status file; one log line per new step, with the time
+        // since the start.
+        let mut show = async || {
+            let Some(p) = tokio::fs::read_to_string(&status)
+                .await
+                .ok()
+                .and_then(|text| terminal::tune_progress(&text))
+            else {
+                return;
+            };
+            let line = (last_step.as_ref() != Some(&p.step))
+                .then(|| format!("[{}] {}", since_text(started.elapsed()), p.step));
+            job.tune_status(line, &p.step, p.percent, p.eta_secs, p.speeds);
+            last_step = Some(p.step);
+        };
+        let ran = loop {
             tokio::select! {
                 ran = &mut run => break ran,
-                () = tokio::time::sleep(TUNE_STATUS_EVERY) => {
-                    if let Some(p) = tokio::fs::read_to_string(&status)
-                        .await
-                        .ok()
-                        .and_then(|text| terminal::tune_progress(&text))
-                    {
-                        // One line per new step, with the time since the start.
-                        if last_step.as_ref() != Some(&p.step) {
-                            job.add_line(format!("[{}] {}", since_text(started.elapsed()), p.step));
-                        }
-                        job.progress(&p.step, p.percent, p.eta_secs);
-                        job.show_speeds(p.speeds);
-                        last_step = Some(p.step);
-                    }
-                }
+                () = tokio::time::sleep(TUNE_STATUS_EVERY) => show().await,
             }
-        }
+        };
+        // What the tuner wrote just before it ended.
+        show().await;
+        ran
     };
     let (ran, output) = ran;
     let read = terminal::tune_result(&output, mode, usage, unix_now());

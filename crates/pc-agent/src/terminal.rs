@@ -43,7 +43,7 @@ try:
     out["tuner"] = {"bounds": plain(k.BOUNDS), "never": plain(k.NEVER),
         "answer_of_flag": plain(k.ANSWER_OF_FLAG), "bool_flags": sorted(k.BOOL_FLAGS),
         "arms": [{"label": a.label, "answer": a.answer, "set_args": plain(a.set_args),
-                  "families": plain(a.families)} for a in k.ARMS]}
+                  "env": plain(a.env), "families": plain(a.families)} for a in k.ARMS]}
 except Exception as e:
     out["tuner_error"] = str(e)
 if len(sys.argv) > 1:
@@ -772,6 +772,12 @@ fn tuner_tries(arms: &Value) -> Vec<TunerTry> {
                 label: text(&arm["label"])?.to_string(),
                 answer: text(&arm["answer"]).unwrap_or("exact").to_string(),
                 args,
+                env: arm["env"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(name, set)| (name.clone(), value(set)))
+                    .collect(),
                 families: values(&arm["families"]),
             })
         })
@@ -975,6 +981,13 @@ mod tests {
         assert_eq!(rebalance.families, ["flash-next"]);
         assert_eq!(options.tries[6].args, ["--trim-stage-weights"]);
         assert!(options.tries[8].args.is_empty());
+        assert!(options.tries[8].env.is_empty());
+        let pin = &options.tries[12];
+        assert!(pin.args.is_empty());
+        assert_eq!(
+            pin.env,
+            [("STRATA_PIN_BY_NEED".to_string(), Some("1".to_string()))].into()
+        );
         assert_eq!(options.tries[9].families, ["qwen36"]);
 
         let help = options.engine_help.unwrap();

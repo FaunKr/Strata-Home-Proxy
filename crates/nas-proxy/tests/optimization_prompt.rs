@@ -22,17 +22,60 @@ async fn prompt(b: &mut Browser, model: &str) -> String {
 }
 
 #[tokio::test]
-async fn asks_for_engine_options_as_the_field_takes_them() {
+async fn asks_for_three_blocks_as_the_fields_take_them() {
     let s = setup(true, |_| {}).await;
     *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
     let mut b = logged_in(&s.url).await;
     let text = prompt(&mut b, "IQ3_XXS").await;
+    let answer = text
+        .split("\n## Your answer\n")
+        .nth(1)
+        .unwrap_or_else(|| panic!("no answer section:\n{text}"));
     for part in [
-        "the `user_args` one option per line (`--name value`)",
-        "paste them into the model's *Engine options* field in my web UI",
+        "exactly three code blocks, in this order, each ready to paste as it is",
+        "1. Engine options: a `text` block with the whole new `user_args`, one option with its value per line (`--name value`), for the *Engine options* field in my web UI.",
+        "2. Engine environment: a `text` block with the whole new `env`, one `NAME=value` per line, for the *Engine environment* field.",
+        "3. Sampling: a `json` block with the whole new `sampling` object of the run config.",
+        "Leave a block empty when nothing in its field should change.",
     ] {
-        assert!(text.contains(part), "{part} missing:\n{text}");
+        assert!(answer.contains(part), "{part} missing:\n{answer}");
     }
+    assert!(
+        text.contains(
+            "only environment variables from the list under *Engine environment variables*"
+        ),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn lists_the_model_s_engine_environment() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.models[0].env = Some(
+        [("STRATA_PIN_BY_NEED", "1"), ("STRATA_NOTE", "a b=c")]
+            .map(|(n, v)| (n.to_string(), v.to_string()))
+            .into(),
+    );
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert!(
+        text.contains("```text\nSTRATA_NOTE=a b=c\nSTRATA_PIN_BY_NEED=1\n```"),
+        "{text}"
+    );
+
+    let mut report = strata_info(true);
+    report.info.models[0].env = Some(Default::default());
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert!(text.contains("### Engine environment\n\n"), "{text}");
+    assert!(text.contains("None set."), "{text}");
+    // Without the tuner's table there is nothing to suggest from.
+    assert!(
+        text.contains("did not report the variables Strata's tuner knows, so suggest none"),
+        "{text}"
+    );
 }
 
 #[tokio::test]
@@ -47,7 +90,6 @@ async fn carries_the_model_and_the_task() {
         "RAM: 64.0 GB",
         "IQ3_XXS",
         "81.0 GB",
-        "ready-to-paste `sampling` block",
         "most tokens per second",
         "one reason for each change",
     ] {
@@ -492,12 +534,22 @@ async fn carries_strata_s_options_when_the_pc_service_read_them() {
                 ..Default::default()
             },
         ],
-        tries: vec![TunerTry {
-            label: "Shorter speculative window (3 tokens)".into(),
-            answer: "placement".into(),
-            args: vec!["--spec".into(), "3".into()],
-            families: vec!["flash-next".into()],
-        }],
+        tries: vec![
+            TunerTry {
+                label: "Shorter speculative window (3 tokens)".into(),
+                answer: "placement".into(),
+                args: vec!["--spec".into(), "3".into()],
+                families: vec!["flash-next".into()],
+                ..Default::default()
+            },
+            TunerTry {
+                label: "Pin memory only when needed".into(),
+                answer: "exact".into(),
+                env: [("STRATA_PIN_BY_NEED".to_string(), Some("1".to_string()))].into(),
+                families: vec!["flash-next".into()],
+                ..Default::default()
+            },
+        ],
         engine_help: Some("strata generate --pack DIR [options]\n  --kv-grow  grow".into()),
     });
     *s.pc.strata_info.lock().unwrap() = Some(report);
@@ -508,7 +560,9 @@ async fn carries_strata_s_options_when_the_pc_service_read_them() {
         "| `--kv-grow` | on or off | exact |",
         "| `--odd` | a\\|b | exact ## not a heading |",
         "- Shorter speculative window (3 tokens) (`--spec 3`), for flash-next: placement",
-        "- environment variable `STRATA_SH_STREAM`, on PCs with gfx12: it halves decode speed",
+        "### Engine environment variables\n\nThe variables Strata's tuner knows; suggest no others.",
+        "- `STRATA_PIN_BY_NEED=1`: Pin memory only when needed, for flash-next, exact",
+        "- never `STRATA_SH_STREAM`, on PCs with gfx12: it halves decode speed",
         "- `--spec` at_most 2, for flash-next: a 2-token window",
         "```text\nstrata generate --pack DIR [options]\n  --kv-grow  grow\n```",
     ] {

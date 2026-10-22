@@ -417,8 +417,9 @@ read is still without it. An engine replaced under the same `exe` (a
   (PC traits such as `hybrid_cpu`), `families` (Strata's model families) and
   `reason`.
 - `tries`: the tuner's own tries in Strata's order: `label`, `answer`, `args`
-  (the engine arguments it sets; empty for one that sets something else) and
-  `families`.
+  (the engine arguments it sets; empty for one that sets something else),
+  `env` (the engine environment variables it sets, name to value, `null` for
+  one it removes; empty from an older PC service) and `families`.
 - `engine_help`: what the engine of the active model's run config (else the
   first model's) prints for `--help`; `null` without a model or when it does
   not run.

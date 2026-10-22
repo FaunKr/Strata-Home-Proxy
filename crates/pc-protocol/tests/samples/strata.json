@@ -340,6 +340,14 @@
         "label": "Shorter speculative window (3 tokens)",
         "answer": "placement",
         "args": ["--spec", "3"],
+        "env": {},
+        "families": ["flash-next"]
+      },
+      {
+        "label": "Pin memory only when needed",
+        "answer": "exact",
+        "args": [],
+        "env": {"STRATA_PIN_BY_NEED": "1"},
         "families": ["flash-next"]
       }
     ],

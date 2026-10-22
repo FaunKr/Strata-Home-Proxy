@@ -340,6 +340,61 @@ async fn shows_each_models_benchmark_fastest_first() {
 }
 
 #[tokio::test]
+async fn on_the_terminal_bench_bat_results_are_marked_not_comparable() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.install = Some(StrataInstall::Terminal);
+    report.info.models = vec![
+        model("IQ3_XXS", Some("qwen"), 1, true),
+        model("coder-IQ1_M", Some("coder"), 1, false),
+    ];
+    report.info.benchmarks = vec![
+        StrataBenchmark {
+            decode_tps: Some(52.0),
+            ..benchmark("coder-IQ1_M", "52 Token/s")
+        },
+        StrataBenchmark {
+            decode_tps: Some(38.5),
+            tool: Some(BenchTool::StrataBench),
+            ..benchmark("IQ3_XXS", "38.5 Token/s")
+        },
+    ];
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata/version").await;
+    assert_eq!(
+        html.matches("BENCH.bat, not comparable").count(),
+        1,
+        "{html}"
+    );
+    assert!(
+        html.contains("Results marked BENCH.bat came from the old Strata folder"),
+        "{html}"
+    );
+    // The faster old result is not the fastest.
+    let fastest = html.find("Fastest").unwrap();
+    assert!(
+        html[..fastest].rfind("IQ3_XXS") > html[..fastest].rfind("coder-IQ1_M"),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn a_strata_folder_from_source_shows_no_note() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.install = Some(StrataInstall::Source);
+    report.info.benchmarks = vec![StrataBenchmark {
+        decode_tps: Some(38.5),
+        ..benchmark("IQ3_XXS", "38.5 Token/s")
+    }];
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata/version").await;
+    assert!(!html.contains("not comparable"), "{html}");
+}
+
+#[tokio::test]
 async fn comparing_models_reaches_the_pc_service() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;

@@ -224,7 +224,8 @@
     "decode_tps": 38.5,
     "prompt_tps": 612.0,
     "speed_projection": false,
-    "version": "0123456"
+    "version": "0123456",
+    "tool": "bench_bat"
   },
   "benchmarks": [
     {
@@ -234,7 +235,8 @@
       "decode_tps": 38.5,
       "prompt_tps": 612.0,
       "speed_projection": false,
-      "version": "0123456"
+      "version": "0123456",
+      "tool": "bench_bat"
     },
     {
       "model": "coder-IQ1_M",

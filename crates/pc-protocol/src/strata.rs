@@ -214,12 +214,28 @@ pub struct StrataBenchmark {
     pub context: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed_projection: Option<bool>,
-    /// Short commit of the Strata folder.
+    /// Short commit of the Strata folder, or the Strata Terminal's
+    /// version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Why its run in a comparison gave no result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// What measured it; missing from older records, which came from
+    /// `BENCH.bat`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<BenchTool>,
+}
+
+/// The benchmark that made a result. The two measure differently, so their
+/// tokens/s are not comparable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchTool {
+    /// `BENCH.bat` of a Strata folder from source.
+    BenchBat,
+    /// Strata's standard benchmark, `strata bench run`.
+    StrataBench,
 }
 
 /// What an update would bring: the commits Strata's Git source has and the

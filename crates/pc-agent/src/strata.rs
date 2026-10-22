@@ -800,7 +800,8 @@ async fn tune(
             tokio::select! {
                 ran = &mut run => break ran,
                 () = tokio::time::sleep(TUNE_STATUS_EVERY) => {
-                    if let Some(p) = std::fs::read_to_string(&status)
+                    if let Some(p) = tokio::fs::read_to_string(&status)
+                        .await
                         .ok()
                         .and_then(|text| terminal::tune_progress(&text))
                     {
@@ -810,31 +811,42 @@ async fn tune(
             }
         }
     };
-    let found = match ran {
-        (Err(Step::Cancelled), _) => Err(Step::Cancelled),
-        (_, output) => {
-            terminal::tune_result(&output, mode, usage, unix_now()).map_err(Step::Failed)
-        }
+    let (ran, output) = ran;
+    let read = terminal::tune_result(&output, mode, usage, unix_now());
+    // Strata activates the preset it saved; undone also after a cancel, so
+    // nothing the tuner found is applied.
+    let restored = job
+        .cleanup(async {
+            let restored = match &read {
+                Ok(StrataTune {
+                    preset: Some(preset),
+                    ..
+                }) => {
+                    job.step("Keeping your settings active");
+                    ask_terminal(job, terminal.undo_preset(preset), terminal::preset_answer).await
+                }
+                _ => Ok(()),
+            };
+            job.step("Starting Strata again");
+            agent.strata().start_again().await;
+            restored
+        })
+        .await;
+    let found = match (ran, read) {
+        (Err(Step::Cancelled), _) => return Err(Step::Cancelled),
+        (_, Ok(found)) => found,
+        // The command's own reason says more than its missing answer.
+        (Err(failed), Err(_)) => return Err(failed),
+        (Ok(()), Err(why)) => return Err(Step::Failed(why)),
     };
-    let restored = match &found {
-        Ok(StrataTune {
-            preset: Some(preset),
-            ..
-        }) => {
-            job.step("Keeping your settings active");
-            ask_terminal(job, terminal.undo_preset(preset), terminal::preset_answer).await
-        }
-        _ => Ok(()),
-    };
-    job.cleanup(async {
-        job.step("Starting Strata again");
-        agent.strata().start_again().await;
-    })
-    .await;
-    let found = found?;
-    restored?;
     let text = tune_text(&found);
     keep_tune(agent, id, found);
+    restored.map_err(|e| match e {
+        Step::Failed(why) => {
+            Step::Failed(format!("{text}, but the tuned settings stay active: {why}"))
+        }
+        other => other,
+    })?;
     Ok(Some(text))
 }
 
@@ -853,7 +865,11 @@ fn tune_text(tune: &StrataTune) -> String {
                 .gain_pct
                 .map(|g| format!(" (+{}%)", g.round()))
                 .unwrap_or_default();
-            format!("{speeds}{gain}: {}", tune.changed.join(", "))
+            if tune.changed.is_empty() {
+                format!("{speeds}{gain}")
+            } else {
+                format!("{speeds}{gain}: {}", tune.changed.join(", "))
+            }
         }
         "already_fastest" => "Your current settings are already the fastest".into(),
         _ => tune
@@ -872,9 +888,14 @@ fn load_tunes(agent: &Agent) -> Vec<(String, StrataTune)> {
 
 /// Keeps model `id`'s tune in place of its last one; `None` forgets it.
 fn keep_tune(agent: &Agent, id: &str, tune: impl Into<Option<StrataTune>>) {
+    let tune = tune.into();
     let mut all = load_tunes(agent);
+    let before = all.len();
     all.retain(|(model, _)| !model.eq_ignore_ascii_case(id));
-    all.extend(tune.into().map(|t| (id.to_string(), t)));
+    if tune.is_none() && all.len() == before {
+        return;
+    }
+    all.extend(tune.map(|t| (id.to_string(), t)));
     let text = serde_json::to_string_pretty(&all).expect("tunes serialize");
     if let Err(e) = crate::write_replacing(&agent.cfg.state_dir().join(TUNES_FILE), &text) {
         tracing::warn!("{TUNES_FILE} not saved: {e}");
@@ -1567,6 +1588,7 @@ pub fn view(agent: &Agent) -> StrataReport {
             let size = catalog::by_id(&id);
             let id = size.map_or(id, |s| s.id());
             let model = install.read_model(&id);
+            let no_tune = tune_unavailable(&install, &id);
             StrataModel {
                 disk_bytes: install.disk_bytes(&id),
                 active: active.as_deref() == Some(id.as_str()),
@@ -1577,8 +1599,8 @@ pub fn view(agent: &Agent) -> StrataReport {
                 config: model.shareable_config(),
                 chat_settings: model.shareable_chat(),
                 load_lines: agent.output.load_lines(&id),
-                tunable: Some(tune_unavailable(&install, &id).is_none()),
-                tune_unavailable: tune_unavailable(&install, &id),
+                tunable: Some(no_tune.is_none()),
+                tune_unavailable: no_tune,
                 last_tune: tunes
                     .iter()
                     .find(|(model, _)| model.eq_ignore_ascii_case(&id))

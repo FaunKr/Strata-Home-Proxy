@@ -190,6 +190,7 @@ impl JobContext {
             if let Some(job) = inner.current.as_mut() {
                 job.step = Some(step);
                 job.percent = None;
+                job.eta_secs = None;
             }
         });
         self.save();

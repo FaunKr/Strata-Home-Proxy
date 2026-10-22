@@ -238,3 +238,83 @@ async fn a_tune_is_refused_in_gaming_mode_and_for_a_folder_from_source() {
     assert_eq!(code, 409, "{answer}");
     assert!(s.fake.runs_of("strata.cmd").is_empty());
 }
+
+/// Strata activates the preset as soon as the tuner ends; a cancel right
+/// after still puts the settings back.
+#[tokio::test]
+async fn a_cancel_after_the_tuner_answered_still_undoes_its_preset() {
+    let s = setup("tune-cancel-late").await;
+    installed(&s);
+    tuner_says(&s, &[TUNED.trim_end()], Duration::ZERO, true);
+    let (code, _) = post(&s, "/strata/jobs", tune("IQ3_XXS")).await;
+    assert_eq!(code, 202);
+    job_until(&s, "the tuner's answer", |j| {
+        j["lines"]
+            .as_array()
+            .is_some_and(|l| l.iter().any(|l| l.as_str().unwrap().contains(PRESET)))
+    })
+    .await;
+    let (code, _) = post(&s, "/strata/job/cancel", json!({})).await;
+    assert_eq!(code, 202);
+    let done = finished(&s).await;
+    assert_eq!(done["state"], "cancelled", "{done}");
+    let runs = s.fake.runs_of("strata.cmd");
+    assert_eq!(
+        runs[1].args,
+        ["presets", "undo", PRESET, "--output", "json"]
+    );
+    eventually("Strata started again", || {
+        s.fake.starts.load(Ordering::SeqCst) == 1
+    })
+    .await;
+}
+
+/// An undo Strata refuses leaves the tuned settings active: the job says so,
+/// and the tune is still kept.
+#[tokio::test]
+async fn a_refused_undo_fails_the_tune_but_keeps_its_result() {
+    let s = setup("tune-undo-refused").await;
+    installed(&s);
+    tuner_says(&s, &[TUNED.trim_end()], Duration::ZERO, false);
+    s.fake.command(
+        "strata.cmd presets",
+        FakeCommand {
+            lines: vec![
+                r#"{"ok": false, "error": {"code": "not_found", "message": "No such preset"}}"#
+                    .into(),
+            ],
+            exit: Some(4),
+            ..FakeCommand::default()
+        },
+    );
+    let (code, _) = post(&s, "/strata/jobs", tune("IQ3_XXS")).await;
+    assert_eq!(code, 202);
+    let done = finished(&s).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    let error = done["error"].as_str().unwrap();
+    assert!(error.contains("the tuned settings stay active"), "{error}");
+    assert!(error.contains("No such preset"), "{error}");
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "IQ3_XXS")["last_tune"]["code"], "faster");
+}
+
+/// A tuner that does not run reports why, not a missing answer.
+#[tokio::test]
+async fn a_tuner_that_fails_without_an_answer_gives_its_reason() {
+    let s = setup("tune-crash").await;
+    installed(&s);
+    s.fake.command(
+        "strata.cmd tune",
+        FakeCommand {
+            lines: vec!["Traceback: engine missing".into()],
+            exit: Some(1),
+            ..FakeCommand::default()
+        },
+    );
+    let (code, _) = post(&s, "/strata/jobs", tune("IQ3_XXS")).await;
+    assert_eq!(code, 202);
+    let done = finished(&s).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert_ne!(done["error"], "The tuner gave no answer", "{done}");
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+}

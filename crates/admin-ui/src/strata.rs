@@ -1062,6 +1062,9 @@ fn last_tune_text(tune: &StrataTune) -> String {
         TuneUse::Chat => "chat",
     };
     let found = match (tune.code.as_str(), tune.base_tps, tune.tuned_tps) {
+        ("faster", Some(base), Some(tuned)) if tune.changed.is_empty() => {
+            format!("{base:.1} → {tuned:.1} tok/s; not applied")
+        }
         ("faster", Some(base), Some(tuned)) => format!(
             "{base:.1} → {tuned:.1} tok/s with {}; not applied",
             tune.changed.join(", ")

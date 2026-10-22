@@ -438,7 +438,10 @@ PC service's state folder; the job's `step`, `percent` and `eta_secs` follow it
 every second (`percent` stays below 100 until the tuner ends). Strata activates
 the preset it saves for faster settings; the PC service undoes that right away
 (`strata presets undo <id>`), so the model keeps running as before and the
-tuned settings wait in the preset. A cancelled tune keeps nothing. A source
+tuned settings wait in the preset; also after a cancel. If Strata refuses
+the undo, the job fails and says the tuned settings stay active, and the
+result is kept. A cancelled tune keeps nothing. While a tune runs, the proxy
+does not trust Strata's `/health`: the tuner's engine may answer there. A source
 folder or a family the tuner does not know is a `409` with the reason of
 `tune_unavailable`.
 

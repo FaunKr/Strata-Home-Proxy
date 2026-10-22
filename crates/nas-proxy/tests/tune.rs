@@ -36,6 +36,31 @@ async fn requests_get_an_answer_at_once_while_tuning() {
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
 }
 
+/// The tuner's engine may answer on Strata's port: requests still get the
+/// answer instead of reaching the engine under test.
+#[tokio::test]
+async fn a_tuner_engine_answering_gets_no_requests() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_job.lock().unwrap() = Some(job(StrataJobKind::Tune, StrataJobState::Running));
+    // The idle check asks the PC service and learns of the tune.
+    answers_with(&s, 503).await;
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    answers_with(&s, 200).await;
+}
+
+/// Sends requests until one gets `status`, for up to 10 s.
+async fn answers_with(s: &Setup, status: u16) {
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        let resp = post_json(s, "/v1/messages", json!({"model": "x"})).await;
+        if resp.status() == status {
+            return;
+        }
+        assert!(Instant::now() < until, "still {}", resp.status());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test]
 async fn the_pc_stays_awake_until_the_tune_ends() {
     let s = setup(true, |c| c.idle_timeout = Duration::from_millis(400)).await;

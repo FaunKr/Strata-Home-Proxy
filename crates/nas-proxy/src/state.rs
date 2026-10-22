@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -96,6 +96,9 @@ pub struct AppState {
     /// The code benchmark in the container code-bench.
     pub code_bench: crate::code_bench::CodeBench,
     in_flight: AtomicUsize,
+    /// The PC service last reported a tune. The tuner's engine may answer on
+    /// Strata's port meanwhile, so Strata's health says nothing then.
+    tuning: AtomicBool,
     /// Requests sent to Strata up to this moment are given up: Strata has
     /// shown nothing since (`drop_lost_requests`).
     give_up: tokio::sync::watch::Sender<Option<Instant>>,
@@ -155,6 +158,7 @@ impl AppState {
             code_bench: crate::code_bench::CodeBench::new(cfg.data_dir.clone()),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
+            tuning: AtomicBool::new(false),
             give_up: tokio::sync::watch::Sender::new(None),
             quiet_since: Mutex::new(None),
             lost_after: Mutex::new(LOST_AFTER),
@@ -193,6 +197,7 @@ impl AppState {
     /// these noted at once: the next call to Strata needs the new key.
     pub async fn ask_pc(&self, agent: &AgentClient) -> Option<PcStatus> {
         let status = agent.status().await?;
+        self.tuning.store(tuning(&status), Ordering::SeqCst);
         if let Some(mac) = status.mac.as_deref().and_then(|m| parse_mac(m).ok())
             && self.settings.set_reported_mac(mac)
         {
@@ -337,14 +342,17 @@ impl AppState {
     }
 
     pub async fn readiness(&self) -> Readiness {
-        {
-            let (lifecycle, now, t) = self.lifecycle();
-            if lifecycle.healthy_lately(now, t) {
+        // During a tune only the PC service knows when Strata is back.
+        if !self.tuning.load(Ordering::SeqCst) {
+            {
+                let (lifecycle, now, t) = self.lifecycle();
+                if lifecycle.healthy_lately(now, t) {
+                    return Readiness::Ready;
+                }
+            }
+            if self.strata_healthy().await {
                 return Readiness::Ready;
             }
-        }
-        if self.strata_healthy().await {
-            return Readiness::Ready;
         }
         match self.ask_pc(&self.agent()).await {
             Some(status) if status.gaming_mode => {

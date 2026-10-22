@@ -278,6 +278,12 @@ An older PC service leaves the field out. This and `context` are read from
 what Strata starts with: `args` with `user_args` over it, as Strata's
 `engine_args` does.
 
+`user_args` are the run config's engine options set by hand, `[]`
+without any, each path cut to its file name as in `config`; missing for a
+configuration without `args_written`, whose Strata does not read them.
+`started_args` are the args Strata starts with, cut the same way and without
+an `--api-key` with its value. An older PC service leaves both out.
+
 `context` is the value of `--max-context` in its configuration (tokens),
 `null` if the flag is missing or its value is not a number. An older
 PC service leaves the field out.

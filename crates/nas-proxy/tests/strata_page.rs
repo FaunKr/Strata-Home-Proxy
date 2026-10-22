@@ -1040,3 +1040,93 @@ async fn the_switch_and_the_removal_land_in_the_history() {
         assert!(details.iter().any(|d| d == wanted), "{wanted}: {details:?}");
     }
 }
+
+// --- #296 the engine options of an installed model ---
+
+/// The two models, the Qwen one with engine options set by hand.
+fn with_engine_options() -> StrataReport {
+    let mut report = with_two_models(None);
+    report.info.models[0].user_args = Some(vec![
+        "--threads".into(),
+        "8".into(),
+        "--control-vector".into(),
+        "my vector.gguf".into(),
+        "--no-mmap".into(),
+    ]);
+    report.info.models[0].started_args = Some(vec![
+        "--native".into(),
+        "a.gguf".into(),
+        "--threads".into(),
+        "8".into(),
+    ]);
+    report.info.models[1].user_args = Some(vec![]);
+    report.info.models[1].started_args = Some(vec!["--native".into(), "b.gguf".into()]);
+    report
+}
+
+#[tokio::test]
+async fn an_installed_model_shows_its_engine_options_one_per_line() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_engine_options());
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(html.matches("Engine options").count(), 2, "{html}");
+    assert!(
+        html.contains("--threads 8\n--control-vector \"my vector.gguf\"\n--no-mmap"),
+        "one option per line, a value with spaces quoted: {html}"
+    );
+    assert!(
+        html.contains("Strata starts with: --native a.gguf --threads 8"),
+        "{html}"
+    );
+    assert!(html.contains("none set by hand"), "{html}");
+}
+
+#[tokio::test]
+async fn without_word_on_engine_options_none_show() {
+    let s = setup(true, |_| {}).await;
+    let mut report = with_engine_options();
+    // An older PC service, and a Strata that keeps no options by hand.
+    report.info.models[0].user_args = None;
+    report.info.models[0].started_args = None;
+    report.info.models[1].user_args = None;
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(!html.contains("Engine options"), "{html}");
+    assert!(!html.contains("Strata starts with"), "{html}");
+}
+
+#[tokio::test]
+async fn an_active_preset_says_it_wins_over_the_engine_options() {
+    let s = setup(true, |_| {}).await;
+    let mut report = with_engine_options();
+    report.info.models[0].presets = serde_json::from_value(json!({
+        "latest": {"id": "p1", "name": "Full speed", "active": true, "state": "fresh"}
+    }))
+    .unwrap();
+    // Saved but not applied, and set aside after a new graphics card.
+    report.info.models[1].presets = serde_json::from_value(json!({
+        "latest": {"id": "p2", "name": "Saved", "active": false}
+    }))
+    .unwrap();
+    report.info.models.push(report.info.models[1].clone());
+    report.info.models[2].id = "swift-IQ3_M".into();
+    report.info.models[2].presets = serde_json::from_value(json!({
+        "latest": {"id": "p3", "name": "Old card", "active": true, "state": "hard"}
+    }))
+    .unwrap();
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(
+        html.matches("Preset Full speed is active; its settings win over these.")
+            .count(),
+        1,
+        "{html}"
+    );
+    assert_eq!(html.matches("win over these").count(), 1, "{html}");
+}

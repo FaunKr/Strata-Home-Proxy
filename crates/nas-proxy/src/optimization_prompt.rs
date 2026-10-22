@@ -7,8 +7,8 @@ use std::{fmt::Write, sync::Arc};
 
 use strata_admin_ui::api::{CodeBenchRun, CodeBenchState};
 use strata_pc_protocol::{
-    LOAD_LINES, MachineFacts, SamplingField, SamplingSource, SamplingSupport, StrataBenchmark,
-    StrataInfo, StrataModel,
+    LOAD_LINES, MachineFacts, NeverRule, SamplingField, SamplingSource, SamplingSupport,
+    StrataBenchmark, StrataInfo, StrataModel, StrataOptions, TunerOption,
 };
 
 use crate::{clock, state::AppState};
@@ -83,6 +83,9 @@ pub fn build(
     let _ = writeln!(out, "\n## Strata\n");
     let version = info.version.as_deref().unwrap_or("unknown");
     let _ = writeln!(out, "- Version: {version}");
+    if let Some(options) = &info.options {
+        options_lines(out, options);
+    }
 
     let _ = writeln!(out, "\n## Model {}\n", model.id);
     model_lines(out, info, model);
@@ -143,6 +146,88 @@ pub fn build(
         code_bench_text(code_bench, &model.id)
     );
     Ok(text)
+}
+
+/// What this Strata version offers to tune: the tuner's table, what it
+/// never picks and the engine's own help.
+fn options_lines(out: &mut String, options: &StrataOptions) {
+    if !options.tuner.is_empty() {
+        let _ = writeln!(
+            out,
+            "\n### Options the tuner knows\n\nStrata's own tuner (`strata tune`) searches \
+             these engine options. Answers: `exact` gives the same answers as without the \
+             option, `placement` the same model with other numbers on the GPU, `quality` can \
+             change the answers, `nonrepeatable` differs from run to run.\n"
+        );
+        let _ = writeln!(out, "| Option | Values | Answers | Tuner tries |");
+        let _ = writeln!(out, "|---|---|---|---|");
+        for option in &options.tuner {
+            let _ = writeln!(
+                out,
+                "| `{}` | {} | {} | {} |",
+                option.flag,
+                option_values(option),
+                option.answer,
+                option.tried.join(", ")
+            );
+        }
+    }
+    if !options.never.is_empty() {
+        let _ = writeln!(
+            out,
+            "\n### Settings the tuner never picks\n\nEach with Strata's reason:\n"
+        );
+        for rule in &options.never {
+            let _ = writeln!(out, "- {}: {}", never_text(rule), rule.reason);
+        }
+    }
+    if let Some(help) = &options.engine_help {
+        let _ = writeln!(
+            out,
+            "\n### Engine help\n\nWhat the engine prints for `--help`:\n"
+        );
+        fenced(out, "text", help);
+    }
+}
+
+fn option_values(option: &TunerOption) -> String {
+    if !option.takes_value {
+        return "on or off".into();
+    }
+    if !option.choices.is_empty() {
+        return option.choices.join(", ");
+    }
+    match (&option.min, &option.max) {
+        (Some(min), Some(max)) => format!("{min} to {max}"),
+        (Some(min), None) => format!("from {min}"),
+        (None, Some(max)) => format!("up to {max}"),
+        (None, None) => "any".into(),
+    }
+}
+
+/// The setting and when the rule holds, e.g. `` `--spec` at_most 2, for flash-next ``.
+fn never_text(rule: &NeverRule) -> String {
+    let mut text = if rule.env {
+        format!("environment variable `{}`", rule.setting)
+    } else {
+        format!("`{}`", rule.setting)
+    };
+    if !rule.values.is_empty() {
+        let _ = write!(text, " = {}", rule.values.join(" or "));
+    }
+    if let Some(test) = &rule.test {
+        let _ = write!(text, " {test}");
+        if let Some(limit) = &rule.limit {
+            let _ = write!(text, " {limit}");
+        }
+    }
+    if !rule.when.is_empty() {
+        let _ = write!(text, ", on PCs with {}", rule.when.join(", "));
+    }
+    if !rule.families.is_empty() {
+        let _ = write!(text, ", for {}", rule.families.join(", "));
+    }
+    text
 }
 
 /// `text` in a fence longer than any run of backticks in it, so text from

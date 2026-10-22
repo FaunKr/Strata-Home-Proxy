@@ -338,6 +338,31 @@ read again after 10 minutes:
 Whatever the PC service cannot read is `null` or an empty list. An older PC
 service leaves out `machine`.
 
+`options` (`StrataOptions`) says what the installed Strata Terminal offers to
+tune, for the optimization prompt. The PC service reads it in the background
+when `/strata` is asked for, with the Terminal's own Python (see
+[strata-api.md](strata-api.md)), and again only when the Terminal's version or
+the engine the run config names (`exe`) changes; a read that failed is tried
+again after 10 minutes. An answer during the read is still without it.
+- `version`: the Terminal version it was read from; the field is missing
+  while it differs from `version`.
+- `tuner`: each engine option of the tuner's table, sorted by `flag`:
+  `takes_value` (`false` for a switch), `min` and `max` of the searched range,
+  `choices`, `answer` (`exact`, `placement`, `quality` or `nonrepeatable`) and
+  `tried`, the values the tuner's own tries set. Values are text as Strata
+  writes them.
+- `never`: what the tuner never picks: `setting` (an engine flag, or an
+  environment variable when `env`), `values` (all when empty), `test` and
+  `limit` (Strata's name for the check on the value and its bound), `when`
+  (PC traits such as `hybrid_cpu`), `families` (Strata's model families) and
+  `reason`.
+- `engine_help`: what the engine of the active model's run config (else the
+  first model's) prints for `--help`; `null` without a model or when it does
+  not run.
+
+Missing without a Terminal (a Strata folder from source), before the first
+read and from an older PC service.
+
 ### What the PC service keeps in the model configurations
 
 When the PC service starts, and after `install`, `add_model` and `update`, it

@@ -8,8 +8,8 @@ use std::{sync::atomic::Ordering, time::Duration};
 use common::*;
 use serde_json::json;
 use strata_pc_protocol::{
-    CpuFacts, GpuFacts, Incoming, LoadLines, MachineFacts, RamStick, SamplingField, SamplingSource,
-    SamplingSupport, StrataSampling, WindowsFacts,
+    CpuFacts, GpuFacts, Incoming, LoadLines, MachineFacts, NeverRule, RamStick, SamplingField,
+    SamplingSource, SamplingSupport, StrataOptions, StrataSampling, TunerOption, WindowsFacts,
 };
 
 async fn prompt(b: &mut Browser, model: &str) -> String {
@@ -421,4 +421,71 @@ async fn a_load_that_ended_without_answering_reads_as_failed() {
         "{text}"
     );
     assert!(text.contains("```text\nout of VRAM\n```"), "{text}");
+}
+
+#[tokio::test]
+async fn carries_strata_s_options_when_the_pc_service_read_them() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    *s.pc.strata_info.lock().unwrap() = Some(report.clone());
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert!(!text.contains("### Options the tuner knows"), "{text}");
+    assert!(!text.contains("### Engine help"), "{text}");
+
+    let option = |flag: &str, answer: &str| TunerOption {
+        flag: flag.into(),
+        takes_value: true,
+        answer: answer.into(),
+        ..Default::default()
+    };
+    report.info.options = Some(StrataOptions {
+        version: "0.2.2".into(),
+        tuner: vec![
+            TunerOption {
+                min: Some("0.0".into()),
+                max: Some("0.55".into()),
+                tried: vec!["0.2".into()],
+                ..option("--pcie-frac", "placement")
+            },
+            TunerOption {
+                choices: vec!["3".into(), "4".into()],
+                ..option("--spec", "placement")
+            },
+            TunerOption {
+                takes_value: false,
+                ..option("--kv-grow", "exact")
+            },
+        ],
+        never: vec![
+            NeverRule {
+                setting: "STRATA_SH_STREAM".into(),
+                env: true,
+                when: vec!["gfx12".into()],
+                reason: "it halves decode speed on this graphics card".into(),
+                ..Default::default()
+            },
+            NeverRule {
+                setting: "--spec".into(),
+                test: Some("at_most".into()),
+                limit: Some("2".into()),
+                families: vec!["flash-next".into()],
+                reason: "a 2-token window was 4% to 11% slower".into(),
+                ..Default::default()
+            },
+        ],
+        engine_help: Some("strata generate --pack DIR [options]\n  --kv-grow  grow".into()),
+    });
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    for part in [
+        "| `--pcie-frac` | 0.0 to 0.55 | placement | 0.2 |",
+        "| `--spec` | 3, 4 | placement |  |",
+        "| `--kv-grow` | on or off | exact |  |",
+        "- environment variable `STRATA_SH_STREAM`, on PCs with gfx12: it halves decode speed",
+        "- `--spec` at_most 2, for flash-next: a 2-token window",
+        "```text\nstrata generate --pack DIR [options]\n  --kv-grow  grow\n```",
+    ] {
+        assert!(text.contains(part), "{part} missing:\n{text}");
+    }
 }

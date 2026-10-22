@@ -530,6 +530,7 @@ pub fn strata_info(installed: bool) -> StrataReport {
         benchmark: None,
         benchmarks: vec![],
         job: None,
+        options: None,
     };
     StrataReport { info, update: None }
 }

@@ -108,6 +108,7 @@ function Test-Alive([string]$id) {
     $stat = (& /bin/ps -o stat= -p $id 2>$null | Out-String).Trim()
     return $stat -and -not $stat.StartsWith('Z')
 }
+function Get-ProgressFile { if ($out -match '(?m)^local-agent: progress in (.+)$') { return $Matches[1].Trim() } }
 function Get-RunId { if ($out -match '(?m)^local-agent: run (\S+)') { return $Matches[1] } }
 function Get-Recorded([string]$name) { return (Get-Content -LiteralPath (Join-Path $record $name) -Raw).Trim() }
 function Test-Branch([string]$name) {
@@ -465,9 +466,12 @@ function test_fallback_mid_run_keeps_work {
 
 function test_warns_without_compaction {
     $env:FAKE_CLAUDE_MODE = 'no-compact'
-    la run task
+    la run --watch task
     if ($code -ne 3) { Fail "exit $code instead of 3: $out" }
     $id = Get-RunId
+    $progress = Get-ProgressFile
+    $warnings = @(Get-Content -LiteralPath $progress | Where-Object { $_.StartsWith('warning: context past the compaction point') })
+    if ($warnings.Count -ne 1) { Fail "not a single warning in: $(Get-Content -LiteralPath $progress -Raw)" }
     la status $id
     Assert-Contains $out 'context: 190K now (peak 190K, compacts near 159K), compactions: 0'
     Assert-Contains $out 'warning: context past the compaction point'
@@ -586,10 +590,13 @@ function test_interrupted_run {
     Assert-Contains $out 'stopped'
     # A runner that died without cleaning up counts as stopped, too.
     if ((Get-Content -Raw $runOut) -notmatch '(?m)^local-agent: run (\S+)') { Fail 'no run id' }
-    $meta = Join-Path $stateDir "runs/$($Matches[1])/meta"
+    $runId = $Matches[1]
+    $meta = Join-Path $stateDir "runs/$runId/meta"
     (Get-Content $meta) -replace '^state=.*', 'state=running' -replace '^pid=.*', 'pid=999999' | Set-Content $meta
-    la status $Matches[1]
+    la status $runId
     Assert-Contains $out 'stopped'
+    la discard $runId
+    if ($code -ne 0) { Fail "discard of a dead run: exit ${code}: $out" }
 }
 
 function test_fallback_gaming_during_run {
@@ -603,6 +610,71 @@ function test_fallback_gaming_during_run {
     la result (Get-RunId)
     Assert-Contains $out 'switched to gaming mode'
     Assert-Contains $out '## Log summary'
+}
+
+function test_watch {
+    la run --watch task
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    $progress = Get-ProgressFile
+    if (-not $progress -or -not (Test-Path -LiteralPath $progress)) { Fail "no progress file in: $out" }
+    Assert-HasLine $progress 'started'
+    Assert-HasLine $progress 'Edit README'
+    Assert-HasLine $progress 'finished'
+    if (Get-Content -LiteralPath $progress | Where-Object { $_.StartsWith('warning:') }) { Fail 'warning despite compaction' }
+    # Without --watch the run says only when it starts and ends.
+    la run task
+    if (@($out -split "`n").Count -ne 2) { Fail "output without --watch: $out" }
+}
+
+function test_discard {
+    la run task
+    $id = Get-RunId
+    $worktree = Get-Recorded 'cwd'
+    la discard $id
+    if ($code -ne 0) { Fail "discard exit ${code}: $out" }
+    if (Test-Path -LiteralPath $worktree) { Fail 'worktree stays' }
+    if (Test-Branch "local-agent/$id") { Fail 'branch stays' }
+    if ((Get-Content README -Raw).Trim() -ne 'hello' -or (git status --porcelain)) { Fail 'checkout changed' }
+    la status $id
+    Assert-Contains $out 'discarded'
+    la discard nosuchrun
+    if ($code -ne 2) { Fail "unknown run: exit $code" }
+    Assert-Contains $out 'nosuchrun'
+}
+
+function test_prune {
+    la run 'old and merged'
+    $merged = Get-RunId
+    git merge -q "local-agent/$merged"
+    la run 'old, not merged'
+    $unmerged = Get-RunId
+    la run 'new'
+    $new = Get-RunId
+    $runs = Join-Path $stateDir 'runs'
+    foreach ($id in $merged, $unmerged) {
+        foreach ($item in @(Get-Item -LiteralPath (Join-Path $runs $id)) + @(Get-ChildItem -LiteralPath (Join-Path $runs $id))) {
+            $item.LastWriteTime = Get-Date '2026-01-01'
+        }
+    }
+    la prune
+    if ($code -ne 0) { Fail "prune exit ${code}: $out" }
+    # Old and merged: run folder, worktree and branch go.
+    if (Test-Path -LiteralPath (Join-Path $runs $merged)) { Fail 'old run stays' }
+    if (Test-Branch "local-agent/$merged") { Fail 'merged branch stays' }
+    if ((git worktree list) -match [regex]::Escape($merged)) { Fail 'merged worktree stays' }
+    # Old but unmerged: everything stays, so discard still works.
+    if (-not (Test-Path -LiteralPath (Join-Path $runs $unmerged))) { Fail 'unmerged run removed' }
+    if (-not ((git worktree list) -match [regex]::Escape($unmerged))) { Fail 'unmerged worktree removed' }
+    if (-not (Test-Path -LiteralPath (Join-Path $runs $new))) { Fail 'new run removed' }
+}
+
+function test_prune_keeps_runs_without_commits {
+    # A run that changed nothing isn't "merged": prune keeps its worktree.
+    $env:FAKE_CLAUDE_MODE = 'no-tool'
+    la run task
+    $worktree = Get-Recorded 'cwd'
+    la prune
+    if (-not (Test-Path -LiteralPath $worktree)) { Fail 'worktree without commits removed' }
 }
 
 $tests = @($args)

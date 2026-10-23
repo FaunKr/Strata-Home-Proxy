@@ -243,6 +243,304 @@ async fn a_model_with_an_unreadable_config_reports_no_picture_state() {
     assert!(qwen.get("config").is_none(), "{qwen}");
 }
 
+// --- #327 picture reading for an installed model ---
+
+/// Setup of a model that is installed already: it writes that model's run
+/// config again, with the picture reader when `--vision yes` was asked.
+fn fake_pictures_setup(s: &Setup, id: &str, on: bool) {
+    let strata = s.agent.cfg.strata_dir.clone();
+    let config = if on {
+        config_with_vision(
+            "a.gguf",
+            json!({"exe": "C:\\Strata\\engine\\strata-vision-hip.exe",
+                "mmproj": "D:\\Strata-data\\models\\IQ3_XXS\\mmproj.gguf", "gpu": true,
+                "max_tokens": 1024, "cpu_exe": "C:\\Strata\\engine\\strata-vision.exe"}),
+        )
+    } else {
+        config_json("a.gguf")
+    };
+    s.fake.command(
+        "START-HERE.bat",
+        FakeCommand {
+            writes: vec![(strata.join(format!("strata-{id}.json")), config.to_string())],
+            ..FakeCommand::default()
+        },
+    );
+}
+
+/// IQ3_XXS active with a config as the service keeps it; gives that config.
+fn active_with_config(s: &Setup, args: Value) -> Value {
+    installed(s);
+    let config = json!({"exe": "C:/Strata/engine/strata.exe", "args": args, "port": 8080,
+        "api_key": OLD_KEY, "reasoning_loop_recovery": "recover"});
+    write(
+        s.agent.cfg.strata_dir.join("strata-iq3_xxs.json"),
+        &config.to_string(),
+    );
+    config
+}
+
+/// Whether setup was asked for it, e.g. `["--vision", "yes"]`.
+fn setup_asked(args: &[String], pair: [&str; 2]) -> bool {
+    args.windows(2).any(|w| w == pair)
+}
+
+#[tokio::test]
+async fn switching_pictures_on_reruns_the_setup_for_that_model() {
+    let s = setup("pictures-other-model").await;
+    installed(&s);
+    // The model has the speed projection: setup must keep it.
+    let mut args = vec![
+        json!("--native"),
+        json!("b.gguf"),
+        json!("--max-context"),
+        json!("131072"),
+        json!("--control-vector-scaled"),
+        json!(vector(&s)),
+    ];
+    args.extend(ESP_FLAGS.map(|f| json!(f)));
+    config_with_args(&s, "coder-iq1_m", json!(args));
+    fake_pictures_setup(&s, "coder-iq1_m", true);
+    let done = job(
+        &s,
+        json!({"kind": "set_pictures", "model": "coder-IQ1_M", "on": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+    assert!(args.contains(&"--setup".to_string()), "{args:?}");
+    for pair in [
+        ["--family", "coder"],
+        ["--model", "IQ1_M"],
+        ["--context", "131072"],
+        ["--vision", "yes"],
+        ["--api-key", OLD_KEY],
+        ["--experimental-speed-projection", "on"],
+    ] {
+        assert!(setup_asked(args, pair), "{pair:?} missing in {args:?}");
+    }
+    // A model that is not active keeps running as it is.
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "coder-IQ1_M")["pictures"], "gpu", "{view}");
+    assert_eq!(model(&view, "IQ3_XXS")["active"], true, "{view}");
+}
+
+#[tokio::test]
+async fn switching_pictures_off_keeps_the_picture_file_on_disk() {
+    let s = setup("pictures-off-keeps-file").await;
+    installed(&s);
+    write(
+        s.agent
+            .cfg
+            .strata_data_dir
+            .join("models/IQ3_XXS/mmproj.gguf"),
+        "picture model",
+    );
+    write(
+        s.agent.cfg.strata_dir.join("strata-iq3_xxs.json"),
+        &config_with_vision(
+            "a.gguf",
+            json!({"exe": "C:\\Strata\\engine\\strata-vision-hip.exe",
+                "mmproj": "D:\\Strata-data\\models\\IQ3_XXS\\mmproj.gguf", "gpu": true,
+                "max_tokens": 1024, "cpu_exe": "C:\\Strata\\engine\\strata-vision.exe"}),
+        )
+        .to_string(),
+    );
+    fake_pictures_setup(&s, "iq3_xxs", false);
+    let done = job(
+        &s,
+        json!({"kind": "set_pictures", "model": "IQ3_XXS", "on": false}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+    assert!(setup_asked(args, ["--vision", "no"]), "{args:?}");
+    // The active model is started again, once.
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+    let config = read_config(&s, "iq3_xxs");
+    assert!(
+        config.get("vision").is_none(),
+        "no reader in the config: {config}"
+    );
+    assert!(
+        s.agent
+            .cfg
+            .strata_data_dir
+            .join("models/IQ3_XXS/mmproj.gguf")
+            .is_file(),
+        "the picture file stays"
+    );
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "IQ3_XXS")["pictures"], "off", "{view}");
+}
+
+#[tokio::test]
+async fn switching_pictures_on_restarts_the_active_model_when_strata_is_idle() {
+    let s = setup("pictures-active-wait").await;
+    installed(&s);
+    fake_pictures_setup(&s, "iq3_xxs", true);
+    s.fake.strata_busy.store(true, Ordering::SeqCst);
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "set_pictures", "model": "IQ3_XXS", "on": true}),
+    )
+    .await;
+    assert_eq!(code, 202, "{answer}");
+    job_until(&s, "waiting for the request", |j| {
+        j["step"].as_str().is_some_and(|t| t.contains("request"))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(
+        s.fake.stops.load(Ordering::SeqCst),
+        0,
+        "stopped mid-request"
+    );
+
+    s.fake.strata_busy.store(false, Ordering::SeqCst);
+    assert_eq!(finished(&s).await["state"], "done");
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1);
+    let args = &s.fake.runs_of("START-HERE.bat")[0].args;
+    assert!(setup_asked(args, ["--vision", "yes"]), "{args:?}");
+}
+
+#[tokio::test]
+async fn a_model_that_does_not_start_with_the_picture_reader_goes_back() {
+    // The limit well behind the fake Strata's first line.
+    let s = setup_with("pictures-no-answer", |c| c.context_start_secs = 3).await;
+    let before = active_with_config(&s, json!(["--native", "a.gguf", "--max-context", "524288"]));
+    fake_pictures_setup(&s, "iq3_xxs", true);
+    s.fake.command(
+        "run-iq3_xxs.bat",
+        FakeCommand {
+            lines: lines(&["loading the picture model"]),
+            hang: true,
+            ..FakeCommand::default()
+        },
+    );
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "set_pictures", "model": "IQ3_XXS", "on": true}),
+    )
+    .await;
+    assert_eq!(code, 202, "{answer}");
+    let done = finished_slowly(&s).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(
+        done["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("settings from before")),
+        "{done}"
+    );
+    assert!(
+        done["lines"]
+            .to_string()
+            .contains("loading the picture model"),
+        "Strata's output: {done}"
+    );
+    let config = read_config(&s, "iq3_xxs");
+    // The whole config from before the setup, not only its args.
+    assert_eq!(
+        config["args"], before["args"],
+        "the args from before: {config}"
+    );
+    assert!(config.get("vision").is_none(), "no reader left: {config}");
+    assert_eq!(
+        config["reasoning_loop_recovery"], "recover",
+        "what setup changed comes back: {config}"
+    );
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 2, "started again");
+}
+
+#[tokio::test]
+async fn cancelling_the_picture_restart_brings_the_settings_back() {
+    let s = setup_with("pictures-cancel", |c| c.context_start_secs = 600).await;
+    let before = active_with_config(&s, json!(["--native", "a.gguf", "--max-context", "524288"]));
+    fake_pictures_setup(&s, "iq3_xxs", true);
+    s.fake.command(
+        "run-iq3_xxs.bat",
+        FakeCommand {
+            lines: lines(&["loading the picture model"]),
+            hang: true,
+            ..FakeCommand::default()
+        },
+    );
+    s.fake.strata_stays_down.store(true, Ordering::SeqCst);
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "set_pictures", "model": "IQ3_XXS", "on": true}),
+    )
+    .await;
+    assert_eq!(code, 202, "{answer}");
+    job_until(&s, "waiting for Strata", |j| {
+        j["step"].as_str().is_some_and(|t| t.contains("ready"))
+    })
+    .await;
+    let (code, _) = post(&s, "/strata/job/cancel", json!({})).await;
+    assert_eq!(code, 202);
+    assert_eq!(finished_slowly(&s).await["state"], "cancelled");
+    let config = read_config(&s, "iq3_xxs");
+    assert_eq!(
+        config["args"], before["args"],
+        "the args from before: {config}"
+    );
+    assert!(config.get("vision").is_none(), "no reader left: {config}");
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 2, "started again");
+}
+
+#[tokio::test]
+async fn a_failed_picture_setup_fails_the_job_with_its_output() {
+    let s = setup("pictures-setup-fails").await;
+    installed(&s);
+    s.fake.command(
+        "START-HERE.bat",
+        FakeCommand {
+            lines: lines(&["the picture model could not be downloaded"]),
+            exit: Some(1),
+            ..FakeCommand::default()
+        },
+    );
+    let done = job(
+        &s,
+        json!({"kind": "set_pictures", "model": "IQ3_XXS", "on": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(
+        done["lines"]
+            .to_string()
+            .contains("the picture model could not be downloaded"),
+        "setup's output: {done}"
+    );
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0, "nothing restarts");
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "IQ3_XXS")["pictures"], "off", "{view}");
+}
+
+#[tokio::test]
+async fn picture_reading_is_refused_for_a_model_that_is_not_installed() {
+    let s = setup("pictures-refused").await;
+    installed(&s);
+    for (model, code) in [("swift-IQ2_XS", 409), ("../../Windows", 400)] {
+        let (got, answer) = post(
+            &s,
+            "/strata/jobs",
+            json!({"kind": "set_pictures", "model": model, "on": true}),
+        )
+        .await;
+        assert_eq!(got, code, "{model}: {answer}");
+    }
+    assert!(s.fake.runs_of("START-HERE.bat").is_empty());
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn activating_waits_for_a_running_request_and_switches_the_start_script() {
     let s = setup("models-activate").await;

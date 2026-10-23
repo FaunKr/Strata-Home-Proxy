@@ -162,6 +162,21 @@ async function forced(page, errors) {
     await sees('Pictures: on (CPU)');
     await sees('Pictures: off');
   });
+  await step('the picture reading switch asks, then the model shows its new state', 'pictures-switch', async () => {
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    const row = page.locator('li.model', { hasText: 'IQ3_XXS' });
+    const switchOff = row.getByRole('button', { name: 'Switch picture reading off' });
+    await switchOff.waitFor(wait);
+    await switchOff.click();
+    await dialog.getByText('Switch picture reading off for IQ3_XXS?').waitFor(wait);
+    await dialog.getByText('Lets the model read pictures').waitFor(wait);
+    await dialog.getByRole('button', { name: 'Switch off' }).click();
+    // The fake PC finishes the job, then the model reads no pictures.
+    await page.waitForTimeout(2500);
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await row.getByText('Pictures: off').waitFor(wait);
+    await row.getByRole('button', { name: 'Switch picture reading on' }).waitFor(wait);
+  });
   await step('Force sleep in the gaming state', 'gaming-overview', async () => {
     await page.goto(base + '/admin', { waitUntil: 'domcontentloaded' });
     await force.click(wait);

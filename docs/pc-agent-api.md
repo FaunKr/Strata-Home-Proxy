@@ -150,8 +150,9 @@ the web UI then asks for a PC service update.
 
 The forced restart of Strata behind *Force restart Strata* in the Strata area,
 with no request body. The service cancels a running Strata job and waits for it
-to end, at most `cancel_wait_secs` (a cancelled `activate` or `set_context`
-may restart Strata itself while rolling back; the kill comes after that). Then
+to end, at most `cancel_wait_secs` (a cancelled `activate`, `set_context` or
+`set_pictures` may restart Strata itself while rolling back; the kill comes
+after that). Then
 it ends Strata as gaming mode does, with `taskkill /F /T` by the configured
 programs and folders; that also hits a Strata started by hand. With a start
 script and `auto_start` it starts Strata again after the usual pause, unless a
@@ -473,6 +474,7 @@ little space, deleting the active model).
 | `set_key` | `api_key` | waits until Strata is not handling a request and restarts it, which brings a new key |
 | `set_speed_projection` | `model`, `on` | turns speed projection on or off in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
+| `set_pictures` | `model`, `on` | setup again for this model with `--vision yes` or `--vision no`, keeping its family, size, context and speed projection; for the active model it then waits until Strata is not handling a request and restarts it once |
 | `set_user_args` | `model`, `user_args` | replaces the engine options set by hand in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_engine_settings` | `model`, `env`, `user_args` (optional) | replaces the engine environment and, if given, the engine options set by hand, as `set_user_args` does; one restart for both |
 | `apply_preset` | `model`, `preset` | Terminal only: `strata presets apply <preset>`; the active model restarts once Strata is not handling a request |
@@ -542,6 +544,20 @@ setup sets up (`400`). What setup derived from the old context
 (KV streaming with `--kv-resident`, `--kv`, parallel slots, calibration)
 stays. A model from the catalog that is not installed is a
 `409`. The modification time stays as with `set_speed_projection`.
+
+`set_pictures` takes a model of the catalog that is installed (`400` for
+one the catalog does not know, `409` for one that is not installed). Setup
+runs as with `add_model`, with the model's family, size and the context its
+configuration has (the catalog's default when it has none), its speed
+projection as it is, and the key Strata runs with, only `--vision`
+differing. A model that is not active is done there, Strata untouched. The
+active one waits until Strata is idle and restarts it once. If that start
+does not come up within `context_start_secs`, or the job is cancelled while
+waiting, the whole run config from before setup is written back, Strata is
+started with it, and the job fails with a plain message naming the settings
+from before; the job's lines show what Strata printed. Setup itself failing
+fails the job with setup's output, and nothing is restarted. Switching off
+only leaves out the `vision` section; the picture file stays on disk.
 
 `set_user_args` replaces `user_args` with the list as given (an empty
 list removes the key); `args`, `args_written` and the modification time

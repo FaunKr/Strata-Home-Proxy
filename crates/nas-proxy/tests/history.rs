@@ -43,6 +43,98 @@ fn hours(day: &Value) -> (f64, f64, f64, f64) {
     )
 }
 
+/// A GET to the web UI with the browser's session cookie.
+async fn get(b: &Browser, path: &str) -> reqwest::Response {
+    let mut req = reqwest::Client::new().get(format!("{}{}", b.base, path));
+    if let Some(c) = &b.cookie {
+        req = req.header("cookie", c);
+    }
+    req.send().await.unwrap()
+}
+
+/// The dates of the rows of a CSV, without the header.
+fn csv_dates(text: &str) -> Vec<String> {
+    text.lines()
+        .skip(1)
+        .map(|line| line.split(',').next().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn the_history_downloads_as_csv() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    seen(&s, EventKind::PcSeenAwake).await;
+    let view = history(&mut b, "7d").await;
+    let resp = get(&b, "/admin/history.csv?range=7d").await;
+    assert_eq!(resp.status(), 200, "the csv download failed");
+    assert_eq!(resp.headers()["content-type"], "text/csv; charset=utf-8");
+    assert_eq!(
+        resp.headers()["content-disposition"],
+        format!(
+            "attachment; filename=\"history-{}-{}.csv\"",
+            view["from"].as_str().unwrap(),
+            view["to"].as_str().unwrap()
+        )
+    );
+    let text = resp.text().await.unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines[0],
+        "date,awake_h,gaming_h,asleep_h,unknown_h,kwh,eur,saved_kwh,saved_eur,source",
+        "{text}"
+    );
+    let days = view["days"].as_array().unwrap();
+    assert_eq!(lines.len() - 1, days.len(), "one row per bar: {text}");
+    for (i, line) in lines[1..].iter().enumerate() {
+        assert_eq!(
+            line.split(',').next().unwrap(),
+            days[i]["date"].as_str().unwrap(),
+            "{text}"
+        );
+    }
+    assert!(text.ends_with("\r\n"), "lines end with \\r\\n: {text}");
+}
+
+#[tokio::test]
+async fn the_csv_needs_a_signed_in_session() {
+    let s = setup(true, |_| {}).await;
+    let b = Browser::new(&s.url);
+    assert_eq!(
+        get(&b, "/admin/history.csv?range=7d").await.status(),
+        401,
+        "not signed in"
+    );
+    // Signed in with the default password, which still has to be changed.
+    let mut b = Browser::new(&s.url);
+    b.call("login", &[("password", "admin")]).await;
+    assert_eq!(
+        get(&b, "/admin/history.csv?range=7d").await.status(),
+        401,
+        "the password must be changed first"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_range_gives_the_same_rows_as_seven_days() {
+    let s = setup(true, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    seen(&s, EventKind::PcSeenAwake).await;
+    // Whole seconds: both answers count the same bars.
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    let seven = get(&b, "/admin/history.csv?range=7d")
+        .await
+        .text()
+        .await
+        .unwrap();
+    let nonsense = get(&b, "/admin/history.csv?range=nonsense")
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(csv_dates(&nonsense), csv_dates(&seven), "{nonsense}\n{seven}");
+}
+
 #[tokio::test]
 async fn a_pc_woken_by_hand_counts_as_awake() {
     let s = setup(false, |_| {}).await;

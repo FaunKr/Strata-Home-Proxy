@@ -28,7 +28,7 @@ use crate::{
     api::{
         ApiKeysView, CodeBenchPage, CreatedKey, ForcedRestart, HistoryView, KeepAwakeChoice,
         OutputMessage, Overview, PcSetupCommand, Session, SettingValue, SettingsView, Setup,
-        SleepAnswer, StrataJobForm, StrataPage,
+        SleepAnswer, StrataJobForm, StrataPage, history_csv,
     },
     app::{App, shell},
 };
@@ -258,6 +258,7 @@ where
     let pkg = PathBuf::from(options.site_root.as_ref()).join(options.site_pkg_dir.as_ref());
     let overview_backend = Arc::clone(&backend);
     let output_backend = Arc::clone(&backend);
+    let csv_backend = Arc::clone(&backend);
     let context = move || provide_context(Arc::clone(&backend));
     // Listing the routes renders the app once, which starts the session
     // resource; without the backend in context that call panics. Meanwhile
@@ -287,6 +288,42 @@ where
             get(move |headers: HeaderMap| async move {
                 session_stream(&output_backend, &headers, |b| b.strata_output())
             }),
+        )
+        // The History as a CSV file, for the download link on the History
+        // page; only a session that needs no password change may read it.
+        .route(
+            "/admin/history.csv",
+            get(
+                move |headers: HeaderMap,
+                      query: axum::extract::Query<std::collections::HashMap<String, String>>| async move {
+                    if csv_backend.session(cookie_token(&headers).as_deref()) != Session::Ready {
+                        return StatusCode::UNAUTHORIZED.into_response();
+                    }
+                    let range = query
+                        .get("range")
+                        .cloned()
+                        .unwrap_or_else(|| "7d".to_string());
+                    let view = csv_backend.history(range).await;
+                    let disposition =
+                        format!("attachment; filename=\"history-{}-{}.csv\"", view.from, view.to);
+                    (
+                        [
+                            (
+                                header::CONTENT_TYPE,
+                                HeaderValue::from_static("text/csv; charset=utf-8"),
+                            ),
+                            (
+                                header::CONTENT_DISPOSITION,
+                                HeaderValue::from_str(&disposition).unwrap_or_else(|_| {
+                                    HeaderValue::from_static("attachment")
+                                }),
+                            ),
+                        ],
+                        history_csv(&view),
+                    )
+                        .into_response()
+                },
+            ),
         )
         .leptos_routes_with_context(&options, routes, context, {
             let options = options.clone();

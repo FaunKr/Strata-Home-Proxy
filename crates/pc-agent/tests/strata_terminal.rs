@@ -329,7 +329,7 @@ async fn a_strata_folder_from_source_has_no_options() {
     assert!(s.fake.runs_of("python").is_empty());
 }
 
-/// What `strata update --output json` answers (`run` in
+/// What `strata update --output jsonl` answers last (`run` in
 /// strata_cli/update_cmd.py), with the Terminal's files at `control`.
 fn update_answer(control: &str) -> String {
     format!(
@@ -353,7 +353,15 @@ async fn an_update_runs_strata_update_with_strata_stopped() {
     let s = setup("terminal-update").await;
     installed(&s);
     let control = r#"{"component": "control", "status": "updated", "changed": true, "installed_before": "0.1.44.1", "installed_after": "0.1.45"}"#;
-    answers(&s, "strata.cmd update", &[&update_answer(control)], None);
+    // Its events first, as `emit` in strata_control/updater.py writes them.
+    let unpacking = r#"{"schema_version": 1, "event": "phase", "phase": "verify", "message": "Unpacking Control 0.1.45", "component": "control"}"#;
+    let downloaded = r#"{"schema_version": 1, "event": "progress", "phase": "download", "component": "control", "label": "Control 0.1.45", "done": 81234567, "total": 81234567, "percent": 100, "bytes_per_second": 30000000}"#;
+    answers(
+        &s,
+        "strata.cmd update",
+        &[downloaded, unpacking, &update_answer(control)],
+        None,
+    );
     answers(
         &s,
         "strata.cmd --version",
@@ -363,7 +371,14 @@ async fn an_update_runs_strata_update_with_strata_stopped() {
     let done = job(&s, json!({"kind": "update"})).await;
     assert_eq!(done["state"], "done", "{done}");
     let update = &s.fake.runs_of("strata.cmd")[0];
-    assert_eq!(update.args, ["update", "--output", "json"]);
+    assert_eq!(update.args, ["update", "--output", "jsonl"]);
+    // The phase is a line, no event or answer is.
+    let shown = done["lines"].as_array().unwrap();
+    assert!(shown.contains(&json!("Unpacking Control 0.1.45")), "{done}");
+    assert!(
+        !shown.iter().any(|l| l.as_str().unwrap().contains('{')),
+        "{done}"
+    );
     assert!(update.env.iter().any(|(k, _)| k == "STRATA_INSTALL_DIR"));
     assert_eq!(
         s.fake.stops.load(Ordering::SeqCst),

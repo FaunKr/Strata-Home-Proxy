@@ -162,9 +162,10 @@ impl Terminal {
     }
 
     /// The engine and the Terminal's files from the signed feed, each only
-    /// after a test start. Read the output with [`updated`].
+    /// after a test start. Each line is an [`update_event`] until the last,
+    /// the answer: read the output with [`updated`].
     pub fn update(&self) -> CommandSpec {
-        self.command(&["update", "--output", "json"])
+        self.command(&["update", "--output", "jsonl"])
     }
 
     /// What `strata update` would change, without downloading. Read the
@@ -296,9 +297,10 @@ impl Terminal {
     }
 
     /// The engine for this PC from the signed feed; the Terminal itself
-    /// stays as it is. Read the output with [`engine_installed`].
+    /// stays as it is. Each line is an [`update_event`] until the last, the
+    /// answer: read the output with [`engine_installed`].
     pub fn install_engine(&self) -> CommandSpec {
-        self.command(&["update", "--no-control", "--output", "json"])
+        self.command(&["update", "--no-control", "--output", "jsonl"])
     }
 
     /// Setup without questions in its install mode, the way `strata launch`
@@ -382,9 +384,10 @@ impl Terminal {
     }
 }
 
-/// Reads what `strata update --output json` printed: `Ok` when the engine
+/// Reads what `strata update --output jsonl` printed: `Ok` when the engine
 /// for this PC is in place, else Strata's reason. The answer is the last
-/// line that is a JSON object (`strata_cli/update_cmd.py`, `run`).
+/// line that is a JSON object and no event (`strata_cli/update_cmd.py`,
+/// `run`).
 pub fn engine_installed(output: &[String]) -> Result<(), String> {
     let answer =
         json_answer(output).ok_or("The Strata Terminal gave no answer about the engine")?;
@@ -445,14 +448,47 @@ fn refused(answer: &Value, fallback: &str) -> Result<(), String> {
     }
 }
 
-/// The last line of `output` that is a JSON object: what `--output json`
-/// answers.
+/// The last line of `output` that is a JSON object and no event: what
+/// `--output json` answers, and `--output jsonl` after its events.
 fn json_answer(output: &[String]) -> Option<Value> {
     output.iter().rev().find_map(|line| {
         serde_json::from_str::<Value>(line.trim())
             .ok()
-            .filter(Value::is_object)
+            .filter(|v| v.is_object() && v.get("event").is_none())
     })
+}
+
+/// What `strata update --output jsonl` reports on its way, one line each
+/// (`emit` in `strata_control/updater.py`).
+#[derive(Debug, PartialEq)]
+pub enum UpdateEvent {
+    /// A new phase: reading the feed, a download, unpacking, the signature
+    /// check, the test start, the switch, a warning.
+    Phase(String),
+    /// How far a download is (`_download`).
+    Download {
+        done: u64,
+        total: u64,
+        percent: u8,
+        bytes_per_sec: Option<u64>,
+    },
+    /// An engine still serves and the update waits (`wait_until_idle`).
+    Waiting(String),
+}
+
+pub fn update_event(line: &str) -> Option<UpdateEvent> {
+    let event: Value = serde_json::from_str(line.trim()).ok()?;
+    match text(&event["event"])? {
+        "phase" => Some(UpdateEvent::Phase(text(&event["message"])?.to_string())),
+        "progress" => Some(UpdateEvent::Download {
+            done: event["done"].as_u64()?,
+            total: event["total"].as_u64()?,
+            percent: event["percent"].as_u64()?.min(100) as u8,
+            bytes_per_sec: event["bytes_per_second"].as_u64(),
+        }),
+        "waiting" => Some(UpdateEvent::Waiting(text(&event["message"])?.to_string())),
+        _ => None,
+    }
 }
 
 /// Reads what `strata update --check --output json` printed: whether the
@@ -539,7 +575,9 @@ pub struct TuneProgress {
 pub fn tune_progress(status: &str) -> Option<TuneProgress> {
     let state: Value = serde_json::from_str(status).ok()?;
     let step = text(&state["message"])?.to_string();
-    let done = state["runs_done"].as_u64();
+    // Before the first finished run there is nothing to count: a quick tune's
+    // file can stay at that state to its end, which read as a stuck 0 %.
+    let done = state["runs_done"].as_u64().filter(|d| *d > 0);
     let planned = state["runs_planned"].as_u64().filter(|p| *p > 0);
     let percent = done
         .zip(planned)
@@ -558,7 +596,7 @@ pub fn tune_progress(status: &str) -> Option<TuneProgress> {
     Some(TuneProgress {
         step,
         percent,
-        eta_secs: state["eta_s"].as_u64(),
+        eta_secs: done.and(state["eta_s"].as_u64()),
         speeds,
     })
 }
@@ -1175,7 +1213,72 @@ mod tests {
                 speeds: Vec::new(),
             })
         );
+        // Nothing measured yet, as a quick tune's file stayed to its end on
+        // the PC: the step, but no share and no estimate.
+        let measuring = r#"{"stage": "base", "message": "Measuring your current settings", "state": "running", "elapsed_s": 0, "runs_done": 0, "runs_planned": 6, "eta_s": 900, "speeds": [], "minutes_left": 15, "text": "Finding the fastest settings for your PC… about 15 min left"}"#;
+        assert_eq!(
+            tune_progress(measuring),
+            Some(TuneProgress {
+                step: "Measuring your current settings".into(),
+                percent: None,
+                eta_secs: None,
+                speeds: Vec::new(),
+            })
+        );
         assert_eq!(tune_progress("{\"stage\": "), None);
+    }
+
+    #[test]
+    fn update_events_give_phases_downloads_and_waits() {
+        // As `emit` in `strata_control/updater.py` writes them, with the
+        // `schema_version` that `--output jsonl` puts first.
+        assert_eq!(
+            update_event(
+                r#"{"schema_version": 1, "event": "phase", "phase": "download", "message": "Downloading engine 0.1.45 windows-x86_64-cuda (412 MiB)", "component": "engine"}"#
+            ),
+            Some(UpdateEvent::Phase(
+                "Downloading engine 0.1.45 windows-x86_64-cuda (412 MiB)".into()
+            ))
+        );
+        assert_eq!(
+            update_event(
+                r#"{"schema_version": 1, "event": "progress", "phase": "download", "component": "engine", "label": "engine 0.1.45 windows-x86_64-cuda", "done": 104857600, "total": 432013312, "percent": 24, "bytes_per_second": 20971520}"#
+            ),
+            Some(UpdateEvent::Download {
+                done: 104857600,
+                total: 432013312,
+                percent: 24,
+                bytes_per_sec: Some(20971520),
+            })
+        );
+        assert_eq!(
+            update_event(
+                r#"{"schema_version": 1, "event": "waiting", "message": "An engine is serving; waiting for it to stop before updating.", "serving": [{"profile": "a running Strata server", "state": "serving"}]}"#
+            ),
+            Some(UpdateEvent::Waiting(
+                "An engine is serving; waiting for it to stop before updating.".into()
+            ))
+        );
+        // The answer and plain lines are no events.
+        assert_eq!(
+            update_event(r#"{"schema_version": 1, "ok": true, "results": []}"#),
+            None
+        );
+        assert_eq!(update_event("Traceback (most recent call last):"), None);
+    }
+
+    #[test]
+    fn the_update_answer_comes_after_its_events() {
+        let output = lines(&[
+            r#"{"schema_version": 1, "event": "phase", "phase": "feed", "message": "Reading the signed update feed"}"#,
+            r#"{"schema_version": 1, "ok": true, "exit_code": 0, "results": [{"component": "engine", "status": "updated"}]}"#,
+        ]);
+        assert_eq!(engine_installed(&output), Ok(()));
+        // Events alone are no answer.
+        assert_eq!(
+            engine_installed(&output[..1]),
+            Err("The Strata Terminal gave no answer about the engine".into())
+        );
     }
 
     #[test]

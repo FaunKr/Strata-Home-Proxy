@@ -17,6 +17,7 @@ use strata_pc_protocol::{StrataJob, StrataJobKind, StrataJobState, TuneSpeed};
 use crate::{
     agent::Agent,
     command::{Cancel, CommandSpec},
+    terminal::{UpdateEvent, update_event},
 };
 
 const JOB_FILE: &str = "strata-job.json";
@@ -24,6 +25,16 @@ const JOB_FILE: &str = "strata-job.json";
 pub(crate) const POLL: Duration = Duration::from_millis(250);
 /// Lines of output a job keeps, for the page to show after a failure.
 pub(crate) const KEPT_LINES: usize = 20;
+
+/// What a command's output lines are read for, besides being kept.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    Lines,
+    /// Setup's steps, downloads and errors.
+    Setup,
+    /// The Terminal's update events.
+    Update,
+}
 
 /// Why a job stopped early.
 #[derive(Debug)]
@@ -345,7 +356,12 @@ impl JobContext {
     /// when `progress` is set and the benchmark's speeds, and ends it on
     /// cancel.
     pub(crate) async fn command(&self, spec: CommandSpec, progress: bool) -> Result<(), Step> {
-        self.run_command(spec, progress, None, true).await
+        let reading = if progress {
+            Reading::Setup
+        } else {
+            Reading::Lines
+        };
+        self.run_command(spec, reading, None, true).await
     }
 
     /// Like [`command`](Self::command) without setup's progress, and gives
@@ -355,7 +371,9 @@ impl JobContext {
         spec: CommandSpec,
     ) -> (Result<(), Step>, Vec<String>) {
         let mut output = Vec::new();
-        let ran = self.run_command(spec, false, Some(&mut output), true).await;
+        let ran = self
+            .run_command(spec, Reading::Lines, Some(&mut output), true)
+            .await;
         (ran, output)
     }
 
@@ -367,7 +385,21 @@ impl JobContext {
     ) -> (Result<(), Step>, Vec<String>) {
         let mut output = Vec::new();
         let ran = self
-            .run_command(spec, false, Some(&mut output), false)
+            .run_command(spec, Reading::Lines, Some(&mut output), false)
+            .await;
+        (ran, output)
+    }
+
+    /// Like [`command_output`](Self::command_output) for a Terminal command
+    /// with `--output jsonl`: its events become the job's steps, log lines
+    /// and download progress, and no JSON line is shown.
+    pub(crate) async fn command_events(
+        &self,
+        spec: CommandSpec,
+    ) -> (Result<(), Step>, Vec<String>) {
+        let mut output = Vec::new();
+        let ran = self
+            .run_command(spec, Reading::Update, Some(&mut output), false)
             .await;
         (ran, output)
     }
@@ -375,7 +407,7 @@ impl JobContext {
     async fn run_command(
         &self,
         spec: CommandSpec,
-        progress: bool,
+        reading: Reading,
         mut output: Option<&mut Vec<String>>,
         show_answers: bool,
     ) -> Result<(), Step> {
@@ -400,6 +432,24 @@ impl JobContext {
             if let Some(output) = output.as_mut() {
                 output.push(line.clone());
             }
+            if reading == Reading::Update
+                && let Some(event) = update_event(&line)
+            {
+                let shown = self.with(|inner| {
+                    let JobsInner {
+                        current,
+                        progress,
+                        step_prefix,
+                        ..
+                    } = inner;
+                    progress.read_update(event, current.as_mut()?, step_prefix.as_deref());
+                    Some(())
+                });
+                if shown.is_some() {
+                    self.save();
+                }
+                continue;
+            }
             if !show_answers
                 && serde_json::from_str::<serde_json::Value>(line.trim())
                     .is_ok_and(|v| v.is_object())
@@ -422,7 +472,7 @@ impl JobContext {
                 bench.read(&line);
                 let job = current.as_mut()?;
                 let before = job.step.clone();
-                if progress {
+                if reading == Reading::Setup {
                     p.read(&line, job);
                     // In a comparison: which model the step belongs to.
                     // A step shown again after a file check has it already.
@@ -566,7 +616,7 @@ fn table_value(line: &str, name: &str) -> Option<f64> {
 
 /// Reads setup's output: the step, a download's progress, a file check's
 /// progress, an error. The same lines Strata's own MCP tool reads
-/// (`tools/strata_mcp.py`).
+/// (`tools/strata_mcp.py`). Also the Terminal's update events.
 #[derive(Default)]
 struct Progress {
     /// The number of setup's last step heading.
@@ -583,6 +633,40 @@ struct Progress {
 impl Progress {
     fn read(&mut self, line: &str, job: &mut StrataJob) {
         self.read_at(line, job, Instant::now());
+    }
+
+    /// One event of `strata update --output jsonl`: a phase or a wait is the
+    /// step and a log line, a download's figures come from Strata itself.
+    fn read_update(&mut self, event: UpdateEvent, job: &mut StrataJob, prefix: Option<&str>) {
+        let step = match event {
+            UpdateEvent::Phase(message) | UpdateEvent::Waiting(message) => message,
+            UpdateEvent::Download {
+                done,
+                total,
+                percent,
+                bytes_per_sec,
+            } => {
+                job.percent = Some(percent);
+                job.done_bytes = Some(done);
+                job.total_bytes = Some(total);
+                job.bytes_per_sec = bytes_per_sec;
+                job.eta_secs = bytes_per_sec
+                    .filter(|speed| *speed > 0)
+                    .map(|speed| total.saturating_sub(done) / speed);
+                return;
+            }
+        };
+        *self = Self::default();
+        keep_line(&mut job.lines, step.clone());
+        job.step = Some(match prefix {
+            Some(prefix) => format!("{prefix} · {step}"),
+            None => step,
+        });
+        job.percent = None;
+        job.done_bytes = None;
+        job.total_bytes = None;
+        job.bytes_per_sec = None;
+        job.eta_secs = None;
     }
 
     fn read_at(&mut self, line: &str, job: &mut StrataJob, now: Instant) {

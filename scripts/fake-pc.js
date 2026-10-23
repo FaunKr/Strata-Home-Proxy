@@ -176,6 +176,18 @@ http.createServer((req, res) => {
       json(job);
     });
   }
+  // A tune 12 minutes in with nothing measured yet, as a quick tune's status
+  // file can stay to its end, for 8 s.
+  else if (req.method === 'POST' && req.url === '/fake/tune-start') {
+    const job = { id: 1, kind: 'tune', model: 'IQ3_XXS', state: 'running', step: 'Measuring your current settings',
+      lines: ['[0m] Measuring your current settings'], error: null,
+      started: Math.floor(Date.now() / 1000) - 12 * 60, ended: null };
+    strataJob = job;
+    setTimeout(() => {
+      if (strataJob === job) strataJob = { ...job, state: 'done', ended: Math.floor(Date.now() / 1000) };
+    }, 8000);
+    res.end();
+  }
   // A running tune with its step log and its measurements so far, for 8 s.
   else if (req.method === 'POST' && req.url === '/fake/tune') {
     const job = { id: 1, kind: 'tune', model: 'IQ3_XXS', state: 'running', percent: 8, eta_secs: 6569,

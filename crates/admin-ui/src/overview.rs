@@ -50,6 +50,13 @@ impl Live {
         client::connect(live);
         live
     }
+
+    /// The proxy's clock now (Unix seconds), counted on from the latest
+    /// overview; `None` until one arrived.
+    pub fn now(&self) -> Option<u64> {
+        let since = self.since.get();
+        self.overview.with(|o| o.as_ref().map(|o| o.now + since))
+    }
 }
 
 #[component]

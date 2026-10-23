@@ -322,6 +322,15 @@ async function tune(page, errors, name) {
     }
     await page.locator('dialog[open]').getByRole('button', { name: 'Cancel' }).click();
     await page.locator('dialog[open]').waitFor({ state: 'detached', ...wait });
+    // A tune with nothing measured yet: its running time, no 0 % bar.
+    await fetch(`${process.env.FAKE_PC}/fake/tune-start`, { method: 'POST' });
+    await page.getByText('Running for 12m').waitFor(wait);
+    const bars = await page.locator('section.job progress').count();
+    if (bars) throw new Error(`a tune with nothing measured shows ${bars} progress bar(s)`);
+    if (process.env.SHOTS === '1') {
+      await page.getByText('Running for 12m').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `${process.env.OUT}/${name}_tune-start.jpg`, type: 'jpeg', quality: 60 });
+    }
     // A running tune: its step log and its measurements so far.
     await fetch(`${process.env.FAKE_PC}/fake/tune`, { method: 'POST' });
     await page.getByText('[5m] Trying: Keep more of the conversation', { exact: false }).waitFor(wait);

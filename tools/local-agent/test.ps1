@@ -218,6 +218,19 @@ function test_check_task_on_stdin {
     if ((Get-Content -LiteralPath (Join-Path $record 'args')) -match 'local-agent-check-') { Fail 'task on the command line' }
 }
 
+function test_run_task_on_stdin {
+    # Without a task argument, and after a bare --, the task comes from stdin.
+    foreach ($arguments in @(@('run'), @('run', '--'))) {
+        $ErrorActionPreference = 'Continue'
+        $lines = 'Task from stdin' | & $pwsh -NoProfile -File $runner @arguments 2>&1 | ForEach-Object { "$_" }
+        $ErrorActionPreference = 'Stop'
+        if ($LASTEXITCODE -ne 0) { Fail "$arguments exit ${LASTEXITCODE}: $($lines -join "`n")" }
+        Assert-HasLine (Join-Path $record 'stdin') 'Task from stdin'
+        if ((Get-Content -LiteralPath (Join-Path $record 'args')) -match 'Task from stdin') { Fail 'task on the command line' }
+        Remove-Item -LiteralPath $record -Recurse -Force
+    }
+}
+
 function test_check_without_claude {
     $saved = $env:PATH
     $env:PATH = '/usr/bin:/bin'
@@ -281,12 +294,23 @@ function test_happy_path {
 function test_long_paths {
     # Git in the worktree, the runner's and the worker's, handles paths past
     # Windows' 260 characters, without a change to the repo's config.
-    la run task
+    # An entry the environment already passes this way stays.
+    $saved = @($env:GIT_CONFIG_COUNT, $env:GIT_CONFIG_KEY_0, $env:GIT_CONFIG_VALUE_0)
+    $env:GIT_CONFIG_COUNT = '1'
+    $env:GIT_CONFIG_KEY_0 = 'credential.interactive'
+    $env:GIT_CONFIG_VALUE_0 = 'false'
+    try {
+        la run task
+    } finally {
+        $env:GIT_CONFIG_COUNT, $env:GIT_CONFIG_KEY_0, $env:GIT_CONFIG_VALUE_0 = $saved
+    }
     if ($code -ne 0) { Fail "exit ${code}: $out" }
     $envFile = Join-Path $record 'env'
-    Assert-HasLine $envFile 'GIT_CONFIG_COUNT=1'
-    Assert-HasLine $envFile 'GIT_CONFIG_KEY_0=core.longpaths'
-    Assert-HasLine $envFile 'GIT_CONFIG_VALUE_0=true'
+    Assert-HasLine $envFile 'GIT_CONFIG_COUNT=2'
+    Assert-HasLine $envFile 'GIT_CONFIG_KEY_0=credential.interactive'
+    Assert-HasLine $envFile 'GIT_CONFIG_VALUE_0=false'
+    Assert-HasLine $envFile 'GIT_CONFIG_KEY_1=core.longpaths'
+    Assert-HasLine $envFile 'GIT_CONFIG_VALUE_1=true'
     if (git config core.longpaths) { Fail "the repo's config changed" }
 }
 
@@ -481,6 +505,8 @@ function test_time_limit {
     # Durations: seconds, minutes, hours; anything else is refused.
     la run --timeout soon task
     if ($code -ne 2) { Fail "--timeout soon: exit $code" }
+    la run --timeout 30M task
+    if ($code -ne 2) { Fail "--timeout 30M: exit $code" }
 }
 
 function test_status {
@@ -521,6 +547,7 @@ function test_one_run_at_a_time {
     }
     la status
     Assert-Contains $out 'queued'
+    Assert-Contains (Get-Content -LiteralPath (Join-Path $tmp 'run-B.out') -Raw) 'waiting for run'
     foreach ($r in $runs) {
         $r.WaitForExit()
         if ($r.ExitCode -ne 0) { Fail "a run failed: exit $($r.ExitCode)" }

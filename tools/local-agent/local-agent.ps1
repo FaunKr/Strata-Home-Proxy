@@ -101,9 +101,9 @@ function Invoke-Git {
 
 # Prints a duration like 90, 90s, 30m or 2h in seconds, or nothing.
 function ConvertTo-Seconds([string]$duration) {
-    if ($duration -notmatch '^([0-9]+)([smh]?)$') { return }
+    if ($duration -cnotmatch '^([0-9]+)([smh]?)$') { return }
     $n = [long]$Matches[1]
-    switch ($Matches[2]) {
+    switch -CaseSensitive ($Matches[2]) {
         'm' { return $n * 60 }
         'h' { return $n * 3600 }
         default { return $n }
@@ -467,6 +467,9 @@ function Start-Worker([string]$workdir, [string[]]$arguments, [string]$inputFile
 function Stop-Worker {
     if (-not $worker -or $worker.HasExited) { return }
     if ($onWindows) {
+        # taskkill writes to stderr when a process ignores the polite request;
+        # with Stop, Windows PowerShell would throw on that line.
+        $ErrorActionPreference = 'Continue'
         & taskkill.exe /T /PID $worker.Id 2>&1 | Out-Null
         for ($i = 0; $i -lt 4 -and -not $worker.HasExited; $i++) { Start-Sleep -Milliseconds 500 }
         if (-not $worker.HasExited) { & taskkill.exe /T /F /PID $worker.Id 2>&1 | Out-Null }
@@ -637,7 +640,7 @@ function Save-Leftovers([string]$worktree, [string]$id) {
 # needs to continue, and falls back.
 function Exit-MidRun([int]$exitCode) {
     $errorText = Get-ResultField 'result'
-    if (-not $errorText) { $errorText = Get-Content -LiteralPath (Join-Path $runDir 'stderr') -Tail 1 -ErrorAction SilentlyContinue }
+    if (-not $errorText) { $errorText = Get-Content -LiteralPath (Join-Path $runDir 'stderr') -Tail 1 -Encoding UTF8 -ErrorAction SilentlyContinue }
     if (-not $errorText) { $errorText = "the worker exited with code $exitCode" }
     $handoff = @("Error: $errorText")
     $branch = Get-Meta $runDir 'branch'
@@ -694,7 +697,7 @@ function Invoke-Run([string[]]$arguments) {
             $script:extraAllow += $arguments[$i]
             $i++
         } elseif ($arg -ceq '--') {
-            $task = $arguments[$i..($arguments.Count - 1)] -join ' '
+            if ($i -lt $arguments.Count) { $task = $arguments[$i..($arguments.Count - 1)] -join ' ' }
             break
         } elseif ($arg.StartsWith('-')) {
             Exit-Usage "unknown option: $arg"
@@ -760,10 +763,13 @@ function Invoke-Run([string[]]$arguments) {
         Set-Meta 'started' (Get-Now)
 
         Set-WorkerEnvironment
-        # git commands of the worker get long paths too.
-        $env:GIT_CONFIG_COUNT = '1'
-        $env:GIT_CONFIG_KEY_0 = 'core.longpaths'
-        $env:GIT_CONFIG_VALUE_0 = 'true'
+        # git commands of the worker get long paths too, after any entries the
+        # environment already passes this way.
+        $n = 0
+        if ($env:GIT_CONFIG_COUNT -match '^[0-9]+$') { $n = [int]$env:GIT_CONFIG_COUNT }
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_KEY_$n", 'core.longpaths')
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_VALUE_$n", 'true')
+        $env:GIT_CONFIG_COUNT = [string]($n + 1)
         $workerArgs = @('-p', '--output-format', 'stream-json', '--verbose', '--append-system-prompt', $prompt,
             '--permission-mode', $mode, '--allowedTools') + $allowed + @('--disallowedTools') + $disallowed
         $script:worker = Start-Worker $workdir $workerArgs (Join-Path $runDir 'task') (Join-Path $runDir 'log.jsonl') (Join-Path $runDir 'stderr')
@@ -801,8 +807,6 @@ function Invoke-Run([string[]]$arguments) {
                 Set-Meta 'ended' (Get-Now)
             }
         }
-        $exitCode = $worker.ExitCode
-
         if ($timedOut) {
             if (-not $readOnly) { Save-Leftovers $workdir $id }
             Set-Meta 'state' 'timeout'
@@ -812,6 +816,8 @@ function Invoke-Run([string[]]$arguments) {
             exit 4
         }
 
+        $exitCode = -1
+        if ($worker.HasExited) { $exitCode = $worker.ExitCode }
         # A worker that exits badly, ends on an error or never ends counts as
         # failed.
         if ($gaming -or $exitCode -ne 0 -or (Get-ResultField 'is_error') -ne 'false') { Exit-MidRun $exitCode }
@@ -939,7 +945,7 @@ function Invoke-Check {
             }
         }
         if (-not $found) {
-            $last = Get-Content -LiteralPath (Join-Path $dir 'stderr') -Tail 1 -ErrorAction SilentlyContinue
+            $last = Get-Content -LiteralPath (Join-Path $dir 'stderr') -Tail 1 -Encoding UTF8 -ErrorAction SilentlyContinue
             Exit-CheckFailed "the worker made no working tool call ($last)" "look at Strata's log on the PC; Claude Code needs Strata 0.1.17 or newer"
         }
         Write-Out 'ok   tool call through Strata'

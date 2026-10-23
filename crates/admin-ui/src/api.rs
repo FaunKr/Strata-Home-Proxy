@@ -960,6 +960,17 @@ pub enum EnergySource {
     Mixed,
 }
 
+impl EnergySource {
+    /// The word for it on the History page and in its CSV.
+    pub fn word(&self) -> &'static str {
+        match self {
+            Self::Measured => "measured",
+            Self::Estimated => "estimated",
+            Self::Mixed => "mixed",
+        }
+    }
+}
+
 /// Energy and savings over a bar or the whole range. € use today's
 /// price for all of it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1031,4 +1042,215 @@ pub struct HistoryView {
 pub async fn get_history(range: String) -> Result<HistoryView, ServerFnError> {
     require_login(false).await?;
     Ok(backend()?.history(range).await)
+}
+
+/// The header of the history's CSV download.
+const CSV_HEADER: &str =
+    "date,awake_h,gaming_h,asleep_h,unknown_h,kwh,eur,saved_kwh,saved_eur,source";
+
+/// The History as a CSV file: the header line, then one row per bar, oldest
+/// first — no label column, no totals. Hours have two decimals, energy three,
+/// euros two; every line ends with `\r\n` and nothing is quoted.
+pub fn history_csv(view: &HistoryView) -> String {
+    let mut out = String::from(CSV_HEADER);
+    out.push_str("\r\n");
+    for day in &view.days {
+        let e = day.energy;
+        out.push_str(&format!(
+            "{},{:.2},{:.2},{:.2},{:.2},{:.3},{:.2},{:.3},{:.2},{}\r\n",
+            day.date,
+            day.awake_h,
+            day.gaming_h,
+            day.asleep_h,
+            day.unknown_h,
+            e.kwh,
+            e.eur,
+            e.saved_kwh,
+            e.saved_eur,
+            e.source.word(),
+        ));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bar(
+        date: &str,
+        awake: f64,
+        gaming: f64,
+        asleep: f64,
+        unknown: f64,
+        kwh: f64,
+        eur: f64,
+        saved_kwh: f64,
+        saved_eur: f64,
+        source: EnergySource,
+    ) -> HistoryDay {
+        HistoryDay {
+            date: date.to_string(),
+            label: date.to_string(),
+            awake_h: awake,
+            gaming_h: gaming,
+            asleep_h: asleep,
+            unknown_h: unknown,
+            energy: Energy {
+                kwh,
+                eur,
+                saved_kwh,
+                saved_eur,
+                source,
+            },
+        }
+    }
+
+    fn view_of(days: Vec<HistoryDay>) -> HistoryView {
+        HistoryView {
+            days,
+            bucket: HistoryBucket::Day,
+            totals: HistoryTotals::default(),
+            from: "2026-10-13".into(),
+            to: "2026-10-19".into(),
+            power: PowerSettings::default(),
+            agent_configured: true,
+        }
+    }
+
+    #[test]
+    fn csv_lists_the_header_and_one_row_per_bar_oldest_first() {
+        let view = view_of(vec![
+            bar(
+                "2026-10-13",
+                5.0,
+                1.0,
+                17.0,
+                1.0,
+                0.4,
+                0.12,
+                0.05,
+                0.014,
+                EnergySource::Estimated,
+            ),
+            bar(
+                "2026-10-14",
+                2.0,
+                0.0,
+                22.0,
+                0.0,
+                0.2,
+                0.06,
+                0.06,
+                0.018,
+                EnergySource::Measured,
+            ),
+        ]);
+        let csv = history_csv(&view);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(
+            lines[0],
+            "date,awake_h,gaming_h,asleep_h,unknown_h,kwh,eur,saved_kwh,saved_eur,source"
+        );
+        assert_eq!(
+            lines[1],
+            "2026-10-13,5.00,1.00,17.00,1.00,0.400,0.12,0.050,0.01,estimated"
+        );
+        assert_eq!(
+            lines[2],
+            "2026-10-14,2.00,0.00,22.00,0.00,0.200,0.06,0.060,0.02,measured"
+        );
+        assert_eq!(lines.len(), 3);
+        assert!(csv.ends_with("\r\n"));
+    }
+
+    #[test]
+    fn csv_rounds_hours_to_two_and_energy_to_three_decimals() {
+        let view = view_of(vec![bar(
+            "2026-10-13",
+            5.4567,
+            1.2,
+            17.004,
+            0.34,
+            1.23456,
+            0.3612,
+            0.5,
+            0.144,
+            EnergySource::Mixed,
+        )]);
+        let csv = history_csv(&view);
+        assert_eq!(
+            csv.lines().nth(1).unwrap(),
+            "2026-10-13,5.46,1.20,17.00,0.34,1.235,0.36,0.500,0.14,mixed"
+        );
+    }
+
+    #[test]
+    fn csv_names_all_three_energy_sources() {
+        for (source, word) in [
+            (EnergySource::Measured, "measured"),
+            (EnergySource::Estimated, "estimated"),
+            (EnergySource::Mixed, "mixed"),
+        ] {
+            let view = view_of(vec![bar(
+                "2026-10-13",
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                source,
+            )]);
+            let expected = format!(",{word}\r\n");
+            assert!(history_csv(&view).ends_with(&expected));
+        }
+    }
+
+    #[test]
+    fn csv_of_a_week_view_lists_the_weeks_with_their_dates() {
+        let mut view = view_of(vec![
+            bar(
+                "2026-09-28",
+                40.0,
+                5.0,
+                120.0,
+                3.0,
+                3.2,
+                0.96,
+                1.4,
+                0.42,
+                EnergySource::Estimated,
+            ),
+            bar(
+                "2026-10-05",
+                35.0,
+                8.0,
+                121.0,
+                0.0,
+                2.9,
+                0.87,
+                1.5,
+                0.45,
+                EnergySource::Estimated,
+            ),
+        ]);
+        view.bucket = HistoryBucket::Week;
+        let csv = history_csv(&view);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1].split(',').next().unwrap(), "2026-09-28");
+        assert_eq!(lines[2].split(',').next().unwrap(), "2026-10-05");
+    }
+
+    #[test]
+    fn csv_of_an_empty_history_is_the_header_line_only() {
+        let csv = history_csv(&view_of(vec![]));
+        assert_eq!(
+            csv,
+            "date,awake_h,gaming_h,asleep_h,unknown_h,kwh,eur,saved_kwh,saved_eur,source\r\n"
+        );
+    }
 }

@@ -6,8 +6,7 @@ use leptos::prelude::*;
 
 use crate::{
     api::{
-        Energy, EnergySource, HistoryBucket, HistoryDay, HistoryTotals, HistoryView, PowerSettings,
-        get_history,
+        Energy, HistoryBucket, HistoryDay, HistoryTotals, HistoryView, PowerSettings, get_history,
     },
     labels::HISTORY_STATES,
 };
@@ -225,7 +224,7 @@ fn PerBar(days: Vec<HistoryDay>) -> impl IntoView {
                                         <td>{kwh(e.kwh)}</td>
                                         <td>{eur(e.eur)}</td>
                                         <td>{eur(e.saved_eur)}</td>
-                                        <td class="muted">{source(e.source)}</td>
+                                        <td class="muted">{e.source.word()}</td>
                                     </tr>
                                 }
                             })
@@ -237,13 +236,6 @@ fn PerBar(days: Vec<HistoryDay>) -> impl IntoView {
     }
 }
 
-fn source(source: EnergySource) -> &'static str {
-    match source {
-        EnergySource::Measured => "measured",
-        EnergySource::Estimated => "estimated",
-        EnergySource::Mixed => "mixed",
-    }
-}
 
 fn kwh(value: f64) -> String {
     format!("{value:.2} kWh")
@@ -319,7 +311,7 @@ fn Bar(day: HistoryDay, named: bool) -> impl IntoView {
         kwh(used),
         eur(cost),
         eur(saved_eur),
-        source(from),
+        from.word(),
     );
     // "18 Oct" from a day's "Sun 18 Oct": the weekday does not fit under a
     // bar. A week ("12 Oct") and a month ("Oct 2026") stay as they are.
@@ -355,7 +347,7 @@ fn Totals(totals: HistoryTotals, power: PowerSettings) -> impl IntoView {
             <dt>"Unknown"</dt>
             <dd>{format!("{} h", hours(totals.unknown_h))}</dd>
             <dt>"Energy"</dt>
-            <dd>{format!("{} ({})", kwh(e.kwh), source(e.source))}</dd>
+            <dd>{format!("{} ({})", kwh(e.kwh), e.source.word())}</dd>
             <dt>"Cost"</dt>
             <dd>{eur(e.eur)}</dd>
             <dt>"Saved"</dt>

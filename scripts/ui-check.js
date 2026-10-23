@@ -163,8 +163,11 @@ async function forced(page, errors) {
     await sees('Pictures: off');
   });
   await step('the picture reading switch asks, then the model shows its new state', 'pictures-switch', async () => {
+    // No Strata job starts in gaming mode, which the steps above left on.
+    await fakePc('awake');
     await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
-    const row = page.locator('li.model', { hasText: 'IQ3_XXS' });
+    // The first row: another one's text can name IQ3_XXS too.
+    const row = page.locator('li.model', { hasText: 'IQ3_XXS' }).first();
     const switchOff = row.getByRole('button', { name: 'Switch picture reading off' });
     await switchOff.waitFor(wait);
     await switchOff.click();
@@ -180,6 +183,7 @@ async function forced(page, errors) {
     await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
     await row.getByText('Pictures: off').waitFor(wait);
     await row.getByRole('button', { name: 'Switch picture reading on' }).waitFor(wait);
+    await fakePc('gaming');
   });
   await step('Force sleep in the gaming state', 'gaming-overview', async () => {
     await page.goto(base + '/admin', { waitUntil: 'domcontentloaded' });

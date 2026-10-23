@@ -175,7 +175,8 @@ else
 fi
 tools/local-agent/test.sh
 # Its PowerShell port for Windows: the same tests under pwsh, and
-# PSScriptAnalyzer, which also checks that it runs on Windows PowerShell 5.1.
+# PSScriptAnalyzer, which also checks its syntax and commands against Windows
+# PowerShell 5.1.
 if command -v pwsh >/dev/null; then
   pwsh -NoProfile -File tools/local-agent/test.ps1
   lint=0

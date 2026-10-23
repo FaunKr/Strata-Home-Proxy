@@ -8,12 +8,14 @@ set -euo pipefail
 version=1.23.0
 sum=b9969345f78251112fb75bdddc789be8689a343472a2e09762303aa03287afab
 dir=${1:-$HOME/.local/share/powershell/Modules}
+target=$dir/PSScriptAnalyzer/$version
+# Installed already: the cloud session hook runs this at every start.
+[[ ! -f $target/PSScriptAnalyzer.psd1 ]] || exit 0
+rm -rf "$target"
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 curl -fsSL -o "$tmp" "https://github.com/PowerShell/PSScriptAnalyzer/releases/download/$version/PSScriptAnalyzer.$version.nupkg"
 echo "$sum  $tmp" | sha256sum -c --quiet
-target=$dir/PSScriptAnalyzer/$version
-rm -rf "$target"
 mkdir -p "$target"
 # Only the module, the Windows PowerShell 5.1 profile check.sh targets and the
 # rule's default reference profile, without which it fails; all profiles

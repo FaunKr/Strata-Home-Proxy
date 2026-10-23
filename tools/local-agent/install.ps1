@@ -36,12 +36,19 @@ if (-not $onWindows) { & chmod 755 (Join-Path $prefix 'local-agent') }
 
 $separator = [IO.Path]::PathSeparator
 if ($onWindows) {
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    if (-not $userPath) { $userPath = '' }
-    if (($userPath.Split($separator) | Where-Object { $_.TrimEnd('\') -eq $prefix.TrimEnd('\') }).Count -eq 0) {
-        [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd($separator) + $separator + $prefix).TrimStart($separator), 'User')
+    # Read and written unexpanded, so entries like %USERPROFILE%\bin stay as
+    # they are.
+    $environment = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    $userPath = [string]$environment.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $expanded = [Environment]::ExpandEnvironmentVariables($userPath)
+    if (($expanded.Split($separator) | Where-Object { $_.TrimEnd('\') -eq $prefix.TrimEnd('\') }).Count -eq 0) {
+        $environment.SetValue('Path', ($userPath.TrimEnd($separator) + $separator + $prefix).TrimStart($separator), [Microsoft.Win32.RegistryValueKind]::ExpandString)
+        # Setting a variable through .NET tells Explorer that the environment
+        # changed, so terminals it starts get the new PATH.
+        [Environment]::SetEnvironmentVariable('LOCAL_AGENT_INSTALL', $null, 'User')
         [Console]::Out.WriteLine("Added $prefix to your user PATH; open a new terminal to use it.")
     }
+    $environment.Close()
 } elseif (($env:PATH.Split($separator) | Where-Object { $_ -eq $prefix }).Count -eq 0) {
     [Console]::Out.WriteLine("Add $prefix to your PATH.")
 }
@@ -51,9 +58,10 @@ if (-not (Test-Path -LiteralPath $config)) {
     [IO.File]::WriteAllText($config, "# local-agent: the Proxy on the NAS and a client key from Access in its web UI.`nLOCAL_AGENT_URL=`nLOCAL_AGENT_KEY=`n", (New-Object Text.UTF8Encoding($false)))
     # Only you may read it: it will hold your key.
     if ($onWindows) {
-        $acl = Get-Acl -LiteralPath $config
+        # A fresh descriptor with only an access list: no inherited entries,
+        # full control for you; owner and audit entries stay as they are.
+        $acl = New-Object Security.AccessControl.FileSecurity
         $acl.SetAccessRuleProtection($true, $false)
-        foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
         $user = [Security.Principal.WindowsIdentity]::GetCurrent().User
         $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($user, 'FullControl', 'Allow')))
         Set-Acl -LiteralPath $config -AclObject $acl

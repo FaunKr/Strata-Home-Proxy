@@ -82,15 +82,17 @@ function Test-ReadableByOthers([string]$path) {
         return (Get-Item -LiteralPath $path).UnixMode.Substring(4) -ne '------'
     }
     $own = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')
-    foreach ($rule in (Get-Acl -LiteralPath $path).Access) {
+    # As SIDs, so that an entry of a deleted account needs no name lookup.
+    $rules = (Get-Acl -LiteralPath $path).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
+    foreach ($rule in $rules) {
         if ($rule.AccessControlType -ne 'Allow') { continue }
-        $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
-        if ($own -notcontains $sid) { return $true }
+        if ($own -notcontains $rule.IdentityReference.Value) { return $true }
     }
     return $false
 }
 
-# The configuration: KEY=VALUE lines, as the Bash runner reads them.
+# The configuration: KEY=VALUE lines, which the Bash runner sources; a value
+# may be quoted or followed by a comment.
 function Read-Config {
     if (-not (Test-Path -LiteralPath $configFile -PathType Leaf)) {
         Exit-Usage "no configuration in $configFile (LOCAL_AGENT_URL and LOCAL_AGENT_KEY, readable only by you)"
@@ -105,20 +107,29 @@ function Read-Config {
     $values = @{}
     foreach ($line in [IO.File]::ReadAllLines($configFile)) {
         if ($line -match '^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            $name = $Matches[1]
             $value = $Matches[2].Trim()
-            if ($value -match '^"(.*)"$' -or $value -match "^'(.*)'$") { $value = $Matches[1] }
-            $values[$Matches[1]] = $value
+            if ($value -match '^"([^"]*)"' -or $value -match "^'([^']*)'") {
+                $value = $Matches[1]
+            } else {
+                $value = ($value -replace '\s+#.*$', '')
+            }
+            $values[$name] = $value
         }
     }
     if (-not $values['LOCAL_AGENT_URL'] -or -not $values['LOCAL_AGENT_KEY']) {
         Exit-Usage "$configFile needs LOCAL_AGENT_URL and LOCAL_AGENT_KEY"
     }
-    $script:url = $values['LOCAL_AGENT_URL'].TrimEnd('/')
+    $script:url = $values['LOCAL_AGENT_URL'] -replace '/$', ''
     $script:key = $values['LOCAL_AGENT_KEY']
     # Strata ignores the model name, but Claude Code only accepts names it knows.
     $script:model = 'claude-sonnet-4-5'
     if ($values['LOCAL_AGENT_MODEL']) { $script:model = $values['LOCAL_AGENT_MODEL'] }
-    if ($values['LOCAL_AGENT_COMPACT_SHARE']) { $script:compactShare = [long]$values['LOCAL_AGENT_COMPACT_SHARE'] }
+    $share = $values['LOCAL_AGENT_COMPACT_SHARE']
+    if ($share) {
+        if ($share -notmatch '^[0-9]+$') { Exit-Usage "LOCAL_AGENT_COMPACT_SHARE in $configFile takes a percentage, not: $share" }
+        $script:compactShare = [long]$share
+    }
 }
 
 # Asks the Proxy for Strata's /health; the Proxy wakes the PC for it. Sets
@@ -175,21 +186,37 @@ function Invoke-Probe([int]$timeout = 330) {
 function Assert-Strata([string]$onFailure) {
     Invoke-Probe
     if ($probeStatus -eq '504' -and $probeTag -eq 'wake_timeout') { Invoke-Probe }
+    # The first matching case only: 401/strata_unauthorized also matches 401/*.
     switch -Wildcard ("$probeStatus/$probeTag") {
         '200/*' { break }
-        '503/gaming' { & $onFailure 'Strata is off: the PC is in gaming mode' }
-        '504/wake_timeout' { & $onFailure 'the PC did not wake up in time (tried twice)' }
+        '503/gaming' {
+            & $onFailure 'Strata is off: the PC is in gaming mode'
+            break
+        }
+        '504/wake_timeout' {
+            & $onFailure 'the PC did not wake up in time (tried twice)'
+            break
+        }
         '401/strata_unauthorized' {
             & $onFailure "Strata refused the Proxy's own key" "set the Strata key in the Proxy's web UI (Strata section)"
+            break
         }
-        '401/*' { & $onFailure 'the Proxy did not accept the key' "check LOCAL_AGENT_KEY in $configFile against Access in the Proxy's web UI" }
+        '401/*' {
+            & $onFailure 'the Proxy did not accept the key' "check LOCAL_AGENT_KEY in $configFile against Access in the Proxy's web UI"
+            break
+        }
         '503/not_configured' {
             & $onFailure 'the Proxy is not set up: it has no address for Strata' "set Strata's address in the Proxy's web UI (Strata section)"
+            break
         }
         '503/no_mac' {
             & $onFailure 'the Proxy cannot wake the PC: it knows no MAC address' 'start the PC once so the PC service reports its MAC, or set PC_MAC on the Proxy'
+            break
         }
-        '000/*' { & $onFailure "the Proxy is unreachable at $url ($probeError)" "check LOCAL_AGENT_URL in $configFile and that this machine reaches the NAS" }
+        '000/*' {
+            & $onFailure "the Proxy is unreachable at $url ($probeError)" "check LOCAL_AGENT_URL in $configFile and that this machine reaches the NAS"
+            break
+        }
         default {
             $tagNote = ''
             if ($probeTag) { $tagNote = " ($probeTag)" }
@@ -249,7 +276,8 @@ function Set-WorkerEnvironment {
 # Quotes one argument by the rules Windows programs split their command line
 # with. 5.1 passes arguments with spaces or quotes to native programs wrongly,
 # so the worker's command line is built here. Anything beyond plain characters
-# is quoted, for cmd.exe too when claude is a .cmd.
+# is quoted. When claude is npm's claude.cmd, cmd.exe reads the line first and
+# still expands %NAME% inside quotes; the arguments the runner passes hold no %.
 function ConvertTo-Argument([string]$argument) {
     if ($argument -match '^[A-Za-z0-9_./:=-]+$') { return $argument }
     $quoted = New-Object Text.StringBuilder
@@ -274,16 +302,14 @@ function ConvertTo-Argument([string]$argument) {
 }
 
 # Starts claude in $workdir with $arguments, stdin from $inputFile and its
-# output in $logFile and $errFile; returns the process.
+# output in $logFile and $errFile; returns the process, or nothing when there
+# is no claude.
 function Start-Worker([string]$workdir, [string[]]$arguments, [string]$inputFile, [string]$logFile, [string]$errFile) {
     $claude = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $claude) { Exit-Usage 'claude not found; install Claude Code' }
+    if (-not $claude) { return }
     $line = ($arguments | ForEach-Object { ConvertTo-Argument $_ }) -join ' '
-    $process = Start-Process -FilePath $claude.Source -ArgumentList $line -WorkingDirectory $workdir -NoNewWindow -PassThru `
+    return Start-Process -FilePath $claude.Source -ArgumentList $line -WorkingDirectory $workdir -NoNewWindow -PassThru `
         -RedirectStandardInput $inputFile -RedirectStandardOutput $logFile -RedirectStandardError $errFile
-    # Keeps the handle, so the exit code stays readable after the process ends.
-    [void]$process.Handle
-    return $process
 }
 
 # The objects of a stream-json log, one per line; lines that aren't JSON are
@@ -336,6 +362,7 @@ function Invoke-Check {
         Set-WorkerEnvironment
         $worker = Start-Worker $work @('-p', '--output-format', 'stream-json', '--verbose', '--allowedTools', 'Bash(echo:*)',
             '--disallowedTools', 'PowerShell') (Join-Path $dir 'task') (Join-Path $dir 'log.jsonl') (Join-Path $dir 'stderr')
+        if (-not $worker) { Exit-CheckFailed 'claude not found' 'install Claude Code, so that claude is on PATH' }
         $worker.WaitForExit()
         $found = $false
         foreach ($e in Read-Events (Join-Path $dir 'log.jsonl')) {

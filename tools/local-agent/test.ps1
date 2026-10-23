@@ -2,8 +2,8 @@
 # Bash runner: each test runs the real script under pwsh in a throwaway git
 # repo, against the same fake Proxy (testdata/fake-proxy.py) and fake `claude`
 # on PATH (testdata/fake-claude), and checks only what a user sees: exit code,
-# output, worktrees, branches and the original checkout. A test here has the
-# name of its counterpart in test.sh.
+# output, worktrees, branches and the original checkout. A test that test.sh
+# has too carries the same name.
 #
 # Usage: pwsh -NoProfile -File tools/local-agent/test.ps1 [test_name...]
 $ErrorActionPreference = 'Stop'
@@ -41,7 +41,11 @@ function Fail([string]$message) {
 }
 # Asserts that a file holds a line, or that a text holds a substring.
 function Assert-HasLine([string]$file, [string]$line) {
-    if (-not (Test-Path -LiteralPath $file) -or (Get-Content -LiteralPath $file) -cnotcontains $line) { Fail "$file has no line '$line'" }
+    if (-not (Test-Path -LiteralPath $file)) {
+        Fail "no $file"
+    } elseif ((Get-Content -LiteralPath $file) -cnotcontains $line) {
+        Fail "$file has no line '$line' in: $((Get-Content -LiteralPath $file) -join "`n")"
+    }
 }
 function Assert-Contains([string]$text, [string]$part) {
     if (-not $text.Contains($part)) { Fail "'$part' missing in: $text" }
@@ -76,7 +80,8 @@ function Invoke-Captured([string]$program, [string[]]$arguments) {
     $script:out = ($lines -join "`n")
 }
 # Runs local-agent.
-function la { Invoke-Captured 'pwsh' (@('-NoProfile', '-File', $runner) + $args) }
+$pwsh = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
+function la { Invoke-Captured $pwsh (@('-NoProfile', '-File', $runner) + $args) }
 
 function Reset-Test {
     foreach ($path in $record, $stateDir, "$($env:FAKE_PROXY_SCENARIO).requests") {
@@ -101,14 +106,14 @@ function Get-OptionValues([string]$option) {
 function test_config_required {
     Remove-Item -LiteralPath $config
     la check
-    if ($code -ne 2) { Fail "exit $code" }
+    if ($code -ne 2) { Fail "exit ${code}: $out" }
     Assert-Contains $out $config
     if (Test-Path (Join-Path $record 'args')) { Fail 'worker started' }
     # A config others can read is refused.
     Write-Config
     & chmod 644 $config
     la check
-    if ($code -ne 2) { Fail "exit $code for a readable file" }
+    if ($code -ne 2) { Fail "exit $code for a readable file: $out" }
     Assert-Contains $out 'chmod 600'
 }
 
@@ -128,7 +133,7 @@ function test_install {
     Assert-Contains $out $config
     $shim = Join-Path $inst 'local-agent'
     Invoke-Captured $shim @('check')
-    if ($code -ne 2) { Fail "check with an empty template: exit $code" }
+    if ($code -ne 2) { Fail "check with an empty template: exit ${code}: $out" }
     Assert-Contains $out 'needs LOCAL_AGENT_URL'
     # A second install keeps the existing config.
     Write-Config
@@ -153,30 +158,69 @@ function test_check {
     Assert-HasLine $envFile 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<unset>'
     Assert-HasLine $envFile "ANTHROPIC_BASE_URL=$url"
     Assert-HasLine $envFile 'ANTHROPIC_AUTH_TOKEN=client-key'
-    # Arguments with parentheses and stars arrive as they are, and the
-    # worker has no PowerShell tool to get around the deny list.
-    if (@(Get-OptionValues '--allowedTools') -cnotcontains 'Bash(echo:*)') { Fail "allowed: $(Get-OptionValues '--allowedTools')" }
-    if (@(Get-OptionValues '--disallowedTools') -cnotcontains 'PowerShell') { Fail 'PowerShell tool not disallowed' }
     # Each failure names its fix.
     $env:FAKE_CLAUDE_MODE = 'no-tool'
     la check
-    if ($code -ne 2) { Fail "without a tool call: exit $code" }
+    if ($code -ne 2) { Fail "without a tool call: exit ${code}: $out" }
     Assert-Contains $out 'FAIL tool call'
     Set-Health '{"status": 200, "max_context": 32768}'
     la check
-    if ($code -ne 2) { Fail "32K: exit $code" }
+    if ($code -ne 2) { Fail "32K: exit ${code}: $out" }
     Assert-Contains $out '128K'
     Set-Health '{"status": 401, "tag": "unauthorized"}'
     la check
     Assert-Contains $out 'Access'
     Set-Content -LiteralPath $config -Value "LOCAL_AGENT_URL=http://127.0.0.1:9`nLOCAL_AGENT_KEY=client-key"
     la check
-    if ($code -ne 2) { Fail "unreachable: exit $code" }
+    if ($code -ne 2) { Fail "unreachable: exit ${code}: $out" }
     Assert-Contains $out 'LOCAL_AGENT_URL'
     Remove-Item -LiteralPath $config
     la check
-    if ($code -ne 2) { Fail "without config: exit $code" }
+    if ($code -ne 2) { Fail "without config: exit ${code}: $out" }
     Assert-Contains $out $config
+}
+
+function test_check_disallows_powershell_tool {
+    # On Windows the worker would have a PowerShell tool, which the deny list
+    # of Bash rules doesn't cover.
+    $env:FAKE_CLAUDE_MODE = 'check'
+    la check
+    if (@(Get-OptionValues '--disallowedTools') -cnotcontains 'PowerShell') { Fail "disallowed: $(Get-OptionValues '--disallowedTools')" }
+    if (@(Get-OptionValues '--allowedTools') -cnotcontains 'Bash(echo:*)') { Fail "allowed: $(Get-OptionValues '--allowedTools')" }
+}
+
+function test_check_task_on_stdin {
+    $env:FAKE_CLAUDE_MODE = 'check'
+    la check
+    if (-not (Get-Content -LiteralPath (Join-Path $record 'stdin') -Raw).Contains('echo local-agent-check-')) { Fail 'no task on stdin' }
+    if ((Get-Content -LiteralPath (Join-Path $record 'args')) -match 'local-agent-check-') { Fail 'task on the command line' }
+}
+
+function test_check_without_claude {
+    $saved = $env:PATH
+    $env:PATH = '/usr/bin:/bin'
+    try {
+        la check
+    } finally {
+        $env:PATH = $saved
+    }
+    if ($code -ne 2) { Fail "exit ${code}: $out" }
+    Assert-Contains $out 'FAIL tool call: claude not found'
+}
+
+function test_config_formats {
+    # As the Bash runner sources it: quotes, comments and a trailing slash.
+    $env:FAKE_CLAUDE_MODE = 'check'
+    Set-Content -LiteralPath $config -Value "# the Proxy`nLOCAL_AGENT_URL=`"$url/`"`nLOCAL_AGENT_KEY=client-key  # from Access`nLOCAL_AGENT_COMPACT_SHARE='70'"
+    la check
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    Assert-HasLine (Join-Path $record 'env') "ANTHROPIC_BASE_URL=$url"
+    Assert-HasLine (Join-Path $record 'env') 'ANTHROPIC_AUTH_TOKEN=client-key'
+    Assert-Contains $out 'compacts near 159K'
+    Add-Content -LiteralPath $config -Value 'LOCAL_AGENT_COMPACT_SHARE=most'
+    la check
+    if ($code -ne 2) { Fail "a share that is no number: exit ${code}: $out" }
+    Assert-Contains $out 'LOCAL_AGENT_COMPACT_SHARE'
 }
 
 $tests = @($args)

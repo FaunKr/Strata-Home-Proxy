@@ -1,6 +1,8 @@
 # PSScriptAnalyzer settings for the PowerShell runner (scripts/check.sh): the
-# default rules, plus a check that it runs on Windows PowerShell 5.1, which
-# ships with Windows, although CI only has PowerShell 7.
+# default rules, plus a check that its syntax and commands exist in Windows
+# PowerShell 5.1, which ships with Windows, although CI only has PowerShell 7.
+# .NET calls are not checked: PSUseCompatibleTypes flagged no call missing
+# from .NET Framework in a test.
 @{
     # Rules for cmdlets in modules, not for a script's own helper functions.
     ExcludeRules = @(

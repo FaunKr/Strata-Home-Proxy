@@ -119,7 +119,10 @@ fn strata_report_splits_into_the_page_and_the_incoming_commits() {
         (Pictures::Gpu, "gpu"),
     ] {
         assert_eq!(serde_json::to_value(state).unwrap(), json!(name));
-        assert_eq!(serde_json::from_value::<Pictures>(json!(name)).unwrap(), state);
+        assert_eq!(
+            serde_json::from_value::<Pictures>(json!(name)).unwrap(),
+            state
+        );
     }
     assert_eq!(sampling.thinking[2].source, SamplingSource::ChatSettings);
     assert_eq!(

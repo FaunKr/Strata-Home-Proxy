@@ -34,8 +34,8 @@ pub use status::{
     StrataKey,
 };
 pub use strata::{
-    BenchTool, ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, Pictures, SamplingField,
-    SamplingSource, SamplingSupport, StrataBenchmark, StrataFamily, StrataInfo, StrataInstall,
-    StrataModel, StrataReport, StrataSampling, StrataSize,
+    BenchTool, ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, Pictures,
+    SamplingField, SamplingSource, SamplingSupport, StrataBenchmark, StrataFamily, StrataInfo,
+    StrataInstall, StrataModel, StrataReport, StrataSampling, StrataSize,
 };
 pub use tune::{PresetState, StrataPreset, StrataPresets, StrataTune, TuneSpeed};

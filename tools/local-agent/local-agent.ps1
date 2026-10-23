@@ -485,10 +485,11 @@ function Stop-Worker {
 function Read-LogLines([string]$logFile, [switch]$Whole) {
     if (-not (Test-Path -LiteralPath $logFile)) { return @() }
     $stream = New-Object IO.FileStream($logFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    $reader = New-Object IO.StreamReader($stream, $utf8)
     try {
-        $text = (New-Object IO.StreamReader($stream, $utf8)).ReadToEnd()
+        $text = $reader.ReadToEnd()
     } finally {
-        $stream.Dispose()
+        $reader.Dispose()
     }
     $lines = $text.Split("`n")
     if ($Whole -or $lines[-1] -eq '') {
@@ -621,11 +622,13 @@ function Get-LastSteps([int]$count) { return @(Get-Steps @(Read-Events (Join-Pat
 function Update-Progress {
     $lines = @(Read-LogLines (Join-Path $runDir 'log.jsonl') -Whole)
     if ($lines.Count -le $seen) { return }
-    $steps = @(Get-Steps @(ConvertFrom-EventLines $lines[$seen..($lines.Count - 1)]))
+    $events = @(ConvertFrom-EventLines $lines[$seen..($lines.Count - 1)])
+    $steps = @(Get-Steps $events)
     $progress = Join-Path $runDir 'progress'
     if ($steps.Count -gt 0) { Add-Utf8File $progress (($steps -join "`n") + "`n") }
+    # Only the new lines: parsing the whole log every second would be slow.
+    Add-ContextStats $events
     if (-not $warned) {
-        Get-ContextStats
         $warning = @(Get-ContextReport) | Where-Object { $_.StartsWith('warning:') }
         if ($warning) {
             Add-Utf8File $progress "$warning`n"
@@ -641,7 +644,11 @@ function Get-ContextStats {
     $script:contextNow = 0
     $script:contextPeak = 0
     $script:compactions = 0
-    foreach ($e in Read-Events (Join-Path $runDir 'log.jsonl')) {
+    Add-ContextStats @(Read-Events (Join-Path $runDir 'log.jsonl'))
+}
+# Carries the context stats forward over more events of the log.
+function Add-ContextStats([object[]]$events) {
+    foreach ($e in $events) {
         if ($e.type -eq 'assistant' -and $e.message -and $e.message.usage) {
             $u = $e.message.usage
             $script:contextNow = [long]$u.input_tokens + [long]$u.cache_read_input_tokens + [long]$u.cache_creation_input_tokens
@@ -668,9 +675,9 @@ function Get-ContextReport {
 
 # Commits what the worker left uncommitted, so the branch holds all its work.
 function Save-Leftovers([string]$worktree, [string]$id) {
-    $changes = Invoke-Git -C $worktree status --porcelain
+    $changes = Invoke-Git -c core.longpaths=true -C $worktree status --porcelain
     if (-not $changes) { return }
-    [void](Invoke-Git -C $worktree add -A)
+    [void](Invoke-Git -c core.longpaths=true -C $worktree add -A)
     [void](Invoke-Git -c core.longpaths=true -C $worktree commit -qm "local-agent: uncommitted changes of run $id")
 }
 
@@ -824,6 +831,9 @@ function Invoke-Run([string[]]$arguments) {
         $finished = $false
         $script:seen = 0
         $script:warned = $false
+        $script:contextNow = 0
+        $script:contextPeak = 0
+        $script:compactions = 0
         try {
             while (-not $worker.WaitForExit(1000)) {
                 if ($watch) { Update-Progress }
@@ -947,6 +957,8 @@ function Remove-Worktree([string]$dir) {
     if (-not $branch -or -not (Test-Path -LiteralPath $repo -PathType Container)) { return }
     if (Test-Path -LiteralPath $worktree -PathType Container) {
         [void](Invoke-Git -c core.longpaths=true -C $repo worktree remove --force $worktree)
+        # A program that still has a file open there keeps it on Windows.
+        if ($gitStatus -ne 0) { Exit-Die "git could not remove the worktree $worktree; close what uses it and try again" }
     }
     [void](Invoke-Git -C $repo worktree prune)
     [void](Invoke-Git -C $repo rev-parse -q --verify "refs/heads/$branch")

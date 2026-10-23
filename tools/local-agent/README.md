@@ -61,8 +61,8 @@ reach the NAS.
    extensionless `local-agent` for Git Bash, which Claude Code uses for its
    Bash tool. Both run `lib\local-agent.ps1` with `-ExecutionPolicy Bypass`,
    so the execution policy doesn't matter.
-3. Fill in the config as in step 2 above, set up Strata as in step 3, then run
-   `local-agent check`.
+3. Fill in the config as in step 2 above, set up Strata as in step 3, run
+   `local-agent check`, and save the skill as in step 5.
 4. Runs, worktrees and logs live under `%LOCALAPPDATA%\local-agent\`. Paths
    in a worktree may get longer than Windows' 260 characters, so git runs with
    `core.longpaths` (the repo's config stays as it is). Other programs need

@@ -642,6 +642,21 @@ function test_discard {
     Assert-Contains $out 'nosuchrun'
 }
 
+function test_discard_keeps_state_when_git_fails {
+    # A worktree git can't remove (on Windows: a file still open there) is
+    # reported, and the run isn't marked discarded.
+    la run task
+    $id = Get-RunId
+    $worktree = Get-Recorded 'cwd'
+    git worktree lock $worktree
+    la discard $id
+    if ($code -ne 1) { Fail "exit ${code}: $out" }
+    Assert-Contains $out 'could not remove the worktree'
+    la status $id
+    if ($out -match 'discarded') { Fail "marked discarded: $out" }
+    git worktree unlock $worktree
+}
+
 function test_prune {
     la run 'old and merged'
     $merged = Get-RunId

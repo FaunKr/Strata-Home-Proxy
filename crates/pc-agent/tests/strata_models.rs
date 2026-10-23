@@ -576,6 +576,155 @@ async fn picture_reading_is_refused_for_a_model_that_is_not_installed() {
 }
 
 #[tokio::test]
+async fn switching_pictures_keeps_the_place_of_the_config_among_the_ones_touched_last() {
+    let s = setup("pictures-keeps-time").await;
+    installed(&s);
+    let path = strata_folder(&s).installation().config_path("coder-iq1_m");
+    let old = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    fake_pictures_setup(&s, "coder-iq1_m", true);
+    let done = job(
+        &s,
+        json!({"kind": "set_pictures", "model": "coder-IQ1_M", "on": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    // A Strata without its own start script starts the config touched last:
+    // setup's write must not make this model the active one.
+    assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), old);
+    assert_eq!(read_config(&s, "coder-iq1_m")["vision"]["gpu"], true);
+}
+
+#[tokio::test]
+async fn after_the_picture_setup_the_config_keeps_what_the_service_manages() {
+    let s = setup("pictures-managed").await;
+    installed(&s);
+    // Setup writes its own config, without the service's loop recovery.
+    let mut config = config_with_vision(
+        "b.gguf",
+        json!({"exe": "C:\\Strata\\engine\\strata-vision.exe", "mmproj": "mmproj.gguf",
+            "gpu": false, "max_tokens": 300, "threads": 8}),
+    );
+    config
+        .as_object_mut()
+        .unwrap()
+        .remove("reasoning_loop_recovery");
+    s.fake.command(
+        "START-HERE.bat",
+        FakeCommand {
+            writes: vec![(
+                s.agent.cfg.strata_dir.join("strata-coder-iq1_m.json"),
+                config.to_string(),
+            )],
+            ..FakeCommand::default()
+        },
+    );
+    let done = job(
+        &s,
+        json!({"kind": "set_pictures", "model": "coder-IQ1_M", "on": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "done", "{done}");
+    let config = read_config(&s, "coder-iq1_m");
+    assert_eq!(config["reasoning_loop_recovery"], "recover", "{config}");
+    assert_eq!(config["vision"]["gpu"], false, "{config}");
+}
+
+#[tokio::test]
+async fn a_picture_setup_that_wrote_the_config_and_then_failed_leaves_the_old_one() {
+    let s = setup("pictures-setup-fails-late").await;
+    let before = active_with_config(&s, json!(["--native", "a.gguf", "--max-context", "65536"]));
+    s.fake.command(
+        "START-HERE.bat",
+        FakeCommand {
+            writes: vec![(
+                s.agent.cfg.strata_dir.join("strata-iq3_xxs.json"),
+                config_with_vision(
+                    "a.gguf",
+                    json!({"exe": "strata-vision.exe", "mmproj": "mmproj.gguf", "gpu": false}),
+                )
+                .to_string(),
+            )],
+            lines: lines(&["the tokenizer step failed"]),
+            exit: Some(1),
+            ..FakeCommand::default()
+        },
+    );
+    let done = job(
+        &s,
+        json!({"kind": "set_pictures", "model": "IQ3_XXS", "on": true}),
+    )
+    .await;
+    assert_eq!(done["state"], "failed", "{done}");
+    let config = read_config(&s, "iq3_xxs");
+    assert_eq!(config["args"], before["args"], "{config}");
+    assert!(
+        config.get("vision").is_none(),
+        "no unproven reader: {config}"
+    );
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0, "nothing restarts");
+}
+
+#[tokio::test]
+async fn switching_pictures_on_is_refused_without_room_for_the_picture_file() {
+    let s = setup("pictures-space").await;
+    installed(&s);
+    *s.fake.disk_free.lock().unwrap() = Some(1_000_000_000);
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "set_pictures", "model": "IQ3_XXS", "on": true}),
+    )
+    .await;
+    assert_eq!(code, 409, "{answer}");
+    assert!(
+        answer["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Not enough space"),
+        "{answer}"
+    );
+    // Switching off downloads nothing.
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "set_pictures", "model": "IQ3_XXS", "on": false}),
+    )
+    .await;
+    assert_eq!(code, 202, "{answer}");
+    finished(&s).await;
+}
+
+#[tokio::test]
+async fn adding_a_model_with_pictures_counts_the_picture_file() {
+    use strata_pc_agent::catalog;
+    let s = setup("pictures-space-add").await;
+    installed(&s);
+    let size = catalog::find("swift", "IQ2_XS").unwrap();
+    // Room for the model and setup's spare, not for the picture file.
+    let free = (size.download_gb + catalog::DISK_SPARE_GB + catalog::PICTURES_GB / 2.0) * 1e9;
+    *s.fake.disk_free.lock().unwrap() = Some(free as u64);
+    let add = |pictures: bool| {
+        let mut body =
+            json!({"kind": "add_model", "family": "swift", "size": "IQ2_XS", "context": 65536});
+        if pictures {
+            body["pictures"] = json!(true);
+        }
+        body
+    };
+    let (code, answer) = post(&s, "/strata/jobs", add(true)).await;
+    assert_eq!(code, 409, "{answer}");
+    let (code, answer) = post(&s, "/strata/jobs", add(false)).await;
+    assert_eq!(code, 202, "{answer}");
+    finished(&s).await;
+}
+
+#[tokio::test]
 async fn activating_waits_for_a_running_request_and_switches_the_start_script() {
     let s = setup("models-activate").await;
     installed(&s);

@@ -31,6 +31,9 @@ const SPEED_PROJECTION_TEXT: &str = "Experimental, and despite the name not fast
 /// What picture reading costs and does, for whoever ticks it.
 const PICTURES_TEXT: &str = "Lets the model read pictures. About 0.9 GB extra download. On cards under 24 GB, pictures are read on the CPU (a few seconds each).";
 
+/// What switching picture reading off does.
+const PICTURES_OFF_TEXT: &str = "The model stops reading pictures. The picture file stays on disk, so switching on again needs no download.";
+
 #[derive(Clone, Copy)]
 struct Actions {
     start: ServerAction<StartStrataJob>,
@@ -1156,7 +1159,7 @@ fn ModelRow(
                 "Switch picture reading {} for {id}?",
                 if on { "on" } else { "off" }
             ),
-            text: PICTURES_TEXT.into(),
+            text: if on { PICTURES_TEXT } else { PICTURES_OFF_TEXT }.into(),
             confirm: if on { "Switch on" } else { "Switch off" },
             danger: false,
         };

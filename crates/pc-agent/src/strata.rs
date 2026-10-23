@@ -187,8 +187,17 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
             "Gaming mode is on: switch it off first".into(),
         ));
     }
-    if let Plan::Install { size, .. } | Plan::AddModel { size, .. } = &plan {
-        check_space(agent, size)?;
+    match &plan {
+        Plan::Install { size, pictures, .. } | Plan::AddModel { size, pictures, .. } => {
+            let pictures_gb = if *pictures { catalog::PICTURES_GB } else { 0.0 };
+            check_space(
+                agent,
+                model_gb(agent, size) + pictures_gb + catalog::DISK_SPARE_GB,
+            )?;
+        }
+        // The picture file and a little room beside it: the model is there.
+        Plan::SetPictures { on: true, .. } => check_space(agent, catalog::PICTURES_GB + 1.0)?,
+        _ => {}
     }
     let (job, record) = JobContext::begin(agent, kind, plan.model()).map_err(|running| {
         Refusal::Conflict(format!("A job is running already ({})", kind_text(running)))
@@ -508,15 +517,19 @@ pub(crate) fn active_model(agent: &Agent) -> Option<String> {
     Some(catalog::by_id(&id).map_or(id, Size::id))
 }
 
-/// Refuses a download that does not fit on the data drive. Of a model partly
-/// downloaded, only the rest counts.
-fn check_space(agent: &Agent, size: &Size) -> Result<(), Refusal> {
+/// What is left to download of a model: of one partly downloaded, only the
+/// rest counts.
+fn model_gb(agent: &Agent, size: &Size) -> f64 {
+    let have_gb = Installation::of(&agent.cfg).downloaded_bytes(&size.id()) as f64 / 1e9;
+    (size.download_gb - have_gb).max(0.0)
+}
+
+/// Refuses a job whose downloads need more than the data drive has free.
+fn check_space(agent: &Agent, need_gb: f64) -> Result<(), Refusal> {
     let data = &agent.cfg.strata_data_dir;
     let Some(free) = agent.platform().disk_free(data) else {
         return Ok(());
     };
-    let have_gb = Installation::of(&agent.cfg).downloaded_bytes(&size.id()) as f64 / 1e9;
-    let need_gb = (size.download_gb - have_gb).max(0.0) + catalog::DISK_SPARE_GB;
     let free_gb = free as f64 / 1e9;
     if free_gb < need_gb {
         return Err(Refusal::Conflict(format!(
@@ -1475,12 +1488,16 @@ async fn set_pictures(job: &JobContext, id: &str, on: bool) -> Result<Option<Str
     } else {
         "Setting up without picture reading"
     });
-    // Setup rewrites the config: all of it is kept to bring back.
-    let before = read_model(agent, id).await?;
+    // Setup rewrites the config: all of it is kept to bring back, and the
+    // active model is known before setup touches any file (a Strata without
+    // its own start script starts the config touched last).
+    let before = load_model(agent, id).await?;
+    let active = active_model(agent).as_deref() == Some(id);
+    let touched = install.modified(id);
     // The key Strata runs with: a model with another one would answer the
     // proxy with 401 until the next start.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
-    setup(
+    let ran = setup(
         job,
         &install,
         size,
@@ -1489,8 +1506,18 @@ async fn set_pictures(job: &JobContext, id: &str, on: bool) -> Result<Option<Str
         before.speed_projection(),
         on,
     )
-    .await?;
-    if active_model(agent).as_deref() != Some(id) {
+    .await;
+    if let Err(step) = ran {
+        // A failed or cancelled setup leaves no unproven config behind.
+        save_model(agent, before).await?;
+        install.set_modified(id, touched);
+        return Err(step);
+    }
+    // What the service keeps in every config (loop recovery, sampling),
+    // and the place of this config among the ones touched last.
+    manage(agent).await;
+    install.set_modified(id, touched);
+    if !active {
         return Ok(None);
     }
     let failed = format!(
@@ -1500,7 +1527,9 @@ async fn set_pictures(job: &JobContext, id: &str, on: bool) -> Result<Option<Str
     let applied = agent
         .strata()
         .restart_or_roll_back(job, "Restoring the settings from before", || async {
-            save_model(agent, before.clone()).await
+            save_model(agent, before.clone()).await?;
+            install.set_modified(id, touched);
+            Ok(())
         })
         .await?;
     match applied {
@@ -1509,8 +1538,9 @@ async fn set_pictures(job: &JobContext, id: &str, on: bool) -> Result<Option<Str
     }
 }
 
-/// A model's config as it is, off the runtime's threads.
-async fn read_model(agent: &Agent, id: &str) -> Result<Model, Step> {
+/// A model's config as it is, off the runtime's threads; an error for one
+/// that cannot be read (unlike [`Installation::read_model`]).
+async fn load_model(agent: &Agent, id: &str) -> Result<Model, Step> {
     let install = Installation::of(&agent.cfg);
     let id = id.to_string();
     tokio::task::spawn_blocking(move || install.model(&id))

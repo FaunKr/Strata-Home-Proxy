@@ -169,7 +169,7 @@ async function forced(page, errors) {
     await switchOff.waitFor(wait);
     await switchOff.click();
     await dialog.getByText('Switch picture reading off for IQ3_XXS?').waitFor(wait);
-    await dialog.getByText('Lets the model read pictures').waitFor(wait);
+    await dialog.getByText('The picture file stays on disk').waitFor(wait);
     await dialog.getByRole('button', { name: 'Switch off' }).click();
     // The fake PC finishes the job in 1.5 s; wait for it rather than guess.
     for (let i = 0; i < 30; i++) {

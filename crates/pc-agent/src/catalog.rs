@@ -136,6 +136,11 @@ pub const DEFAULT_CONTEXT: u32 = 65536;
 /// Free space the setup needs beside the download.
 pub const DISK_SPARE_GB: f64 = 8.0;
 
+/// The picture file setup downloads with `--vision yes`: 0.91 GB for the
+/// Qwen3.8-Flash-Next families, 0.90 GB for Qwen3.6 (`sha256` sizes of
+/// `mmproj-Qwen3.8-Flash-Next-BF16.gguf` and `mmproj-F16.gguf` in `setup.py`).
+pub const PICTURES_GB: f64 = 0.91;
+
 /// The model family Strata's tuner knows a family's models as
 /// (`detect_family` in `strata_control/autotune.py`): Qwen3.6 is `qwen36`,
 /// every Qwen3.8-Flash-Next build (Swift, the Coder, Unsloth's and Gyro's

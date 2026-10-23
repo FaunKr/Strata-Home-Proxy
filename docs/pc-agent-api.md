@@ -558,8 +558,14 @@ with a plain message naming the settings from before; the job's lines show
 what Strata printed. A cancel brings that config back as well and ends the
 job cancelled: before the stop Strata keeps running as it was, after the
 stop it is started with the config from before again. Setup itself failing
-fails the job with setup's output, and nothing is restarted. Switching off
-only leaves out the `vision` section; the picture file stays on disk.
+or being cancelled writes the config from before back, fails the job with
+setup's output, and restarts nothing. After setup the service puts back
+what it keeps in every config (loop recovery, the sampling block) and the
+config's modification time, so a Strata without its own start script still
+starts the model it started before. Switching on needs room for the picture
+file (`409` otherwise); `install` and `add_model` with `pictures` count it
+beside the model. Switching off only leaves out the `vision` section; the
+picture file stays on disk.
 
 `set_user_args` replaces `user_args` with the list as given (an empty
 list removes the key); `args`, `args_written` and the modification time

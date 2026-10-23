@@ -232,6 +232,22 @@ impl Installation {
         write_config(&self.config_path(&model.id), &model.fields)
     }
 
+    /// When a model's config was last modified; `None` without one.
+    pub fn modified(&self, id: &str) -> Option<std::time::SystemTime> {
+        std::fs::metadata(self.config_path(id))
+            .and_then(|m| m.modified())
+            .ok()
+    }
+
+    /// Gives a model's config back the modification time `time` from
+    /// [`Self::modified`], after setup wrote it anew: Strata without its own
+    /// start script starts the config touched last. Nothing without a time.
+    pub fn set_modified(&self, id: &str, time: Option<std::time::SystemTime>) {
+        if let Some(time) = time {
+            set_modified(&self.config_path(id), time);
+        }
+    }
+
     /// The Strata key in the model configs: the first config's in the order
     /// of their ids that has one. The service writes the same key into all.
     pub fn key(&self) -> Option<String> {
@@ -1017,19 +1033,24 @@ fn write_config(path: &Path, fields: &ConfigFields) -> Result<(), String> {
     write_keeping_time(path, &config_text(fields))
 }
 
+/// Sets a file's modification time; a failure is only logged.
+fn set_modified(path: &Path, time: std::time::SystemTime) {
+    let kept = std::fs::File::options()
+        .write(true)
+        .open(path)
+        .and_then(|f| f.set_modified(time));
+    if let Err(e) = kept {
+        tracing::warn!("Kept no modification time on {}: {e}", path.display());
+    }
+}
+
 /// Replaces the file's text and gives it back its modification time.
 fn write_keeping_time(path: &Path, text: &str) -> Result<(), String> {
     let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
     crate::write_replacing(path, text)
         .map_err(|e| format!("{} not written: {e}", path.display()))?;
     if let Some(time) = modified {
-        let kept = std::fs::File::options()
-            .write(true)
-            .open(path)
-            .and_then(|f| f.set_modified(time));
-        if let Err(e) = kept {
-            tracing::warn!("Kept no modification time on {}: {e}", path.display());
-        }
+        set_modified(path, time);
     }
     Ok(())
 }

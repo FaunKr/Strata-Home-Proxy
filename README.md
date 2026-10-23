@@ -15,7 +15,7 @@ and asks it to go to sleep after the idle timeout.
 | 2. Proxy | built, tested against simulated Strata |
 | 3. PC service and gaming switch | built, tested against simulated PC; setup via command from the *PC* area: [docs/pc-service.md](docs/pc-service.md) |
 | 4. Web UI | built (English, areas Overview, PC, Strata, Access, System), with history and energy estimate |
-| 5. Acceptance on real hardware | open |
+| 5. Acceptance on real hardware | done: in daily use on the NAS and the PC |
 
 ## What the proxy does
 

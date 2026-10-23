@@ -136,6 +136,16 @@ async fn an_unknown_range_gives_the_same_rows_as_seven_days() {
 }
 
 #[tokio::test]
+async fn the_history_page_offers_the_csv_download() {
+    let s = setup(true, |c| c.idle_check = Duration::from_secs(3600)).await;
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/pc/history").await;
+    assert!(html.contains("Download CSV"), "{html}");
+    assert!(html.contains("/admin/history.csv?range=7d"), "{html}");
+    assert!(html.contains("download"), "{html}");
+}
+
+#[tokio::test]
 async fn a_pc_woken_by_hand_counts_as_awake() {
     let s = setup(false, |_| {}).await;
     let mut b = logged_in(&s.url).await;

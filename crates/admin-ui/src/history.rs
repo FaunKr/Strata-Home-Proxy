@@ -56,6 +56,13 @@ pub fn HistoryPage() -> impl IntoView {
                                         .iter()
                                         .map(|(key, name)| preset(range, key, name))
                                         .collect::<Vec<_>>()}
+                                    <a
+                                        class="button secondary"
+                                        href=move || format!("/admin/history.csv?range={}", range.get())
+                                        download=""
+                                    >
+                                        "Download CSV"
+                                    </a>
                                 </div>
                                 <Picker range from=view.from.clone() to=view.to.clone() />
                                 {shown(view)}

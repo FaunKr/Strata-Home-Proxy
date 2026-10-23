@@ -243,7 +243,6 @@ fn PerBar(days: Vec<HistoryDay>) -> impl IntoView {
     }
 }
 
-
 fn kwh(value: f64) -> String {
     format!("{value:.2} kWh")
 }

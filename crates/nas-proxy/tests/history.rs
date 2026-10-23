@@ -80,8 +80,7 @@ async fn the_history_downloads_as_csv() {
     let text = resp.text().await.unwrap();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(
-        lines[0],
-        "date,awake_h,gaming_h,asleep_h,unknown_h,kwh,eur,saved_kwh,saved_eur,source",
+        lines[0], "date,awake_h,gaming_h,asleep_h,unknown_h,kwh,eur,saved_kwh,saved_eur,source",
         "{text}"
     );
     let days = view["days"].as_array().unwrap();
@@ -132,7 +131,11 @@ async fn an_unknown_range_gives_the_same_rows_as_seven_days() {
         .text()
         .await
         .unwrap();
-    assert_eq!(csv_dates(&nonsense), csv_dates(&seven), "{nonsense}\n{seven}");
+    assert_eq!(
+        csv_dates(&nonsense),
+        csv_dates(&seven),
+        "{nonsense}\n{seven}"
+    );
 }
 
 #[tokio::test]

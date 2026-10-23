@@ -526,7 +526,7 @@ pub fn strata_info(installed: bool) -> StrataReport {
         } else {
             vec![]
         },
-        families: vec![family("qwen", "Qwen3.8-Flash-Next", true)],
+        families: vec![family("qwen", "Qwen3.8-Flash-Next", true, true)],
         catalog: vec![StrataSize {
             id: "IQ3_XXS".into(),
             family: "qwen".into(),
@@ -579,11 +579,12 @@ pub fn model(id: &str, family: Option<&str>, disk_bytes: u64, active: bool) -> S
     }
 }
 
-pub fn family(id: &str, title: &str, speed_projection: bool) -> StrataFamily {
+pub fn family(id: &str, title: &str, speed_projection: bool, pictures: bool) -> StrataFamily {
     StrataFamily {
         id: id.into(),
         title: title.into(),
         speed_projection,
+        pictures,
     }
 }
 

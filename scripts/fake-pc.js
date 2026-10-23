@@ -162,7 +162,9 @@ http.createServer((req, res) => {
     req.on('data', (c) => { raw += c; });
     req.on('end', () => {
       const body = raw ? JSON.parse(raw) : {};
-      strataJob = { id: 1, kind: 'activate', model: body.model ?? null, state: 'running',
+      // A picture switch ends by reporting the model with its new state.
+      const picturesAfter = body.kind === 'set_pictures' ? (body.on ? 'gpu' : 'off') : null;
+      strataJob = { id: 1, kind: body.kind ?? 'activate', model: body.model ?? null, state: 'running',
         lines: [], error: null, started: Math.floor(Date.now() / 1000), ended: null };
       // A run over all models activates each model; end the job shortly after,
       // so the proxy moves on to that model's run.
@@ -170,6 +172,10 @@ http.createServer((req, res) => {
       setTimeout(() => {
         if (strataJob === job) {
           strataJob = { ...job, state: 'done', ended: Math.floor(Date.now() / 1000) };
+          if (picturesAfter) {
+            const switched = strata.models.find((m) => m.id === body.model);
+            if (switched) switched.pictures = picturesAfter;
+          }
         }
       }, 1500);
       res.statusCode = 202;

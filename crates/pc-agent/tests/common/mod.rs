@@ -45,6 +45,9 @@ pub struct FakeCommand {
     pub ignores_cancel: bool,
     /// Files (path, content) it leaves behind when it succeeds, unless they exist.
     pub creates: Vec<(PathBuf, String)>,
+    /// Files it writes when it succeeds, over existing ones: setup rewriting
+    /// the run config of a model it is set up for again.
+    pub writes: Vec<(PathBuf, String)>,
 }
 
 #[derive(Default)]
@@ -184,6 +187,12 @@ impl FakePlatform {
                     if path.exists() {
                         continue;
                     }
+                    if let Some(dir) = path.parent() {
+                        std::fs::create_dir_all(dir).unwrap();
+                    }
+                    std::fs::write(path, content).unwrap();
+                }
+                for (path, content) in command.writes {
                     if let Some(dir) = path.parent() {
                         std::fs::create_dir_all(dir).unwrap();
                     }

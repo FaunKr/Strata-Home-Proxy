@@ -115,6 +115,10 @@ enum Plan {
         id: String,
         context: u32,
     },
+    SetPictures {
+        id: String,
+        on: bool,
+    },
     /// Benchmarks `ids` in turn, then `active` is the active model again.
     CompareModels {
         ids: Vec<String>,
@@ -156,6 +160,7 @@ impl Plan {
             | Self::Benchmark { id }
             | Self::SetSpeedProjection { id, .. }
             | Self::SetContext { id, .. }
+            | Self::SetPictures { id, .. }
             | Self::SetUserArgs { id, .. }
             | Self::SetEngineSettings { id, .. }
             | Self::SwitchToTerminal { id }
@@ -321,6 +326,10 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             }
             let id = installed_model(&install, &model)?;
             Ok(Plan::SetContext { id, context })
+        }
+        StrataJobRequest::SetPictures { model, on } => {
+            let id = installed_model(&install, &model)?;
+            Ok(Plan::SetPictures { id, on })
         }
         StrataJobRequest::SetUserArgs { model, user_args } => {
             let id = installed_model(&install, &model)?;
@@ -539,6 +548,7 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::SetKey => set_key(job).await,
         Plan::SetSpeedProjection { id, on } => set_speed_projection(job, &id, on).await,
         Plan::SetContext { id, context } => set_context(job, &id, context).await,
+        Plan::SetPictures { id, on } => set_pictures(job, &id, on).await,
         Plan::SetUserArgs { id, user_args } => set_user_args(job, &id, user_args).await,
         Plan::SetEngineSettings { id, user_args, env } => {
             set_engine_settings(job, &id, user_args, env).await
@@ -1450,6 +1460,74 @@ async fn set_context(job: &JobContext, id: &str, context: u32) -> Result<Option<
     .await
 }
 
+/// Turns picture reading for an installed model on or off: setup runs for
+/// that model again, with its family, size, context, speed projection and
+/// the key Strata runs with, and `--vision yes` or `--vision no`. A model
+/// that is not active is left running as it is. If the active model does not
+/// come up with the new config, the whole config from before the setup comes
+/// back, Strata starts with it and the job fails.
+async fn set_pictures(job: &JobContext, id: &str, on: bool) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    let install = Installation::of(&agent.cfg);
+    let size = catalog::by_id(id).expect("installed_model checks the catalog");
+    job.step(if on {
+        "Setting up picture reading"
+    } else {
+        "Setting up without picture reading"
+    });
+    // Setup rewrites the config: all of it is kept to bring back.
+    let before = read_model(agent, id).await?;
+    // The key Strata runs with: a model with another one would answer the
+    // proxy with 401 until the next start.
+    let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
+    setup(
+        job,
+        &install,
+        size,
+        before.context().unwrap_or(catalog::DEFAULT_CONTEXT),
+        &key,
+        before.speed_projection(),
+        on,
+    )
+    .await?;
+    if active_model(agent).as_deref() != Some(id) {
+        return Ok(None);
+    }
+    let failed = format!(
+        "Strata did not start {} picture reading; the settings from before apply again",
+        if on { "with" } else { "without" }
+    );
+    let applied = agent
+        .strata()
+        .restart_or_roll_back(job, "Restoring the settings from before", || async {
+            save_model(agent, before.clone()).await
+        })
+        .await?;
+    match applied {
+        Applied::Kept => Ok(None),
+        Applied::RolledBack => Err(Step::Failed(failed)),
+    }
+}
+
+/// A model's config as it is, off the runtime's threads.
+async fn read_model(agent: &Agent, id: &str) -> Result<Model, Step> {
+    let install = Installation::of(&agent.cfg);
+    let id = id.to_string();
+    tokio::task::spawn_blocking(move || install.model(&id))
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))?
+        .map_err(Step::Failed)
+}
+
+/// A whole model config back as it was, off the runtime's threads.
+async fn save_model(agent: &Agent, model: Model) -> Result<(), Step> {
+    let install = Installation::of(&agent.cfg);
+    tokio::task::spawn_blocking(move || install.save(&model))
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))?
+        .map_err(Step::Failed)
+}
+
 /// Replaces a model's engine options set by hand. The active model restarts
 /// with them as [`change_and_restart`] does.
 async fn set_user_args(
@@ -2233,6 +2311,7 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SetKey => "Set Strata key",
         StrataJobKind::SetSpeedProjection => "Switch speed projection",
         StrataJobKind::SetContext => "Change context",
+        StrataJobKind::SetPictures => "Switch picture reading",
         StrataJobKind::SetUserArgs => "Save engine options",
         StrataJobKind::SetEngineSettings => "Save engine settings",
         StrataJobKind::PresetOff => "Turn the preset off",

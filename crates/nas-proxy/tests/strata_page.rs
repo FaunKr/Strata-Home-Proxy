@@ -729,6 +729,71 @@ async fn without_word_from_the_pc_service_no_picture_state_shows() {
     assert!(!html.contains("Pictures:"), "{html}");
 }
 
+// --- #327 switching picture reading for an installed model ---
+
+#[tokio::test]
+async fn switching_picture_reading_sends_only_its_fields() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = b
+        .call(
+            "strata-job",
+            &[
+                ("kind", "set_pictures"),
+                ("model", "IQ3_XXS"),
+                ("pictures", "true"),
+                ("family", "qwen"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        last_body(&s),
+        json!({"kind": "set_pictures", "model": "IQ3_XXS", "on": true})
+    );
+    let resp = b
+        .call(
+            "strata-job",
+            &[
+                ("kind", "set_pictures"),
+                ("model", "swift-IQ2_XS"),
+                ("pictures", "false"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        last_body(&s),
+        json!({"kind": "set_pictures", "model": "swift-IQ2_XS", "on": false})
+    );
+}
+
+#[tokio::test]
+async fn only_models_with_a_known_picture_state_offer_the_switch() {
+    let s = setup(true, |_| {}).await;
+    // A model with a reader can switch it off, one without can switch it on.
+    *s.pc.strata_info.lock().unwrap() =
+        Some(with_picture_state(Some(Pictures::Gpu), Some(Pictures::Off)));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(
+        html.matches("Switch picture reading off").count(),
+        1,
+        "{html}"
+    );
+    assert_eq!(
+        html.matches("Switch picture reading on").count(),
+        1,
+        "{html}"
+    );
+    // An older PC service says nothing about picture reading: no switch.
+    *s.pc.strata_info.lock().unwrap() = Some(with_picture_state(None, None));
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(!html.contains("Switch picture reading"), "{html}");
+}
+
 // --- #101 the context of installed models ---
 
 #[tokio::test]

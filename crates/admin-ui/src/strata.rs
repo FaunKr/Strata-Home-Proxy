@@ -90,6 +90,23 @@ impl Actions {
         });
     }
 
+    fn pictures(&self, model: String, on: bool) {
+        self.start.dispatch(StartStrataJob {
+            kind: StrataJobKind::SetPictures,
+            family: None,
+            size: None,
+            context: None,
+            model: Some(model),
+            speed_projection: None,
+            pictures: Some(on),
+            tune_mode: None,
+            tune_use: None,
+            preset: None,
+            options: None,
+            env: None,
+        });
+    }
+
     fn set_context(&self, model: String, context: u32) {
         self.start.dispatch(StartStrataJob {
             kind: StrataJobKind::SetContext,
@@ -1124,6 +1141,40 @@ fn ModelRow(
             </button>
         }
     });
+    // Only with word from the PC service on the picture state: an older one
+    // does not say. Switching runs setup for that model again.
+    let pictures = model.pictures.map(|current| {
+        let on = current == Pictures::Off;
+        let id = model.id.clone();
+        let label = if on {
+            "Switch picture reading on"
+        } else {
+            "Switch picture reading off"
+        };
+        let question = Question {
+            title: format!(
+                "Switch picture reading {} for {id}?",
+                if on { "on" } else { "off" }
+            ),
+            text: PICTURES_TEXT.into(),
+            confirm: if on { "Switch on" } else { "Switch off" },
+            danger: false,
+        };
+        let confirm = expect_context::<Confirm>();
+        view! {
+            <button
+                type="button"
+                class="secondary"
+                disabled=move || blocked.get()
+                on:click=move |_| {
+                    let id = id.clone();
+                    confirm.ask(question.clone(), move || actions.pictures(id.clone(), on));
+                }
+            >
+                {label}
+            </button>
+        }
+    });
     let sampling = model.sampling.as_ref().map(sampling_lines);
     let last_tune = model
         .last_tune
@@ -1206,7 +1257,7 @@ fn ModelRow(
             {preset_line}
             {switch}
             <div class="model-actions">
-                {activate}{projection}{engine}<OptimizationPrompt model=model.id.clone() />{preset_button}{preset_off}{tune}
+                {activate}{projection}{pictures}{engine}<OptimizationPrompt model=model.id.clone() />{preset_button}{preset_off}{tune}
                 {delete}
             </div>
         </li>

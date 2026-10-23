@@ -329,6 +329,10 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
             model: model()?,
             context: context()?,
         },
+        StrataJobKind::SetPictures => StrataJobRequest::SetPictures {
+            model: model()?,
+            on: form.pictures,
+        },
         StrataJobKind::CompareModels => StrataJobRequest::CompareModels,
         StrataJobKind::SwitchToTerminal => StrataJobRequest::SwitchToTerminal,
         StrataJobKind::RemoveOldStrataFolder => StrataJobRequest::RemoveOldStrataFolder,

@@ -208,11 +208,11 @@ fn insert_cookie(value: &str) {
 
 /// Lets only a logged-in user through who needs no password change, as
 /// [`require_login`] does for the server functions.
-fn ready_session(backend: &SharedBackend, headers: &HeaderMap) -> Result<(), Response> {
+fn ready_session(backend: &SharedBackend, headers: &HeaderMap) -> Result<(), StatusCode> {
     match backend.session(cookie_token(headers).as_deref()) {
         Session::Ready => Ok(()),
-        Session::MustChange => Err(StatusCode::FORBIDDEN.into_response()),
-        Session::Anonymous => Err(StatusCode::UNAUTHORIZED.into_response()),
+        Session::MustChange => Err(StatusCode::FORBIDDEN),
+        Session::Anonymous => Err(StatusCode::UNAUTHORIZED),
     }
 }
 
@@ -229,7 +229,7 @@ async fn history_csv_file(
     Query(query): Query<CsvQuery>,
 ) -> Response {
     if let Err(refused) = ready_session(&backend, &headers) {
-        return refused;
+        return refused.into_response();
     }
     let view = backend.history(query.range.unwrap_or_default()).await;
     let disposition = format!(
@@ -260,7 +260,7 @@ fn session_stream<T: serde::Serialize + Send + 'static>(
     stream: impl FnOnce(&dyn Backend) -> BoxStream<'static, T>,
 ) -> Response {
     if let Err(refused) = ready_session(backend, headers) {
-        return refused;
+        return refused.into_response();
     }
     let events = stream(backend.as_ref()).map(|item| {
         Event::default()

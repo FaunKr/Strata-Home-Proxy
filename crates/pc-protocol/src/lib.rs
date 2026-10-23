@@ -34,7 +34,7 @@ pub use status::{
     StrataKey,
 };
 pub use strata::{
-    BenchTool, ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, SamplingField,
+    BenchTool, ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, Pictures, SamplingField,
     SamplingSource, SamplingSupport, StrataBenchmark, StrataFamily, StrataInfo, StrataInstall,
     StrataModel, StrataReport, StrataSampling, StrataSize,
 };

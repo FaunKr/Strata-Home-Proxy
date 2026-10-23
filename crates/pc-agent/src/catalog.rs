@@ -16,6 +16,9 @@ pub struct Family {
     /// Setup offers Strata's experimental speed projection; made for the
     /// original Qwen3.8-Flash-Next, which the Coder shares.
     pub speed_projection: bool,
+    /// Setup can set up picture reading for this family: every family in
+    /// Strata's tables has a vision model.
+    pub pictures: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -36,36 +39,42 @@ pub const FAMILIES: &[Family] = &[
         title: "Qwen3.8-Flash-Next",
         tag: "",
         speed_projection: true,
+        pictures: true,
     },
     Family {
         id: "swift",
         title: "Swift 1.5",
         tag: "swift-",
         speed_projection: false,
+        pictures: true,
     },
     Family {
         id: "coder",
         title: "Qwen3.8-Flash-Next Coder",
         tag: "coder-",
         speed_projection: true,
+        pictures: true,
     },
     Family {
         id: "unsloth",
         title: "Qwen3.8-Flash-Next (Unsloth)",
         tag: "unsloth-",
         speed_projection: false,
+        pictures: true,
     },
     Family {
         id: "qwen36",
         title: "Qwen3.6-35B-A3B",
         tag: "qwen36-",
         speed_projection: false,
+        pictures: true,
     },
     Family {
         id: "gyro",
         title: "Qwen3.8-Flash-Next (Gyro)",
         tag: "gyro-",
         speed_projection: false,
+        pictures: true,
     },
 ];
 

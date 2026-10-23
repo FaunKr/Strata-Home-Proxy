@@ -39,13 +39,15 @@ fn old_folder(s: &Setup) -> Managed {
 
 /// The old Strata folder serving IQ3_XXS with these engine arguments.
 fn old_folder_with(s: &Setup, args: Value) -> Managed {
+    old_folder_config(s, json!({"exe": "strata.exe", "args": args, "port": 8080}))
+}
+
+/// The old Strata folder serving IQ3_XXS with this run config.
+fn old_folder_config(s: &Setup, config: Value) -> Managed {
     let cfg = &s.agent.cfg;
     let leaves = SetupLeaves::new(&cfg.strata_dir, &cfg.strata_data_dir, "0123456789abcdef");
     leaves
-        .model(
-            "iq3_xxs",
-            json!({"exe": "strata.exe", "args": args, "port": 8080}),
-        )
+        .model("iq3_xxs", config)
         .chat_settings("iq3_xxs", CHAT)
         .download("IQ3_XXS", "a.gguf", "0123456789");
     let managed = Managed {
@@ -427,6 +429,7 @@ async fn a_model_without_a_context_switches_with_the_default_one() {
     for wanted in [
         ["--context", "65536"],
         ["--experimental-speed-projection", "off"],
+        ["--vision", "no"],
     ] {
         assert!(
             setup.args.windows(2).any(|w| w == wanted),
@@ -434,4 +437,25 @@ async fn a_model_without_a_context_switches_with_the_default_one() {
             setup.args
         );
     }
+}
+
+#[tokio::test]
+async fn a_model_with_picture_reading_keeps_it_in_the_switch() {
+    let s = setup("switch-vision").await;
+    // A run config with setup's vision section, as an install with pictures
+    // leaves it.
+    old_folder_config(
+        &s,
+        json!({"exe": "strata.exe", "args": ["--native", "a.gguf"], "port": 8080,
+            "vision": {"exe": "strata-vision-hip.exe", "mmproj": "mmproj.gguf",
+                "model": "a.gguf", "gpu": true, "max_tokens": 1024}}),
+    );
+    switchable(&s);
+    assert_eq!(job(&s, "switch_to_terminal").await["state"], "done");
+    let setup = &s.fake.runs_of("python")[0];
+    assert!(
+        setup.args.windows(2).any(|w| w == ["--vision", "yes"]),
+        "{:?}",
+        setup.args
+    );
 }

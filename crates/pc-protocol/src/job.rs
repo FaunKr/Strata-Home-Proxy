@@ -151,6 +151,9 @@ pub enum StrataJobRequest {
         /// catalog entry offers it.
         #[serde(default, skip_serializing_if = "is_false")]
         experimental_speed_projection: bool,
+        /// Whether setup sets up picture reading for this model.
+        #[serde(default, skip_serializing_if = "is_false")]
+        pictures: bool,
     },
     AddModel {
         family: String,
@@ -161,6 +164,8 @@ pub enum StrataJobRequest {
         api_key: Option<String>,
         #[serde(default, skip_serializing_if = "is_false")]
         experimental_speed_projection: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        pictures: bool,
     },
     Activate {
         model: String,

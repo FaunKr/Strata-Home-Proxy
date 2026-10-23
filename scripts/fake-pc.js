@@ -73,10 +73,10 @@ const strata = {
     { ...model('swift-IQ2_XS', 'swift', 'IQ2_XS', false, 32768, false), presets: { latest: null, other_context: true } },
   ],
   families: [
-    { id: 'qwen', title: 'Qwen3.8-Flash-Next', speed_projection: true },
-    { id: 'coder', title: 'Coder', speed_projection: true },
-    { id: 'swift', title: 'Swift', speed_projection: false },
-    { id: 'gyro', title: 'Qwen3.8-Flash-Next (Gyro)', speed_projection: false },
+    { id: 'qwen', title: 'Qwen3.8-Flash-Next', speed_projection: true, pictures: true },
+    { id: 'coder', title: 'Coder', speed_projection: true, pictures: true },
+    { id: 'swift', title: 'Swift', speed_projection: false, pictures: true },
+    { id: 'gyro', title: 'Qwen3.8-Flash-Next (Gyro)', speed_projection: false, pictures: true },
   ],
   catalog: [
     { id: 'IQ3_S', family: 'qwen', size: 'IQ3_S', download_gb: 83.6, ram_gb: 62, memory_with_vram: false, fits: true, partly_downloaded: false },

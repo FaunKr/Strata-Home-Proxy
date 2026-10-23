@@ -140,17 +140,20 @@
     {
       "id": "qwen",
       "title": "Qwen3.8-Flash-Next",
-      "speed_projection": true
+      "speed_projection": true,
+      "pictures": true
     },
     {
       "id": "swift",
       "title": "Swift 1.5",
-      "speed_projection": false
+      "speed_projection": false,
+      "pictures": true
     },
     {
       "id": "coder",
       "title": "Qwen3.8-Flash-Next Coder",
-      "speed_projection": true
+      "speed_projection": true,
+      "pictures": true
     }
   ],
   "catalog": [

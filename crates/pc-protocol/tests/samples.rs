@@ -110,6 +110,7 @@ fn strata_report_splits_into_the_page_and_the_incoming_commits() {
     assert_eq!(latest.state, Some(PresetState::Soft));
     let sampling = info.models[0].sampling.as_ref().unwrap();
     assert_eq!(sampling.support, SamplingSupport::ModelCard);
+    assert!(info.families[0].pictures);
     assert_eq!(sampling.thinking[2].source, SamplingSource::ChatSettings);
     assert_eq!(
         info.benchmarks[1].error.as_deref(),
@@ -154,6 +155,7 @@ fn optional_request_fields_stay_out_when_unset() {
         context: 65536,
         api_key: "k".into(),
         experimental_speed_projection: false,
+        pictures: false,
     };
     assert_eq!(
         serde_json::to_value(&install).unwrap(),
@@ -165,10 +167,11 @@ fn optional_request_fields_stay_out_when_unset() {
         context: 32768,
         api_key: None,
         experimental_speed_projection: false,
+        pictures: true,
     };
     assert_eq!(
         serde_json::to_value(&add).unwrap(),
-        json!({"kind": "add_model", "family": "coder", "size": "IQ1_M", "context": 32768})
+        json!({"kind": "add_model", "family": "coder", "size": "IQ1_M", "context": 32768, "pictures": true})
     );
 }
 
@@ -223,6 +226,7 @@ fn an_older_strata_answer_still_parses() {
     assert_eq!(model.loop_recovery, None);
     assert_eq!(model.sampling, None);
     assert!(!info.families[0].speed_projection);
+    assert!(!info.families[0].pictures);
     assert!(info.benchmarks.is_empty());
     assert_eq!(info.benchmark.unwrap().decode_tps, None);
     assert!(!info.catalog[0].memory_with_vram);

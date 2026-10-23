@@ -87,11 +87,13 @@ enum Plan {
         size: &'static Size,
         context: u32,
         speed_projection: bool,
+        pictures: bool,
     },
     AddModel {
         size: &'static Size,
         context: u32,
         speed_projection: bool,
+        pictures: bool,
     },
     Activate {
         id: String,
@@ -239,12 +241,14 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             // The key comes with the start (see `strata_key`).
             api_key: _,
             experimental_speed_projection: wanted,
+            pictures,
         } => {
             let size = size(&family, &s)?;
             Ok(Plan::Install {
                 size,
                 context: context(c)?,
                 speed_projection: check_speed_projection(size, wanted)?,
+                pictures,
             })
         }
         StrataJobRequest::AddModel {
@@ -253,12 +257,14 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             context: c,
             api_key: _,
             experimental_speed_projection: wanted,
+            pictures,
         } => {
             let size = size(&family, &s)?;
             let plan = Plan::AddModel {
                 size,
                 context: context(c)?,
                 speed_projection: check_speed_projection(size, wanted)?,
+                pictures,
             };
             strata_installed(&install)?;
             Ok(plan)
@@ -518,12 +524,14 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
             size,
             context,
             speed_projection,
-        } => install(job, size, context, speed_projection).await,
+            pictures,
+        } => install(job, size, context, speed_projection, pictures).await,
         Plan::AddModel {
             size,
             context,
             speed_projection,
-        } => add_model(job, size, context, speed_projection).await,
+            pictures,
+        } => add_model(job, size, context, speed_projection, pictures).await,
         Plan::Activate { id } => activate(job, &id).await,
         Plan::Delete { id } => delete(job, &id).await,
         Plan::Update => update(job).await,
@@ -548,6 +556,7 @@ async fn install(
     size: &Size,
     context: u32,
     speed_projection: bool,
+    pictures: bool,
 ) -> Result<Option<String>, Step> {
     let agent = job.agent();
     let strata = Installation::of(&agent.cfg);
@@ -557,7 +566,16 @@ async fn install(
     // Setup writes a key only if one is known; the start below makes the
     // one Strata runs with.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
-    setup(job, &strata, size, context, &key, speed_projection).await?;
+    setup(
+        job,
+        &strata,
+        size,
+        context,
+        &key,
+        speed_projection,
+        pictures,
+    )
+    .await?;
     // A Strata started by hand ends with the old values, the new one starts
     // with the managed ones.
     agent.strata().stop();
@@ -652,13 +670,23 @@ async fn add_model(
     size: &Size,
     context: u32,
     speed_projection: bool,
+    pictures: bool,
 ) -> Result<Option<String>, Step> {
     let agent = job.agent();
     // The key Strata runs with: a model with another key would answer the
     // proxy with 401 until the next start.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
     let install = Installation::of(&agent.cfg);
-    setup(job, &install, size, context, &key, speed_projection).await?;
+    setup(
+        job,
+        &install,
+        size,
+        context,
+        &key,
+        speed_projection,
+        pictures,
+    )
+    .await?;
     if active_changed(agent, &manage(agent).await) {
         agent.strata().restart_when_idle(job).await?;
     }
@@ -1214,6 +1242,7 @@ async fn switch_to_terminal(job: &JobContext, id: &str) -> Result<Option<String>
             context,
             &key,
             model.speed_projection(),
+            model.pictures(),
         )
         .await?;
         if !terminal.has(id) {
@@ -2029,7 +2058,7 @@ fn parse_numstat(line: &str) -> Option<ChangedFile> {
 }
 
 /// Runs the setup of `install` without questions, with the fixed values
-/// and the key.
+/// and the key; with `pictures`, setup also sets up the picture reader.
 async fn setup(
     job: &JobContext,
     install: &Installation,
@@ -2037,6 +2066,7 @@ async fn setup(
     context: u32,
     api_key: &str,
     speed_projection: bool,
+    pictures: bool,
 ) -> Result<(), Step> {
     let agent = job.agent();
     let mut args: Vec<String> = vec!["--yes".into(), "--no-start".into(), "--no-browser".into()];
@@ -2052,7 +2082,7 @@ async fn setup(
             "--context",
             &context.to_string(),
             "--vision",
-            "no",
+            if pictures { "yes" } else { "no" },
             "--host",
             STRATA_HOST,
             "--port",
@@ -2285,6 +2315,7 @@ pub fn view(agent: &Agent) -> StrataReport {
                 id: f.id.into(),
                 title: f.title.into(),
                 speed_projection: f.speed_projection,
+                pictures: f.pictures,
             })
             .collect(),
         catalog: catalog::SIZES

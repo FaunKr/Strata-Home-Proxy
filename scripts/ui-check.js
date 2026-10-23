@@ -149,6 +149,13 @@ async function forced(page, errors) {
     await page.locator('.strata-state .badge', { hasText: 'Paused' }).waitFor(wait);
     if (await restart.count()) throw new Error('Force restart Strata shows in gaming mode');
   });
+  await step('the model form offers picture reading, ticked by default', 'pictures', async () => {
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    const tick = page.locator('input[id$="-pictures"]').first();
+    await tick.waitFor(wait);
+    await sees('Lets the model read pictures');
+    if (!(await tick.isChecked())) throw new Error('the Pictures tick is off by default');
+  });
   await step('Force sleep in the gaming state', 'gaming-overview', async () => {
     await page.goto(base + '/admin', { waitUntil: 'domcontentloaded' });
     await force.click(wait);

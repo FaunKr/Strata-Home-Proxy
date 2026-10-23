@@ -2275,6 +2275,7 @@ pub fn view(agent: &Agent) -> StrataReport {
                 speed_projection: Some(model.speed_projection()),
                 context: model.context(),
                 loop_recovery: Some(model.loop_recovery().into()),
+                pictures: model.picture_state(),
                 sampling: support.map(|support| model.sampling(support)),
                 config: model.shareable_config(),
                 user_args: model.shareable_user_args(),

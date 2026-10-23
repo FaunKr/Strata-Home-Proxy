@@ -181,6 +181,68 @@ async fn another_model_of_another_family_refuses_the_speed_projection() {
     assert!(s.fake.runs_of("START-HERE.bat").is_empty());
 }
 
+// --- #326 the picture state of installed models ---
+
+/// A config with setup's `vision` section (`VR.vision_section` in `setup.py`).
+fn config_with_vision(gguf: &str, vision: Value) -> Value {
+    let mut config = config_json(gguf);
+    config["vision"] = vision;
+    config
+}
+
+#[tokio::test]
+async fn installed_models_report_their_picture_state() {
+    let s = setup("models-pictures").await;
+    installed(&s);
+    let strata = s.agent.cfg.strata_dir.clone();
+    // The GPU reader and the CPU one of cards under 24 GB, as setup writes
+    // them; the plain config of a model setup was never asked for pictures.
+    write(
+        strata.join("strata-iq3_xxs.json"),
+        &config_with_vision(
+            "a.gguf",
+            json!({"exe": "C:\\Strata\\engine\\strata-vision-hip.exe",
+                "mmproj": "D:\\Strata-data\\models\\IQ3_XXS\\mmproj-Qwen3.8-Flash-Next-BF16.gguf",
+                "model": "Qwen3.8-Flash-Next-IQ3_XXS.gguf", "gpu": true, "max_tokens": 1024,
+                "cpu_exe": "C:\\Strata\\engine\\strata-vision.exe"}),
+        )
+        .to_string(),
+    );
+    write(
+        strata.join("strata-coder-iq1_m.json"),
+        &config_with_vision(
+            "b.gguf",
+            json!({"exe": "C:\\Strata\\engine\\strata-vision.exe",
+                "mmproj": "mmproj-Qwen3.8-Flash-Next-BF16.gguf",
+                "model": "Qwen3.8-Flash-Next-IQ1_M.gguf", "gpu": false, "max_tokens": 300,
+                "threads": 8}),
+        )
+        .to_string(),
+    );
+    write(
+        strata.join("strata-swift-iq2_xs.json"),
+        &config_json("c.gguf").to_string(),
+    );
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "IQ3_XXS")["pictures"], "gpu");
+    assert_eq!(model(&view, "coder-IQ1_M")["pictures"], "cpu");
+    assert_eq!(model(&view, "swift-IQ2_XS")["pictures"], "off");
+}
+
+#[tokio::test]
+async fn a_model_with_an_unreadable_config_reports_no_picture_state() {
+    let s = setup("models-pictures-unreadable").await;
+    installed(&s);
+    write(
+        s.agent.cfg.strata_dir.join("strata-iq3_xxs.json"),
+        "{ \"exe\": \"strata.exe\"",
+    );
+    let view = get(&s, "/strata").await;
+    let qwen = model(&view, "IQ3_XXS");
+    assert_eq!(qwen["pictures"], Value::Null);
+    assert!(qwen.get("config").is_none(), "{qwen}");
+}
+
 #[tokio::test]
 async fn activating_waits_for_a_running_request_and_switches_the_start_script() {
     let s = setup("models-activate").await;

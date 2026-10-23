@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use strata_pc_protocol::Pictures;
 
 use crate::{
     sampling::{self, SamplingSupport, StrataSampling},
@@ -675,6 +676,20 @@ impl Model {
         let args = self.started_args();
         let at = args.iter().position(|v| v == CONTEXT_FLAG)?;
         args.get(at + 1)?.as_str()?.parse().ok()
+    }
+
+    /// Whether the config has a picture reader, and which one: no `vision`
+    /// section is `off`, `vision.gpu` the GPU reader or the CPU one. `None`
+    /// for a config that cannot be read, as [`Self::shareable_config`] says.
+    pub fn picture_state(&self) -> Option<Pictures> {
+        if self.fields.is_empty() {
+            return None;
+        }
+        Some(match self.fields.get("vision") {
+            Some(vision) if vision.get("gpu") == Some(&Value::Bool(true)) => Pictures::Gpu,
+            Some(_) => Pictures::Cpu,
+            None => Pictures::Off,
+        })
     }
 
     /// Whether the config has a picture reader: setup writes a `vision`

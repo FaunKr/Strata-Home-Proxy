@@ -171,8 +171,12 @@ async function forced(page, errors) {
     await dialog.getByText('Switch picture reading off for IQ3_XXS?').waitFor(wait);
     await dialog.getByText('Lets the model read pictures').waitFor(wait);
     await dialog.getByRole('button', { name: 'Switch off' }).click();
-    // The fake PC finishes the job, then the model reads no pictures.
-    await page.waitForTimeout(2500);
+    // The fake PC finishes the job in 1.5 s; wait for it rather than guess.
+    for (let i = 0; i < 30; i++) {
+      const job = await (await fetch(`${process.env.FAKE_PC}/strata/job`)).json();
+      if (job?.state === 'done') break;
+      await page.waitForTimeout(500);
+    }
     await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
     await row.getByText('Pictures: off').waitFor(wait);
     await row.getByRole('button', { name: 'Switch picture reading on' }).waitFor(wait);

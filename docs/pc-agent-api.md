@@ -552,10 +552,12 @@ configuration has (the catalog's default when it has none), its speed
 projection as it is, and the key Strata runs with, only `--vision`
 differing. A model that is not active is done there, Strata untouched. The
 active one waits until Strata is idle and restarts it once. If that start
-does not come up within `context_start_secs`, or the job is cancelled while
-waiting, the whole run config from before setup is written back, Strata is
-started with it, and the job fails with a plain message naming the settings
-from before; the job's lines show what Strata printed. Setup itself failing
+does not come up within `context_start_secs`, the whole run config from
+before setup is written back, Strata is started with it, and the job fails
+with a plain message naming the settings from before; the job's lines show
+what Strata printed. A cancel brings that config back as well and ends the
+job cancelled: before the stop Strata keeps running as it was, after the
+stop it is started with the config from before again. Setup itself failing
 fails the job with setup's output, and nothing is restarted. Switching off
 only leaves out the `vision` section; the picture file stays on disk.
 

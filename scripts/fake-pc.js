@@ -173,8 +173,8 @@ http.createServer((req, res) => {
         if (strataJob === job) {
           strataJob = { ...job, state: 'done', ended: Math.floor(Date.now() / 1000) };
           if (picturesAfter) {
-            const model = strata.models.find((m) => m.id === body.model);
-            if (model) model.pictures = picturesAfter;
+            const switched = strata.models.find((m) => m.id === body.model);
+            if (switched) switched.pictures = picturesAfter;
           }
         }
       }, 1500);

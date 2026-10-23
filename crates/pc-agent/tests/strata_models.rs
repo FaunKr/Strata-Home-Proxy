@@ -496,6 +496,40 @@ async fn cancelling_the_picture_restart_brings_the_settings_back() {
 }
 
 #[tokio::test]
+async fn cancelling_before_the_restart_brings_the_settings_back_without_one() {
+    let s = setup("pictures-cancel-while-busy").await;
+    let before = active_with_config(&s, json!(["--native", "a.gguf", "--max-context", "524288"]));
+    fake_pictures_setup(&s, "iq3_xxs", true);
+    s.fake.strata_busy.store(true, Ordering::SeqCst);
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "set_pictures", "model": "IQ3_XXS", "on": true}),
+    )
+    .await;
+    assert_eq!(code, 202, "{answer}");
+    job_until(&s, "waiting for the request", |j| {
+        j["step"].as_str().is_some_and(|t| t.contains("request"))
+    })
+    .await;
+    let (code, _) = post(&s, "/strata/job/cancel", json!({})).await;
+    assert_eq!(code, 202);
+    assert_eq!(finished_slowly(&s).await["state"], "cancelled");
+    // Setup already wrote the config with the picture reader; it goes back.
+    let config = read_config(&s, "iq3_xxs");
+    assert_eq!(
+        config["args"], before["args"],
+        "the args from before: {config}"
+    );
+    assert!(config.get("vision").is_none(), "no reader left: {config}");
+    // Strata never stopped, so nothing starts it again.
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0);
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+    let view = get(&s, "/strata").await;
+    assert_eq!(model(&view, "IQ3_XXS")["pictures"], "off", "{view}");
+}
+
+#[tokio::test]
 async fn a_failed_picture_setup_fails_the_job_with_its_output() {
     let s = setup("pictures-setup-fails").await;
     installed(&s);

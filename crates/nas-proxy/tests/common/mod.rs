@@ -674,6 +674,7 @@ fn start_job(pc: &Pc, body: Value) -> Response {
         | StrataJobRequest::Delete { model }
         | StrataJobRequest::SetSpeedProjection { model, .. }
         | StrataJobRequest::SetContext { model, .. }
+        | StrataJobRequest::SetPictures { model, .. }
         | StrataJobRequest::Tune { model, .. }
         | StrataJobRequest::ApplyPreset { model, .. }
         | StrataJobRequest::UndoPreset { model, .. }

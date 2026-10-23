@@ -122,3 +122,15 @@ for `local-agent.ps1` under pwsh on Linux, with a test of the same name for
 each test in `test.sh`; `scripts/check.sh` runs it and PSScriptAnalyzer, which
 checks the PowerShell against Windows PowerShell 5.1. Nothing runs on real
 Windows in CI; the manual `windows.yml` workflow parses the scripts under 5.1.
+
+What pwsh on Linux does not enforce, so `test.ps1` can't catch it; check a
+change to `local-agent.ps1` for it by reading:
+
+- File sharing: a file another process holds open for writing (the worker's
+  `log.jsonl`, `stderr`) opens only with `FileShare.ReadWrite`; plain
+  `File.ReadAllLines` or `Get-Content` fails on Windows while the run goes on.
+- Native stderr: with `$ErrorActionPreference = 'Stop'`, Windows PowerShell
+  5.1 throws on a native command's stderr line when it's redirected (`git`
+  goes through `Invoke-Git`; set `Continue` around others such as `taskkill`).
+- The Windows-only branches: `taskkill`, the registry and PATH in
+  `install.ps1`, ACLs, `LongPathsEnabled`.

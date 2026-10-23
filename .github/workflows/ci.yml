@@ -104,6 +104,10 @@ jobs:
       # check.sh lints the workflows with it.
       - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         run: scripts/install-actionlint.sh "$RUNNER_TEMP/bin" && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # check.sh lints the PowerShell port of local-agent with it (pwsh is on
+      # the runner).
+      - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
+        run: scripts/install-psscriptanalyzer.sh
       - if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         run: |
           if [[ $CARGO == false ]]; then

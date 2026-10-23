@@ -34,6 +34,10 @@ if ! command -v pwsh >/dev/null; then
     chmod +x "$pwsh_dir/pwsh" && ln -sf "$pwsh_dir/pwsh" "$HOME/.local/bin/pwsh"
   fi
 fi
+# PSScriptAnalyzer for the lint of local-agent's PowerShell port in scripts/check.sh.
+if command -v pwsh >/dev/null; then
+  scripts/install-psscriptanalyzer.sh || true
+fi
 # The linters shellcheck and actionlint for the lint steps in scripts/check.sh.
 if ! command -v shellcheck >/dev/null; then
   (apt-get install -y -q shellcheck || (apt-get update -q && apt-get install -y -q shellcheck)) >/dev/null 2>&1 || true

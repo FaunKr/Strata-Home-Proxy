@@ -1,0 +1,9 @@
+#!/bin/sh
+# local-agent for Git Bash, where Claude Code's Bash tool runs on Windows:
+# hands every argument to the PowerShell runner installed next to it. Uses pwsh
+# where there is no Windows PowerShell (the tests on Linux).
+dir=$(cd "$(dirname "$0")" && { pwd -W 2>/dev/null || pwd; })
+if command -v powershell.exe >/dev/null 2>&1; then
+  exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$dir/lib/local-agent.ps1" "$@"
+fi
+exec pwsh -NoProfile -File "$dir/lib/local-agent.ps1" "$@"

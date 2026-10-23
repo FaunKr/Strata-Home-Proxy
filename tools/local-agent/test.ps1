@@ -87,10 +87,33 @@ function Reset-Test {
     foreach ($path in $record, $stateDir, "$($env:FAKE_PROXY_SCENARIO).requests") {
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
     }
-    Remove-Item Env:FAKE_CLAUDE_MODE, Env:PREFIX -ErrorAction SilentlyContinue
+    Remove-Item Env:FAKE_CLAUDE_MODE, Env:FAKE_CLAUDE_SLEEP, Env:PREFIX, Env:LOCAL_AGENT_PROBE_INTERVAL -ErrorAction SilentlyContinue
     Write-Config
     Set-Health '{"status": 200, "max_context": 262144}'
     New-Repo
+}
+
+# Starts local-agent in the background with its output in $outFile; returns
+# the process.
+function Start-Runner([string]$outFile, [string[]]$arguments) {
+    $info = New-Object Diagnostics.ProcessStartInfo 'sh'
+    foreach ($a in @('-c', 'exec "$@" >"$0" 2>&1', $outFile, $pwsh, '-NoProfile', '-File', $runner) + $arguments) { $info.ArgumentList.Add($a) }
+    $info.UseShellExecute = $false
+    $info.WorkingDirectory = (Get-Location).Path
+    return [Diagnostics.Process]::Start($info)
+}
+# A process counts as alive unless it is gone or a zombie (which a container's
+# init may never reap).
+function Test-Alive([string]$id) {
+    $stat = (& /bin/ps -o stat= -p $id 2>$null | Out-String).Trim()
+    return $stat -and -not $stat.StartsWith('Z')
+}
+function Get-ProgressFile { if ($out -match '(?m)^local-agent: progress in (.+)$') { return $Matches[1].Trim() } }
+function Get-RunId { if ($out -match '(?m)^local-agent: run (\S+)') { return $Matches[1] } }
+function Get-Recorded([string]$name) { return (Get-Content -LiteralPath (Join-Path $record $name) -Raw).Trim() }
+function Test-Branch([string]$name) {
+    git rev-parse -q --verify $name 2>$null | Out-Null
+    return $LASTEXITCODE -eq 0
 }
 
 # The values the fake claude got for an option, one per line.
@@ -105,14 +128,14 @@ function Get-OptionValues([string]$option) {
 
 function test_config_required {
     Remove-Item -LiteralPath $config
-    la check
+    la run task
     if ($code -ne 2) { Fail "exit ${code}: $out" }
     Assert-Contains $out $config
     if (Test-Path (Join-Path $record 'args')) { Fail 'worker started' }
     # A config others can read is refused.
     Write-Config
     & chmod 644 $config
-    la check
+    la run task
     if ($code -ne 2) { Fail "exit $code for a readable file: $out" }
     Assert-Contains $out 'chmod 600'
 }
@@ -196,6 +219,19 @@ function test_check_task_on_stdin {
     if ((Get-Content -LiteralPath (Join-Path $record 'args')) -match 'local-agent-check-') { Fail 'task on the command line' }
 }
 
+function test_run_task_on_stdin {
+    # Without a task argument, and after a bare --, the task comes from stdin.
+    foreach ($arguments in @(@('run'), @('run', '--'))) {
+        $ErrorActionPreference = 'Continue'
+        $lines = 'Task from stdin' | & $pwsh -NoProfile -File $runner @arguments 2>&1 | ForEach-Object { "$_" }
+        $ErrorActionPreference = 'Stop'
+        if ($LASTEXITCODE -ne 0) { Fail "$arguments exit ${LASTEXITCODE}: $($lines -join "`n")" }
+        Assert-HasLine (Join-Path $record 'stdin') 'Task from stdin'
+        if ((Get-Content -LiteralPath (Join-Path $record 'args')) -match 'Task from stdin') { Fail 'task on the command line' }
+        Remove-Item -LiteralPath $record -Recurse -Force
+    }
+}
+
 function test_check_without_claude {
     $saved = $env:PATH
     $env:PATH = '/usr/bin:/bin'
@@ -221,6 +257,439 @@ function test_config_formats {
     la check
     if ($code -ne 2) { Fail "a share that is no number: exit ${code}: $out" }
     Assert-Contains $out 'LOCAL_AGENT_COMPACT_SHARE'
+}
+
+function test_happy_path {
+    la run 'Add a line to README'
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    $id = Get-RunId
+    if (-not $id) { Fail "no run id in: $out" }
+    # The worker ran in a worktree outside the repo, on a new branch.
+    $cwd = Get-Recorded 'cwd'
+    if (-not $cwd.StartsWith("$stateDir/")) { Fail "worker ran in $cwd" }
+    if ((git -C $cwd branch --show-current) -ne "local-agent/$id") { Fail "wrong branch in $cwd" }
+    Assert-HasLine (Join-Path $record 'stdin') 'Add a line to README'
+    # The edit is committed on the branch; the checkout is untouched.
+    git diff --quiet main "local-agent/$id"
+    if ($LASTEXITCODE -eq 0) { Fail 'branch without a change' }
+    if ((Get-Content README -Raw).Trim() -ne 'hello') { Fail 'checkout changed' }
+    if (git status --porcelain) { Fail 'checkout not clean' }
+    # How the worker was set up.
+    $envFile = Join-Path $record 'env'
+    Assert-HasLine $envFile "ANTHROPIC_BASE_URL=$url"
+    Assert-HasLine $envFile 'ANTHROPIC_AUTH_TOKEN=client-key'
+    Assert-HasLine $envFile 'ANTHROPIC_API_KEY=<unset>'
+    if (-not ((Get-Content $envFile) -match '^ANTHROPIC_MODEL=claude-')) { Fail 'no Claude model name' }
+    Assert-HasLine $envFile 'CLAUDE_CODE_DISABLE_1M_CONTEXT=1'
+    Assert-HasLine $envFile 'CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192'
+    # At 256K the window is capped at 180K, without a percentage override.
+    Assert-HasLine $envFile 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=180000'
+    Assert-HasLine $envFile 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<unset>'
+    # The result shows the summary and the diff.
+    la result $id
+    if ($code -ne 0) { Fail "result exit ${code}: $out" }
+    Assert-Contains $out 'Added a line to README.'
+    Assert-Contains $out '+edited by the worker'
+}
+
+function test_long_paths {
+    # Git in the worktree, the runner's and the worker's, handles paths past
+    # Windows' 260 characters, without a change to the repo's config.
+    # An entry the environment already passes this way stays.
+    $saved = @($env:GIT_CONFIG_COUNT, $env:GIT_CONFIG_KEY_0, $env:GIT_CONFIG_VALUE_0)
+    $env:GIT_CONFIG_COUNT = '1'
+    $env:GIT_CONFIG_KEY_0 = 'credential.interactive'
+    $env:GIT_CONFIG_VALUE_0 = 'false'
+    try {
+        la run task
+    } finally {
+        $env:GIT_CONFIG_COUNT, $env:GIT_CONFIG_KEY_0, $env:GIT_CONFIG_VALUE_0 = $saved
+    }
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    $envFile = Join-Path $record 'env'
+    Assert-HasLine $envFile 'GIT_CONFIG_COUNT=2'
+    Assert-HasLine $envFile 'GIT_CONFIG_KEY_0=credential.interactive'
+    Assert-HasLine $envFile 'GIT_CONFIG_VALUE_0=false'
+    Assert-HasLine $envFile 'GIT_CONFIG_KEY_1=core.longpaths'
+    Assert-HasLine $envFile 'GIT_CONFIG_VALUE_1=true'
+    if (git config core.longpaths) { Fail "the repo's config changed" }
+}
+
+function test_files_without_byte_order_mark {
+    $task = 'Unicode ' + [char]0x00DC + [char]0x00EF + ' task'
+    la run $task
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    $runDir = Join-Path $stateDir "runs/$(Get-RunId)"
+    foreach ($name in 'task', 'meta', 'summary') {
+        $bytes = [IO.File]::ReadAllBytes((Join-Path $runDir $name))
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { Fail "$name starts with a byte order mark" }
+    }
+    Assert-HasLine (Join-Path $runDir 'task') $task
+}
+
+function test_autocompact_follows_context {
+    # 75 % of 128000, plus the output cap and Claude Code's reserve.
+    Set-Health '{"status": 200, "max_context": 128000}'
+    la run task
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    Assert-HasLine (Join-Path $record 'env') 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=117192'
+    Assert-HasLine (Join-Path $record 'env') 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<unset>'
+}
+
+function test_compact_share_changes_window {
+    Add-Content -LiteralPath $config -Value 'LOCAL_AGENT_COMPACT_SHARE=70'
+    Set-Health '{"status": 200, "max_context": 128000}'
+    la run task
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    Assert-HasLine (Join-Path $record 'env') 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=110792'
+    Assert-HasLine (Join-Path $record 'env') 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<unset>'
+    # Below Claude Code's 100K minimum the window stays at 100K, and the
+    # percentage override brings compaction down to the share.
+    Add-Content -LiteralPath $config -Value 'LOCAL_AGENT_COMPACT_SHARE=50'
+    la run task
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    Assert-HasLine (Join-Path $record 'env') 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000'
+    Assert-HasLine (Join-Path $record 'env') 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=64'
+}
+
+function test_worker_permissions {
+    [void](New-Item -ItemType Directory -Path .claude)
+    Set-Content -LiteralPath .claude/settings.json -Value '{"permissions": {"allow": ["Bash(cargo test:*)", "Bash(git push:*)"]}}'
+    git add .claude
+    git commit -qm settings
+    la run --allow 'Bash(make check:*)' task
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    if (@(Get-OptionValues '--permission-mode') -cnotcontains 'acceptEdits') { Fail 'not acceptEdits' }
+    $allowed = @(Get-OptionValues '--allowedTools')
+    $denied = @(Get-OptionValues '--disallowedTools')
+    # A rule with a space and parentheses arrives as one argument.
+    foreach ($rule in 'Edit', 'Bash(git commit:*)', 'Bash(cargo test:*)', 'Bash(make check:*)') {
+        if ($allowed -cnotcontains $rule) { Fail "$rule not allowed: $allowed" }
+    }
+    if ($allowed -ccontains 'Bash(git push:*)') { Fail 'git push allowed' }
+    foreach ($rule in 'Bash(git push:*)', 'WebFetch', 'Bash(curl:*)', 'PowerShell') {
+        if ($denied -cnotcontains $rule) { Fail "$rule not denied: $denied" }
+    }
+    # --allow counts for its run only.
+    la run task
+    if (@(Get-OptionValues '--allowedTools') -ccontains 'Bash(make check:*)') { Fail '--allow kept' }
+    # A denied tool doesn't block tools that merely share its first letters.
+    la run --allow 'Bash(ncdu:*)' task
+    if (@(Get-OptionValues '--allowedTools') -cnotcontains 'Bash(ncdu:*)') { Fail 'ncdu not allowed' }
+    # The PowerShell tool stays off whatever --allow says.
+    la run --allow PowerShell --allow 'PowerShell(Get-ChildItem:*)' task
+    if (@(Get-OptionValues '--allowedTools') -match '^PowerShell') { Fail 'PowerShell allowed' }
+    # Read-only runs work in the checkout: the repo's rules don't apply there.
+    $env:FAKE_CLAUDE_MODE = 'no-tool'
+    la run --read-only task
+    if (@(Get-OptionValues '--allowedTools') -ccontains 'Bash(cargo test:*)') { Fail "repo's rules in a read-only run" }
+    if (@(Get-OptionValues '--disallowedTools') -cnotcontains 'PowerShell') { Fail 'PowerShell allowed in a read-only run' }
+}
+
+function test_read_only {
+    $env:FAKE_CLAUDE_MODE = 'no-tool'
+    la run --read-only 'Explain README'
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    if ((Get-Recorded 'cwd') -ne $repo) { Fail 'worker not in the repo' }
+    if ((git branch --format='%(refname:short)') -ne 'main') { Fail 'branch created' }
+    if (@(git worktree list).Count -ne 1) { Fail 'worktree created' }
+    if (@(Get-OptionValues '--allowedTools') -ccontains 'Edit') { Fail 'Edit allowed' }
+    foreach ($rule in 'Edit', 'Write', 'Bash(git commit:*)') {
+        if (@(Get-OptionValues '--disallowedTools') -cnotcontains $rule) { Fail "$rule not denied" }
+    }
+    la result (Get-RunId)
+    Assert-Contains $out 'I would rather not.'
+    if ($out.Contains('## Changes')) { Fail 'changes with --read-only' }
+}
+
+# Runs a task that must fall back before the worker starts; $reason is the
+# expected reason, $hint a piece of the hint.
+function Assert-Fallback([string]$reason, [string]$hint) {
+    la run task
+    if ($code -ne 3) { Fail "exit $code instead of 3: $out" }
+    if (Test-Path (Join-Path $record 'args')) { Fail 'worker started' }
+    if ((git branch --format='%(refname:short)') -ne 'main') { Fail 'branch created' }
+    la result (Get-RunId)
+    Assert-Contains $out 'fallback'
+    Assert-Contains $out $reason
+    Assert-Contains $out $hint
+}
+function Get-RequestCount { return @(Get-Content -LiteralPath "$($env:FAKE_PROXY_SCENARIO).requests").Count }
+
+function test_fallback_gaming {
+    Set-Health '{"status": 503, "tag": "gaming"}'
+    Assert-Fallback 'gaming mode' 'fall back'
+    if ((Get-RequestCount) -ne 1) { Fail 'gaming mode retried' }
+}
+
+function test_fallback_wake_timeout_retries_once {
+    Set-Health '{"status": 504, "tag": "wake_timeout"}' '{"status": 200, "max_context": 262144}'
+    la run task
+    if ($code -ne 0) { Fail "exit $code after a successful retry: $out" }
+    Set-Health '{"status": 504, "tag": "wake_timeout"}'
+    Remove-Item -LiteralPath "$($env:FAKE_PROXY_SCENARIO).requests", $record -Recurse -Force
+    New-Repo '-2'
+    Assert-Fallback 'did not wake' 'fall back'
+    if ((Get-RequestCount) -ne 2) { Fail 'not retried exactly once' }
+}
+
+function test_fallback_setup_errors {
+    Set-Health '{"status": 401, "tag": "unauthorized"}'
+    Assert-Fallback 'key' 'Access'
+    Set-Health '{"status": 401, "tag": "strata_unauthorized"}'
+    Assert-Fallback 'Strata refused' 'Strata key'
+    Set-Health '{"status": 503, "tag": "not_configured"}'
+    Assert-Fallback 'not set up' 'Strata'
+    Set-Health '{"status": 503, "tag": "no_mac"}'
+    Assert-Fallback 'MAC' 'PC service'
+    Set-Health '{"status": 200, "max_context": 32768}'
+    Assert-Fallback '32768' '128K'
+    Set-Health '{"status": 200, "max_context": 127999}'
+    Assert-Fallback '127999' '128K'
+}
+
+function test_fallback_proxy_unreachable {
+    Set-Content -LiteralPath $config -Value "LOCAL_AGENT_URL=http://127.0.0.1:9`nLOCAL_AGENT_KEY=client-key"
+    Assert-Fallback 'unreachable' 'LOCAL_AGENT_URL'
+}
+
+function test_fallback_mid_run_keeps_work {
+    $env:FAKE_CLAUDE_MODE = 'crash'
+    la run task
+    if ($code -ne 3) { Fail "exit $code instead of 3: $out" }
+    $id = Get-RunId
+    if (@(git show "local-agent/${id}:README") -cnotcontains 'half done') { Fail "the worker's work is missing on the branch" }
+    if (-not (Test-Path -LiteralPath (Get-Recorded 'cwd'))) { Fail 'worktree removed' }
+    la result $id
+    foreach ($part in 'fallback', 'mid-run', 'API Error: 503', '## Log summary', 'Edit README', '+half done') { Assert-Contains $out $part }
+}
+
+function test_warns_without_compaction {
+    $env:FAKE_CLAUDE_MODE = 'no-compact'
+    la run --watch task
+    if ($code -ne 3) { Fail "exit $code instead of 3: $out" }
+    $id = Get-RunId
+    $progress = Get-ProgressFile
+    $warnings = @(Get-Content -LiteralPath $progress | Where-Object { $_.StartsWith('warning: context past the compaction point') })
+    if ($warnings.Count -ne 1) { Fail "not a single warning in: $(Get-Content -LiteralPath $progress -Raw)" }
+    la status $id
+    Assert-Contains $out 'context: 190K now (peak 190K, compacts near 159K), compactions: 0'
+    Assert-Contains $out 'warning: context past the compaction point'
+    # The fallback's log summary names the cause.
+    la result $id
+    Assert-Contains $out 'API Error: 400'
+    Assert-Contains $out 'compactions: 0'
+}
+
+function test_fallback_mid_run_gaming {
+    $env:FAKE_CLAUDE_MODE = 'crash-gaming'
+    la run task
+    if ($code -ne 3) { Fail "exit $code instead of 3: $out" }
+    la result (Get-RunId)
+    Assert-Contains $out 'mid-run'
+    Assert-Contains $out 'the PC switched to gaming mode'
+}
+
+function test_time_limit {
+    $env:FAKE_CLAUDE_MODE = 'hang'
+    $started = Get-Date
+    la run --timeout 2s task
+    if ($code -ne 4) { Fail "exit $code instead of 4: $out" }
+    if (((Get-Date) - $started).TotalSeconds -ge 15) { Fail 'time limit not kept' }
+    Start-Sleep -Milliseconds 500
+    foreach ($id in (Get-Recorded 'pid'), (Get-Recorded 'child')) {
+        if (Test-Alive $id) { Fail "process $id still running" }
+    }
+    $run = Get-RunId
+    if (-not (Test-Branch "local-agent/$run")) { Fail 'branch removed' }
+    if (-not (Test-Path -LiteralPath (Get-Recorded 'cwd'))) { Fail 'worktree removed' }
+    la result $run
+    Assert-Contains $out 'timeout'
+    Assert-Contains $out 'Bash sleep 1000'
+    # Durations: seconds, minutes, hours; anything else is refused.
+    la run --timeout soon task
+    if ($code -ne 2) { Fail "--timeout soon: exit $code" }
+    la run --timeout 30M task
+    if ($code -ne 2) { Fail "--timeout 30M: exit $code" }
+}
+
+function test_status {
+    # While running.
+    $env:FAKE_CLAUDE_MODE = 'slow'
+    $env:FAKE_CLAUDE_SLEEP = '3'
+    $runOut = Join-Path $tmp 'run.out'
+    $background = Start-Runner $runOut @('run', "First line of the task`nsecond line")
+    for ($i = 0; $i -lt 50; $i++) {
+        la status
+        if ($out.Contains('running')) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    Assert-Contains $out 'running'
+    Assert-Contains $out 'First line of the task'
+    $background.WaitForExit()
+    if ($background.ExitCode -ne 0) { Fail "run failed: $(Get-Content -Raw $runOut)" }
+    # Done; without a run id it shows the latest run of this repo.
+    la status
+    if ($code -ne 0) { Fail "status exit $code" }
+    foreach ($part in 'done', 'Edit README', 'context compacted', 'context: 20K now (peak 50K, compacts near 159K), compactions: 1') { Assert-Contains $out $part }
+    if ($out.Contains('warning:')) { Fail "warning despite compaction: $out" }
+    # Fallen back.
+    Set-Health '{"status": 503, "tag": "gaming"}'
+    la run task
+    la status (Get-RunId)
+    Assert-Contains $out 'fallback'
+    Assert-Contains $out 'the PC is in gaming mode'
+}
+
+function test_one_run_at_a_time {
+    $env:FAKE_CLAUDE_MODE = 'slow'
+    $env:FAKE_CLAUDE_SLEEP = '2'
+    $runs = @()
+    foreach ($task in 'A', 'B', 'C') {
+        $runs += Start-Runner (Join-Path $tmp "run-$task.out") @('run', $task)
+        Start-Sleep -Milliseconds 500
+    }
+    la status
+    Assert-Contains $out 'queued'
+    Assert-Contains (Get-Content -LiteralPath (Join-Path $tmp 'run-B.out') -Raw) 'waiting for run'
+    foreach ($r in $runs) {
+        $r.WaitForExit()
+        if ($r.ExitCode -ne 0) { Fail "a run failed: exit $($r.ExitCode)" }
+    }
+    # The workers ran one after another, in the order the runs started.
+    $spans = @(Get-Content -LiteralPath (Join-Path $record 'spans') | ForEach-Object { , ($_ -split ' ') } | Sort-Object { [double]$_[0] })
+    if (($spans | ForEach-Object { $_[2] }) -join '' -ne 'ABC') { Fail "order: $(Get-Recorded 'spans')" }
+    for ($i = 1; $i -lt $spans.Count; $i++) {
+        if ([double]$spans[$i][0] -lt [double]$spans[$i - 1][1]) { Fail "workers ran at the same time: $(Get-Recorded 'spans')" }
+    }
+}
+
+function test_stale_queue_entry {
+    # A runner killed while waiting leaves its entry behind; it must not block.
+    [void](New-Item -ItemType Directory -Force -Path (Join-Path $stateDir 'queue'))
+    Set-Content -LiteralPath (Join-Path $stateDir 'queue/0000000000-dead') -Value '999999'
+    $started = Get-Date
+    la run task
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    if (((Get-Date) - $started).TotalSeconds -ge 10) { Fail 'a dead entry held up the run' }
+}
+
+function test_interrupted_run {
+    $env:FAKE_CLAUDE_MODE = 'hang'
+    $runOut = Join-Path $tmp 'run.out'
+    $background = Start-Runner $runOut @('run', 'task')
+    for ($i = 0; $i -lt 100 -and -not (Test-Path (Join-Path $record 'child')); $i++) { Start-Sleep -Milliseconds 100 }
+    # Ctrl+C.
+    & /bin/kill -INT $background.Id
+    $background.WaitForExit()
+    Start-Sleep -Milliseconds 500
+    foreach ($id in (Get-Recorded 'pid'), (Get-Recorded 'child')) {
+        if (Test-Alive $id) { Fail "process $id still running after cancelling" }
+    }
+    la status
+    Assert-Contains $out 'stopped'
+    # A runner that died without cleaning up counts as stopped, too.
+    if ((Get-Content -Raw $runOut) -notmatch '(?m)^local-agent: run (\S+)') { Fail 'no run id' }
+    $runId = $Matches[1]
+    $meta = Join-Path $stateDir "runs/$runId/meta"
+    (Get-Content $meta) -replace '^state=.*', 'state=running' -replace '^pid=.*', 'pid=999999' | Set-Content $meta
+    la status $runId
+    Assert-Contains $out 'stopped'
+    la discard $runId
+    if ($code -ne 0) { Fail "discard of a dead run: exit ${code}: $out" }
+}
+
+function test_fallback_gaming_during_run {
+    $env:FAKE_CLAUDE_MODE = 'hang-gaming'
+    $env:LOCAL_AGENT_PROBE_INTERVAL = '1'
+    $started = Get-Date
+    la run task
+    if ($code -ne 3) { Fail "exit $code instead of 3: $out" }
+    if (((Get-Date) - $started).TotalSeconds -ge 15) { Fail 'gaming mode noticed too late' }
+    if (Test-Alive (Get-Recorded 'child')) { Fail 'worker still running' }
+    la result (Get-RunId)
+    Assert-Contains $out 'switched to gaming mode'
+    Assert-Contains $out '## Log summary'
+}
+
+function test_watch {
+    la run --watch task
+    if ($code -ne 0) { Fail "exit ${code}: $out" }
+    $progress = Get-ProgressFile
+    if (-not $progress -or -not (Test-Path -LiteralPath $progress)) { Fail "no progress file in: $out" }
+    Assert-HasLine $progress 'started'
+    Assert-HasLine $progress 'Edit README'
+    Assert-HasLine $progress 'finished'
+    if (Get-Content -LiteralPath $progress | Where-Object { $_.StartsWith('warning:') }) { Fail 'warning despite compaction' }
+    # Without --watch the run says only when it starts and ends.
+    la run task
+    if (@($out -split "`n").Count -ne 2) { Fail "output without --watch: $out" }
+}
+
+function test_discard {
+    la run task
+    $id = Get-RunId
+    $worktree = Get-Recorded 'cwd'
+    la discard $id
+    if ($code -ne 0) { Fail "discard exit ${code}: $out" }
+    if (Test-Path -LiteralPath $worktree) { Fail 'worktree stays' }
+    if (Test-Branch "local-agent/$id") { Fail 'branch stays' }
+    if ((Get-Content README -Raw).Trim() -ne 'hello' -or (git status --porcelain)) { Fail 'checkout changed' }
+    la status $id
+    Assert-Contains $out 'discarded'
+    la discard nosuchrun
+    if ($code -ne 2) { Fail "unknown run: exit $code" }
+    Assert-Contains $out 'nosuchrun'
+}
+
+function test_discard_keeps_state_when_git_fails {
+    # A worktree git can't remove (on Windows: a file still open there) is
+    # reported, and the run isn't marked discarded.
+    la run task
+    $id = Get-RunId
+    $worktree = Get-Recorded 'cwd'
+    git worktree lock $worktree
+    la discard $id
+    if ($code -ne 1) { Fail "exit ${code}: $out" }
+    Assert-Contains $out 'could not remove the worktree'
+    la status $id
+    if ($out -match 'discarded') { Fail "marked discarded: $out" }
+    git worktree unlock $worktree
+}
+
+function test_prune {
+    la run 'old and merged'
+    $merged = Get-RunId
+    git merge -q "local-agent/$merged"
+    la run 'old, not merged'
+    $unmerged = Get-RunId
+    la run 'new'
+    $new = Get-RunId
+    $runs = Join-Path $stateDir 'runs'
+    foreach ($id in $merged, $unmerged) {
+        foreach ($item in @(Get-Item -LiteralPath (Join-Path $runs $id)) + @(Get-ChildItem -LiteralPath (Join-Path $runs $id))) {
+            $item.LastWriteTime = Get-Date '2026-01-01'
+        }
+    }
+    la prune
+    if ($code -ne 0) { Fail "prune exit ${code}: $out" }
+    # Old and merged: run folder, worktree and branch go.
+    if (Test-Path -LiteralPath (Join-Path $runs $merged)) { Fail 'old run stays' }
+    if (Test-Branch "local-agent/$merged") { Fail 'merged branch stays' }
+    if ((git worktree list) -match [regex]::Escape($merged)) { Fail 'merged worktree stays' }
+    # Old but unmerged: everything stays, so discard still works.
+    if (-not (Test-Path -LiteralPath (Join-Path $runs $unmerged))) { Fail 'unmerged run removed' }
+    if (-not ((git worktree list) -match [regex]::Escape($unmerged))) { Fail 'unmerged worktree removed' }
+    if (-not (Test-Path -LiteralPath (Join-Path $runs $new))) { Fail 'new run removed' }
+}
+
+function test_prune_keeps_runs_without_commits {
+    # A run that changed nothing isn't "merged": prune keeps its worktree.
+    $env:FAKE_CLAUDE_MODE = 'no-tool'
+    la run task
+    $worktree = Get-Recorded 'cwd'
+    la prune
+    if (-not (Test-Path -LiteralPath $worktree)) { Fail 'worktree without commits removed' }
 }
 
 $tests = @($args)

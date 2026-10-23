@@ -38,9 +38,16 @@ Reference values after #151:
 | Run | Jobs | Minutes |
 |---|---|---|
 | PR with a code change | changes, test, ci-ok | approx. 6–10 |
+| PR that changes the web UI, the proxy or the protocol | as above, plus ui | approx. 5–10; 18 when the Ubuntu mirror is slow (#321) |
 | PR that changes only `tools/local-agent/` or the code-bench runner (not its `tasks/`) | changes, test without Cargo (`cargo=false`, `check.sh --no-cargo`), ci-ok | approx. 1–2 (estimate) |
 | PR that changes a workflow, Cargo.lock or scripts/ | everything except Windows | approx. 5–18 (#309: 5, #308: 15) |
 | Push to `main` | changes, test (check only), publish, ci-ok | approx. 5–10 |
+
+The `ui` job installs Chromium's system packages with Playwright's
+`--with-deps` (fonts, xvfb, libnss3) from the runner's Ubuntu mirror. That
+usually takes 20 seconds; on #321 the mirror sent 29 kB/s and the step took
+13 minutes, so a `ui` job still running after 10 minutes is worth a look at
+that step before you wait longer.
 
 The code-bench image's build also builds its repo task: it vendors the
 crates, prebuilds and runs the PC service's tests three times (the checkout,

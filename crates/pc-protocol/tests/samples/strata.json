@@ -51,6 +51,7 @@
       "speed_projection": true,
       "context": 262144,
       "loop_recovery": "recover",
+      "pictures": "off",
       "sampling": {
         "support": "model_card",
         "thinking": [
@@ -131,6 +132,7 @@
       "speed_projection": false,
       "context": null,
       "loop_recovery": "stop",
+      "pictures": null,
       "sampling": null,
       "tunable": false,
       "tune_unavailable": "Tuning needs the Strata Terminal; this Strata is a folder from source"

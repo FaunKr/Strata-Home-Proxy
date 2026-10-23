@@ -302,6 +302,11 @@ PC service leaves the field out.
 Strata reads it: `recover` (also `true`), `stop` or `off` (if the value is
 missing or unknown). An older PC service leaves the field out.
 
+`pictures` is `off`, `cpu` or `gpu`: no `vision` section in its
+configuration is `off`, `vision.gpu` true is the GPU reader and false the
+CPU one (see [strata-api.md](strata-api.md)). It is `null` when the
+configuration cannot be read, and left out by an older PC service.
+
 `sampling` says what a request without sampling fields gets: `support`
 is `model_card`, `config` or `none` (this Strata reads none and is
 greedy), `thinking` and `instruct` are lists of `{"name", "value",

@@ -111,6 +111,19 @@ fn strata_report_splits_into_the_page_and_the_incoming_commits() {
     let sampling = info.models[0].sampling.as_ref().unwrap();
     assert_eq!(sampling.support, SamplingSupport::ModelCard);
     assert!(info.families[0].pictures);
+    assert_eq!(info.models[0].pictures, Some(Pictures::Off));
+    assert_eq!(info.models[1].pictures, None);
+    for (state, name) in [
+        (Pictures::Off, "off"),
+        (Pictures::Cpu, "cpu"),
+        (Pictures::Gpu, "gpu"),
+    ] {
+        assert_eq!(serde_json::to_value(state).unwrap(), json!(name));
+        assert_eq!(
+            serde_json::from_value::<Pictures>(json!(name)).unwrap(),
+            state
+        );
+    }
     assert_eq!(sampling.thinking[2].source, SamplingSource::ChatSettings);
     assert_eq!(
         info.benchmarks[1].error.as_deref(),
@@ -225,6 +238,7 @@ fn an_older_strata_answer_still_parses() {
     assert_eq!(model.speed_projection, None);
     assert_eq!(model.loop_recovery, None);
     assert_eq!(model.sampling, None);
+    assert_eq!(model.pictures, None);
     assert!(!info.families[0].speed_projection);
     assert!(!info.families[0].pictures);
     assert!(info.benchmarks.is_empty());

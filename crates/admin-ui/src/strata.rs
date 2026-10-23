@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use leptos::{html::Dialog, prelude::*};
 use leptos_router::components::{A, Outlet};
-use strata_pc_protocol::{BenchTool, MAX_SWITCHED_CONTEXT, StrataFamily, StrataInstall};
+use strata_pc_protocol::{BenchTool, MAX_SWITCHED_CONTEXT, Pictures, StrataFamily, StrataInstall};
 
 use crate::{
     api::{
@@ -1035,6 +1035,13 @@ fn ModelRow(
             "recover" => " · loop recovery on",
             "stop" => " · loop recovery stops the reply",
             _ => " · loop recovery off",
+        });
+    }
+    if let Some(pictures) = model.pictures {
+        meta.push_str(match pictures {
+            Pictures::Gpu => " · Pictures: on (GPU)",
+            Pictures::Cpu => " · Pictures: on (CPU)",
+            Pictures::Off => " · Pictures: off",
         });
     }
     let activate = (!model.active).then(|| {

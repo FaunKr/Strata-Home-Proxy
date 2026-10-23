@@ -684,6 +684,49 @@ async fn only_models_that_take_it_offer_to_switch_the_speed_projection() {
     assert!(!html.contains("Switch speed projection"), "{html}");
 }
 
+// --- #326 the picture state of installed models ---
+
+/// The same two models, with the PC service saying `pictures` about each.
+fn with_picture_state(qwen: Option<Pictures>, swift: Option<Pictures>) -> StrataReport {
+    let mut report = with_two_models(None);
+    report.info.models[0].pictures = qwen;
+    report.info.models[1].pictures = swift;
+    report
+}
+
+#[tokio::test]
+async fn installed_models_show_their_picture_state() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_picture_state(Some(Pictures::Gpu), Some(Pictures::Cpu)));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(html.matches("Pictures: on (GPU)").count(), 1, "{html}");
+    assert_eq!(html.matches("Pictures: on (CPU)").count(), 1, "{html}");
+}
+
+#[tokio::test]
+async fn a_model_without_picture_reading_shows_it_off() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_picture_state(Some(Pictures::Off), Some(Pictures::Off)));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(html.matches("Pictures: off").count(), 2, "{html}");
+    assert!(!html.contains("Pictures: on"), "{html}");
+}
+
+#[tokio::test]
+async fn without_word_from_the_pc_service_no_picture_state_shows() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_picture_state(None, None));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("IQ3_XXS"), "{html}");
+    assert!(!html.contains("Pictures:"), "{html}");
+}
+
 // --- #101 the context of installed models ---
 
 #[tokio::test]

@@ -56,6 +56,10 @@ pub fn HistoryPage() -> impl IntoView {
                                         .iter()
                                         .map(|(key, name)| preset(range, key, name))
                                         .collect::<Vec<_>>()}
+                                </div>
+                                <Picker range from=view.from.clone() to=view.to.clone() />
+                                // Outside the range group: it picks no range.
+                                <div class="chips">
                                     <a
                                         class="button secondary"
                                         href=move || format!("/admin/history.csv?range={}", range.get())
@@ -64,7 +68,6 @@ pub fn HistoryPage() -> impl IntoView {
                                         "Download CSV"
                                     </a>
                                 </div>
-                                <Picker range from=view.from.clone() to=view.to.clone() />
                                 {shown(view)}
                             </section>
                         }

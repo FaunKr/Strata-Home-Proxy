@@ -9,7 +9,7 @@ use std::{
 
 use axum::{
     Router,
-    extract::ConnectInfo,
+    extract::{ConnectInfo, Query},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{
         IntoResponse, Response,
@@ -206,16 +206,61 @@ fn insert_cookie(value: &str) {
     }
 }
 
+/// Lets only a logged-in user through who needs no password change, as
+/// [`require_login`] does for the server functions.
+fn ready_session(backend: &SharedBackend, headers: &HeaderMap) -> Result<(), Response> {
+    match backend.session(cookie_token(headers).as_deref()) {
+        Session::Ready => Ok(()),
+        Session::MustChange => Err(StatusCode::FORBIDDEN.into_response()),
+        Session::Anonymous => Err(StatusCode::UNAUTHORIZED.into_response()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct CsvQuery {
+    range: Option<String>,
+}
+
+/// The History of `range` as a CSV file, for the download link on the
+/// History page. Without a range it is the history's own default.
+async fn history_csv_file(
+    backend: SharedBackend,
+    headers: HeaderMap,
+    Query(query): Query<CsvQuery>,
+) -> Response {
+    if let Err(refused) = ready_session(&backend, &headers) {
+        return refused;
+    }
+    let view = backend.history(query.range.unwrap_or_default()).await;
+    let disposition = format!(
+        "attachment; filename=\"history-{}-{}.csv\"",
+        view.from, view.to
+    );
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/csv; charset=utf-8"),
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(&disposition)
+                    .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+            ),
+        ],
+        history_csv(&view),
+    )
+        .into_response()
+}
+
 /// A backend stream as server-sent events, only for a logged-in user.
 fn session_stream<T: serde::Serialize + Send + 'static>(
     backend: &SharedBackend,
     headers: &HeaderMap,
     stream: impl FnOnce(&dyn Backend) -> BoxStream<'static, T>,
 ) -> Response {
-    match backend.session(cookie_token(headers).as_deref()) {
-        Session::Ready => {}
-        Session::MustChange => return StatusCode::FORBIDDEN.into_response(),
-        Session::Anonymous => return StatusCode::UNAUTHORIZED.into_response(),
+    if let Err(refused) = ready_session(backend, headers) {
+        return refused;
     }
     let events = stream(backend.as_ref()).map(|item| {
         Event::default()
@@ -289,41 +334,11 @@ where
                 session_stream(&output_backend, &headers, |b| b.strata_output())
             }),
         )
-        // The History as a CSV file, for the download link on the History
-        // page; only a session that needs no password change may read it.
         .route(
             "/admin/history.csv",
-            get(
-                move |headers: HeaderMap,
-                      query: axum::extract::Query<std::collections::HashMap<String, String>>| async move {
-                    if csv_backend.session(cookie_token(&headers).as_deref()) != Session::Ready {
-                        return StatusCode::UNAUTHORIZED.into_response();
-                    }
-                    let range = query
-                        .get("range")
-                        .cloned()
-                        .unwrap_or_else(|| "7d".to_string());
-                    let view = csv_backend.history(range).await;
-                    let disposition =
-                        format!("attachment; filename=\"history-{}-{}.csv\"", view.from, view.to);
-                    (
-                        [
-                            (
-                                header::CONTENT_TYPE,
-                                HeaderValue::from_static("text/csv; charset=utf-8"),
-                            ),
-                            (
-                                header::CONTENT_DISPOSITION,
-                                HeaderValue::from_str(&disposition).unwrap_or_else(|_| {
-                                    HeaderValue::from_static("attachment")
-                                }),
-                            ),
-                        ],
-                        history_csv(&view),
-                    )
-                        .into_response()
-                },
-            ),
+            get(move |headers: HeaderMap, query: Query<CsvQuery>| {
+                history_csv_file(Arc::clone(&csv_backend), headers, query)
+            }),
         )
         .leptos_routes_with_context(&options, routes, context, {
             let options = options.clone();

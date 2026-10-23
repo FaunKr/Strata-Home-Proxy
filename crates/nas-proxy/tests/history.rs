@@ -60,13 +60,25 @@ fn csv_dates(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The history and its CSV for the same range, both taken on the same day:
+/// across local midnight the two would show different bars.
+async fn csv_and_history(b: &mut Browser, range: &str) -> (reqwest::Response, Value) {
+    loop {
+        let before = history(b, range).await;
+        let resp = get(b, &format!("/admin/history.csv?range={range}")).await;
+        let after = fetch(b, range).await;
+        if before["from"] == after["from"] && before["to"] == after["to"] {
+            return (resp, after);
+        }
+    }
+}
+
 #[tokio::test]
 async fn the_history_downloads_as_csv() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     seen(&s, EventKind::PcSeenAwake).await;
-    let view = history(&mut b, "7d").await;
-    let resp = get(&b, "/admin/history.csv?range=7d").await;
+    let (resp, view) = csv_and_history(&mut b, "7d").await;
     assert_eq!(resp.status(), 200, "the csv download failed");
     assert_eq!(resp.headers()["content-type"], "text/csv; charset=utf-8");
     assert_eq!(
@@ -109,7 +121,7 @@ async fn the_csv_needs_a_signed_in_session() {
     b.call("login", &[("password", "admin")]).await;
     assert_eq!(
         get(&b, "/admin/history.csv?range=7d").await.status(),
-        401,
+        403,
         "the password must be changed first"
     );
 }
@@ -119,23 +131,24 @@ async fn an_unknown_range_gives_the_same_rows_as_seven_days() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
     seen(&s, EventKind::PcSeenAwake).await;
-    // Whole seconds: both answers count the same bars.
-    tokio::time::sleep(Duration::from_millis(2100)).await;
-    let seven = get(&b, "/admin/history.csv?range=7d")
-        .await
-        .text()
-        .await
-        .unwrap();
-    let nonsense = get(&b, "/admin/history.csv?range=nonsense")
-        .await
-        .text()
-        .await
-        .unwrap();
-    assert_eq!(
-        csv_dates(&nonsense),
-        csv_dates(&seven),
-        "{nonsense}\n{seven}"
-    );
+    let csv = |range: &'static str| {
+        let b = &b;
+        async move {
+            let resp = get(b, &format!("/admin/history.csv?range={range}")).await;
+            csv_dates(&resp.text().await.unwrap())
+        }
+    };
+    // Across local midnight the two would show different days; then again.
+    loop {
+        let seven = csv("7d").await;
+        let nonsense = csv("nonsense").await;
+        let missing = csv("").await;
+        if seven == csv("7d").await {
+            assert_eq!(nonsense, seven, "an unknown range");
+            assert_eq!(missing, seven, "an empty range");
+            return;
+        }
+    }
 }
 
 #[tokio::test]
@@ -144,8 +157,10 @@ async fn the_history_page_offers_the_csv_download() {
     let b = logged_in(&s.url).await;
     let html = b.page("/admin/pc/history").await;
     assert!(html.contains("Download CSV"), "{html}");
-    assert!(html.contains("/admin/history.csv?range=7d"), "{html}");
-    assert!(html.contains("download"), "{html}");
+    assert!(
+        html.contains(r#"href="/admin/history.csv?range=7d" download"#),
+        "a download link for the picked range: {html}"
+    );
 }
 
 #[tokio::test]

@@ -14,8 +14,8 @@ fn lines(lines: &[&str]) -> Vec<String> {
     lines.iter().map(|l| l.to_string()).collect()
 }
 
-/// What `strata update --output json` prints for the engine's `status`
-/// (`strata_cli/update_cmd.py`, `run`, Strata 011c9e6).
+/// What `strata update --output jsonl` prints last for the engine's
+/// `status` (`strata_cli/update_cmd.py`, `run`, Strata 011c9e6).
 fn engine_answer(status: &str) -> String {
     format!(
         r#"{{"schema_version": 1, "ok": true, "feed": {{"source": "f", "sequence": 41, "channel": "stable", "key_id": "k"}}, "results": [{{"component": "engine", "status": "{status}", "installed_before": null, "changed": true, "note": "The feed has no engine package for this PC.", "reasons": ["hip gfx1030: no package"]}}], "exit_code": 0}}"#
@@ -124,7 +124,7 @@ async fn install_sets_up_the_strata_terminal_and_serves_the_new_model() {
     let terminal = cfg.strata_home.join("terminal").join("current");
     let update = &s.fake.runs_of("strata.cmd")[0];
     assert_eq!(update.program, terminal.join("bin").join("strata.cmd"));
-    assert_eq!(update.args, ["update", "--no-control", "--output", "json"]);
+    assert_eq!(update.args, ["update", "--no-control", "--output", "jsonl"]);
     assert_eq!(
         env(update, "STRATA_INSTALL_DIR"),
         Some(install.display().to_string().as_str())
@@ -644,6 +644,93 @@ async fn progress_comes_from_setups_output() {
     assert_eq!(job["step"], "4/7: Downloading the model");
     assert_eq!(job["done_bytes"], 10_000_000_000u64);
     assert_eq!(job["total_bytes"], 80_000_000_000u64);
+}
+
+/// Events `strata update --output jsonl` prints on its way, as `emit` in
+/// `strata_control/updater.py` writes them (Strata 5c8dd32).
+const FEED: &str = r#"{"schema_version": 1, "event": "phase", "phase": "feed", "message": "Reading the signed update feed"}"#;
+const DOWNLOAD: &str = r#"{"schema_version": 1, "event": "phase", "phase": "download", "message": "Downloading engine 0.1.45 windows-x86_64-cuda (412 MiB)", "component": "engine"}"#;
+const DOWNLOADED: &str = r#"{"schema_version": 1, "event": "progress", "phase": "download", "component": "engine", "label": "engine 0.1.45 windows-x86_64-cuda", "done": 104857600, "total": 432013312, "percent": 24, "bytes_per_second": 20971520}"#;
+const UNPACKING: &str = r#"{"schema_version": 1, "event": "phase", "phase": "verify", "message": "Unpacking 0.1.45 windows-x86_64-cuda", "component": "engine"}"#;
+
+#[tokio::test]
+async fn the_engine_install_shows_strata_s_phases_and_download() {
+    let s = setup("strata-engine-progress").await;
+    installable(&s);
+    s.fake.command(
+        "strata.cmd update",
+        FakeCommand {
+            lines: lines(&[FEED, DOWNLOAD, DOWNLOADED]),
+            hang: true,
+            ..FakeCommand::default()
+        },
+    );
+    post(&s, "/strata/jobs", install()).await;
+    let job = job_until(&s, "engine download", |j| j["percent"] == 24).await;
+    assert_eq!(
+        job["step"],
+        "Downloading engine 0.1.45 windows-x86_64-cuda (412 MiB)"
+    );
+    assert_eq!(job["done_bytes"], 104857600);
+    assert_eq!(job["total_bytes"], 432013312);
+    assert_eq!(job["bytes_per_sec"], 20971520);
+    // (432013312 - 104857600) / 20971520
+    assert_eq!(job["eta_secs"], 15);
+    let shown: Vec<&str> = job["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l.as_str().unwrap())
+        .collect();
+    assert!(shown.contains(&"Reading the signed update feed"), "{job}");
+    assert!(!shown.iter().any(|l| l.contains('{')), "{job}");
+    let (code, _) = post(&s, "/strata/job/cancel", json!({})).await;
+    assert_eq!(code, 202);
+    assert_eq!(finished(&s).await["state"], "cancelled");
+}
+
+#[tokio::test]
+async fn the_engine_install_ends_with_strata_s_reason_after_its_phases() {
+    let s = setup("strata-engine-phases").await;
+    installable(&s);
+    let refused = r#"{"schema_version": 1, "ok": false, "error": {"code": 5, "message": "engine 0.1.45: the signature does not match"}}"#;
+    s.fake.command(
+        "strata.cmd update",
+        FakeCommand {
+            lines: lines(&[DOWNLOAD, DOWNLOADED, UNPACKING, refused]),
+            exit: Some(5),
+            ..FakeCommand::default()
+        },
+    );
+    post(&s, "/strata/jobs", install()).await;
+    let job = finished(&s).await;
+    assert_eq!(job["state"], "failed", "{job}");
+    assert_eq!(job["error"], "engine 0.1.45: the signature does not match");
+    // The last phase came without the download's figures.
+    assert_eq!(job["step"], "Unpacking 0.1.45 windows-x86_64-cuda");
+    for figure in [
+        "percent",
+        "done_bytes",
+        "total_bytes",
+        "bytes_per_sec",
+        "eta_secs",
+    ] {
+        assert!(job[figure].is_null(), "{figure}: {job}");
+    }
+    // After the install script's lines: the phases, no JSON.
+    let shown = job["lines"].as_array().unwrap();
+    assert_eq!(
+        shown[shown.len() - 2..],
+        [
+            "Downloading engine 0.1.45 windows-x86_64-cuda (412 MiB)",
+            "Unpacking 0.1.45 windows-x86_64-cuda"
+        ]
+    );
+    assert!(
+        !shown.iter().any(|l| l.as_str().unwrap().contains('{')),
+        "{job}"
+    );
+    assert!(s.fake.runs_of("python").is_empty(), "no model download");
 }
 
 #[tokio::test]

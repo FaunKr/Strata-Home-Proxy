@@ -363,6 +363,10 @@ async fn a_running_tune_logs_each_new_step_and_shows_its_speeds() {
         json!(["[0m] Measuring your current settings"])
     );
     assert!(first.get("speeds").is_none(), "{first}");
+    // Nothing measured yet: the step, but no share and no estimate.
+    assert_eq!(first["step"], "Measuring your current settings");
+    assert!(first["percent"].is_null(), "{first}");
+    assert!(first["eta_secs"].is_null(), "{first}");
 
     std::fs::write(
         &status,
@@ -381,6 +385,9 @@ async fn a_running_tune_logs_each_new_step_and_shows_its_speeds() {
             "[0m] Trying: Run the control thread on the last CPU core (round 1 of 3)",
         ])
     );
+    // Two of 23 runs done.
+    assert_eq!(second["percent"], 8);
+    assert_eq!(second["eta_secs"], 6569);
     assert_eq!(
         second["speeds"],
         json!([

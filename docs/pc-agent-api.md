@@ -456,7 +456,7 @@ little space, deleting the active model).
 | `add_model` | `family`, `size`, `context`, optional `api_key` and `experimental_speed_projection` | setup with `--setup` (for the Strata Terminal in its install mode) and the key Strata runs with, the active model stays active |
 | `activate` | `model` | waits until Strata is not handling a request, restarts with the other run config (`strata serve --profile`) or start script |
 | `delete` | `model` | deletes this model's model folder, pack, configuration, start script and log |
-| `update` | – | Terminal: `strata update --output json` (engine and Terminal files, each after a test start) with Strata stopped, restarts; a part that is not in place fails the job with Strata's reason. Folder from source: `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts |
+| `update` | – | Terminal: `strata update --output jsonl` (engine and Terminal files, each after a test start) with Strata stopped, its phases as steps and its downloads as figures, restarts; a part that is not in place fails the job with Strata's reason. Folder from source: `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts |
 | `benchmark` | – | Terminal: `strata bench run --url <strata_url> --out <new folder> --output json` with the Strata key in `STRATA_API_KEY`. Folder from source: `BENCH.bat --config <active model>`. Keeps tokens/s with model, date and tool |
 | `compare_models` | – | `benchmark` for each installed model in turn, each as it is set up; activates each model for this and at the end (also after cancelling) the previously active one again |
 | `switch_to_terminal` | – | only while Strata runs from an old Strata folder: the Strata Terminal and its engine as with `install`, the Terminal's setup in its install mode for the active model with its context and speed projection on the same Strata data folder (no new download of files already there), its Chat settings copied; once Strata is idle, the old Strata stops and `strata serve` starts with the new run config. Until the old Strata stops, `GET /strata` still shows the old folder (`install: source`), also after a restart of the service, which undoes the unfinished switch. Until the Terminal's Strata answers on `/health` (within `context_start_secs`), a failure or a cancel removes the Terminal's run config, restores the managed start and starts the old Strata again |
@@ -474,7 +474,9 @@ little space, deleting the active model).
 `tune` takes about 20 minutes (`quick`) or up to two hours (`thorough`).
 Strata's tuner writes its progress to `strata-tune-status.json` in the
 PC service's state folder; the job's `step`, `percent` and `eta_secs` follow it
-every second (`percent` stays below 100 until the tuner ends). Each new step
+every second (`percent` stays below 100 until the tuner ends; before its
+first finished run, `runs_done` 0, there is no `percent` and no `eta_secs`,
+and the web UI shows how long the tune has run instead). Each new step
 adds a line to the job's `lines` with the time since the tune started
 (`[10m] Trying: …`, from an hour on `[1h 05m] …`); the tuner's JSON answer is
 no line. The job's `speeds` lists the measurements so far as Strata's status

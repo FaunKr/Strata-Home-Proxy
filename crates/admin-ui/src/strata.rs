@@ -576,6 +576,16 @@ fn eta_text(secs: u64) -> String {
     }
 }
 
+/// How long a job has run, as the tune's step log counts it: `12m`,
+/// `1h 05m`.
+fn running_text(secs: u64) -> String {
+    let minutes = secs / 60;
+    match minutes {
+        0..60 => format!("{minutes}m"),
+        _ => format!("{}h {:02}m", minutes / 60, minutes % 60),
+    }
+}
+
 /// A running tune's measurements, one row each: the model's own settings
 /// (Strata's `base`) in plain words, the others with their difference from
 /// them, and the fastest marked.
@@ -631,6 +641,18 @@ fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoVi
     let lines = job.lines.join("\n");
     let speeds = speed_rows(&job.speeds);
     let confirm = expect_context::<Confirm>();
+    // Before its first measurement a tune has no share to show, and Strata
+    // may not write again until it ends: the time it runs shows it moves.
+    let running_for = (job.kind == StrataJobKind::Tune && job.percent.is_none()).then(|| {
+        let live = expect_context::<Area>().live;
+        let started = job.started;
+        move || {
+            live.now().map(|now| {
+                let text = format!("Running for {}", running_text(now.saturating_sub(started)));
+                view! { <p class="hint">{text}</p> }
+            })
+        }
+    });
     view! {
         <section class="card job" role="status">
             <div class="card-head">
@@ -638,6 +660,7 @@ fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoVi
                 {job.percent.map(|p| view! { <span class="muted small">{format!("{p} %")}</span> })}
             </div>
             {job.step.map(|s| view! { <p>{format!("Step {s}")}</p> })}
+            {running_for}
             {job
                 .percent
                 .map(|p| {
@@ -2784,6 +2807,13 @@ fn StrataKey(unreported: bool) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn running_time_counts_minutes_then_hours() {
+        assert_eq!(running_text(59), "0m");
+        assert_eq!(running_text(12 * 60 + 30), "12m");
+        assert_eq!(running_text(65 * 60), "1h 05m");
+    }
 
     #[test]
     fn engine_options_go_one_per_line_with_odd_values_quoted() {

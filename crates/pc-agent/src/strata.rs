@@ -588,7 +588,7 @@ async fn install_terminal(job: &JobContext) -> Result<(), Step> {
         }
     }
     job.step("Installing the engine for this PC");
-    ask_terminal(job, terminal.install_engine(), terminal::engine_installed).await
+    ask_terminal_events(job, terminal.install_engine(), terminal::engine_installed).await
 }
 
 /// Runs a Terminal command in the job and reads its answer, which says why
@@ -598,7 +598,25 @@ async fn ask_terminal<T>(
     spec: CommandSpec,
     read: fn(&[String]) -> Result<T, String>,
 ) -> Result<T, Step> {
-    let (ran, output) = job.command_output(spec).await;
+    answer(job.command_output(spec).await, read)
+}
+
+/// Like [`ask_terminal`] for a command that reports its way as events
+/// (`--output jsonl`), shown as the job's steps and progress.
+async fn ask_terminal_events<T>(
+    job: &JobContext,
+    spec: CommandSpec,
+    read: fn(&[String]) -> Result<T, String>,
+) -> Result<T, Step> {
+    answer(job.command_events(spec).await, read)
+}
+
+/// A Terminal command's answer read from its output, unless it was
+/// cancelled.
+fn answer<T>(
+    (ran, output): (Result<(), Step>, Vec<String>),
+    read: fn(&[String]) -> Result<T, String>,
+) -> Result<T, Step> {
     if let Err(Step::Cancelled) = ran {
         return Err(Step::Cancelled);
     }
@@ -730,7 +748,7 @@ async fn update_terminal(job: &JobContext) -> Result<Option<String>, Step> {
     agent.strata().wait_idle(job).await?;
     agent.strata().stop();
     job.step("Updating the engine and the Strata Terminal (download and test start)");
-    let updated = ask_terminal(job, terminal.update(), terminal::updated).await;
+    let updated = ask_terminal_events(job, terminal.update(), terminal::updated).await;
     if updated.is_ok() {
         manage(agent).await;
     }

@@ -162,7 +162,7 @@ Strata's saved settings from a tune, for one model file and its choices (context
 _Avoid_: profile, tuning (for the saved result), Voreinstellung
 
 **Pictures**:
-Picture reading for a model: setup's *Pictures* tick in the web UI's install and add-model form, on by default, which makes setup write a picture reader into the run config. A model set up without it reads no pictures.
+Picture reading for a model: setup's *Pictures* tick in the web UI's install and add-model form, on by default, which makes setup write a picture reader into the run config. An installed model shows *Pictures: on (CPU)*, *on (GPU)* or *off* and switches it with one setup run; a model without a picture reader reads no pictures.
 _Avoid_: vision (except `--vision` and the `vision` section in configs and code), image support, multimodal
 
 ## Code benchmark

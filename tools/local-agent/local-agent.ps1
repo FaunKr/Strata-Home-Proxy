@@ -30,7 +30,8 @@ Configuration: %APPDATA%\local-agent\env (readable only by you) with
 # $IsWindows only exists from PowerShell 6 on; 5.1 runs only on Windows.
 $onWindows = -not (Test-Path variable:IsWindows) -or $IsWindows
 
-# %APPDATA% on Windows; the XDG folder elsewhere, as the Bash runner uses it.
+# %APPDATA% and %LOCALAPPDATA% on Windows; the XDG folders elsewhere, as the
+# Bash runner uses them.
 function Get-BaseDir([string]$windowsVar, [string]$xdgVar, [string]$fallback) {
     $dir = [Environment]::GetEnvironmentVariable($windowsVar)
     if (-not $dir) { $dir = [Environment]::GetEnvironmentVariable($xdgVar) }
@@ -38,6 +39,9 @@ function Get-BaseDir([string]$windowsVar, [string]$xdgVar, [string]$fallback) {
     return $dir
 }
 $configFile = Join-Path (Join-Path (Get-BaseDir 'APPDATA' 'XDG_CONFIG_HOME' '.config') 'local-agent') 'env'
+$stateDir = Join-Path (Get-BaseDir 'LOCALAPPDATA' 'XDG_STATE_HOME' '.local/state') 'local-agent'
+$runsDir = Join-Path $stateDir 'runs'
+$queueDir = Join-Path $stateDir 'queue'
 
 # Compaction starts at this share of Strata's window, in percent
 # (LOCAL_AGENT_COMPACT_SHARE in the configuration).
@@ -51,6 +55,13 @@ $compactReserve = 13000
 # than 100K, and nothing above 180K is tested (200K is the model's own window).
 $minWindow = 100000
 $maxWindow = 180000
+# Room for one turn past the compaction point (a large file read) before the
+# runner warns that the worker isn't compacting.
+$compactOverrun = 20000
+# Seconds between looks at the Proxy during a run, for gaming mode
+# (LOCAL_AGENT_PROBE_INTERVAL, mainly for the tests).
+$probeInterval = 60
+if ($env:LOCAL_AGENT_PROBE_INTERVAL) { $probeInterval = [int]$env:LOCAL_AGENT_PROBE_INTERVAL }
 # Below 128K, compaction thrashes on read-heavy work (measured at 64K): after a
 # compaction the context is already 20-29K, and one file read adds up to 15K.
 # 128000 rather than 131072, so that both count as 128K.
@@ -74,6 +85,139 @@ function Get-Quotient([long]$a, [long]$b) { return [long][math]::Floor($a / $b) 
 # Out-File can't.
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 function Write-Utf8File([string]$path, [string]$text) { [IO.File]::WriteAllText($path, $text, $utf8) }
+function Add-Utf8File([string]$path, [string]$text) { [IO.File]::AppendAllText($path, $text, $utf8) }
+# Output, and what git prints, in UTF-8, as Git Bash and the session read it;
+# 5.1 uses the console's code page otherwise.
+try { [Console]::OutputEncoding = $utf8 } catch { $null = $_ }
+
+# Runs git quietly; returns its output lines and sets gitStatus. Its errors are
+# dropped: 5.1 would turn them into terminating errors.
+function Invoke-Git {
+    $ErrorActionPreference = 'Continue'
+    $output = & git @args 2>$null
+    $script:gitStatus = $LASTEXITCODE
+    return $output
+}
+
+# Prints a duration like 90, 90s, 30m or 2h in seconds, or nothing.
+function ConvertTo-Seconds([string]$duration) {
+    if ($duration -cnotmatch '^([0-9]+)([smh]?)$') { return }
+    $n = [long]$Matches[1]
+    switch -CaseSensitive ($Matches[2]) {
+        'm' { return $n * 60 }
+        'h' { return $n * 3600 }
+        default { return $n }
+    }
+}
+
+function Get-Now { return [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+
+# Run metadata: one key=value per line in <run>/meta.
+function Set-Meta([string]$name, [string]$value) {
+    $file = Join-Path $runDir 'meta'
+    $lines = @()
+    if (Test-Path -LiteralPath $file) { $lines = @([IO.File]::ReadAllLines($file) | Where-Object { -not $_.StartsWith("$name=") }) }
+    $lines += "$name=$value"
+    Write-Utf8File "$file.tmp" (($lines -join "`n") + "`n")
+    Move-Item -LiteralPath "$file.tmp" -Destination $file -Force
+}
+function Get-Meta([string]$dir, [string]$name) {
+    $file = Join-Path $dir 'meta'
+    if (-not (Test-Path -LiteralPath $file)) { return '' }
+    $value = ''
+    foreach ($line in [IO.File]::ReadAllLines($file)) {
+        if ($line.StartsWith("$name=")) { $value = $line.Substring($name.Length + 1) }
+    }
+    return $value
+}
+
+function Test-Alive([string]$id) {
+    if ($id -notmatch '^[0-9]+$') { return $false }
+    return [bool](Get-Process -Id ([int]$id) -ErrorAction SilentlyContinue)
+}
+
+# A run's state; a queued or running run whose runner is gone is "stopped".
+function Get-RunState([string]$dir) {
+    $state = Get-Meta $dir 'state'
+    if (($state -eq 'queued' -or $state -eq 'running') -and -not (Test-Alive (Get-Meta $dir 'pid'))) { $state = 'stopped' }
+    return $state
+}
+
+# Sets runDir for a run id, or for the latest run of the current repo (of any
+# repo outside one) when no id is given.
+function Select-Run([string]$id) {
+    if ($id) {
+        $script:runDir = Join-Path $runsDir $id
+        if (-not (Test-Path -LiteralPath (Join-Path $runDir 'meta'))) { Exit-Usage "unknown run: $id" }
+        return
+    }
+    $top = Invoke-Git rev-parse --show-toplevel
+    if ($gitStatus -ne 0) { $top = '' }
+    $latest = ''
+    if (Test-Path -LiteralPath $runsDir) {
+        foreach ($dir in Get-ChildItem -LiteralPath $runsDir -Directory | Sort-Object Name) {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir.FullName 'meta'))) { continue }
+            if (-not $top -or (Get-Meta $dir.FullName 'repo') -eq $top) { $latest = $dir.FullName }
+        }
+    }
+    if (-not $latest) { Exit-Usage 'no runs yet' }
+    $script:runDir = $latest
+}
+
+# The queue lets one run at a time talk to Strata, across all repos. Each
+# waiting or active run holds a file named by a growing number, holding the
+# runner's pid; the lowest number of a live runner goes first.
+function Add-Ticket([string]$id) {
+    [void](New-Item -ItemType Directory -Force -Path $queueDir)
+    # A file held open without sharing as mutex for the counter; Windows lets
+    # go of it when its runner dies.
+    $lock = $null
+    while (-not $lock) {
+        try {
+            $lock = [IO.File]::Open((Join-Path $stateDir 'counter.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
+        } catch {
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    try {
+        $counter = Join-Path $stateDir 'counter'
+        $n = 0
+        if (Test-Path -LiteralPath $counter) { $n = [long]([IO.File]::ReadAllText($counter).Trim()) }
+        $n++
+        Write-Utf8File $counter "$n`n"
+    } finally {
+        $lock.Close()
+    }
+    $script:ticket = Join-Path $queueDir ('{0:d10}-{1}' -f $n, $id)
+    # Written whole and then moved, so a reader never sees it without the pid.
+    $new = Join-Path $queueDir ".new-$id"
+    Write-Utf8File $new "$PID`n"
+    Move-Item -LiteralPath $new -Destination $ticket
+}
+
+# Waits until this run's ticket is the first one of a live runner.
+function Wait-Turn {
+    $said = $false
+    while ($true) {
+        $first = $null
+        foreach ($file in Get-ChildItem -LiteralPath $queueDir -File | Where-Object { -not $_.Name.StartsWith('.') } | Sort-Object Name) {
+            $owner = ''
+            try { $owner = [IO.File]::ReadAllText($file.FullName).Trim() } catch { $owner = '' }
+            if (-not (Test-Alive $owner)) {
+                Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+                continue
+            }
+            $first = $file
+            break
+        }
+        if ($first -and $first.FullName -eq $ticket) { return }
+        if (-not $said -and $first) {
+            Write-Out "local-agent: waiting for run $($first.Name.Substring(11)) to finish"
+            $said = $true
+        }
+        Start-Sleep -Seconds 1
+    }
+}
 
 # True when the configuration file can be read by anyone but the user (and, on
 # Windows, SYSTEM and the administrators, who can read every file anyway).
@@ -307,9 +451,32 @@ function ConvertTo-Argument([string]$argument) {
 function Start-Worker([string]$workdir, [string[]]$arguments, [string]$inputFile, [string]$logFile, [string]$errFile) {
     $claude = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $claude) { return }
+    # cmd.exe ends a command line at a line break.
+    if ($claude.Source -match '\.(cmd|bat)$') { $arguments = @($arguments | ForEach-Object { $_ -replace "`r?`n", ' ' }) }
     $line = ($arguments | ForEach-Object { ConvertTo-Argument $_ }) -join ' '
-    return Start-Process -FilePath $claude.Source -ArgumentList $line -WorkingDirectory $workdir -NoNewWindow -PassThru `
+    $process = Start-Process -FilePath $claude.Source -ArgumentList $line -WorkingDirectory $workdir -NoNewWindow -PassThru `
         -RedirectStandardInput $inputFile -RedirectStandardOutput $logFile -RedirectStandardError $errFile
+    # Keeps the handle, so that 5.1 can still read the exit code after the
+    # process has ended.
+    [void]$process.Handle
+    return $process
+}
+
+# Stops the worker and every command it started: on Windows its process tree,
+# first asking, then by force.
+function Stop-Worker {
+    if (-not $worker -or $worker.HasExited) { return }
+    if ($onWindows) {
+        # taskkill writes to stderr when a process ignores the polite request;
+        # with Stop, Windows PowerShell would throw on that line.
+        $ErrorActionPreference = 'Continue'
+        & taskkill.exe /T /PID $worker.Id 2>&1 | Out-Null
+        for ($i = 0; $i -lt 4 -and -not $worker.HasExited; $i++) { Start-Sleep -Milliseconds 500 }
+        if (-not $worker.HasExited) { & taskkill.exe /T /F /PID $worker.Id 2>&1 | Out-Null }
+    } else {
+        $worker.Kill($true)
+    }
+    [void]$worker.WaitForExit(5000)
 }
 
 # The objects of a stream-json log, one per line; lines that aren't JSON are
@@ -319,6 +486,409 @@ function Read-Events([string]$logFile) {
     foreach ($line in [IO.File]::ReadAllLines($logFile, $utf8)) {
         if (-not $line.Trim()) { continue }
         try { $line | ConvertFrom-Json } catch { continue }
+    }
+}
+
+# Tools the worker may use without asking, before the repo's own allow rules.
+$readTools = @('Read', 'Glob', 'Grep', 'TodoWrite', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)',
+    'Bash(git show:*)', 'Bash(ls:*)', 'Bash(grep:*)')
+$editTools = @('Edit', 'MultiEdit', 'Write', 'NotebookEdit')
+$writeTools = $editTools + @('Bash(git add:*)', 'Bash(git commit:*)')
+# Never allowed, whatever the repo or --allow say: pushing, and the usual
+# network tools. A deny list can't catch every program that talks to the
+# network; it keeps the common ways closed. On Windows the worker also has a
+# PowerShell tool, which these Bash rules don't cover, so it gets none.
+$deniedTools = @('WebFetch', 'WebSearch', 'Bash(git push:*)', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(ssh:*)',
+    'Bash(scp:*)', 'Bash(rsync:*)', 'Bash(nc:*)', 'PowerShell')
+
+# True when a rule is one of deniedTools or narrows one of them:
+# "Bash(git push --force)" narrows "Bash(git push:*)", "WebFetch(domain:x)"
+# narrows "WebFetch"; "Bash(ncdu:*)" doesn't narrow "Bash(nc:*)".
+function Test-Denied([string]$rule) {
+    foreach ($denied in $deniedTools) {
+        if ($rule -ceq $denied) { return $true }
+        if ($denied.EndsWith(':*)')) {
+            $command = $denied.Substring(0, $denied.Length - 3)
+            if ($rule -ceq "$command)" -or $rule.StartsWith("${command}:", 'Ordinal') -or $rule.StartsWith("$command ", 'Ordinal')) { return $true }
+        } elseif ($rule.StartsWith("$denied(", 'Ordinal')) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Sets allowed and disallowed for the worker: the base tools, the repo's allow
+# rules (.claude/settings.json; not for read-only runs) and extraAllow, minus
+# denied ones.
+function Set-Permissions([string]$repo, [bool]$readOnly) {
+    $candidates = @($readTools)
+    if (-not $readOnly) { $candidates += $writeTools }
+    # A read-only run works in the user's checkout, where the repo's rules
+    # could allow writing commands; it gets only the read tools and --allow.
+    $settings = Join-Path $repo '.claude/settings.json'
+    if (-not $readOnly -and (Test-Path -LiteralPath $settings)) {
+        try {
+            $parsed = [IO.File]::ReadAllText($settings) | ConvertFrom-Json
+            if ($parsed.permissions -and $parsed.permissions.allow) { $candidates += @($parsed.permissions.allow | Where-Object { $_ }) }
+        } catch {
+            $null = $_
+        }
+    }
+    $candidates += $extraAllow
+    $script:allowed = @()
+    foreach ($rule in $candidates) {
+        if (Test-Denied $rule) { continue }
+        if ($readOnly -and $editTools -ccontains ($rule -replace '\(.*$', '')) { continue }
+        $script:allowed += $rule
+    }
+    $script:disallowed = @($deniedTools)
+    if ($readOnly) { $script:disallowed += $editTools + @('Bash(git add:*)', 'Bash(git commit:*)') }
+}
+
+# Ends a run that Strata can't take: exit 3 tells the skill to hand the task to
+# a normal agent. $reason, and $hint on what to fix.
+function Exit-Fallback([string]$reason, [string]$hint) {
+    Set-Meta 'state' 'fallback'
+    Set-Meta 'reason' $reason
+    if ($hint) { Set-Meta 'hint' $hint }
+    Set-Meta 'ended' (Get-Now)
+    Write-Err "local-agent: run $(Get-Meta $runDir 'id') falls back to a normal agent: $reason"
+    if ($hint) { Write-Err "local-agent: to fix: $hint" }
+    exit 3
+}
+
+# A field of the worker's final result event, e.g. result or is_error, as
+# text ('true', 'false'); empty without one.
+function Get-ResultField([string]$name) {
+    $value = ''
+    foreach ($e in Read-Events (Join-Path $runDir 'log.jsonl')) {
+        if ($e.type -eq 'result') {
+            $value = $e.$name
+            if ($value -is [bool]) { $value = $value.ToString().ToLower() }
+        }
+    }
+    return [string]$value
+}
+
+# The worker's log as one line per step.
+function Get-Steps([string]$logFile) {
+    foreach ($e in Read-Events $logFile) {
+        if ($e.type -eq 'assistant') {
+            foreach ($part in @($e.message.content)) {
+                if (-not $part -or $part.type -ne 'tool_use') { continue }
+                $what = ''
+                foreach ($field in 'file_path', 'path', 'command', 'pattern') {
+                    if ($part.input -and $null -ne $part.input.$field) {
+                        $what = [string]$part.input.$field
+                        break
+                    }
+                }
+                if ($what.Length -gt 100) { $what = $what.Substring(0, 100) }
+                "$($part.name) $what"
+            }
+        } elseif ($e.type -eq 'system' -and $e.subtype -eq 'init') {
+            'started'
+        } elseif ($e.type -eq 'system' -and $e.subtype -eq 'compact_boundary') {
+            'context compacted'
+        } elseif ($e.type -eq 'result') {
+            if ($e.is_error) { 'finished with an error' } else { 'finished' }
+        }
+    }
+}
+function Get-LastSteps([int]$count) { return @(Get-Steps (Join-Path $runDir 'log.jsonl') | Select-Object -Last $count) }
+
+# How full the worker's context is, from the usage in its log: sets
+# contextNow and contextPeak (tokens) and compactions.
+function Get-ContextStats {
+    $script:contextNow = 0
+    $script:contextPeak = 0
+    $script:compactions = 0
+    foreach ($e in Read-Events (Join-Path $runDir 'log.jsonl')) {
+        if ($e.type -eq 'assistant' -and $e.message -and $e.message.usage) {
+            $u = $e.message.usage
+            $script:contextNow = [long]$u.input_tokens + [long]$u.cache_read_input_tokens + [long]$u.cache_creation_input_tokens
+            if ($contextNow -gt $contextPeak) { $script:contextPeak = $contextNow }
+        } elseif ($e.type -eq 'system' -and $e.subtype -eq 'compact_boundary') {
+            $script:compactions++
+        }
+    }
+}
+
+# Lines on the worker's context, and a warning when it has grown past the
+# compaction point by more than a turn's room without compacting (Claude Code
+# then runs on until Strata answers 400). Needs Get-ContextStats and a run that
+# recorded compact_at.
+function Get-ContextReport {
+    $at = Get-Meta $runDir 'compact_at'
+    if (-not $at -or $contextPeak -le 0) { return }
+    "context: $(Get-Quotient ($contextNow + 500) 1000)K now (peak $(Get-Quotient ($contextPeak + 500) 1000)K, " +
+    "compacts near $(Get-Quotient ([long]$at + 500) 1000)K), compactions: $compactions"
+    if ($contextNow -gt [long]$at + $compactOverrun) {
+        'warning: context past the compaction point without compacting; Strata may answer 400 soon'
+    }
+}
+
+# Commits what the worker left uncommitted, so the branch holds all its work.
+function Save-Leftovers([string]$worktree, [string]$id) {
+    $changes = Invoke-Git -C $worktree status --porcelain
+    if (-not $changes) { return }
+    [void](Invoke-Git -C $worktree add -A)
+    [void](Invoke-Git -c core.longpaths=true -C $worktree commit -qm "local-agent: uncommitted changes of run $id")
+}
+
+# After the worker died partway: keeps its work, writes what a fallback agent
+# needs to continue, and falls back.
+function Exit-MidRun([int]$exitCode) {
+    $errorText = Get-ResultField 'result'
+    if (-not $errorText) { $errorText = Get-Content -LiteralPath (Join-Path $runDir 'stderr') -Tail 1 -Encoding UTF8 -ErrorAction SilentlyContinue }
+    if (-not $errorText) { $errorText = "the worker exited with code $exitCode" }
+    $handoff = @("Error: $errorText")
+    $branch = Get-Meta $runDir 'branch'
+    if ($branch) {
+        $repo = Get-Meta $runDir 'repo'
+        Save-Leftovers (Get-Meta $runDir 'worktree') (Get-Meta $runDir 'id')
+        $handoff += "Changed files, committed on ${branch}:"
+        $handoff += @(Invoke-Git -C $repo diff --name-only (Get-Meta $runDir 'base') $branch | ForEach-Object { "  $_" })
+    }
+    Get-ContextStats
+    $handoff += @(Get-ContextReport)
+    $handoff += 'Last steps:'
+    $handoff += @(Get-LastSteps 10 | ForEach-Object { "  $_" })
+    Write-Utf8File (Join-Path $runDir 'handoff') (($handoff -join "`n") + "`n")
+    # A quick look whether the PC went into gaming mode meanwhile.
+    Invoke-Probe 15
+    if ($probeTag -eq 'gaming') { Exit-Fallback 'Strata failed mid-run: the PC switched to gaming mode' }
+    Exit-Fallback "Strata failed mid-run: $errorText"
+}
+
+$instructions = @"
+You are a local-agent worker: a Claude Code session running unattended for another session.
+Nobody can answer questions or permission prompts. If a tool or command is denied, work around it or say so in your summary.
+Work only in the current directory.
+"@
+$writeInstructions = @"
+When you are done, commit your changes with a short message.
+End with a short summary: what you changed, how you checked it, and what is left open.
+"@
+$readOnlyInstructions = @"
+This run is read-only: you cannot change files. Answer from what you read.
+End with your answer and the files it rests on.
+"@
+
+function Invoke-Run([string[]]$arguments) {
+    $task = ''
+    $readOnly = $false
+    $timeout = '2h'
+    $script:extraAllow = @()
+    $i = 0
+    while ($i -lt $arguments.Count) {
+        $arg = $arguments[$i]
+        $i++
+        if ($arg -ceq '--read-only') {
+            $readOnly = $true
+        } elseif ($arg -ceq '--watch') {
+            Exit-Die '--watch is not ported to Windows yet; see issue #312'
+        } elseif ($arg -ceq '--timeout') {
+            if ($i -ge $arguments.Count) { Exit-Usage '--timeout needs a time, e.g. --timeout 30m' }
+            $timeout = $arguments[$i]
+            $i++
+        } elseif ($arg -ceq '--allow') {
+            if ($i -ge $arguments.Count) { Exit-Usage "--allow needs a rule, e.g. --allow 'Bash(cargo test:*)'" }
+            $script:extraAllow += $arguments[$i]
+            $i++
+        } elseif ($arg -ceq '--') {
+            if ($i -lt $arguments.Count) { $task = $arguments[$i..($arguments.Count - 1)] -join ' ' }
+            break
+        } elseif ($arg.StartsWith('-')) {
+            Exit-Usage "unknown option: $arg"
+        } else {
+            $task = $arguments[($i - 1)..($arguments.Count - 1)] -join ' '
+            break
+        }
+    }
+    $limit = ConvertTo-Seconds $timeout
+    if ($null -eq $limit) { Exit-Usage "--timeout takes seconds, or a number with s, m or h: $timeout" }
+    Read-Config
+    if (-not $task) {
+        if ([Console]::IsInputRedirected) { [Console]::InputEncoding = $utf8 }
+        $task = [Console]::In.ReadToEnd().TrimEnd("`r", "`n")
+    }
+    if (-not $task) { Exit-Usage 'no task' }
+    $repo = Invoke-Git rev-parse --show-toplevel
+    if ($gitStatus -ne 0 -or -not $repo) { Exit-Usage 'not inside a git repository' }
+
+    $id = '{0}-{1:x4}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), (Get-Random -Maximum 65536)
+    $script:runDir = Join-Path $runsDir $id
+    [void](New-Item -ItemType Directory -Force -Path $runDir)
+    if (-not $onWindows) { & chmod 700 $stateDir }
+    Write-Utf8File (Join-Path $runDir 'task') "$task`n"
+    Set-Meta 'id' $id
+    Set-Meta 'repo' $repo
+    Set-Meta 'state' 'queued'
+    Set-Meta 'pid' $PID
+    Set-Meta 'started' (Get-Now)
+    Write-Out "local-agent: run $id ($runDir)"
+
+    Add-Ticket $id
+    try {
+        Wait-Turn
+        Assert-Strata 'Exit-Fallback'
+        Set-Compaction
+        Set-Meta 'compact_at' $compactAt
+
+        # A writing run gets its own branch and worktree; a read-only one
+        # reads the repo as it is.
+        $workdir = $repo
+        $mode = 'acceptEdits'
+        if ($readOnly) {
+            $mode = 'default'
+            Set-Meta 'mode' 'read-only'
+        } else {
+            $base = Invoke-Git -C $repo rev-parse HEAD
+            $branch = "local-agent/$id"
+            $workdir = Join-Path (Join-Path $stateDir (Split-Path -Leaf $repo)) $id
+            # Long paths for git, without touching the repo's config: deep
+            # build folders in a worktree go past Windows' 260 characters.
+            [void](Invoke-Git -c core.longpaths=true -C $repo worktree add -q -b $branch $workdir $base)
+            if ($gitStatus -ne 0) { Exit-Die "git could not create the worktree $workdir" }
+            Set-Meta 'mode' 'write'
+            Set-Meta 'base' $base
+            Set-Meta 'branch' $branch
+            Set-Meta 'worktree' $workdir
+        }
+        Set-Permissions $repo $readOnly
+        $prompt = $instructions + "`n" + $writeInstructions
+        if ($readOnly) { $prompt = $instructions + "`n" + $readOnlyInstructions }
+        Set-Meta 'state' 'running'
+        Set-Meta 'started' (Get-Now)
+
+        Set-WorkerEnvironment
+        # git commands of the worker get long paths too, after any entries the
+        # environment already passes this way.
+        $n = 0
+        if ($env:GIT_CONFIG_COUNT -match '^[0-9]+$') { $n = [int]$env:GIT_CONFIG_COUNT }
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_KEY_$n", 'core.longpaths')
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_VALUE_$n", 'true')
+        $env:GIT_CONFIG_COUNT = [string]($n + 1)
+        $workerArgs = @('-p', '--output-format', 'stream-json', '--verbose', '--append-system-prompt', $prompt,
+            '--permission-mode', $mode, '--allowedTools') + $allowed + @('--disallowedTools') + $disallowed
+        $script:worker = Start-Worker $workdir $workerArgs (Join-Path $runDir 'task') (Join-Path $runDir 'log.jsonl') (Join-Path $runDir 'stderr')
+        if (-not $worker) { Exit-Fallback 'claude not found' 'install Claude Code, so that claude is on PATH' }
+        $deadline = (Get-Now) + $limit
+        $nextProbe = (Get-Now) + $probeInterval
+        $timedOut = $false
+        $gaming = $false
+        $finished = $false
+        try {
+            while (-not $worker.WaitForExit(1000)) {
+                if ((Get-Now) -ge $deadline) {
+                    $timedOut = $true
+                    Stop-Worker
+                    break
+                }
+                # Claude Code retries a 503 for a long time; gaming mode ends
+                # the run sooner.
+                if ((Get-Now) -ge $nextProbe) {
+                    $nextProbe = (Get-Now) + $probeInterval
+                    Invoke-Probe 10
+                    if ($probeTag -eq 'gaming') {
+                        $gaming = $true
+                        Stop-Worker
+                        break
+                    }
+                }
+            }
+            $finished = $true
+        } finally {
+            # Interrupted (Ctrl+C): the worker and what it started stop too.
+            if (-not $finished) {
+                Stop-Worker
+                Set-Meta 'state' 'stopped'
+                Set-Meta 'ended' (Get-Now)
+            }
+        }
+        if ($timedOut) {
+            if (-not $readOnly) { Save-Leftovers $workdir $id }
+            Set-Meta 'state' 'timeout'
+            Set-Meta 'reason' "stopped after the time limit of $timeout"
+            Set-Meta 'ended' (Get-Now)
+            Write-Err "local-agent: run $id stopped after $timeout; see local-agent result $id"
+            exit 4
+        }
+
+        $exitCode = -1
+        if ($worker.HasExited) { $exitCode = $worker.ExitCode }
+        # A worker that exits badly, ends on an error or never ends counts as
+        # failed.
+        if ($gaming -or $exitCode -ne 0 -or (Get-ResultField 'is_error') -ne 'false') { Exit-MidRun $exitCode }
+        Write-Utf8File (Join-Path $runDir 'summary') ((Get-ResultField 'result') + "`n")
+        if (-not $readOnly) { Save-Leftovers $workdir $id }
+        Set-Meta 'ended' (Get-Now)
+        Set-Meta 'state' 'done'
+        Write-Out "local-agent: run $id done; review it with: local-agent result $id"
+    } finally {
+        Remove-Item -LiteralPath $ticket -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Show-Status([string]$id) {
+    Select-Run $id
+    $state = Get-RunState $runDir
+    $started = [long](Get-Meta $runDir 'started')
+    $ended = Get-Meta $runDir 'ended'
+    if (-not $ended) { $ended = Get-Now }
+    $elapsed = [long]$ended - $started
+    Write-Out "run $(Get-Meta $runDir 'id'): $state ($(Get-Quotient $elapsed 60)m$($elapsed % 60)s)"
+    Write-Out "repo: $(Get-Meta $runDir 'repo')"
+    Write-Out "task: $([IO.File]::ReadAllLines((Join-Path $runDir 'task'))[0])"
+    $reason = Get-Meta $runDir 'reason'
+    if ($reason) { Write-Out "reason: $reason" }
+    $log = Join-Path $runDir 'log.jsonl'
+    if ((Test-Path -LiteralPath $log) -and (Get-Item -LiteralPath $log).Length -gt 0) {
+        Get-ContextStats
+        Get-ContextReport | ForEach-Object { Write-Out $_ }
+        Write-Out 'last steps:'
+        Get-LastSteps 8 | ForEach-Object { Write-Out "  $_" }
+    }
+}
+
+function Show-Result([string]$id) {
+    Select-Run $id
+    $state = Get-RunState $runDir
+    Write-Out "run $(Get-Meta $runDir 'id'): $state"
+    if ($state -eq 'fallback') { Write-Out 'next: fall back to a normal agent' }
+    if ($state -eq 'timeout') { Write-Out 'next: report the timeout; no fallback' }
+    $reason = Get-Meta $runDir 'reason'
+    $hint = Get-Meta $runDir 'hint'
+    if ($reason) { Write-Out "reason: $reason" }
+    if ($hint) { Write-Out "to fix: $hint" }
+    $worktree = Get-Meta $runDir 'worktree'
+    if ($worktree) { Write-Out "worktree: $worktree (branch $(Get-Meta $runDir 'branch'))" }
+    $summary = Join-Path $runDir 'summary'
+    if (Test-Path -LiteralPath $summary) {
+        Write-Out ''
+        Write-Out '## Summary'
+        Write-Out ([IO.File]::ReadAllText($summary, $utf8).TrimEnd("`n"))
+    }
+    if ($state -eq 'timeout') {
+        Write-Out ''
+        Write-Out '## Last steps'
+        Get-LastSteps 10 | ForEach-Object { Write-Out $_ }
+    }
+    $handoff = Join-Path $runDir 'handoff'
+    if (Test-Path -LiteralPath $handoff) {
+        Write-Out ''
+        Write-Out '## Log summary'
+        Write-Out ([IO.File]::ReadAllText($handoff, $utf8).TrimEnd("`n"))
+    }
+    $branch = Get-Meta $runDir 'branch'
+    if ($branch) {
+        $repo = Get-Meta $runDir 'repo'
+        $base = Get-Meta $runDir 'base'
+        Write-Out ''
+        Write-Out "## Changes on $branch"
+        Invoke-Git -C $repo --no-pager diff --stat $base $branch | ForEach-Object { Write-Out $_ }
+        Invoke-Git -C $repo --no-pager diff $base $branch | ForEach-Object { Write-Out $_ }
     }
 }
 
@@ -375,7 +945,7 @@ function Invoke-Check {
             }
         }
         if (-not $found) {
-            $last = Get-Content -LiteralPath (Join-Path $dir 'stderr') -Tail 1 -ErrorAction SilentlyContinue
+            $last = Get-Content -LiteralPath (Join-Path $dir 'stderr') -Tail 1 -Encoding UTF8 -ErrorAction SilentlyContinue
             Exit-CheckFailed "the worker made no working tool call ($last)" "look at Strata's log on the PC; Claude Code needs Strata 0.1.17 or newer"
         }
         Write-Out 'ok   tool call through Strata'
@@ -385,10 +955,17 @@ function Invoke-Check {
 }
 
 $command = ''
-if ($args.Count -gt 0) { $command = $args[0] }
+$rest = @()
+if ($args.Count -gt 0) {
+    $command = $args[0]
+    $rest = @($args | Select-Object -Skip 1)
+}
 switch ($command) {
+    'run' { Invoke-Run $rest }
+    'status' { Show-Status ($rest | Select-Object -First 1) }
+    'result' { Show-Result ($rest | Select-Object -First 1) }
     'check' { Invoke-Check }
-    { $_ -in 'run', 'status', 'result', 'discard', 'prune' } { Exit-Die "$command is not ported to Windows yet; see issue #312" }
+    { $_ -in 'discard', 'prune' } { Exit-Die "$command is not ported to Windows yet; see issue #312" }
     { $_ -in '-h', '--help', 'help' } { Write-Out $usage }
     default {
         Write-Err $usage

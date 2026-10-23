@@ -697,7 +697,8 @@ fn with_picture_state(qwen: Option<Pictures>, swift: Option<Pictures>) -> Strata
 #[tokio::test]
 async fn installed_models_show_their_picture_state() {
     let s = setup(true, |_| {}).await;
-    *s.pc.strata_info.lock().unwrap() = Some(with_picture_state(Some(Pictures::Gpu), Some(Pictures::Cpu)));
+    *s.pc.strata_info.lock().unwrap() =
+        Some(with_picture_state(Some(Pictures::Gpu), Some(Pictures::Cpu)));
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
@@ -708,7 +709,8 @@ async fn installed_models_show_their_picture_state() {
 #[tokio::test]
 async fn a_model_without_picture_reading_shows_it_off() {
     let s = setup(true, |_| {}).await;
-    *s.pc.strata_info.lock().unwrap() = Some(with_picture_state(Some(Pictures::Off), Some(Pictures::Off)));
+    *s.pc.strata_info.lock().unwrap() =
+        Some(with_picture_state(Some(Pictures::Off), Some(Pictures::Off)));
     let mut b = logged_in(&s.url).await;
     page(&mut b).await;
     let html = b.page("/admin/strata").await;

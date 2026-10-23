@@ -207,6 +207,10 @@ pub struct StrataFamily {
     /// not say so.
     #[serde(default)]
     pub speed_projection: bool,
+    /// Setup can set up picture reading for this family; older services do
+    /// not say so.
+    #[serde(default)]
+    pub pictures: bool,
 }
 
 /// A size from Strata's catalog.

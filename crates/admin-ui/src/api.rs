@@ -1083,11 +1083,7 @@ mod tests {
         gaming: f64,
         asleep: f64,
         unknown: f64,
-        kwh: f64,
-        eur: f64,
-        saved_kwh: f64,
-        saved_eur: f64,
-        source: EnergySource,
+        energy: Energy,
     ) -> HistoryDay {
         HistoryDay {
             date: date.to_string(),
@@ -1096,13 +1092,7 @@ mod tests {
             gaming_h: gaming,
             asleep_h: asleep,
             unknown_h: unknown,
-            energy: Energy {
-                kwh,
-                eur,
-                saved_kwh,
-                saved_eur,
-                source,
-            },
+            energy,
         }
     }
 
@@ -1127,11 +1117,13 @@ mod tests {
                 1.0,
                 17.0,
                 1.0,
-                0.4,
-                0.12,
-                0.05,
-                0.014,
-                EnergySource::Estimated,
+                Energy {
+                    kwh: 0.4,
+                    eur: 0.12,
+                    saved_kwh: 0.05,
+                    saved_eur: 0.014,
+                    source: EnergySource::Estimated,
+                },
             ),
             bar(
                 "2026-10-14",
@@ -1139,11 +1131,13 @@ mod tests {
                 0.0,
                 22.0,
                 0.0,
-                0.2,
-                0.06,
-                0.06,
-                0.018,
-                EnergySource::Measured,
+                Energy {
+                    kwh: 0.2,
+                    eur: 0.06,
+                    saved_kwh: 0.06,
+                    saved_eur: 0.018,
+                    source: EnergySource::Measured,
+                },
             ),
         ]);
         let csv = history_csv(&view);
@@ -1172,11 +1166,13 @@ mod tests {
             1.2,
             17.004,
             0.34,
-            1.23456,
-            0.3612,
-            0.5,
-            0.144,
-            EnergySource::Mixed,
+            Energy {
+                kwh: 1.23456,
+                eur: 0.3612,
+                saved_kwh: 0.5,
+                saved_eur: 0.144,
+                source: EnergySource::Mixed,
+            },
         )]);
         let csv = history_csv(&view);
         assert_eq!(
@@ -1198,11 +1194,10 @@ mod tests {
                 0.0,
                 0.0,
                 0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                source,
+                Energy {
+                    source,
+                    ..Energy::default()
+                },
             )]);
             let expected = format!(",{word}\r\n");
             assert!(history_csv(&view).ends_with(&expected));
@@ -1218,11 +1213,13 @@ mod tests {
                 5.0,
                 120.0,
                 3.0,
-                3.2,
-                0.96,
-                1.4,
-                0.42,
-                EnergySource::Estimated,
+                Energy {
+                    kwh: 3.2,
+                    eur: 0.96,
+                    saved_kwh: 1.4,
+                    saved_eur: 0.42,
+                    source: EnergySource::Estimated,
+                },
             ),
             bar(
                 "2026-10-05",
@@ -1230,11 +1227,13 @@ mod tests {
                 8.0,
                 121.0,
                 0.0,
-                2.9,
-                0.87,
-                1.5,
-                0.45,
-                EnergySource::Estimated,
+                Energy {
+                    kwh: 2.9,
+                    eur: 0.87,
+                    saved_kwh: 1.5,
+                    saved_eur: 0.45,
+                    source: EnergySource::Estimated,
+                },
             ),
         ]);
         view.bucket = HistoryBucket::Week;

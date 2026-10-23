@@ -677,6 +677,12 @@ impl Model {
         args.get(at + 1)?.as_str()?.parse().ok()
     }
 
+    /// Whether the config has a picture reader: setup writes a `vision`
+    /// section only when asked for `--vision yes`.
+    pub fn pictures(&self) -> bool {
+        self.fields.contains_key("vision")
+    }
+
     /// Whether the config loads a control vector, Strata's or another one.
     pub fn speed_projection(&self) -> bool {
         self.started_args()
@@ -1660,6 +1666,35 @@ mod tests {
         model.set_speed_projection(false).unwrap();
         assert_eq!(model.fields()["args"], json!(["a.gguf", "--threads", "8"]));
         assert!(!model.speed_projection());
+    }
+
+    #[test]
+    fn picture_reading_is_the_vision_section_of_the_config() {
+        let f = Folders::new("vision");
+        let s = f.setup();
+        // Setup's `VR.vision_section` for the GPU reader and the CPU one.
+        s.config(
+            "gpu",
+            json!({"exe": "strata.exe", "args": [], "vision": {
+                "exe": "C:\\Strata\\engine\\strata-vision-hip.exe",
+                "mmproj": "D:\\models\\mmproj-Qwen3.8-Flash-Next-BF16.gguf",
+                "model": "model.gguf", "gpu": true, "max_tokens": 1024,
+                "cpu_exe": "C:\\Strata\\engine\\strata-vision.exe"
+            }}),
+        );
+        s.config(
+            "cpu",
+            json!({"exe": "strata.exe", "args": [], "vision": {
+                "exe": "C:\\Strata\\engine\\strata-vision.exe",
+                "mmproj": "mmproj.gguf",
+                "model": "model.gguf", "gpu": false, "max_tokens": 300, "threads": 8
+            }}),
+        );
+        s.config("plain", config(json!(["--native"])));
+        let install = s.installation();
+        assert!(install.read_model("gpu").pictures());
+        assert!(install.read_model("cpu").pictures());
+        assert!(!install.read_model("plain").pictures());
     }
 
     #[test]

@@ -685,7 +685,14 @@ impl Model {
         if self.fields.is_empty() {
             return None;
         }
-        Some(match self.fields.get("vision") {
+        // Strata starts a reader for a `vision` section that is a non-empty
+        // object (`if cfg.get("vision")` in serve/server.py).
+        let vision = self
+            .fields
+            .get("vision")
+            .and_then(Value::as_object)
+            .filter(|vision| !vision.is_empty());
+        Some(match vision {
             Some(vision) if vision.get("gpu") == Some(&Value::Bool(true)) => Pictures::Gpu,
             Some(_) => Pictures::Cpu,
             None => Pictures::Off,
@@ -695,7 +702,7 @@ impl Model {
     /// Whether the config has a picture reader: setup writes a `vision`
     /// section only when asked for `--vision yes`.
     pub fn pictures(&self) -> bool {
-        self.fields.contains_key("vision")
+        matches!(self.picture_state(), Some(Pictures::Cpu | Pictures::Gpu))
     }
 
     /// Whether the config loads a control vector, Strata's or another one.
@@ -1706,7 +1713,23 @@ mod tests {
             }}),
         );
         s.config("plain", config(json!(["--native"])));
+        s.config(
+            "empty",
+            json!({"exe": "strata.exe", "args": [], "vision": {}}),
+        );
+        s.config(
+            "null",
+            json!({"exe": "strata.exe", "args": [], "vision": null}),
+        );
         let install = s.installation();
+        for id in ["empty", "null"] {
+            assert!(!install.read_model(id).pictures(), "{id}");
+            assert_eq!(
+                install.read_model(id).picture_state(),
+                Some(Pictures::Off),
+                "{id}"
+            );
+        }
         assert!(install.read_model("gpu").pictures());
         assert!(install.read_model("cpu").pictures());
         assert!(!install.read_model("plain").pictures());

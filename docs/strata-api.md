@@ -59,7 +59,7 @@ Always 200 and without a key (line 6213):
  "image_generation": false, "loaded": true, "service": "strata"}
 ```
 
-`loaded` is false as long as the model is not in memory. Strata loads it with the next request. If `/health` does not answer at all, Strata is not running or not up yet. `images` is true when the served model reads pictures, that is when the run config it was started with has a `vision` section (below).
+`loaded` is false as long as the model is not in memory. Strata loads it with the next request. If `/health` does not answer at all, Strata is not running or not up yet. `images` is true when the served model reads pictures, that is when the run config it was started with has a non-empty `vision` section (below; `svc.vision is not None` in `serve/server.py`, at 7ddc17a3).
 
 ## Summary of an update: `POST /v1/chat/completions`
 

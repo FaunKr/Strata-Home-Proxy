@@ -16,9 +16,13 @@ jobs:
           components: clippy
       - run: cargo clippy -p strata-pc-agent --all-targets -- -D warnings
       - run: cargo test -p strata-pc-agent
-      - name: install.ps1 parses
+      - name: The PowerShell scripts parse under Windows PowerShell 5.1
         run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile("$PWD\deploy\windows\install.ps1", [ref]$null, [ref]$errors) | Out-Null
-          if ($errors) { $errors; exit 1 }
+          $failed = $false
+          foreach ($file in 'deploy\windows\install.ps1', 'tools\local-agent\local-agent.ps1', 'tools\local-agent\install.ps1') {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile("$PWD\$file", [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $file; $errors; $failed = $true }
+          }
+          if ($failed) { exit 1 }
         shell: powershell

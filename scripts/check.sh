@@ -162,6 +162,7 @@ scripts/test-truenas-auto-update.sh
 # And the repo's own scripts.
 if command -v shellcheck >/dev/null; then
   shellcheck tools/local-agent/local-agent tools/local-agent/install.sh tools/local-agent/test.sh tools/local-agent/testdata/fake-claude \
+    tools/local-agent/shims/local-agent \
     scripts/*.sh .claude/hooks/*.sh
 else
   echo "WARNING: shellcheck missing, tools/local-agent and scripts not checked" >&2
@@ -173,6 +174,27 @@ else
   echo "WARNING: actionlint missing, .github/workflows not checked (scripts/install-actionlint.sh)" >&2
 fi
 tools/local-agent/test.sh
+# Its PowerShell port for Windows: the same tests under pwsh, and
+# PSScriptAnalyzer, which also checks that it runs on Windows PowerShell 5.1.
+if command -v pwsh >/dev/null; then
+  pwsh -NoProfile -File tools/local-agent/test.ps1
+  lint=0
+  # shellcheck disable=SC2016 # PowerShell variables, for pwsh to expand.
+  pwsh -NoProfile -Command '
+    if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) { exit 3 }
+    $found = foreach ($file in Get-ChildItem tools/local-agent/*.ps1) {
+      Invoke-ScriptAnalyzer -Path $file.FullName -Settings tools/local-agent/PSScriptAnalyzerSettings.psd1
+    }
+    $found | ForEach-Object { "{0}:{1}: {2}: {3}" -f $_.ScriptPath, $_.Line, $_.RuleName, $_.Message }
+    if ($found) { exit 1 }' || lint=$?
+  if ((lint == 3)); then
+    echo "WARNING: PSScriptAnalyzer missing, tools/local-agent/*.ps1 not linted (scripts/install-psscriptanalyzer.sh)" >&2
+  elif ((lint != 0)); then
+    exit "$lint"
+  fi
+else
+  echo "WARNING: pwsh missing, the PowerShell port of local-agent not tested" >&2
+fi
 # The code benchmark's runner, against a faked opencode.
 python3 tools/code-bench/test_runner.py
 # Build first, then test. nextest kills a test after 60 s and names it

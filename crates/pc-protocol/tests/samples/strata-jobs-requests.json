@@ -57,6 +57,16 @@
     "context": 131072
   },
   {
+    "kind": "set_pictures",
+    "model": "IQ3_XXS",
+    "on": true
+  },
+  {
+    "kind": "set_pictures",
+    "model": "coder-IQ1_M",
+    "on": false
+  },
+  {
     "kind": "compare_models"
   },
   {

@@ -19,6 +19,8 @@ pub enum StrataJobKind {
     SetKey,
     SetSpeedProjection,
     SetContext,
+    /// Turns a model's picture reading on or off, with one setup run.
+    SetPictures,
     CompareModels,
     /// From the old Strata folder to the Strata Terminal, with the active
     /// model.
@@ -42,7 +44,7 @@ pub enum StrataJobKind {
 }
 
 impl StrataJobKind {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Install,
         Self::AddModel,
         Self::Activate,
@@ -52,6 +54,7 @@ impl StrataJobKind {
         Self::SetKey,
         Self::SetSpeedProjection,
         Self::SetContext,
+        Self::SetPictures,
         Self::CompareModels,
         Self::SwitchToTerminal,
         Self::RemoveOldStrataFolder,
@@ -186,6 +189,11 @@ pub enum StrataJobRequest {
         model: String,
         context: u32,
     },
+    /// Turns picture reading for `model` on or off.
+    SetPictures {
+        model: String,
+        on: bool,
+    },
     CompareModels,
     SwitchToTerminal,
     RemoveOldStrataFolder,
@@ -240,6 +248,7 @@ impl StrataJobRequest {
             Self::SetKey { .. } => StrataJobKind::SetKey,
             Self::SetSpeedProjection { .. } => StrataJobKind::SetSpeedProjection,
             Self::SetContext { .. } => StrataJobKind::SetContext,
+            Self::SetPictures { .. } => StrataJobKind::SetPictures,
             Self::CompareModels => StrataJobKind::CompareModels,
             Self::SwitchToTerminal => StrataJobKind::SwitchToTerminal,
             Self::RemoveOldStrataFolder => StrataJobKind::RemoveOldStrataFolder,

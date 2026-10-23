@@ -647,8 +647,10 @@ fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoVi
         let live = expect_context::<Area>().live;
         let started = job.started;
         move || {
-            live.now()
-                .map(|now| format!("Running for {}", running_text(now.saturating_sub(started))))
+            live.now().map(|now| {
+                let text = format!("Running for {}", running_text(now.saturating_sub(started)));
+                view! { <p class="hint">{text}</p> }
+            })
         }
     });
     view! {
@@ -658,7 +660,7 @@ fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoVi
                 {job.percent.map(|p| view! { <span class="muted small">{format!("{p} %")}</span> })}
             </div>
             {job.step.map(|s| view! { <p>{format!("Step {s}")}</p> })}
-            {running_for.map(|text| view! { <p class="hint">{text}</p> })}
+            {running_for}
             {job
                 .percent
                 .map(|p| {

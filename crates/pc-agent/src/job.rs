@@ -194,14 +194,10 @@ impl JobContext {
     /// Shows `step`, after the prefix if one is set.
     pub fn step(&self, step: &str) {
         self.with(|inner| {
-            let step = match &inner.step_prefix {
-                Some(prefix) => format!("{prefix} · {step}"),
-                None => step.to_string(),
-            };
+            let step = prefixed(inner.step_prefix.as_deref(), step.to_string());
             if let Some(job) = inner.current.as_mut() {
                 job.step = Some(step);
-                job.percent = None;
-                job.eta_secs = None;
+                clear_figures(job);
             }
         });
         self.save();
@@ -435,17 +431,22 @@ impl JobContext {
             if reading == Reading::Update
                 && let Some(event) = update_event(&line)
             {
-                let shown = self.with(|inner| {
+                let changed = self.with(|inner| {
                     let JobsInner {
                         current,
                         progress,
+                        secret,
                         step_prefix,
                         ..
                     } = inner;
-                    progress.read_update(event, current.as_mut()?, step_prefix.as_deref());
-                    Some(())
+                    let job = current.as_mut()?;
+                    let before = (job.step.clone(), job.percent);
+                    progress.read_update(event, job, secret.as_deref(), step_prefix.as_deref());
+                    Some((job.step.clone(), job.percent) != before)
                 });
-                if shown.is_some() {
+                // Strata reports a download up to four times a second: the
+                // job is saved for a new step or percent only.
+                if changed == Some(true) {
                     self.save();
                 }
                 continue;
@@ -481,7 +482,7 @@ impl JobContext {
                             (step_prefix.as_deref(), job.step.as_mut())
                         && !step.starts_with(&format!("{prefix} · "))
                     {
-                        *step = format!("{prefix} · {step}");
+                        *step = prefixed(Some(prefix), std::mem::take(step));
                     }
                 }
                 keep_line(&mut job.lines, line);
@@ -637,7 +638,13 @@ impl Progress {
 
     /// One event of `strata update --output jsonl`: a phase or a wait is the
     /// step and a log line, a download's figures come from Strata itself.
-    fn read_update(&mut self, event: UpdateEvent, job: &mut StrataJob, prefix: Option<&str>) {
+    fn read_update(
+        &mut self,
+        event: UpdateEvent,
+        job: &mut StrataJob,
+        secret: Option<&str>,
+        prefix: Option<&str>,
+    ) {
         let step = match event {
             UpdateEvent::Phase(message) | UpdateEvent::Waiting(message) => message,
             UpdateEvent::Download {
@@ -657,16 +664,16 @@ impl Progress {
             }
         };
         *self = Self::default();
-        keep_line(&mut job.lines, step.clone());
-        job.step = Some(match prefix {
-            Some(prefix) => format!("{prefix} · {step}"),
+        let step = match secret {
+            Some(key) => step.replace(key, "***"),
             None => step,
-        });
-        job.percent = None;
-        job.done_bytes = None;
-        job.total_bytes = None;
-        job.bytes_per_sec = None;
-        job.eta_secs = None;
+        };
+        // A wait is reported again at each look; one line says it.
+        if job.lines.last() != Some(&step) {
+            keep_line(&mut job.lines, step.clone());
+        }
+        job.step = Some(prefixed(prefix, step));
+        clear_figures(job);
     }
 
     fn read_at(&mut self, line: &str, job: &mut StrataJob, now: Instant) {
@@ -753,6 +760,23 @@ fn parse_download(line: &str) -> Option<(&str, u64, u64, u8)> {
 }
 
 /// Adds `line` to a job's output, which keeps the last [`KEPT_LINES`].
+/// `step`, after which model of a comparison it belongs to, if any.
+fn prefixed(prefix: Option<&str>, step: String) -> String {
+    match prefix {
+        Some(prefix) => format!("{prefix} · {step}"),
+        None => step,
+    }
+}
+
+/// A new step starts without the last one's share, download and estimate.
+fn clear_figures(job: &mut StrataJob) {
+    job.percent = None;
+    job.done_bytes = None;
+    job.total_bytes = None;
+    job.bytes_per_sec = None;
+    job.eta_secs = None;
+}
+
 fn keep_line(lines: &mut Vec<String>, line: String) {
     lines.push(line);
     let over = lines.len().saturating_sub(KEPT_LINES);

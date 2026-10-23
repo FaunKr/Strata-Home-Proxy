@@ -598,11 +598,7 @@ async fn ask_terminal<T>(
     spec: CommandSpec,
     read: fn(&[String]) -> Result<T, String>,
 ) -> Result<T, Step> {
-    let (ran, output) = job.command_output(spec).await;
-    if let Err(Step::Cancelled) = ran {
-        return Err(Step::Cancelled);
-    }
-    read(&output).map_err(Step::Failed)
+    answer(job.command_output(spec).await, read)
 }
 
 /// Like [`ask_terminal`] for a command that reports its way as events
@@ -612,7 +608,15 @@ async fn ask_terminal_events<T>(
     spec: CommandSpec,
     read: fn(&[String]) -> Result<T, String>,
 ) -> Result<T, Step> {
-    let (ran, output) = job.command_events(spec).await;
+    answer(job.command_events(spec).await, read)
+}
+
+/// A Terminal command's answer read from its output, unless it was
+/// cancelled.
+fn answer<T>(
+    (ran, output): (Result<(), Step>, Vec<String>),
+    read: fn(&[String]) -> Result<T, String>,
+) -> Result<T, Step> {
     if let Err(Step::Cancelled) = ran {
         return Err(Step::Cancelled);
     }

@@ -479,15 +479,34 @@ function Stop-Worker {
     [void]$worker.WaitForExit(5000)
 }
 
-# The objects of a stream-json log, one per line; lines that aren't JSON are
-# skipped.
-function Read-Events([string]$logFile) {
-    if (-not (Test-Path -LiteralPath $logFile)) { return }
-    foreach ($line in [IO.File]::ReadAllLines($logFile, $utf8)) {
+# The lines of a log the worker may still be writing, which Windows lets only
+# a reader that shares write access open. -Whole leaves out a last line that
+# has no line break yet.
+function Read-LogLines([string]$logFile, [switch]$Whole) {
+    if (-not (Test-Path -LiteralPath $logFile)) { return @() }
+    $stream = New-Object IO.FileStream($logFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    $reader = New-Object IO.StreamReader($stream, $utf8)
+    try {
+        $text = $reader.ReadToEnd()
+    } finally {
+        $reader.Dispose()
+    }
+    $lines = $text.Split("`n")
+    if ($Whole -or $lines[-1] -eq '') {
+        if ($lines.Count -lt 2) { return @() }
+        $lines = $lines[0..($lines.Count - 2)]
+    }
+    return $lines
+}
+
+# The objects of stream-json lines; lines that aren't JSON are skipped.
+function ConvertFrom-EventLines([string[]]$lines) {
+    foreach ($line in $lines) {
         if (-not $line.Trim()) { continue }
         try { $line | ConvertFrom-Json } catch { continue }
     }
 }
+function Read-Events([string]$logFile) { ConvertFrom-EventLines (Read-LogLines $logFile) }
 
 # Tools the worker may use without asking, before the repo's own allow rules.
 $readTools = @('Read', 'Glob', 'Grep', 'TodoWrite', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)',
@@ -571,8 +590,8 @@ function Get-ResultField([string]$name) {
 }
 
 # The worker's log as one line per step.
-function Get-Steps([string]$logFile) {
-    foreach ($e in Read-Events $logFile) {
+function Get-Steps([object[]]$events) {
+    foreach ($e in $events) {
         if ($e.type -eq 'assistant') {
             foreach ($part in @($e.message.content)) {
                 if (-not $part -or $part.type -ne 'tool_use') { continue }
@@ -595,7 +614,29 @@ function Get-Steps([string]$logFile) {
         }
     }
 }
-function Get-LastSteps([int]$count) { return @(Get-Steps (Join-Path $runDir 'log.jsonl') | Select-Object -Last $count) }
+function Get-LastSteps([int]$count) { return @(Get-Steps @(Read-Events (Join-Path $runDir 'log.jsonl')) | Select-Object -Last $count) }
+
+# For --watch: appends the steps of new whole log lines to the progress file
+# and, once per run, a warning when the worker is past its compaction point.
+# Updates seen and warned.
+function Update-Progress {
+    $lines = @(Read-LogLines (Join-Path $runDir 'log.jsonl') -Whole)
+    if ($lines.Count -le $seen) { return }
+    $events = @(ConvertFrom-EventLines $lines[$seen..($lines.Count - 1)])
+    $steps = @(Get-Steps $events)
+    $progress = Join-Path $runDir 'progress'
+    if ($steps.Count -gt 0) { Add-Utf8File $progress (($steps -join "`n") + "`n") }
+    # Only the new lines: parsing the whole log every second would be slow.
+    Add-ContextStats $events
+    if (-not $warned) {
+        $warning = @(Get-ContextReport) | Where-Object { $_.StartsWith('warning:') }
+        if ($warning) {
+            Add-Utf8File $progress "$warning`n"
+            $script:warned = $true
+        }
+    }
+    $script:seen = $lines.Count
+}
 
 # How full the worker's context is, from the usage in its log: sets
 # contextNow and contextPeak (tokens) and compactions.
@@ -603,7 +644,11 @@ function Get-ContextStats {
     $script:contextNow = 0
     $script:contextPeak = 0
     $script:compactions = 0
-    foreach ($e in Read-Events (Join-Path $runDir 'log.jsonl')) {
+    Add-ContextStats @(Read-Events (Join-Path $runDir 'log.jsonl'))
+}
+# Carries the context stats forward over more events of the log.
+function Add-ContextStats([object[]]$events) {
+    foreach ($e in $events) {
         if ($e.type -eq 'assistant' -and $e.message -and $e.message.usage) {
             $u = $e.message.usage
             $script:contextNow = [long]$u.input_tokens + [long]$u.cache_read_input_tokens + [long]$u.cache_creation_input_tokens
@@ -630,9 +675,9 @@ function Get-ContextReport {
 
 # Commits what the worker left uncommitted, so the branch holds all its work.
 function Save-Leftovers([string]$worktree, [string]$id) {
-    $changes = Invoke-Git -C $worktree status --porcelain
+    $changes = Invoke-Git -c core.longpaths=true -C $worktree status --porcelain
     if (-not $changes) { return }
-    [void](Invoke-Git -C $worktree add -A)
+    [void](Invoke-Git -c core.longpaths=true -C $worktree add -A)
     [void](Invoke-Git -c core.longpaths=true -C $worktree commit -qm "local-agent: uncommitted changes of run $id")
 }
 
@@ -678,6 +723,7 @@ End with your answer and the files it rests on.
 function Invoke-Run([string[]]$arguments) {
     $task = ''
     $readOnly = $false
+    $watch = $false
     $timeout = '2h'
     $script:extraAllow = @()
     $i = 0
@@ -687,7 +733,7 @@ function Invoke-Run([string[]]$arguments) {
         if ($arg -ceq '--read-only') {
             $readOnly = $true
         } elseif ($arg -ceq '--watch') {
-            Exit-Die '--watch is not ported to Windows yet; see issue #312'
+            $watch = $true
         } elseif ($arg -ceq '--timeout') {
             if ($i -ge $arguments.Count) { Exit-Usage '--timeout needs a time, e.g. --timeout 30m' }
             $timeout = $arguments[$i]
@@ -728,6 +774,10 @@ function Invoke-Run([string[]]$arguments) {
     Set-Meta 'pid' $PID
     Set-Meta 'started' (Get-Now)
     Write-Out "local-agent: run $id ($runDir)"
+    if ($watch) {
+        Write-Utf8File (Join-Path $runDir 'progress') ''
+        Write-Out "local-agent: progress in $(Join-Path $runDir 'progress')"
+    }
 
     Add-Ticket $id
     try {
@@ -779,8 +829,14 @@ function Invoke-Run([string[]]$arguments) {
         $timedOut = $false
         $gaming = $false
         $finished = $false
+        $script:seen = 0
+        $script:warned = $false
+        $script:contextNow = 0
+        $script:contextPeak = 0
+        $script:compactions = 0
         try {
             while (-not $worker.WaitForExit(1000)) {
+                if ($watch) { Update-Progress }
                 if ((Get-Now) -ge $deadline) {
                     $timedOut = $true
                     Stop-Worker
@@ -807,6 +863,7 @@ function Invoke-Run([string[]]$arguments) {
                 Set-Meta 'ended' (Get-Now)
             }
         }
+        if ($watch) { Update-Progress }
         if ($timedOut) {
             if (-not $readOnly) { Save-Leftovers $workdir $id }
             Set-Meta 'state' 'timeout'
@@ -892,6 +949,64 @@ function Show-Result([string]$id) {
     }
 }
 
+# Removes a run's worktree and branch, if it has them.
+function Remove-Worktree([string]$dir) {
+    $repo = Get-Meta $dir 'repo'
+    $worktree = Get-Meta $dir 'worktree'
+    $branch = Get-Meta $dir 'branch'
+    if (-not $branch -or -not (Test-Path -LiteralPath $repo -PathType Container)) { return }
+    if (Test-Path -LiteralPath $worktree -PathType Container) {
+        [void](Invoke-Git -c core.longpaths=true -C $repo worktree remove --force $worktree)
+        # A program that still has a file open there keeps it on Windows.
+        if ($gitStatus -ne 0) { Exit-Die "git could not remove the worktree $worktree; close what uses it and try again" }
+    }
+    [void](Invoke-Git -C $repo worktree prune)
+    [void](Invoke-Git -C $repo rev-parse -q --verify "refs/heads/$branch")
+    if ($gitStatus -eq 0) { [void](Invoke-Git -C $repo branch -qD $branch) }
+}
+
+# True when a run's branch is merged: it has commits, and another local branch
+# contains its tip.
+function Test-Merged([string]$dir) {
+    $repo = Get-Meta $dir 'repo'
+    $branch = Get-Meta $dir 'branch'
+    if (-not $branch -or -not (Test-Path -LiteralPath $repo -PathType Container)) { return $false }
+    $tip = Invoke-Git -C $repo rev-parse -q --verify "refs/heads/$branch"
+    if ($gitStatus -ne 0) { return $false }
+    # A branch without commits of its own is contained everywhere; keep it.
+    if ($tip -eq (Get-Meta $dir 'base')) { return $false }
+    $containing = @(Invoke-Git -C $repo for-each-ref --contains "refs/heads/$branch" '--format=%(refname:short)' refs/heads/)
+    return [bool]($containing | Where-Object { $_ -and -not $_.StartsWith('local-agent/') })
+}
+
+function Invoke-Discard([string]$id) {
+    if (-not $id) { Exit-Usage 'discard needs a run id' }
+    Select-Run $id
+    if ((Get-RunState $runDir) -in 'queued', 'running') { Exit-Usage "run $id is still running" }
+    Remove-Worktree $runDir
+    Set-Meta 'state' 'discarded'
+    Write-Out "local-agent: discarded run $id"
+}
+
+# Removes the worktrees of merged runs, and run folders older than 14 days
+# whose worktree is gone. Unmerged work is never removed.
+function Invoke-Prune {
+    if (-not (Test-Path -LiteralPath $runsDir)) { return }
+    foreach ($dir in Get-ChildItem -LiteralPath $runsDir -Directory | Sort-Object Name) {
+        $meta = Join-Path $dir.FullName 'meta'
+        if (-not (Test-Path -LiteralPath $meta)) { continue }
+        if ((Get-RunState $dir.FullName) -in 'queued', 'running') { continue }
+        if (Test-Merged $dir.FullName) { Remove-Worktree $dir.FullName }
+        # As find -mtime +14: 15 whole days or more.
+        $old = ((Get-Date) - (Get-Item -LiteralPath $meta).LastWriteTime).TotalDays -ge 15
+        $worktree = Get-Meta $dir.FullName 'worktree'
+        if ($old -and -not ($worktree -and (Test-Path -LiteralPath $worktree -PathType Container))) {
+            Remove-Item -LiteralPath $dir.FullName -Recurse -Force
+            Write-Out "local-agent: pruned run $($dir.Name)"
+        }
+    }
+}
+
 function Exit-CheckFailed([string]$reason, [string]$hint) {
     Write-Out "FAIL ${checkStep}: $reason"
     if ($hint) { Write-Out "     to fix: $hint" }
@@ -965,7 +1080,8 @@ switch ($command) {
     'status' { Show-Status ($rest | Select-Object -First 1) }
     'result' { Show-Result ($rest | Select-Object -First 1) }
     'check' { Invoke-Check }
-    { $_ -in 'discard', 'prune' } { Exit-Die "$command is not ported to Windows yet; see issue #312" }
+    'discard' { Invoke-Discard ($rest | Select-Object -First 1) }
+    'prune' { Invoke-Prune }
     { $_ -in '-h', '--help', 'help' } { Write-Out $usage }
     default {
         Write-Err $usage

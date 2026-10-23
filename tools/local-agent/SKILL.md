@@ -5,9 +5,9 @@ description: Offload a task to the local model through the local-agent runner. U
 
 # local-agent
 
-`local-agent run` starts a headless Claude Code worker whose model is the local model, reached through the local-agent server configured in `~/.config/local-agent/env`. It works on a new branch in its own worktree; the user's checkout stays untouched. The local model is slow and free; a cloud agent is fast and costs tokens.
+`local-agent run` starts a headless Claude Code worker whose model is the local model, reached through the local-agent server configured in `~/.config/local-agent/env` (on Windows `%APPDATA%\local-agent\env`). It runs on macOS, Linux and Windows. It works on a new branch in its own worktree; the user's checkout stays untouched. The local model is slow and free; a cloud agent is fast and costs tokens.
 
-If `local-agent` isn't on `PATH`, tell the user to run local-agent's `install.sh`, then `local-agent check`.
+If `local-agent` isn't on `PATH`, tell the user to run local-agent's `install.sh` (on Windows `install.ps1`), then `local-agent check`.
 
 Offload only when the user asks. When a task is well scoped and mechanical (a rename, a test for a known function, a doc pass), suggest offloading it in one line and wait for the answer.
 

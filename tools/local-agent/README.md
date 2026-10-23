@@ -6,8 +6,15 @@ loop, in a worktree of its own on a new branch. The `local-agent` skill
 ([SKILL.md](SKILL.md)) tells Claude when and how.
 Design and decisions: issue #107.
 
-Runs on macOS and Linux, with Bash, git, jq and curl. Cloud sessions
-cannot reach the NAS.
+Runs on macOS, Linux and Windows. On macOS and Linux `local-agent` is a Bash
+script that needs git, jq and curl; on Windows `local-agent.ps1` runs on
+Windows PowerShell 5.1 (or PowerShell 7) and needs only git and claude. Both
+runners have the same commands, output and exit codes. Cloud sessions cannot
+reach the NAS.
+
+**Changing local-agent:** every change to its behaviour goes into both runners
+(`local-agent` and `local-agent.ps1`) and both test scripts (`test.sh` and
+`test.ps1`) in the same PR.
 
 ## Setup
 
@@ -40,6 +47,29 @@ cannot reach the NAS.
    and a tool call through Strata and, on an error, names what to do.
 5. Save the skill: create the content of [SKILL.md](SKILL.md) as a personal
    skill `local-agent`.
+
+### On Windows
+
+1. In PowerShell, run
+   `powershell -NoProfile -ExecutionPolicy Bypass -File tools\local-agent\install.ps1`.
+   It needs no administrator rights. It copies the runner to
+   `%LOCALAPPDATA%\Programs\local-agent` (or `PREFIX`) and adds that folder to
+   your user PATH. It also creates `%APPDATA%\local-agent\env`, readable only
+   by you, and warns when git or claude is missing. Open a new terminal
+   afterwards.
+2. Two shims call the runner: `local-agent.cmd` for PowerShell and cmd, and an
+   extensionless `local-agent` for Git Bash, which Claude Code uses for its
+   Bash tool. Both run `lib\local-agent.ps1` with `-ExecutionPolicy Bypass`,
+   so the execution policy doesn't matter.
+3. Fill in the config as in step 2 above, set up Strata as in step 3, run
+   `local-agent check`, and save the skill as in step 5.
+4. Runs, worktrees and logs live under `%LOCALAPPDATA%\local-agent\`. Paths
+   in a worktree may get longer than Windows' 260 characters, so git runs with
+   `core.longpaths` (the repo's config stays as it is). Other programs need
+   long paths switched on in Windows: `check` warns when `LongPathsEnabled` is
+   off (an administrator sets
+   `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled` to 1).
+5. `--watch` names the progress file; follow it in Git Bash with `tail -f`.
 
 ## Checking compaction
 
@@ -79,11 +109,16 @@ local-agent run --read-only --watch "Read every file under crates/nas-proxy/src 
 Passed when the run ends with exit 0 and the progress file (or
 `local-agent status`) shows `context compacted` at least once. If instead
 `request exceeds the context window` is in the log
-(`~/.local/state/local-agent/runs/<run>/log.jsonl`), Claude Code compacts
+(`~/.local/state/local-agent/runs/<run>/log.jsonl`, on Windows
+`%LOCALAPPDATA%\local-agent\runs\<run>\log.jsonl`), Claude Code compacts
 too late: lower `LOCAL_AGENT_COMPACT_SHARE` and check again.
 
 ## Tests
 
 `tools/local-agent/test.sh` (runs in `scripts/check.sh`) starts the real
 runner against a faked proxy (`testdata/fake-proxy.py`) and a faked
-`claude` (`testdata/fake-claude`).
+`claude` (`testdata/fake-claude`). `tools/local-agent/test.ps1` does the same
+for `local-agent.ps1` under pwsh on Linux, with a test of the same name for
+each test in `test.sh`; `scripts/check.sh` runs it and PSScriptAnalyzer, which
+checks the PowerShell against Windows PowerShell 5.1. Nothing runs on real
+Windows in CI; the manual `windows.yml` workflow parses the scripts under 5.1.

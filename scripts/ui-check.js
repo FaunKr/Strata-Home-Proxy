@@ -156,6 +156,12 @@ async function forced(page, errors) {
     await sees('Lets the model read pictures');
     if (!(await tick.isChecked())) throw new Error('the Pictures tick is off by default');
   });
+  await step("the models list shows each model's picture state", 'pictures-state', async () => {
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await sees('Pictures: on (GPU)');
+    await sees('Pictures: on (CPU)');
+    await sees('Pictures: off');
+  });
   await step('Force sleep in the gaming state', 'gaming-overview', async () => {
     await page.goto(base + '/admin', { waitUntil: 'domcontentloaded' });
     await force.click(wait);

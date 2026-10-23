@@ -2058,8 +2058,7 @@ fn parse_numstat(line: &str) -> Option<ChangedFile> {
 }
 
 /// Runs the setup of `install` without questions, with the fixed values
-/// The setup of `install` without questions, with the fixed values, the key
-/// and, when `pictures` is asked for, the picture reader setup downloads.
+/// and the key; with `pictures`, setup also sets up the picture reader.
 async fn setup(
     job: &JobContext,
     install: &Installation,

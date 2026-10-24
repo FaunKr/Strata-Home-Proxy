@@ -14,7 +14,7 @@ Offload only when the user asks. When a task is well scoped and mechanical (a re
 ## Before you offload
 
 - **Size it.** Estimate the change. A run has 2 hours by default and a context that compacts when it fills. Above about 500 changed lines, or more than one layer (backend and UI, say), split the work into thin vertical slices, one run each, or pass a longer `--timeout` and say why.
-- **Check that the worker can verify its work.** The worker runs on the user's machine, with that machine's toolchain. Run the brief's check command there once yourself, or `local-agent check`. If something it needs is missing (a compiler target, a linter, a browser for UI checks), tell the user what to install before the run, or name in the brief which checks the worker can't run.
+- **Check that the worker can verify its work.** The worker runs on the user's machine, with that machine's toolchain. Run the brief's full check command there once yourself before the run, not only the narrow one: a tool that only the full check needs, found missing after the run, keeps the work from being pushed. `local-agent check` covers the proxy and Strata, not the repo's tools. If something it needs is missing (a compiler target, a linter, a browser for UI checks), tell the user what to install before the run, or name in the brief which checks the worker can't run.
 - **Commit first.** The worker sees the last commit, not uncommitted changes.
 
 ## Write the brief

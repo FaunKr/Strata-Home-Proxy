@@ -80,6 +80,44 @@ rm -f "$tree_index"
 # shellcheck source=scripts/free-space.sh
 source "$(dirname "$0")/free-space.sh"
 
+# Every tool a full run needs, all named at once before anything runs: on a
+# machine set up for the first time (a Mac for local-agent, say) a run that
+# stops at each missing tool in turn costs one run per tool.
+missing=()
+# The Node scripts of the browser check (eslint.config.mjs). Cloud sessions
+# have ESLint under /opt/node-tools; elsewhere: npm install -g eslint@10.1.0 (the version CI installs).
+eslint=$(command -v eslint || echo /opt/node-tools/node_modules/.bin/eslint)
+[[ -x $eslint ]] || missing+=("ESLint: npm install -g eslint@10.1.0")
+# The update script for TrueNAS locks with flock.
+command -v flock >/dev/null || missing+=("flock: brew install flock (on Linux it is part of util-linux)")
+# The code benchmark's runner removes folders through shutil.rmtree(dir_fd=…).
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null ||
+  missing+=("Python 3.11 or newer as python3 (now: $(python3 --version 2>&1)): brew install python (on Linux your distribution's python3.11 or newer)")
+if [[ $cargo == true ]]; then
+  # The time limit of the test run.
+  # shellcheck source=scripts/timeout.sh
+  source "$(dirname "$0")/timeout.sh"
+  [[ -n $timeout ]] || missing+=("$timeout_hint")
+  # The test runner, at least the version .config/nextest.toml pins (CI installs it).
+  nextest_version=$(scripts/nextest-version.sh)
+  installed=$(cargo nextest --version 2>/dev/null | sed -n '1s/^cargo-nextest \([0-9.]*\).*/\1/p' || true)
+  if [[ -z $installed || $(printf '%s\n' "$nextest_version" "$installed" | sort -V | head -n1) != "$nextest_version" ]]; then
+    missing+=("cargo-nextest ${installed:-missing}, needs $nextest_version: scripts/install-nextest.sh (or cargo install cargo-nextest@$nextest_version --locked)")
+  fi
+  # The browser half of the web UI. Homebrew's Rust has no wasm32 standard
+  # library; rustup's has, once its bin folder comes first in PATH.
+  if selected strata-admin-ui && [[ ! -d $(rustc --print sysroot)/lib/rustlib/wasm32-unknown-unknown ]]; then
+    missing+=("the wasm32 target for $(command -v rustc): rustup target add wasm32-unknown-unknown; a Rust without rustup (Homebrew's) has none, so put ~/.cargo/bin before it in PATH")
+  fi
+fi
+# The linters shellcheck and actionlint, and pwsh with PSScriptAnalyzer, stay warnings below: CI
+# installs them, and on a Mac they are not needed to build and test.
+if ((${#missing[@]})); then
+  printf 'Missing for a full run:\n' >&2
+  printf '  %s\n' "${missing[@]}" >&2
+  exit 2
+fi
+
 if [[ $cargo == true ]]; then
   cargo fmt --check
 fi
@@ -89,21 +127,7 @@ if grep -rnE '\.(start|stop)_strata\(' crates/pc-agent/src --exclude=strata_proc
   echo "Start and stop Strata only through agent.strata() (crates/pc-agent/src/strata_process.rs)" >&2
   exit 1
 fi
-# The Node scripts of the browser check (eslint.config.mjs). Cloud sessions
-# have ESLint under /opt/node-tools; elsewhere: npm install -g eslint@10.1.0 (the version CI installs).
-eslint=$(command -v eslint || echo /opt/node-tools/node_modules/.bin/eslint)
-if [[ ! -x $eslint ]]; then
-  echo "ESLint missing: npm install -g eslint@10.1.0" >&2
-  exit 2
-fi
 "$eslint" scripts
-# The test runner, at least the version .config/nextest.toml pins (CI installs it).
-nextest_version=$(scripts/nextest-version.sh)
-installed=$(cargo nextest --version 2>/dev/null | sed -n '1s/^cargo-nextest \([0-9.]*\).*/\1/p' || true)
-if [[ $cargo == true ]] && [[ -z $installed || $(printf '%s\n' "$nextest_version" "$installed" | sort -V | head -n1) != "$nextest_version" ]]; then
-  echo "cargo-nextest ${installed:-missing}, needs $nextest_version: scripts/install-nextest.sh (or cargo install cargo-nextest@$nextest_version --locked)" >&2
-  exit 2
-fi
 # The integration tests are one binary per crate (autotests = false): a file
 # in tests/ that tests/main.rs does not list would silently never run.
 for main in crates/*/tests/main.rs; do
@@ -123,6 +147,8 @@ scripts/check-language.test.sh
 scripts/check-language.sh
 # No Claude session links in commits or PR bodies; CI checks the PR itself.
 scripts/check-session-links.test.sh
+# Which HEAD the push guard checks, in a worktree too.
+scripts/push-guard.test.sh
 if [[ $cargo == true ]]; then
   cargo clippy "${package_args[@]}" --all-targets -- -D warnings
 fi
@@ -204,7 +230,7 @@ python3 tools/code-bench/test_runner.py
 if [[ $cargo == true ]]; then
   cargo nextest run "${package_args[@]}" --no-run
   # The time limit catches a run that hangs outside a single test.
-  timeout 15m cargo nextest run "${package_args[@]}" --no-tests=pass
+  "$timeout" 15m cargo nextest run "${package_args[@]}" --no-tests=pass
 fi
 
 if [[ $packages == all ]]; then

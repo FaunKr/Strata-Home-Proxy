@@ -130,7 +130,8 @@ http.createServer((req, res) => {
   else if (req.url.startsWith('/status')) {
     // Only a tune is reported as running, so its card shows.
     const tuning = strataJob?.kind === 'tune' && strataJob.state === 'running';
-    json({ ...status, gaming_mode: pcState === 'gaming', strata_running: pcState === 'awake' || pcState === 'loading',
+    json({ ...status, gaming_mode: pcState === 'gaming', strata_running: ['awake', 'loading', 'unreachable'].includes(pcState),
+      strata_answers: ['awake', 'unreachable'].includes(pcState),
       ...(tuning ? { strata_job: true, strata_job_kind: 'tune' } : {}) });
   }
   else if (req.url.startsWith('/strata/key')) {

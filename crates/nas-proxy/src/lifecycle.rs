@@ -210,14 +210,14 @@ impl Lifecycle {
     pub fn pc_answered(
         &mut self,
         status: Option<&PcStatus>,
-        strata_answers: bool,
+        strata_answers_nas: bool,
         now: Now,
         t: Timings,
     ) -> Observed {
         let from = self.pc;
         let up = match status {
             None => {
-                if !strata_answers && self.pc != PcState::Waking {
+                if !strata_answers_nas && self.pc != PcState::Waking {
                     self.pc = PcState::Asleep;
                 }
                 false

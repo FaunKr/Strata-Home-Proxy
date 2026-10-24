@@ -123,6 +123,9 @@ async fn registering_enters_token_and_address_of_the_pc_service() {
     assert_eq!(body["nas_url"], s.url);
     // The PC service makes the Strata key itself.
     assert_eq!(body.get("strata_api_key"), None);
+    // The install command opens Strata's port for the NAS.
+    let strata = reqwest::Url::parse(s.state.cfg().strata_url.as_deref().unwrap()).unwrap();
+    assert_eq!(body["strata_port"], strata.port().unwrap());
 
     let cfg = s.state.cfg();
     assert_eq!(cfg.pc_agent_token.as_deref(), Some(token));
@@ -131,6 +134,19 @@ async fn registering_enters_token_and_address_of_the_pc_service() {
     s.state.settings.reset("PC_AGENT_TOKEN").unwrap();
     assert_eq!(s.state.cfg().pc_agent_token, None);
     assert!(kinds(&s.state).contains(&strata_nas_proxy::events::EventKind::PcServiceRegistered));
+}
+
+#[tokio::test]
+async fn registering_without_a_strata_address_names_strata_s_default_port() {
+    let s = setup(false, |c| {
+        c.pc_agent_url = None;
+        c.strata_url = None;
+    })
+    .await;
+    let mut b = logged_in(&s.url).await;
+    let (_, code) = command(&mut b).await;
+    let body: serde_json::Value = register(&s, &code, 8091).await.json().await.unwrap();
+    assert_eq!(body["strata_port"], 8080);
 }
 
 #[tokio::test]

@@ -40,8 +40,9 @@ then carry on anyway.
    ```
    Windows asks once for administrator rights. The script downloads
    `strata-pc-agent.exe` from the NAS to `%LOCALAPPDATA%\StrataHome`, registers the PC
-   with the NAS, makes it start at login, opens port 8091 only for
-   the NAS and creates the desktop shortcut **Gaming an-aus**. The NAS fills in the token
+   with the NAS, makes it start at login, opens port 8091 and Strata's port
+   (the one in the proxy's Strata address, 8080 without one; firewall rule
+   *Strata from the NAS*) only for the NAS and creates the desktop shortcut **Gaming an-aus**. The NAS fills in the token
    and `PC_AGENT_URL` itself; the service makes the Strata key at every start of Strata.
 3. The **Strata** area is where you set the start script and Strata programs. Until then
    the service runs, but does not start Strata itself.
@@ -75,7 +76,7 @@ the command from above once.
 
 **Removing:** After *Create install command*, the area also shows the command for this
 (`irm http://<NAS>:<Port>/admin/agent/install.ps1?uninstall | iex`). It removes
-the task, firewall rule, shortcut and folder. Afterwards, on the NAS, reset
+the task, both firewall rules, shortcut and folder. Afterwards, on the NAS, reset
 `PC_AGENT_URL` and `PC_AGENT_TOKEN` in the *PC* area with *Reset*.
 
 The service writes to `%LOCALAPPDATA%\StrataHome\strata-pc-agent.log`.

@@ -338,6 +338,7 @@ pub fn strata_badge(overview: &Overview) -> (&'static str, &'static str) {
         (StrataView::Offline, PcView::Awake) => ("Offline", "is-bad"),
         (StrataView::Offline, _) => ("Offline", "is-idle"),
         (StrataView::Loading, _) => ("Loading", "is-warn"),
+        (StrataView::Unreachable, _) => ("Not reachable", "is-warn"),
         (StrataView::Unloaded, _) => ("Idle", "is-ok"),
         (StrataView::Ready, _) => ("Ready", "is-ok"),
         (StrataView::Busy { .. }, _) => ("Busy", "is-warn"),

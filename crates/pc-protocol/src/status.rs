@@ -15,6 +15,11 @@ pub struct PcStatus {
     /// model counts as running before it answers.
     #[serde(default)]
     pub strata_running: bool,
+    /// Strata answered the service's own `/health` in this check. With
+    /// `strata_running` but no answer at the NAS, the network between them
+    /// drops it, e.g. the PC's firewall. Missing from older services.
+    #[serde(default)]
+    pub strata_answers: bool,
     /// Seconds since the last keyboard or mouse input.
     #[serde(default)]
     pub user_idle_secs: u64,

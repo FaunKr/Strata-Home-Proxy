@@ -228,10 +228,12 @@ impl Agent {
     }
 
     pub async fn status(&self) -> PcStatus {
+        let answers = self.strata_healthy().await;
         PcStatus {
             gaming_mode: self.gaming(),
             // A Strata started moments ago runs, though it may not answer yet.
-            strata_running: self.strata_healthy().await || self.strata().loading(),
+            strata_running: answers || self.strata().loading(),
+            strata_answers: answers,
             user_idle_secs: self.platform.user_idle().as_secs(),
             mac: None,
             strata_job: self.jobs.running(),

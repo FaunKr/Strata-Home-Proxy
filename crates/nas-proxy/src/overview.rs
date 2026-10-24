@@ -43,6 +43,8 @@ struct Probe {
     health: Health,
     metrics: Option<Metrics>,
     pc: Option<PcStatus>,
+    /// Strata answers the PC service but, asked twice, not the proxy.
+    unreachable: bool,
     /// The running Strata job, asked for only while one runs.
     job: Option<StrataJob>,
     /// The power of the power plug.
@@ -213,11 +215,13 @@ async fn run(state: &Arc<AppState>) {
 
 async fn probe(state: &AppState) -> Probe {
     // The plug alongside, so a slow one holds up nothing else.
-    let ((health, metrics, pc, job), power) = tokio::join!(probe_pc(state), power(state));
+    let ((health, metrics, pc, unreachable, job), power) =
+        tokio::join!(probe_pc(state), power(state));
     Probe {
         health,
         metrics,
         pc,
+        unreachable,
         job,
         power,
     }
@@ -242,10 +246,28 @@ async fn metrics(state: &AppState) -> Option<Metrics> {
 
 async fn probe_pc(
     state: &AppState,
-) -> (Health, Option<Metrics>, Option<PcStatus>, Option<StrataJob>) {
-    let health = state.strata_health().await;
+) -> (
+    Health,
+    Option<Metrics>,
+    Option<PcStatus>,
+    bool,
+    Option<StrataJob>,
+) {
+    let mut health = state.strata_health().await;
     let up = matches!(health, Health::Up { .. });
     let (metrics, pc) = tokio::join!(metrics(state), state.check_pc(up));
+    // Strata answered the PC service but not the proxy: asked once more, so
+    // a Strata that came up between the two answers does not count. Not
+    // while the PC settles into sleep, when the proxy ignores its answers.
+    let answers_pc = pc
+        .as_ref()
+        .is_some_and(|s| s.strata_answers && !s.gaming_mode);
+    let unreachable = if !up && answers_pc && state.strata().is_some() && !state.settling() {
+        health = state.strata_health().await;
+        !matches!(health, Health::Up { .. })
+    } else {
+        false
+    };
     let job = match &pc {
         Some(status) if status.strata_job => state
             .agent()
@@ -254,7 +276,7 @@ async fn probe_pc(
             .filter(|j| j.state == strata_admin_ui::api::StrataJobState::Running),
         _ => None,
     };
-    (health, metrics, pc, job)
+    (health, metrics, pc, unreachable, job)
 }
 
 fn strata_view(probe: &Probe, in_flight: usize) -> StrataView {
@@ -271,6 +293,7 @@ fn strata_view(probe: &Probe, in_flight: usize) -> StrataView {
         },
         (_, Health::Up { loaded: true }) => StrataView::Ready,
         (_, Health::Up { loaded: false }) => StrataView::Unloaded,
+        _ if probe.unreachable => StrataView::Unreachable,
         // The process runs but does not answer yet: starting, or restarted by
         // the watchdog.
         _ if probe

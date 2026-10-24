@@ -139,6 +139,11 @@ async function forced(page, errors) {
     await page.locator('.strata-state .badge', { hasText: 'Loading' }).waitFor(wait);
     await restart.waitFor(wait);
   });
+  await step('a Strata the NAS cannot reach shows as not reachable', 'unreachable', async () => {
+    await fakePc('unreachable');
+    await page.locator('.strata-state .badge', { hasText: 'Not reachable' }).waitFor(wait);
+    await sees("Check the PC's firewall");
+  });
   await step('Force restart Strata while Strata hangs', 'hung', async () => {
     await fakePc('hung');
     await page.locator('.strata-state .badge', { hasText: 'Offline' }).waitFor(wait);

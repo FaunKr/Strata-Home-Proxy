@@ -20,6 +20,11 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 # Name of the scheduled task and firewall rule; existing installs have it.
 $TaskName = "Strata PC-Dienst"
+# The firewall rule for Strata's port: a new Strata program after an update
+# needs no Windows prompt then.
+$StrataRule = "Strata from the NAS"
+# Strata's port; the NAS names the one in its Strata address.
+$StrataPort = 8080
 $exe = Join-Path $Target "strata-pc-agent.exe"
 $config = Join-Path $Target "strata-pc-agent.toml"
 # Existing installs have this shortcut name.
@@ -60,6 +65,7 @@ if ($Uninstall) {
     Stop-Agent
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Get-NetFirewallRule -DisplayName $TaskName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    Get-NetFirewallRule -DisplayName $StrataRule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     Remove-Item $shortcut -ErrorAction SilentlyContinue
     Remove-Item $Target -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "PC service removed. On the NAS, reset PC_AGENT_URL and PC_AGENT_TOKEN in the settings."
@@ -72,6 +78,12 @@ if (-not $NasUrl -and -not $NasIp) {
 
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
 $update = Test-Path $config
+if ($update) {
+    # Strata's port from the address the service reaches it at, for a run
+    # without registration or a NAS that does not name it.
+    $url = Get-Content $config | Where-Object { $_ -match '^\s*strata_url\s*=' } | Select-Object -First 1
+    if ($url -match '["'']https?://[^"''/]+:(\d+)') { $StrataPort = [int]$Matches[1] }
+}
 
 if ($NasUrl) {
     # Before the registration, so an error here does not use up the code.
@@ -110,6 +122,8 @@ if ($NasUrl) {
     } catch {
         throw "Registration with the NAS failed. The one-time code is valid only once and only briefly: create a new install command in the PC area of the web UI. ($_)"
     }
+    # A NAS before the Strata port does not name it.
+    if ($reg.strata_port) { $StrataPort = [int]$reg.strata_port }
     # What the registration sets is replaced; everything else in an existing
     # config stays. A strata_api_key of an older install goes: the service
     # makes the Strata key itself.
@@ -163,6 +177,9 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
 Get-NetFirewallRule -DisplayName $TaskName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 New-NetFirewallRule -DisplayName $TaskName -Direction Inbound -Protocol TCP `
     -LocalPort $Port -RemoteAddress $NasIp -Action Allow | Out-Null
+Get-NetFirewallRule -DisplayName $StrataRule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -DisplayName $StrataRule -Direction Inbound -Protocol TCP `
+    -LocalPort $StrataPort -RemoteAddress $NasIp -Action Allow | Out-Null
 
 # Desktop shortcut that switches gaming mode on and off.
 $shell = New-Object -ComObject WScript.Shell

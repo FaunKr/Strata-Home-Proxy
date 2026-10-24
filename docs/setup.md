@@ -85,7 +85,10 @@ then `strata launch` with `--host 0.0.0.0`, port **8080** and an **API key**, th
 
 ## 6. Firewall on the PC
 
-Open port 8080 only for the NAS (adjust IP):
+The install command of the PC service does this: it opens Strata's port only
+for the NAS (rule *Strata from the NAS*), so a new Strata program after an
+update needs no Windows prompt. Without the PC service, open port 8080 only for
+the NAS (adjust IP):
 
 ```powershell
 New-NetFirewallRule -DisplayName "Strata only from the NAS" -Direction Inbound -Protocol TCP -LocalPort 8080 -RemoteAddress 192.168.1.10 -Action Allow

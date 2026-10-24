@@ -64,6 +64,9 @@ pub struct FakePc {
     pub hold_chat: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// Strata's process runs but does not answer yet (starting).
     pub starting: AtomicBool,
+    /// The PC's firewall drops the NAS's requests to Strata: it answers
+    /// the PC service, not the NAS.
+    pub strata_blocked: AtomicBool,
     /// Strata answers, but its model is not in memory (`"loaded": false`).
     pub unloaded: AtomicBool,
     /// Bodies of the chat requests that were not streamed.
@@ -194,6 +197,7 @@ impl FakePc {
         PcStatus {
             gaming_mode: self.gaming.load(Ordering::SeqCst),
             strata_running: self.strata_running(),
+            strata_answers: self.strata_up(),
             strata_job: self.job_running(),
             strata_job_kind: self.job_running().then(|| self.job_kind()).flatten(),
             mac: self.report_mac.lock().unwrap().clone(),
@@ -246,7 +250,7 @@ pub async fn plug_status(State(pc): State<Pc>) -> Response {
 /// Like Strata: 200 with `loaded`; a stand-in 503 when it would not answer.
 pub async fn health(State(pc): State<Pc>, headers: HeaderMap) -> Response {
     *pc.health_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
-    if pc.strata_up() {
+    if pc.strata_up() && !pc.strata_blocked.load(Ordering::SeqCst) {
         let loaded = !pc.unloaded.load(Ordering::SeqCst);
         Json(
             json!({"status": "ok", "loaded": loaded, "service": "strata",

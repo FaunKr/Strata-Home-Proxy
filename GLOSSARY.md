@@ -129,6 +129,10 @@ _Avoid_: entladen, Modell nicht geladen
 The PC service reports Strata as running, but it does not answer yet.
 _Avoid_: starting, Lädt
 
+**Not reachable**:
+Strata answers the PC service on the PC, but not the proxy: the network between NAS and PC drops it, e.g. the PC's firewall after a Strata update.
+_Avoid_: unreachable (in UI text), Offline
+
 **Forced Strata restart**:
 *Force restart Strata* in the web UI: the PC service cancels a running Strata job, kills Strata hard (a hand-started one too) and starts its own Strata again when it has a start script and auto-start is on. Refused in gaming mode and during a PC service update.
 _Avoid_: Strata kill, hard restart

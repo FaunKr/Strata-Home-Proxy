@@ -285,29 +285,32 @@ async fn without_a_pc_service_there_is_no_switch() {
     );
 }
 
+/// The switch shows `why` it cannot be used, and refuses with it.
+async fn blocked(s: &Setup, b: &mut Browser, why: &str) {
+    let view = relay_view(b).await;
+    let shown = view["blocked"].as_str().unwrap_or_default();
+    assert!(shown.contains(why), "{view}");
+    refused(switch(b, true).await, why).await;
+    assert!(s.pc.job_bodies.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
-async fn the_switch_says_why_it_cannot_be_used() {
+async fn a_pc_service_without_the_switch_is_too_old() {
     let (s, mut b) = switchable().await;
-    s.pc.no_relay.store(true, Ordering::SeqCst);
-    refused(switch(&mut b, true).await, "too old").await;
-    assert!(
-        relay_view(&mut b).await["blocked"]
-            .as_str()
-            .unwrap()
-            .contains("too old")
-    );
-    s.pc.no_relay.store(false, Ordering::SeqCst);
+    s.pc.no_switch.store(true, Ordering::SeqCst);
+    blocked(&s, &mut b, "too old").await;
+}
 
+#[tokio::test]
+async fn gaming_mode_blocks_the_switch() {
+    let (s, mut b) = switchable().await;
     s.pc.gaming.store(true, Ordering::SeqCst);
-    refused(switch(&mut b, true).await, "Gaming mode").await;
-    assert!(
-        relay_view(&mut b).await["blocked"]
-            .as_str()
-            .unwrap()
-            .contains("Gaming mode")
-    );
-    s.pc.gaming.store(false, Ordering::SeqCst);
+    blocked(&s, &mut b, "Gaming mode").await;
+}
 
+#[tokio::test]
+async fn an_old_strata_folder_blocks_the_switch() {
+    let (s, mut b) = switchable().await;
     s.pc.strata_info
         .lock()
         .unwrap()
@@ -315,13 +318,26 @@ async fn the_switch_says_why_it_cannot_be_used() {
         .unwrap()
         .info
         .install = Some(strata_pc_protocol::StrataInstall::Source);
-    assert!(
-        relay_view(&mut b).await["blocked"]
-            .as_str()
-            .unwrap()
-            .contains("old Strata folder")
+    let view = relay_view(&mut b).await;
+    let shown = view["blocked"].as_str().unwrap_or_default();
+    assert!(shown.contains("old Strata folder"), "{view}");
+}
+
+#[tokio::test]
+async fn a_mode_waiting_for_the_next_start_shows_as_switching() {
+    let (s, mut b) = switchable().await;
+    *s.pc.relay_wanted.lock().unwrap() = Some(true);
+    assert_eq!(
+        relay_view(&mut b).await,
+        json!({"on": true, "switching": true, "blocked": null})
     );
-    assert!(s.pc.job_bodies.lock().unwrap().is_empty());
+    assert_eq!(switch(&mut b, true).await.status(), 200);
+    assert!(
+        s.pc.job_bodies.lock().unwrap().is_empty(),
+        "set so already: no second job"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!kinds(&s.state).contains(&strata_nas_proxy::events::EventKind::RelayOn));
 }
 
 #[tokio::test]

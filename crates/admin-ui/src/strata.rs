@@ -3020,7 +3020,7 @@ fn Relay(view: RelayView, action: ServerAction<SetRelay>) -> impl IntoView {
     } = view;
     let locked = blocked.is_some() || switching;
     let state = if switching {
-        "Switching: Strata restarts with the new mode once it has finished its requests."
+        "Switching: Strata runs with the new mode from its next start, once it has finished its requests."
     } else if on {
         "On: Strata listens on the PC only, and the PC service passes the proxy's requests on to it."
     } else {

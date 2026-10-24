@@ -25,7 +25,8 @@ const sample = name =>
   JSON.parse(fs.readFileSync(path.join(__dirname, '../crates/pc-protocol/tests/samples', name), 'utf8'));
 
 // No MAC: the check does not cover a reported one.
-const status = { ...sample('status.json'), version: '0.1.0+ui-check', user_idle_secs: 0, mac: undefined };
+const status = { ...sample('status.json'), version: '0.1.0+ui-check', user_idle_secs: 0, mac: undefined,
+  relay: { on: false, wanted: false } };
 const strataSample = sample('strata.json');
 
 const at = Math.floor(Date.now() / 1000) - 3600;
@@ -186,8 +187,10 @@ http.createServer((req, res) => {
       const body = raw ? JSON.parse(raw) : {};
       // A picture switch ends by reporting the model with its new state.
       const picturesAfter = body.kind === 'set_pictures' ? (body.on ? 'gpu' : 'off') : null;
-      // A relay switch ends with Strata running in the new mode.
-      const relayAfter = body.kind === 'set_relay' ? { on: body.on } : null;
+      // A relay switch keeps the mode at once and ends with Strata running
+      // in it.
+      const relayAfter = body.kind === 'set_relay' ? { on: body.on, wanted: body.on } : null;
+      if (relayAfter) status.relay = { ...status.relay, wanted: body.on };
       strataJob = { id: 1, kind: body.kind ?? 'activate', model: body.model ?? null, state: 'running',
         lines: [], error: null, started: Math.floor(Date.now() / 1000), ended: null };
       // A run over all models activates each model; end the job shortly after,

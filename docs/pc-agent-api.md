@@ -97,9 +97,12 @@ last Strata it started is the Strata Terminal's on `127.0.0.1`, so the proxy
 reaches it only through `/relay` (below). The mode set with the job
 `set_relay` (kept in the managed values), else `relay` in the TOML, counts
 from the next start of Strata; before its first start the service counts a
-running Strata as started with the TOML. An old Strata folder's Strata is
-never in relay mode. Missing from services before relay mode, which cannot
-relay. The proxy follows `on` for every call to Strata and keeps the last
+running Strata as started with that mode. `wanted` is the mode the next
+start takes (`false` for an old Strata folder); while it differs from `on`
+the web UI shows the switch as switching. An old Strata folder's Strata is
+never in relay mode. `relay` is missing from services before relay mode,
+which cannot relay; `wanted` from services before `set_relay` (0.2.0), whose
+switch the web UI disables as too old. The proxy follows `on` for every call to Strata and keeps the last
 value in `DATA_DIR` (`relay-mode`), so a request after a restart of the
 proxy or while the PC sleeps takes the same way.
 

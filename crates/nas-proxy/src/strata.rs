@@ -231,12 +231,17 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
 }
 
 /// Relay mode as an answering PC service reports it, and why its switch
-/// cannot be used now.
+/// cannot be used now. The switch shows the mode it is set to; until
+/// Strata runs with it, it is switching.
 fn relay_view(status: &PcStatus, info: Option<&StrataInfo>) -> RelayView {
     let job = info.and_then(|i| i.job.as_ref());
-    let switching = job
+    let running = job
         .is_some_and(|j| j.kind == StrataJobKind::SetRelay && j.state == StrataJobState::Running);
-    let blocked = if status.relay.is_none() {
+    let wanted = status.relay.and_then(|r| r.wanted);
+    let on = wanted.unwrap_or(status.relay_on());
+    let switching = running || on != status.relay_on();
+    // A service that reports no wanted mode takes no `set_relay`.
+    let blocked = if wanted.is_none() {
         Some(RELAY_TOO_OLD)
     } else if status.gaming_mode {
         Some(RELAY_GAMING)
@@ -246,7 +251,7 @@ fn relay_view(status: &PcStatus, info: Option<&StrataInfo>) -> RelayView {
         None
     };
     RelayView {
-        on: status.relay_on(),
+        on,
         switching,
         blocked: blocked.map(String::from),
     }
@@ -265,6 +270,10 @@ pub async fn set_relay(state: &AppState, on: bool) -> Result<(), String> {
     };
     if let Some(why) = relay_view(&status, None).blocked {
         return Err(why);
+    }
+    // Set so already, e.g. a second click: no second job or event.
+    if status.relay.and_then(|r| r.wanted) == Some(on) {
+        return Ok(());
     }
     agent
         .start_strata_job(&StrataJobRequest::SetRelay { on })

@@ -315,7 +315,8 @@ async function oldFolder(page, errors, name) {
 }
 
 // Turns relay mode on under Strata → Connection, sees the switch and its
-// end as scripts/fake-pc.js reports them, and turns it off again.
+// end as scripts/fake-pc.js reports them, turns it off again and sees it
+// disabled with its reason in gaming mode.
 // Returns the number of findings.
 async function relay(page, errors, name) {
   const wait = { timeout: 15000 };
@@ -326,13 +327,22 @@ async function relay(page, errors, name) {
     await page.waitForTimeout(1500);
     const toggle = page.getByLabel('Relay through the PC service');
     await toggle.check(wait);
-    await page.getByText('Switching: Strata restarts with the new mode').waitFor(wait);
+    await page.getByText('Switching: Strata runs with the new mode from its next start').waitFor(wait);
     if (process.env.SHOTS === '1') {
       await page.screenshot({ path: `${process.env.OUT}/${name}_relay-switching.jpg`, type: 'jpeg', quality: 60 });
     }
     await page.getByText('On: Strata listens on the PC only').waitFor(wait);
     await toggle.uncheck(wait);
     await page.getByText('Off: the proxy reaches Strata directly').waitFor(wait);
+    // In gaming mode the switch is disabled and says why.
+    await fetch(`${process.env.FAKE_PC}/fake/pc?state=gaming`, { method: 'POST' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByText('Gaming mode is on: switch it off to switch relay mode.').waitFor(wait);
+    if (await toggle.isEnabled()) throw new Error('the relay switch can be used in gaming mode');
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/${name}_relay-gaming.jpg`, type: 'jpeg', quality: 60 });
+    }
+    await fetch(`${process.env.FAKE_PC}/fake/pc?state=awake`, { method: 'POST' });
   } catch (e) {
     issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
   }

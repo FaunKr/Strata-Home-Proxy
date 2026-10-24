@@ -443,12 +443,13 @@ pub enum EventKind {
     KeepAwakeEnded,
     /// Strata jobs on the PC; detail: kind and model, and why it failed.
     StrataJobStarted,
-    /// Relay mode switched from the web UI (the switch's job follows).
-    RelayOn,
-    RelayOff,
     StrataJobDone,
     StrataJobFailed,
     StrataJobCancelled,
+    /// Relay mode switched on or off from the web UI (the switch's job
+    /// follows).
+    RelayOn,
+    RelayOff,
     /// A preset applied or undone by its job; detail: the model.
     PresetApplied,
     PresetUndone,
@@ -655,9 +656,10 @@ pub struct StrataPage {
 /// the PC service passes the proxy's requests on to it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelayView {
-    /// Strata runs in relay mode, as the PC service last reported.
+    /// The mode the switch is set to, as the PC service last reported.
     pub on: bool,
-    /// A switch waits for Strata to finish its requests and restart.
+    /// Strata does not run with that mode yet: a switch waits for Strata
+    /// to finish its requests and restart, or for its next start.
     pub switching: bool,
     /// Why the switch cannot be used now; `None` if it can.
     pub blocked: Option<String>,

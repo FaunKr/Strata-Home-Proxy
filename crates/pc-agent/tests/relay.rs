@@ -153,7 +153,10 @@ async fn in_relay_mode_the_terminal_s_strata_listens_on_the_pc_only() {
     s.agent.strata().start();
     let (_, args) = s.fake.started.lock().unwrap().clone().unwrap();
     assert_eq!(args, Terminal::serve_args(&config, "127.0.0.1", "8080"));
-    assert_eq!(get(&s, "/status").await["relay"], json!({"on": true}));
+    assert_eq!(
+        get(&s, "/status").await["relay"],
+        json!({"on": true, "wanted": true})
+    );
 }
 
 #[tokio::test]
@@ -163,7 +166,10 @@ async fn without_relay_mode_strata_listens_for_the_nas() {
     s.agent.strata().start();
     let (_, args) = s.fake.started.lock().unwrap().clone().unwrap();
     assert_eq!(args, Terminal::serve_args(&config, "0.0.0.0", "8080"));
-    assert_eq!(get(&s, "/status").await["relay"], json!({"on": false}));
+    assert_eq!(
+        get(&s, "/status").await["relay"],
+        json!({"on": false, "wanted": false})
+    );
 }
 
 #[tokio::test]
@@ -175,7 +181,7 @@ async fn an_old_strata_folder_s_start_is_left_as_it_is() {
     assert!(args.is_empty(), "{args:?}");
     assert_eq!(
         get(&s, "/status").await["relay"],
-        json!({"on": false}),
+        json!({"on": false, "wanted": false}),
         "the proxy keeps the direct path"
     );
 }
@@ -212,7 +218,10 @@ async fn switching_relay_mode_restarts_strata_on_the_pc_only_once_idle() {
     assert_eq!(finished(&s).await["state"], "done");
     let (_, args) = s.fake.started.lock().unwrap().clone().unwrap();
     assert_eq!(args, Terminal::serve_args(&config, "127.0.0.1", "8080"));
-    assert_eq!(get(&s, "/status").await["relay"], json!({"on": true}));
+    assert_eq!(
+        get(&s, "/status").await["relay"],
+        json!({"on": true, "wanted": true})
+    );
     assert!(
         s.restarted().status().await.relay.unwrap().on,
         "the mode outlasts a restart of the service"
@@ -234,7 +243,10 @@ async fn switching_relay_mode_off_brings_strata_back_for_the_nas() {
     assert_eq!(finished(&s).await["state"], "done");
     let (_, args) = s.fake.started.lock().unwrap().clone().unwrap();
     assert_eq!(args, Terminal::serve_args(&config, "0.0.0.0", "8080"));
-    assert_eq!(get(&s, "/status").await["relay"], json!({"on": false}));
+    assert_eq!(
+        get(&s, "/status").await["relay"],
+        json!({"on": false, "wanted": false})
+    );
 }
 
 #[tokio::test]
@@ -246,6 +258,7 @@ async fn a_switch_while_strata_is_down_only_saves_the_mode() {
     post(&s, "/strata/jobs", json!({"kind": "set_relay", "on": true})).await;
     assert_eq!(finished(&s).await["state"], "done");
     assert_eq!(s.fake.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(get(&s, "/status").await["relay"]["wanted"], true);
     s.agent.strata().start();
     let (_, args) = s.fake.started.lock().unwrap().clone().unwrap();
     assert_eq!(args, Terminal::serve_args(&config, "127.0.0.1", "8080"));
@@ -264,5 +277,8 @@ async fn relay_mode_is_refused_for_the_old_strata_folder() {
             .contains("Strata Terminal"),
         "{answer}"
     );
-    assert_eq!(get(&s, "/status").await["relay"], json!({"on": false}));
+    assert_eq!(
+        get(&s, "/status").await["relay"],
+        json!({"on": false, "wanted": false})
+    );
 }

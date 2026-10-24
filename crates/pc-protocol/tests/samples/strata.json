@@ -167,7 +167,10 @@
       "ram_gb": 60,
       "memory_with_vram": false,
       "fits": true,
-      "partly_downloaded": true
+      "partly_downloaded": true,
+      "about": "3-bit i-quant, better quality, slower (more CPU work per token)",
+      "verdict": "fits",
+      "pictures": true
     },
     {
       "id": "coder-IQ1_M",
@@ -187,7 +190,11 @@
       "ram_gb": 108,
       "memory_with_vram": false,
       "fits": false,
-      "partly_downloaded": false
+      "partly_downloaded": false,
+      "about": "5-bit (Unsloth Dynamic): Q5_K experts with Q8_0 downs, close to Q8_0 in quality",
+      "verdict": "slow here: part of its experts in RAM, the rest read from the SSD (setup asks first)",
+      "experimental": true,
+      "pictures": false
     },
     {
       "id": "gyro-Gyro-S",

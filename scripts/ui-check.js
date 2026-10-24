@@ -10,7 +10,7 @@ const areas = ['/admin', '/admin/pc', '/admin/pc/history', '/admin/strata', '/ad
 const expected = {
   '/admin': ['87 W', 'Awake', '11.8 / 16.0 GB', '0 rpm', '41 % of limit', 'Last 7 days', 'kWh'],
   // The catalog from scripts/fake-pc.js: Gyro's memory is RAM + VRAM.
-  '/admin/strata': ['needs 62 GB RAM (recommended)', 'needs 28 GB RAM + VRAM', 'needs 35 GB RAM + VRAM (not enough RAM + VRAM)', 'DeepSeek-V4.1-Flash UD-Q8_K_XL'],
+  '/admin/strata': ['needs 62 GB RAM (recommended)', 'needs 28 GB RAM + VRAM', 'needs 35 GB RAM + VRAM (not enough RAM + VRAM)', 'DeepSeek-V4.1-Flash UD-Q8_K_XL · 508.4 GB download · needs 306 GB RAM + VRAM (experimental) (does not fit)', '3.5-bit i-quant, the best quality (matches the full model), the slowest. On this PC: fits.'],
   '/admin/pc/history': ['Awake and asleep', 'Last 7 days', 'Last 12 months', 'From', 'Energy', 'Saved', "today's price"],
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
@@ -154,12 +154,28 @@ async function forced(page, errors) {
     await page.locator('.strata-state .badge', { hasText: 'Paused' }).waitFor(wait);
     if (await restart.count()) throw new Error('Force restart Strata shows in gaming mode');
   });
+  await step('a failed job keeps its card with the error until closed', 'failed-job', async () => {
+    await fetch(`${process.env.FAKE_PC}/fake/last-job?state=failed`, { method: 'POST' });
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await sees("DeepSeek's engine is not available for this computer yet. Nothing has been downloaded.");
+    await page.waitForTimeout(1500);
+    await page.getByRole('button', { name: 'Close' }).click(wait);
+    await page.locator('section.failed-job').waitFor({ state: 'detached', ...wait });
+    await fetch(`${process.env.FAKE_PC}/fake/last-job?state=done`, { method: 'POST' });
+  });
   await step('the model form offers picture reading, ticked by default', 'pictures', async () => {
     await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
     const tick = page.locator('input[id$="-pictures"]').first();
     await tick.waitFor(wait);
     await sees('Lets the model read pictures');
     if (!(await tick.isChecked())) throw new Error('the Pictures tick is off by default');
+  });
+  await step("a size that reads no pictures offers no tick and shows Strata's words", 'pictures-size', async () => {
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    await page.locator('#AddModel-size').selectOption('deepseek-v4.1-flash-UD-Q8_K_XL');
+    await sees('On this PC: does not fit');
+    await page.locator('#AddModel-pictures').waitFor({ state: 'detached', ...wait });
   });
   await step("the models list shows each model's picture state", 'pictures-state', async () => {
     await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });

@@ -253,3 +253,34 @@ async fn a_failed_read_is_tried_again_after_the_next_job() {
     assert!(view.get("catalog_unreadable").is_none(), "{view}");
     assert_eq!(view["recommended"], "IQ3_S");
 }
+
+#[tokio::test]
+async fn each_size_carries_strata_s_words() {
+    let s = setup("catalog-words").await;
+    installed(&s, "0.2.2");
+    let mut catalog: Value = serde_json::from_str(CATALOG).unwrap();
+    let nvfp4 = catalog["catalog"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|f| f["family"] == "nvfp4")
+        .unwrap();
+    nvfp4["sizes"][2]["experimental"] = true.into();
+    nvfp4["sizes"][2]["images"] = false.into();
+    catalog_answers(&s, vec![catalog.to_string()], None);
+    let view = get(&s, "/strata").await;
+    let unsloth = entry(&view, "unsloth-UD-Q5_K_XL");
+    assert_eq!(
+        unsloth["about"],
+        "5-bit (Unsloth Dynamic): Q5_K experts with Q8_0 downs, close to Q8_0 in quality"
+    );
+    assert_eq!(
+        unsloth["verdict"],
+        "slow here: part of its experts in RAM, the rest read from the SSD (setup asks first)"
+    );
+    assert_eq!(unsloth["pictures"], true);
+    assert!(unsloth.get("experimental").is_none(), "{unsloth}");
+    let qad = entry(&view, "nvfp4-NVFP4-QAD");
+    assert_eq!(qad["experimental"], true);
+    assert_eq!(qad["pictures"], false);
+}

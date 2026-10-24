@@ -248,6 +248,9 @@ pub fn StrataArea() -> impl IntoView {
         cancel: ServerAction::new(),
         summarize: ServerAction::new(),
     };
+    // The start of the failed job whose card was closed: a new page answer
+    // must not bring it back.
+    let closed_job = RwSignal::new(None::<u64>);
     // Counts up every few seconds while Strata writes the update summary.
     let tick = RwSignal::new(0u32);
     // Asked for again when a job ends, so the tabs show the result.
@@ -361,6 +364,18 @@ pub fn StrataArea() -> impl IntoView {
                     .ok()
                     .map(|p| {
                         let job = area.job(&p);
+                        // The last job, if it failed: its card stays with the
+                        // error and the last lines until closed or the next job.
+                        let failed = p
+                            .info
+                            .as_ref()
+                            .and_then(|i| i.job.clone())
+                            .filter(|j| {
+                                matches!(
+                                    j.state,
+                                    StrataJobState::Failed | StrataJobState::Interrupted
+                                )
+                            });
                         let problem = p
                             .problem
                             .clone()
@@ -389,6 +404,13 @@ pub fn StrataArea() -> impl IntoView {
                             {gaming}
                             {move || {
                                 job.get().map(|j| view! { <JobCard job=j cancel=actions.cancel /> })
+                            }}
+                            {move || {
+                                (job.with(Option::is_none))
+                                    .then(|| failed.clone())
+                                    .flatten()
+                                    .filter(|j| closed_job.get() != Some(j.started))
+                                    .map(|j| view! { <FailedJob job=j closed=closed_job /> })
                             }}
                         }
                     })
@@ -653,12 +675,50 @@ fn speed_rows(speeds: &[TuneSpeed]) -> Vec<String> {
         .collect()
 }
 
-#[component]
-fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoView {
-    let title = match &job.model {
+/// What a job does, with its model: `Loading model coder-IQ1_M`.
+fn job_title(job: &StrataJob) -> String {
+    match &job.model {
         Some(m) => format!("{} {m}", strata_job_label(job.kind)),
         None => strata_job_label(job.kind).to_string(),
+    }
+}
+
+/// A job that failed: what it did, why it failed and its last lines.
+#[component]
+fn FailedJob(job: StrataJob, closed: RwSignal<Option<u64>>) -> impl IntoView {
+    let what = job_title(&job);
+    let (title, reason) = match job.state {
+        StrataJobState::Interrupted => (
+            format!("{what} was interrupted"),
+            "The PC service restarted while it ran.",
+        ),
+        _ => (
+            format!("{what} failed"),
+            "The PC service gave no reason; the lines below are the job's last output.",
+        ),
     };
+    let error = job.error.clone().unwrap_or_else(|| reason.into());
+    let started = job.started;
+    let lines = job.lines.join("\n");
+    view! {
+        <section class="card job failed-job" role="status">
+            <div class="card-head">
+                <h2>{title}</h2>
+            </div>
+            <p class="error">{error}</p>
+            {(!lines.is_empty()).then(|| view! { <pre class="lines">{lines}</pre> })}
+            <div class="actions">
+                <button type="button" class="secondary" on:click=move |_| closed.set(Some(started))>
+                    "Close"
+                </button>
+            </div>
+        </section>
+    }
+}
+
+#[component]
+fn JobCard(job: StrataJob, cancel: ServerAction<CancelStrataJob>) -> impl IntoView {
+    let title = job_title(&job);
     let mut figures = Vec::new();
     if let (Some(done), Some(total)) = (job.done_bytes, job.total_bytes) {
         figures.push(format!("{} of {}", bytes_gb(done), bytes_gb(total)));
@@ -790,7 +850,7 @@ fn ModelChoice(
     let context = RwSignal::new(info.default_context);
     let speed_projection = RwSignal::new(false);
     let pictures = RwSignal::new(true);
-    let takes = |field: fn(&StrataFamily) -> bool| {
+    let takes = |field: fn(&StrataSize, &StrataFamily) -> bool| {
         let sizes = sizes.clone();
         let families = info.families.clone();
         Memo::new(move |_| {
@@ -798,12 +858,31 @@ fn ModelChoice(
                 sizes
                     .iter()
                     .filter(|s| &s.id == id)
-                    .any(|s| families.iter().any(|f| f.id == s.family && field(f)))
+                    .any(|s| families.iter().any(|f| f.id == s.family && field(s, f)))
             })
         })
     };
-    let takes_projection = takes(|f| f.speed_projection);
-    let takes_pictures = takes(|f| f.pictures);
+    let takes_projection = takes(|_, f| f.speed_projection);
+    // Per size from Strata's catalog; an older PC service says it per family.
+    let takes_pictures = takes(|s, f| s.pictures.unwrap_or(f.pictures));
+    // Strata's words about the chosen size.
+    let strata_words = {
+        let sizes = sizes.clone();
+        move || {
+            choice.with(|id| {
+                let size = sizes.iter().find(|s| &s.id == id)?;
+                let verdict = size.verdict.as_ref().map(|v| format!("On this PC: {v}."));
+                let about =
+                    (!size.about.is_empty()).then(|| format!("{}.", capitalized(&size.about)));
+                let text = [about, verdict]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                (!text.is_empty()).then(|| view! { <p class="hint">{text}</p> })
+            })
+        }
+    };
     let family_title = |id: &str| {
         info.families
             .iter()
@@ -829,8 +908,15 @@ fn ModelChoice(
             if info.recommended.as_deref() == Some(s.id.as_str()) {
                 text.push_str(" (recommended)");
             }
-            if !s.fits {
-                text.push_str(&format!(" (not enough {memory})"));
+            if s.experimental {
+                text.push_str(" (experimental)");
+            }
+            match s.verdict.as_deref().map(verdict_head) {
+                // Strata's verdict; "fits" goes without saying.
+                Some(head) if head != "fits" => text.push_str(&format!(" ({head})")),
+                Some(_) => {}
+                None if !s.fits => text.push_str(&format!(" (not enough {memory})")),
+                None => {}
             }
             if s.partly_downloaded {
                 text.push_str(" (partly downloaded)");
@@ -904,6 +990,7 @@ fn ModelChoice(
                 >
                     {options}
                 </select>
+                {strata_words}
             </div>
             <div>
                 <label for=ctx.clone()>"Context"</label>
@@ -960,6 +1047,21 @@ fn ModelChoice(
         </div>
     }
     .into_any()
+}
+
+/// The head of Strata's verdict for a list entry: `tight` of `tight: it
+/// needs …`, `fits in the low-RAM mode` of `fits in the low-RAM mode
+/// (slower: …)`.
+fn verdict_head(verdict: &str) -> &str {
+    verdict.split([':', '(']).next().unwrap_or(verdict).trim()
+}
+
+/// Strata writes its descriptions in lower case, as the middle of a line.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
 }
 
 #[component]

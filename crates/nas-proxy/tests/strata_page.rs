@@ -561,6 +561,10 @@ async fn a_family_without_picture_reading_offers_no_tick() {
         memory_with_vram: false,
         fits: true,
         partly_downloaded: false,
+        about: String::new(),
+        verdict: None,
+        experimental: false,
+        pictures: None,
     }];
     report.info.recommended = None;
     *s.pc.strata_info.lock().unwrap() = Some(report);
@@ -569,6 +573,111 @@ async fn a_family_without_picture_reading_offers_no_tick() {
     assert!(html.contains("swift-IQ2_XS"), "{html}");
     assert!(!html.contains("id=\"Install-pictures\""), "{html}");
     assert!(!html.contains("Pictures"), "{html}");
+}
+
+/// One size as Strata's catalog describes it.
+fn described(
+    id: &str,
+    size: &str,
+    verdict: &str,
+    experimental: bool,
+    pictures: bool,
+) -> StrataSize {
+    StrataSize {
+        id: id.into(),
+        family: "qwen".into(),
+        size: size.into(),
+        download_gb: 66.4,
+        ram_gb: 48,
+        memory_with_vram: false,
+        fits: verdict == "fits",
+        partly_downloaded: false,
+        about: "2-bit, the fastest".into(),
+        verdict: Some(verdict.into()),
+        experimental,
+        pictures: Some(pictures),
+    }
+}
+
+#[tokio::test]
+async fn the_model_choice_shows_strata_s_words() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.catalog = vec![
+        described("Q2_0", "Q2_0", "fits", false, true),
+        described(
+            "IQ3_S",
+            "IQ3_S",
+            "tight: it needs about 90 GB of free disk space",
+            true,
+            true,
+        ),
+    ];
+    report.info.recommended = Some("Q2_0".into());
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("2-bit, the fastest"), "{html}");
+    assert!(html.contains("On this PC: fits."), "{html}");
+    assert!(
+        html.contains("IQ3_S · 66.4 GB download · needs 48 GB RAM (experimental) (tight)"),
+        "{html}"
+    );
+    assert!(!html.contains("not enough RAM"), "{html}");
+    assert!(html.contains("id=\"AddModel-pictures\""), "{html}");
+}
+
+#[tokio::test]
+async fn a_size_without_picture_reading_offers_no_tick() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.catalog = vec![described("Q2_0", "Q2_0", "fits", false, false)];
+    report.info.recommended = Some("Q2_0".into());
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("Q2_0"), "{html}");
+    assert!(!html.contains("id=\"AddModel-pictures\""), "{html}");
+}
+
+#[tokio::test]
+async fn a_failed_job_keeps_its_card_with_the_error_and_last_lines() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    *s.pc.strata_job.lock().unwrap() = Some(StrataJob {
+        model: Some("deepseek-v4.1-flash-UD-Q8_K_XL".into()),
+        error: Some("not enough disk space for the download".into()),
+        lines: vec![
+            "=== Step 4: Downloading the model ===".into(),
+            "  [X] not enough disk space".into(),
+        ],
+        ..job(StrataJobKind::AddModel, StrataJobState::Failed)
+    });
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(
+        html.contains("deepseek-v4.1-flash-UD-Q8_K_XL failed"),
+        "{html}"
+    );
+    assert!(
+        html.contains("not enough disk space for the download"),
+        "{html}"
+    );
+    assert!(
+        html.contains("=== Step 4: Downloading the model ==="),
+        "{html}"
+    );
+    assert!(html.contains(">Close<"), "{html}");
+}
+
+#[tokio::test]
+async fn a_job_that_ended_well_leaves_no_card() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    *s.pc.strata_job.lock().unwrap() = Some(job(StrataJobKind::AddModel, StrataJobState::Done));
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(!html.contains("failed-job"), "{html}");
 }
 
 #[tokio::test]

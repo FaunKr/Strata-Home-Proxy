@@ -256,6 +256,20 @@ pub struct StrataSize {
     pub fits: bool,
     /// Parts are downloaded already; installing continues there.
     pub partly_downloaded: bool,
+    /// Strata's one line about the size; empty from older services.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub about: String,
+    /// Strata's verdict for this PC, e.g. `fits` or `tight: …`; missing
+    /// when Strata gave none and from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    /// Strata marks the size experimental; `false` from older services.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub experimental: bool,
+    /// Setup can set up picture reading for this size; missing from older
+    /// services, which say it per family (`StrataFamily::pictures`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pictures: Option<bool>,
 }
 
 /// A model's last benchmark run.

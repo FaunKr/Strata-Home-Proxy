@@ -79,12 +79,14 @@ fn lines(prefix: &str, n: usize) -> Vec<String> {
     (1..=n).map(|i| format!("{prefix} {i}")).collect()
 }
 
+/// A model's load lines; before Strata's catalog is read the page knows
+/// the model by its run config's lower-case name.
 fn load_lines(view: &Value, id: &str) -> Value {
     view["models"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|m| m["id"] == id)
+        .find(|m| m["id"].as_str().is_some_and(|m| m.eq_ignore_ascii_case(id)))
         .unwrap_or_else(|| panic!("{id} missing: {view}"))["load_lines"]
         .clone()
 }

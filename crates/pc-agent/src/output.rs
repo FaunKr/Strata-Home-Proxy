@@ -194,15 +194,27 @@ impl StrataOutput {
 
     /// `model` was deleted: its load lines go with it.
     pub fn forget_load(&self, model: &str) {
-        let removed = self.inner.lock().unwrap().loads.remove(model).is_some();
+        let removed = {
+            let loads = &mut self.inner.lock().unwrap().loads;
+            let before = loads.len();
+            loads.retain(|id, _| !id.eq_ignore_ascii_case(model));
+            loads.len() != before
+        };
         if removed {
             self.save();
         }
     }
 
-    /// The lines of `model`'s latest load, if one was seen.
+    /// The lines of `model`'s latest load, if one was seen. Ids match in
+    /// any letter case: a start before Strata's catalog was read knows the
+    /// model by its run config's lower-case name.
     pub fn load_lines(&self, model: &str) -> Option<LoadLines> {
-        self.inner.lock().unwrap().loads.get(model).cloned()
+        let inner = self.inner.lock().unwrap();
+        inner
+            .loads
+            .iter()
+            .find(|(id, _)| id.eq_ignore_ascii_case(model))
+            .map(|(_, load)| load.clone())
     }
 
     /// Writes the kept loads to `load-lines.json`, without holding up the
@@ -269,6 +281,7 @@ fn end_load(inner: &mut Inner, answered: bool) -> bool {
         lines: lines.into(),
         answered,
     };
+    inner.loads.retain(|id, _| !id.eq_ignore_ascii_case(&model));
     inner.loads.insert(model, load);
     true
 }

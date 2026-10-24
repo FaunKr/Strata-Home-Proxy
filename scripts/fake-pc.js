@@ -10,6 +10,8 @@
 // and Strata answer: loading runs Strata without answering yet, hung is past
 // its load time (the PC service no longer counts it as running), asleep
 // answers nothing.
+// POST /fake/catalog?state=unreadable|read makes Strata's catalog unreadable
+// or brings it back.
 // Sleep now is refused; a forced sleep puts the fake PC to sleep, and a forced
 // Strata restart finds nothing to start.
 // The answers start from the PC service's samples in the protocol crate, so a
@@ -77,11 +79,13 @@ const strata = {
     { id: 'coder', title: 'Coder', speed_projection: true, pictures: true },
     { id: 'swift', title: 'Swift', speed_projection: false, pictures: true },
     { id: 'gyro', title: 'Qwen3.8-Flash-Next (Gyro)', speed_projection: false, pictures: true },
+    { id: 'deepseek41', title: 'DeepSeek-V4.1-Flash', speed_projection: false, pictures: false },
   ],
   catalog: [
     { id: 'IQ3_S', family: 'qwen', size: 'IQ3_S', download_gb: 83.6, ram_gb: 62, memory_with_vram: false, fits: true, partly_downloaded: false },
     { id: 'gyro-Gyro-S', family: 'gyro', size: 'Gyro-S', download_gb: 58.5, ram_gb: 28, memory_with_vram: true, fits: true, partly_downloaded: false },
     { id: 'gyro-Gyro-M', family: 'gyro', size: 'Gyro-M', download_gb: 92, ram_gb: 35, memory_with_vram: true, fits: false, partly_downloaded: false },
+    { id: 'deepseek-v4.1-flash-UD-Q8_K_XL', family: 'deepseek41', size: 'UD-Q8_K_XL', download_gb: 508.4, ram_gb: 306, memory_with_vram: true, fits: false, partly_downloaded: false },
   ],
   recommended: 'IQ3_S',
   contexts: [32768, 65536, 131072],
@@ -113,6 +117,8 @@ const runFor = (model, state) => ({
 });
 let held = [];
 const summary = '- **Run setup again** after this update.\n- Long prompts are read faster.\n- A crash when an answer hits max_tokens in a tool call is fixed.';
+
+const { catalog, contexts } = strata;
 
 http.createServer((req, res) => {
   const json = body => {
@@ -150,6 +156,13 @@ http.createServer((req, res) => {
   else if (req.method === 'POST' && req.url === '/strata/kill') {
     if (pcState === 'gaming') refuse(sample('strata-kill-refused.json'));
     else json({ ...sample('strata-kill.json'), cancelled_job: undefined, started: false });
+  }
+  else if (req.method === 'POST' && req.url.startsWith('/fake/catalog')) {
+    const unreadable = new URL(req.url, 'http://fake').searchParams.get('state') === 'unreadable';
+    strata.catalog_unreadable = unreadable ? 'Strata gave no catalog' : undefined;
+    strata.catalog = unreadable ? [] : catalog;
+    strata.contexts = unreadable ? [] : contexts;
+    res.end();
   }
   else if (req.method === 'POST' && req.url.startsWith('/fake/pc')) {
     pcState = new URL(req.url, 'http://fake').searchParams.get('state');

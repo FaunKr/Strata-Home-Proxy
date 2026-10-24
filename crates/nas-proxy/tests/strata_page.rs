@@ -260,6 +260,36 @@ async fn the_page_offers_the_setup_with_the_recommendation() {
 }
 
 #[tokio::test]
+async fn an_unreadable_catalog_asks_for_a_strata_update_instead_of_a_list() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.catalog = vec![];
+    report.info.contexts = vec![];
+    report.info.catalog_unreadable = Some("Strata gave no catalog".into());
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("Update Strata to choose a model"), "{html}");
+    assert!(html.contains("Strata gave no catalog"), "{html}");
+    assert!(!html.contains("Load model"), "{html}");
+    // The installed model stays, without a context to switch to.
+    assert!(html.contains("IQ3_XXS"), "{html}");
+    assert!(!html.contains("Change context"), "{html}");
+}
+
+#[tokio::test]
+async fn while_the_catalog_is_read_the_page_says_so() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.catalog = vec![];
+    report.info.catalog_reading = true;
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("Reading Strata"), "{html}");
+}
+
+#[tokio::test]
 async fn the_page_lists_installed_models_without_waking() {
     let s = setup(true, |_| {}).await;
     *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));

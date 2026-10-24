@@ -10,7 +10,7 @@ const areas = ['/admin', '/admin/pc', '/admin/pc/history', '/admin/strata', '/ad
 const expected = {
   '/admin': ['87 W', 'Awake', '11.8 / 16.0 GB', '0 rpm', '41 % of limit', 'Last 7 days', 'kWh'],
   // The catalog from scripts/fake-pc.js: Gyro's memory is RAM + VRAM.
-  '/admin/strata': ['needs 62 GB RAM (recommended)', 'needs 28 GB RAM + VRAM', 'needs 35 GB RAM + VRAM (not enough RAM + VRAM)'],
+  '/admin/strata': ['needs 62 GB RAM (recommended)', 'needs 28 GB RAM + VRAM', 'needs 35 GB RAM + VRAM (not enough RAM + VRAM)', 'DeepSeek-V4.1-Flash UD-Q8_K_XL'],
   '/admin/pc/history': ['Awake and asleep', 'Last 7 days', 'Last 12 months', 'From', 'Energy', 'Saved', "today's price"],
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
@@ -465,6 +465,10 @@ async function codeBench(page, errors) {
       }
       // The phone pass starts again from the first upstream and a written summary.
       await fetch(`${process.env.FAKE_PC}/fake/summary?mode=answer`, { method: 'POST' });
+      // An unreadable catalog asks for a Strata update instead of the list.
+      await fetch(`${process.env.FAKE_PC}/fake/catalog?state=unreadable`, { method: 'POST' });
+      findings += await check(page, errors, name, '/admin/strata (catalog unreadable)', ['Update Strata to choose a model', 'IQ3_XXS'], '_admin_strata-unreadable');
+      await fetch(`${process.env.FAKE_PC}/fake/catalog?state=read`, { method: 'POST' });
       findings += await forced(page, errors);
       findings += await codeBench(page, errors);
     }

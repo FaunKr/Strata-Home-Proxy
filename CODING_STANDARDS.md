@@ -85,8 +85,9 @@ Questions already decided: `docs/adr/`.
   section in `labels.rs`. If the section is missing,
   `each_area_shows_its_own_settings` fails.
 - **Strata jobs run only fixed programs.** The PC service takes
-  values only from `catalog.rs` and checks model IDs before they go into a path:
-  against the catalog for a new model, against the installed run configs for
+  a new model's family, size and context only from the catalog Strata
+  answered last (`catalog.rs`) and checks model IDs before they go into a path:
+  against that catalog for a new model, against the installed run configs for
   one that is installed (`Installation::has`, after `Installation::plain_id`). The Strata key is in no response to the
   web UI and in no stored job.
 - **Every way out of a Strata job leaves a state Strata

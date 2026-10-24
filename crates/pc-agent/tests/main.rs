@@ -11,6 +11,7 @@ mod managed_values;
 mod model_configs;
 mod presets;
 mod strata;
+mod strata_catalog;
 mod strata_models;
 mod strata_output;
 mod strata_process;

@@ -337,6 +337,23 @@ impl Terminal {
         }
     }
 
+    /// Prints Strata's catalog for this PC ([`crate::catalog::SCRIPT`]),
+    /// with the run configs in `install` and the models in `data`.
+    pub fn catalog(&self, install: &Path, data: &Path) -> CommandSpec {
+        let root = self.root();
+        CommandSpec {
+            program: root.join("python").join("python.exe"),
+            args: vec![
+                "-c".into(),
+                crate::catalog::SCRIPT.into(),
+                install.display().to_string(),
+                data.display().to_string(),
+            ],
+            dir: Some(root),
+            env: vec![self.install_env(), ("PYTHONNOUSERSITE".into(), "1".into())],
+        }
+    }
+
     /// The arguments to start the `strata` command with, so that it serves
     /// `config` in the foreground on `host` and `port`; the key comes from
     /// the run config.

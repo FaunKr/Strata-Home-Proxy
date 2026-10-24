@@ -6,3 +6,5 @@ crates/nas-proxy/tests/ui_language.rs
 # The check itself and its tests name the characters.
 scripts/check-language.sh
 scripts/check-language.test.sh
+# Strata's real catalog output: some of its size names read as German.
+crates/pc-agent/fixtures/strata-catalog.json

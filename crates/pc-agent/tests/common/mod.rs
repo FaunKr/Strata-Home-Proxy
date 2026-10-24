@@ -113,15 +113,35 @@ impl Fake {
             .insert(program.to_string(), command);
     }
 
-    /// The runs of `program`, by file name.
+    /// The runs of `program`, by file name, or by the name a script run
+    /// with `-c` gives itself (`python catalog`).
     pub fn runs_of(&self, program: &str) -> Vec<CommandSpec> {
         self.ran
             .lock()
             .unwrap()
             .iter()
-            .filter(|c| file_name(&c.program) == program)
+            .filter(|c| run_name(c) == program)
             .cloned()
             .collect()
+    }
+}
+
+/// What Strata's catalog script prints for a PC with 64 GB of RAM and an
+/// RTX 4090 (see the unit test in `catalog.rs`); every test's PC answers
+/// with it unless the test says otherwise.
+pub const CATALOG: &str = include_str!("../../fixtures/strata-catalog.json");
+
+/// A run's name for the fakes: the program's file name, and for a script
+/// run with `-c` whose first line is `# <name>` that name after it.
+fn run_name(spec: &CommandSpec) -> String {
+    let name = file_name(&spec.program);
+    match spec.args.as_slice() {
+        [c, script, ..] if c == "-c" => script
+            .lines()
+            .next()
+            .and_then(|l| l.strip_prefix("# "))
+            .map_or(name.clone(), |own| format!("{name} {own}")),
+        _ => name,
     }
 }
 
@@ -262,7 +282,7 @@ impl Platform for FakePlatform {
     fn run(&self, spec: &CommandSpec) -> anyhow::Result<Running> {
         let fake = Arc::clone(&self.0);
         fake.ran.lock().unwrap().push(spec.clone());
-        let name = file_name(&spec.program);
+        let name = run_name(spec);
         if name == "git" && fake.git_missing.load(Ordering::SeqCst) {
             anyhow::bail!("git not found");
         }
@@ -271,7 +291,10 @@ impl Platform for FakePlatform {
         }
         // The most specific fake first: "strata.cmd update --check", then
         // "strata.cmd update", then "strata.cmd".
-        for n in (1..=spec.args.len().min(2)).rev() {
+        for n in (1..=spec.args.len().min(2))
+            .rev()
+            .filter(|_| !name.contains(' '))
+        {
             let sub = format!("{name} {}", spec.args[..n].join(" "));
             if fake.commands.lock().unwrap().contains_key(&sub) {
                 return Ok(self.fake_run(&sub));
@@ -406,6 +429,13 @@ pub async fn setup(name: &str) -> Setup {
 pub async fn setup_with(name: &str, tweak: impl FnOnce(&mut Config)) -> Setup {
     let fake = Arc::new(Fake::default());
     fake.strata_up.store(true, Ordering::SeqCst);
+    fake.command(
+        "python catalog",
+        FakeCommand {
+            lines: vec![CATALOG.trim_end().to_string()],
+            ..FakeCommand::default()
+        },
+    );
     *fake.idle.lock().unwrap() = Duration::from_secs(3600);
     fake.ram.store(64 << 30, Ordering::SeqCst);
     *fake.disk_free.lock().unwrap() = Some(500_000_000_000);
@@ -456,6 +486,7 @@ pub async fn sleep_answer(s: &Setup) -> (u16, Value) {
 }
 
 pub async fn post(s: &Setup, path: &str, body: Value) -> (u16, Value) {
+    catalog_as_at_start(s, path).await;
     let resp = client()
         .post(format!("{}{path}", s.url))
         .bearer_auth("secret")
@@ -470,6 +501,7 @@ pub async fn post(s: &Setup, path: &str, body: Value) -> (u16, Value) {
 }
 
 pub async fn get(s: &Setup, path: &str) -> Value {
+    catalog_as_at_start(s, path).await;
     client()
         .get(format!("{}{path}", s.url))
         .bearer_auth("secret")
@@ -479,6 +511,15 @@ pub async fn get(s: &Setup, path: &str) -> Value {
         .json()
         .await
         .unwrap()
+}
+
+/// The service reads Strata's catalog at its start, before the page is
+/// visited; a test's Strata comes after the start, so its catalog is read
+/// before the first call that may need it.
+async fn catalog_as_at_start(s: &Setup, path: &str) {
+    if path.starts_with("/strata") {
+        strata_pc_agent::strata::read_catalog_if_new(&s.agent).await;
+    }
 }
 
 /// The job once `done` holds for it.

@@ -757,6 +757,19 @@ fn ModelChoice(
         .filter(|s| !skip.contains(&s.id))
         .cloned()
         .collect();
+    if let Some(why) = info.catalog_unreadable.clone() {
+        return view! {
+            <p class="hint">"Update Strata to choose a model."</p>
+            <p class="muted small">{format!("Strata's model list could not be read: {why}")}</p>
+        }
+        .into_any();
+    }
+    if info.catalog_reading {
+        return view! { <p class="hint">"Reading Strata's model list…"</p> }.into_any();
+    }
+    if info.catalog.is_empty() {
+        return view! { <p class="hint">"Strata's model list comes with Strata."</p> }.into_any();
+    }
     if sizes.is_empty() {
         return view! { <p class="hint">"Every model on Strata's list is installed already."</p> }
             .into_any();
@@ -1030,19 +1043,23 @@ fn ModelRow(
 ) -> impl IntoView {
     let size = bytes_gb(model.disk_bytes);
     // Only with word from the PC service on the context: an older one does not say.
-    let switch = model.context.map(|current| {
-        view! {
-            <ContextSwitch
-                id=model.id.clone()
-                active=model.active
-                current
-                contexts
-                default_context
-                actions
-                blocked
-            />
-        }
-    });
+    // Without Strata's catalog there are no contexts to offer.
+    let switch = model
+        .context
+        .filter(|_| !contexts.is_empty())
+        .map(|current| {
+            view! {
+                <ContextSwitch
+                    id=model.id.clone()
+                    active=model.active
+                    current
+                    contexts
+                    default_context
+                    actions
+                    blocked
+                />
+            }
+        });
     let mut meta = match &model.size {
         Some(quant) if *quant != model.id => format!("{quant} · {size}"),
         _ => size.clone(),

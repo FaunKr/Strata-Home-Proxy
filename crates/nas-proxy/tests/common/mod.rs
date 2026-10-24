@@ -537,6 +537,8 @@ pub fn strata_info(installed: bool) -> StrataReport {
             fits: true,
             partly_downloaded: false,
         }],
+        catalog_reading: false,
+        catalog_unreadable: None,
         recommended: Some("IQ3_XXS".into()),
         contexts: vec![32768, 65536],
         default_context: 65536,

@@ -78,6 +78,12 @@ if (-not $NasUrl -and -not $NasIp) {
 
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
 $update = Test-Path $config
+if ($update) {
+    # Strata's port from the address the service reaches it at, for a run
+    # without registration or a NAS that does not name it.
+    $url = Get-Content $config | Where-Object { $_ -match '^\s*strata_url\s*=' } | Select-Object -First 1
+    if ($url -match '["'']https?://[^"''/]+:(\d+)') { $StrataPort = [int]$Matches[1] }
+}
 
 if ($NasUrl) {
     # Before the registration, so an error here does not use up the code.
@@ -140,9 +146,6 @@ if ($NasUrl) {
     [IO.File]::WriteAllLines($config, $lines)
     Write-Host "Registered with the NAS, config: $config"
 } elseif ($update) {
-    # Strata's port from the address the service reaches it at.
-    $url = Get-Content $config | Where-Object { $_ -match '^\s*strata_url\s*=' } | Select-Object -First 1
-    if ($url -match '"http://[^"/]+:(\d+)') { $StrataPort = [int]$Matches[1] }
     # Only the NAS address can have changed.
     $lines = Get-Content $config | ForEach-Object {
         if ($_ -match "^\s*allowed_clients\s*=") { "allowed_clients = [`"$NasIp`"]" } else { $_ }

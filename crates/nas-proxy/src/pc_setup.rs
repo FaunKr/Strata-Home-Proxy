@@ -495,12 +495,12 @@ struct Registered {
     strata_port: u16,
 }
 
-/// The port the install command opens for Strata: the one in the proxy's
-/// Strata address, or Strata's default.
+/// The port the install command opens for Strata: the one the proxy's
+/// Strata address reaches, or Strata's default without an address.
 fn strata_port(strata_url: Option<&str>) -> u16 {
     strata_url
         .and_then(|url| reqwest::Url::parse(url).ok())
-        .and_then(|url| url.port())
+        .and_then(|url| url.port_or_known_default())
         .unwrap_or(8080)
 }
 

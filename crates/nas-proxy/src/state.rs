@@ -310,7 +310,7 @@ impl AppState {
         self.lifecycle.lock().unwrap().touch(Now::read());
     }
 
-    fn settling(&self) -> bool {
+    pub(crate) fn settling(&self) -> bool {
         let (lifecycle, now, t) = self.lifecycle();
         lifecycle.settling(now, t)
     }
@@ -339,13 +339,13 @@ impl AppState {
 
     /// Asks the PC service for its status for the overview, and notes gaming
     /// mode or a sleeping PC like the idle check does.
-    pub async fn check_pc(&self, strata_answers: bool) -> Option<PcStatus> {
+    pub async fn check_pc(&self, strata_answers_nas: bool) -> Option<PcStatus> {
         let agent = self.agent();
         if !agent.configured() {
             return None;
         }
         let status = self.ask_pc(&agent).await;
-        self.note(|l, now, t| l.pc_answered(status.as_ref(), strata_answers, now, t));
+        self.note(|l, now, t| l.pc_answered(status.as_ref(), strata_answers_nas, now, t));
         status
     }
 
@@ -506,10 +506,10 @@ impl AppState {
         let status = self.ask_pc(&agent).await;
         // A missed answer is no sleeping PC while Strata still answers (a
         // busy PC or network); waking it again would restart the idle time.
-        let strata_answers = status.is_none() && self.strata_healthy().await;
+        let strata_answers_nas = status.is_none() && self.strata_healthy().await;
         {
             let (mut lifecycle, now, t) = self.lifecycle();
-            let seen = lifecycle.pc_answered(status.as_ref(), strata_answers, now, t);
+            let seen = lifecycle.pc_answered(status.as_ref(), strata_answers_nas, now, t);
             self.record(seen.record);
             // A tune holds the idle time: its end starts it again.
             if status.as_ref().is_some_and(tuning) {

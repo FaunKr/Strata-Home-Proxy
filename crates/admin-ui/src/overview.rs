@@ -645,7 +645,7 @@ pub(crate) fn strata_sentence(strata: &StrataView) -> String {
         StrataView::Offline => "Strata is not running.".into(),
         StrataView::Loading => "Strata is loading the model.".into(),
         StrataView::Unreachable => "Strata runs on the PC but does not answer the NAS. Check the \
-                                    PC's firewall, for example a Windows prompt after a Strata \
+                                    PC's firewall: allow Strata if Windows asked after a Strata \
                                     update, or run the install command again."
             .into(),
         StrataView::Unloaded => "Strata is ready and loads the model with the next request.".into(),

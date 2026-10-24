@@ -43,6 +43,126 @@ fn hours(day: &Value) -> (f64, f64, f64, f64) {
     )
 }
 
+/// A GET to the web UI with the browser's session cookie.
+async fn get(b: &Browser, path: &str) -> reqwest::Response {
+    let mut req = reqwest::Client::new().get(format!("{}{}", b.base, path));
+    if let Some(c) = &b.cookie {
+        req = req.header("cookie", c);
+    }
+    req.send().await.unwrap()
+}
+
+/// The dates of the rows of a CSV, without the header.
+fn csv_dates(text: &str) -> Vec<String> {
+    text.lines()
+        .skip(1)
+        .map(|line| line.split(',').next().unwrap().to_string())
+        .collect()
+}
+
+/// The history and its CSV for the same range, both taken on the same day:
+/// across local midnight the two would show different bars.
+async fn csv_and_history(b: &mut Browser, range: &str) -> (reqwest::Response, Value) {
+    loop {
+        let before = history(b, range).await;
+        let resp = get(b, &format!("/admin/history.csv?range={range}")).await;
+        let after = fetch(b, range).await;
+        if before["from"] == after["from"] && before["to"] == after["to"] {
+            return (resp, after);
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_history_downloads_as_csv() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    seen(&s, EventKind::PcSeenAwake).await;
+    let (resp, view) = csv_and_history(&mut b, "7d").await;
+    assert_eq!(resp.status(), 200, "the csv download failed");
+    assert_eq!(resp.headers()["content-type"], "text/csv; charset=utf-8");
+    assert_eq!(
+        resp.headers()["content-disposition"],
+        format!(
+            "attachment; filename=\"history-{}-{}.csv\"",
+            view["from"].as_str().unwrap(),
+            view["to"].as_str().unwrap()
+        )
+    );
+    let text = resp.text().await.unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines[0], "date,awake_h,gaming_h,asleep_h,unknown_h,kwh,eur,saved_kwh,saved_eur,source",
+        "{text}"
+    );
+    let days = view["days"].as_array().unwrap();
+    assert_eq!(lines.len() - 1, days.len(), "one row per bar: {text}");
+    for (i, line) in lines[1..].iter().enumerate() {
+        assert_eq!(
+            line.split(',').next().unwrap(),
+            days[i]["date"].as_str().unwrap(),
+            "{text}"
+        );
+    }
+    assert!(text.ends_with("\r\n"), "lines end with \\r\\n: {text}");
+}
+
+#[tokio::test]
+async fn the_csv_needs_a_signed_in_session() {
+    let s = setup(true, |_| {}).await;
+    let b = Browser::new(&s.url);
+    assert_eq!(
+        get(&b, "/admin/history.csv?range=7d").await.status(),
+        401,
+        "not signed in"
+    );
+    // Signed in with the default password, which still has to be changed.
+    let mut b = Browser::new(&s.url);
+    b.call("login", &[("password", "admin")]).await;
+    assert_eq!(
+        get(&b, "/admin/history.csv?range=7d").await.status(),
+        403,
+        "the password must be changed first"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_range_gives_the_same_rows_as_seven_days() {
+    let s = setup(true, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    seen(&s, EventKind::PcSeenAwake).await;
+    let csv = |range: &'static str| {
+        let b = &b;
+        async move {
+            let resp = get(b, &format!("/admin/history.csv?range={range}")).await;
+            csv_dates(&resp.text().await.unwrap())
+        }
+    };
+    // Across local midnight the two would show different days; then again.
+    loop {
+        let seven = csv("7d").await;
+        let nonsense = csv("nonsense").await;
+        let missing = csv("").await;
+        if seven == csv("7d").await {
+            assert_eq!(nonsense, seven, "an unknown range");
+            assert_eq!(missing, seven, "an empty range");
+            return;
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_history_page_offers_the_csv_download() {
+    let s = setup(true, |c| c.idle_check = Duration::from_secs(3600)).await;
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/pc/history").await;
+    assert!(html.contains("Download CSV"), "{html}");
+    assert!(
+        html.contains(r#"href="/admin/history.csv?range=7d" download"#),
+        "a download link for the picked range: {html}"
+    );
+}
+
 #[tokio::test]
 async fn a_pc_woken_by_hand_counts_as_awake() {
     let s = setup(false, |_| {}).await;

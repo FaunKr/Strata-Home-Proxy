@@ -16,6 +16,10 @@
     "api_key": "0123abcd"
   },
   {
+    "kind": "install",
+    "api_key": "0123abcd"
+  },
+  {
     "kind": "add_model",
     "family": "coder",
     "size": "IQ1_M",

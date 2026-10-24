@@ -287,6 +287,18 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
     let context = || form.context.ok_or_else(|| need("context"));
     let preset = || form.preset.clone().ok_or_else(|| need("preset"));
     Ok(match form.kind {
+        // Strata alone; with a model only for an older PC service, whose
+        // page offers its own model list before Strata is set up.
+        StrataJobKind::Install if form.family.is_none() && form.size.is_none() => {
+            StrataJobRequest::Install {
+                family: None,
+                size: None,
+                context: None,
+                api_key: hex(&random_key()),
+                experimental_speed_projection: false,
+                pictures: false,
+            }
+        }
         StrataJobKind::Install | StrataJobKind::AddModel => {
             let family = form.family.clone().ok_or_else(|| need("family"))?;
             let size = form.size.clone().ok_or_else(|| need("size"))?;
@@ -294,9 +306,9 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
             let pictures = form.pictures;
             if form.kind == StrataJobKind::Install {
                 StrataJobRequest::Install {
-                    family,
-                    size,
-                    context: context()?,
+                    family: Some(family),
+                    size: Some(size),
+                    context: Some(context()?),
                     // The PC service ignores it; one before the key per
                     // start refuses an empty key, so it gets a random one.
                     api_key: hex(&random_key()),

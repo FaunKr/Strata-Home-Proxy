@@ -183,6 +183,18 @@ async function forced(page, errors) {
     await page.locator('section.failed-job').waitFor({ state: 'detached', ...wait });
     await fetch(`${process.env.FAKE_PC}/fake/last-job?state=done`, { method: 'POST' });
   });
+  await step('a PC without Strata sets up Strata alone, then offers the first model', 'first-install', async () => {
+    const strataState = state => fetch(`${process.env.FAKE_PC}/fake/strata?state=${state}`, { method: 'POST' });
+    await strataState('none');
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await sees('Then you choose the first model');
+    if (await page.locator('select[id="Install-size"]').count()) throw new Error('the setup asks for a model');
+    await strataState('first');
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await sees('Choose the first model');
+    await page.locator('select[id="AddModel-size"]').waitFor(wait);
+    await strataState('installed');
+  });
   await step('the model form offers picture reading, ticked by default', 'pictures', async () => {
     await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
     const tick = page.locator('input[id$="-pictures"]').first();

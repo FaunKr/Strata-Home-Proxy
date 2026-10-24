@@ -14,12 +14,17 @@ fn bearer(secret: &str) -> Option<String> {
     Some(format!("Bearer {secret}"))
 }
 
-/// A PC whose Strata runs in relay mode, with `key`; the proxy has seen
-/// its status once. Only the test asks for the status.
+/// A PC whose Strata runs in relay mode, with its Strata key; the proxy
+/// has seen its status once. Only the test asks for the status.
 async fn relayed(awake: bool) -> Setup {
+    relayed_in(awake, None).await
+}
+
+async fn relayed_in(awake: bool, data_dir: Option<std::path::PathBuf>) -> Setup {
     let s = setup(true, |c| {
         c.pc_agent_token = Some(TOKEN.into());
         c.idle_check = Duration::from_secs(3600);
+        c.data_dir = data_dir;
     })
     .await;
     s.pc.relay.store(true, Ordering::SeqCst);
@@ -143,5 +148,32 @@ async fn a_sleeping_pc_is_woken_and_answers_through_the_relay() {
     assert_eq!(resp.status(), 200);
     assert!(s.pc.wol_packets.load(Ordering::SeqCst) >= 1);
     assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 1);
+    no_direct_request(&s);
+}
+
+#[tokio::test]
+async fn after_a_restart_of_the_proxy_the_first_request_takes_the_relay() {
+    let s = relayed_in(true, Some(data_dir("relay-restart"))).await;
+    let state = restarted(&s);
+    let url = serve_proxy(state).await;
+    // Before any status: the request itself goes the way the proxy kept.
+    let resp = post_json_to(&url, &s.key, "/v1/chat/completions", json!({})).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(s.pc.api_requests.load(Ordering::SeqCst), 1);
+    no_direct_request(&s);
+}
+
+#[tokio::test]
+async fn the_update_summary_s_chat_goes_through_the_relay() {
+    let s = relayed(true).await;
+    let answer = s
+        .state
+        .strata()
+        .unwrap()
+        .chat(&json!({"messages": []}), Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(answer.content, "Hallo");
+    assert!(s.pc.relay_requests.load(Ordering::SeqCst) >= 1);
     no_direct_request(&s);
 }

@@ -93,10 +93,14 @@ compares it only for a change. It is there even while no model
 configuration holds a key; only services before the key per start lack it.
 
 `relay` is relay mode as the service runs Strata: `{"on": true}` when the
-Strata Terminal's Strata listens on the PC only and the proxy reaches it
-through `/relay` (below). It follows `relay` in the TOML, which counts from
-the next start of Strata. Missing from services before relay mode, which
-cannot relay. The proxy follows `on` for every call to Strata.
+last Strata it started is the Strata Terminal's on `127.0.0.1`, so the proxy
+reaches it only through `/relay` (below). `relay` in the TOML counts from
+the next start of Strata; before its first start the service counts a
+running Strata as started with the TOML. An old Strata folder's Strata is
+never in relay mode. Missing from services before relay mode, which cannot
+relay. The proxy follows `on` for every call to Strata and keeps the last
+value in `DATA_DIR` (`relay-mode`), so a request after a restart of the
+proxy or while the PC sleeps takes the same way.
 
 If the service does not answer, the proxy assumes the PC is asleep and wakes
 it.
@@ -128,7 +132,7 @@ without the prefix: `GET /relay/health` is Strata's `GET /health`. Method,
 query, headers and body pass unchanged, except that the token's
 `Authorization` is replaced by `Bearer <Strata key>` and headers of one
 connection (`Host`, `Connection`, `Transfer-Encoding`, …) stay behind.
-Strata's answer comes back unchanged, its errors included. Both bodies are
+Strata's answer comes back unchanged, its errors and redirects included. Both bodies are
 streamed with no overall timeout (an event stream arrives event by event);
 when the caller's connection ends, the request to Strata ends too.
 

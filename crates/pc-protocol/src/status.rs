@@ -69,6 +69,13 @@ pub const RELAY_PATH: &str = "/relay";
 /// the answer is the PC service's, not Strata's.
 pub const RELAY_NO_STRATA: &str = "x-relay-no-strata";
 
+impl PcStatus {
+    /// Strata runs in relay mode: the proxy reaches it through the relay.
+    pub fn relay_on(&self) -> bool {
+        self.relay.is_some_and(|r| r.on)
+    }
+}
+
 /// `GET /strata/key`: the Strata key in Strata's model configs, and the
 /// generation the status reports for it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

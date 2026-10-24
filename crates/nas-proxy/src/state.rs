@@ -100,8 +100,9 @@ pub struct AppState {
     /// Strata's port meanwhile, so Strata's health says nothing then.
     tuning: AtomicBool,
     /// The PC service reported Strata running in relay mode: calls to
-    /// Strata go through its relay. Kept while the PC sleeps; the next
-    /// status, which every wake-up asks for, brings it anew.
+    /// Strata go through its relay. Kept in `DATA_DIR`, so that after a
+    /// restart of the proxy or while the PC sleeps a request still takes
+    /// the relay before the next status.
     relay: AtomicBool,
     /// Requests sent to Strata up to this moment are given up: Strata has
     /// shown nothing since (`drop_lost_requests`).
@@ -163,7 +164,7 @@ impl AppState {
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
             tuning: AtomicBool::new(false),
-            relay: AtomicBool::new(false),
+            relay: AtomicBool::new(relay_file(&cfg.data_dir).is_some_and(|p| p.exists())),
             give_up: tokio::sync::watch::Sender::new(None),
             quiet_since: Mutex::new(None),
             lost_after: Mutex::new(LOST_AFTER),
@@ -212,8 +213,7 @@ impl AppState {
 
     async fn take_over(&self, agent: &AgentClient, status: &PcStatus) {
         self.tuning.store(tuning(status), Ordering::SeqCst);
-        self.relay
-            .store(status.relay.is_some_and(|r| r.on), Ordering::SeqCst);
+        self.note_relay(status.relay_on());
         if let Some(mac) = status.mac.as_deref().and_then(|m| parse_mac(m).ok())
             && self.settings.set_reported_mac(mac)
         {
@@ -250,6 +250,27 @@ impl AppState {
     /// Strata runs in relay mode, as the PC service last reported.
     pub fn relay(&self) -> bool {
         self.relay.load(Ordering::SeqCst)
+    }
+
+    /// Takes over the reported relay mode and keeps a change in `DATA_DIR`.
+    fn note_relay(&self, on: bool) {
+        if self.relay.swap(on, Ordering::SeqCst) == on {
+            return;
+        }
+        let Some(dir) = self.cfg().data_dir.clone() else {
+            return;
+        };
+        let written = if on {
+            crate::files::write_private(&dir, RELAY_FILE, b"on\n")
+        } else {
+            match std::fs::remove_file(dir.join(RELAY_FILE)) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                other => other,
+            }
+        };
+        if let Err(e) = written {
+            tracing::warn!("Relay mode not saved: {e}");
+        }
     }
 
     /// Client for the PC service with the current address and token.
@@ -716,6 +737,13 @@ impl Drop for ActivityGuard {
 }
 
 const KEEP_AWAKE_FILE: &str = "keep-awake.json";
+
+/// There while the PC service last reported relay mode.
+const RELAY_FILE: &str = "relay-mode";
+
+fn relay_file(data_dir: &Option<PathBuf>) -> Option<PathBuf> {
+    data_dir.as_ref().map(|dir| dir.join(RELAY_FILE))
+}
 
 fn keep_awake_file(data_dir: &Option<PathBuf>) -> Option<PathBuf> {
     data_dir.as_ref().map(|dir| dir.join(KEEP_AWAKE_FILE))

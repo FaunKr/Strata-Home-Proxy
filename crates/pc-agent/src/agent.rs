@@ -42,6 +42,7 @@ use crate::{
     strata::{self, OptionsCheck, PresetsCheck, Refusal, StrataJobRequest, UpdateCheck},
     strata_key::StrataKey,
     strata_process::{StrataProcess, Times},
+    terminal::Terminal,
     update::UpdateError,
 };
 
@@ -103,6 +104,9 @@ pub struct Agent {
     pub(crate) output: Arc<StrataOutput>,
     /// A new one comes with every start of Strata.
     pub(crate) strata_key: StrataKey,
+    /// The last Strata this service started listens on this PC only;
+    /// unknown before its first start.
+    pub(crate) strata_local: Mutex<Option<bool>>,
     /// What the PC is, read with the first `GET /strata`; with when to read
     /// it again if it lacks a graphics card or the drive.
     machine: Mutex<Option<(MachineFacts, Option<Instant>)>>,
@@ -131,6 +135,8 @@ impl Agent {
             .expect("HTTP client");
         let relay_http = reqwest::Client::builder()
             .connect_timeout(STRATA_CONNECT_TIMEOUT)
+            // Strata's answer goes back as it is, a redirect too.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("HTTP client");
         let gaming = gaming_flag(&cfg).exists();
@@ -165,6 +171,7 @@ impl Agent {
             standby_pending: AtomicBool::new(false),
             output,
             strata_key: StrataKey::new(),
+            strata_local: Mutex::new(None),
             machine: Mutex::new(None),
         })
     }
@@ -218,6 +225,20 @@ impl Agent {
         }
     }
 
+    /// Strata runs for relay mode: the last start put it on this PC only.
+    /// Before the first start, a Strata already running counts as started
+    /// with the configuration.
+    fn relay_on(&self) -> bool {
+        let started = *self.strata_local.lock().unwrap();
+        started.unwrap_or_else(|| {
+            let managed = self.managed();
+            self.cfg.relay
+                && managed
+                    .start(&self.cfg)
+                    .is_some_and(|(_, args)| Terminal::served_config(args).is_some())
+        })
+    }
+
     pub(crate) async fn strata_healthy(&self) -> bool {
         matches!(self.strata_get("/health").send().await, Ok(r) if r.status().is_success())
     }
@@ -248,7 +269,9 @@ impl Agent {
             version: Some(crate::version().to_string()),
             hardware: Some(self.platform.hardware()),
             strata_key_generation: Some(self.strata_key.generation()),
-            relay: Some(Relay { on: self.cfg.relay }),
+            relay: Some(Relay {
+                on: self.relay_on(),
+            }),
         }
     }
 

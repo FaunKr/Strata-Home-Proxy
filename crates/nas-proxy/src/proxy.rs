@@ -237,8 +237,9 @@ struct Incoming {
 /// PC service adds the key.
 async fn send_upstream(st: &AppState, req: &Incoming) -> Result<reqwest::Response, String> {
     let used = st.strata_key.key();
+    let relayed = st.relay();
     let resp = send_once(st, req, used.as_deref()).await?;
-    if resp.status() != StatusCode::UNAUTHORIZED || st.relay() {
+    if resp.status() != StatusCode::UNAUTHORIZED || relayed {
         return Ok(resp);
     }
     match crate::strata_key::refresh(st, used.as_deref()).await {

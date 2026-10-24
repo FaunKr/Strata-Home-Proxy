@@ -92,16 +92,18 @@ impl StrataClient {
 
     /// Sends `req`; the relay's marked `502` counts as no answer, like a
     /// failed connection.
-    async fn send(&self, req: reqwest::RequestBuilder) -> Result<Response, String> {
+    async fn send(&self, req: reqwest::RequestBuilder) -> Result<Response, Unanswered> {
         let resp = req.send().await.map_err(|e| {
             if e.is_timeout() {
-                TIMED_OUT.to_string()
+                Unanswered::TimedOut
             } else {
-                e.to_string()
+                Unanswered::Failed(e.to_string())
             }
         })?;
         if self.relayed && resp.headers().contains_key(RELAY_NO_STRATA) {
-            return Err("Strata does not answer the PC service".into());
+            return Err(Unanswered::Failed(
+                "Strata does not answer the PC service".into(),
+            ));
         }
         Ok(resp)
     }
@@ -118,7 +120,8 @@ impl StrataClient {
     pub async fn health(&self) -> Result<StrataHealth, String> {
         let resp = self
             .send(self.request(&self.probe, Method::GET, "/health"))
-            .await?;
+            .await
+            .map_err(|e| e.to_string())?;
         if !resp.status().is_success() {
             return Err(format!("/health answers {}", resp.status()));
         }
@@ -145,12 +148,11 @@ impl StrataClient {
             .request(&self.upstream, Method::POST, "/v1/chat/completions")
             .timeout(limit)
             .json(body);
-        let resp = self.send(req).await.map_err(|e| {
-            if e == TIMED_OUT {
+        let resp = self.send(req).await.map_err(|e| match e {
+            Unanswered::TimedOut => {
                 format!("Strata did not answer within {} s", limit.as_secs_f64())
-            } else {
-                e
             }
+            Unanswered::Failed(e) => e,
         })?;
         if !resp.status().is_success() {
             return Err(format!("Strata answers {}", resp.status()));
@@ -181,12 +183,24 @@ impl StrataClient {
             .request(&self.upstream, method, path_and_query)
             .headers(headers)
             .body(body);
-        self.send(req).await
+        self.send(req).await.map_err(|e| e.to_string())
     }
 }
 
-/// What [`StrataClient::send`] gives for a call that ran out of time.
-const TIMED_OUT: &str = "timed out";
+/// Why a call to Strata got no answer.
+enum Unanswered {
+    TimedOut,
+    Failed(String),
+}
+
+impl std::fmt::Display for Unanswered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TimedOut => f.write_str("Strata did not answer in time"),
+            Self::Failed(e) => f.write_str(e),
+        }
+    }
+}
 
 /// Reads a `/health` answer; one that is not JSON, or lacks `loaded`, counts
 /// as loaded, since only builds other than Strata answer that way.

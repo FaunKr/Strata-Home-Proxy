@@ -50,7 +50,7 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
     let keys = &state.strata_key;
     keys.unreported
         .store(status.strata_key_generation.is_none(), Ordering::SeqCst);
-    if status.relay.is_some_and(|r| r.on) {
+    if status.relay_on() {
         return;
     }
     if status.strata_key_generation.is_some() && status.strata_key_generation != keys.generation() {

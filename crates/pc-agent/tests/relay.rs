@@ -172,4 +172,17 @@ async fn an_old_strata_folder_s_start_is_left_as_it_is() {
     let (program, args) = s.fake.started.lock().unwrap().clone().unwrap();
     assert_eq!(program, std::path::PathBuf::from("START-HERE.bat"));
     assert!(args.is_empty(), "{args:?}");
+    assert_eq!(
+        get(&s, "/status").await["relay"],
+        json!({"on": false}),
+        "the proxy keeps the direct path"
+    );
+}
+
+#[tokio::test]
+async fn a_restarted_service_reports_the_mode_of_the_strata_it_finds() {
+    let s = setup_with("relay-restarted", relay_on).await;
+    terminal_installed(&s);
+    let agent = s.restarted();
+    assert!(agent.status().await.relay.unwrap().on);
 }

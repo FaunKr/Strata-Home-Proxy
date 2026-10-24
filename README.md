@@ -195,7 +195,7 @@ is in English and split into five areas: *Overview*, *PC*, *Strata*
   container, then the default password applies again.
 - **Settings:** Every value from [deploy/env.example](deploy/env.example)
   except `DATA_DIR` can be changed in its area (*PC*: connection,
-  waking and sleeping; *Strata → Connection*: address and key; *System*: the
+  waking and sleeping; *Strata → Connection*: address, key and relay mode; *System*: the
   rest) and applies as soon as the section is saved, only the address of the
   proxy (`LISTEN_ADDR`) not until a restart. The value from the
   page applies, otherwise the environment variable, otherwise the default; *Reset* discards

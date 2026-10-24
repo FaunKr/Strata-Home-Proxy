@@ -54,6 +54,7 @@ fn old_folder_config(s: &Setup, config: Value) -> Managed {
         strata_start: Some(leaves.installation().run_script("iq3_xxs")),
         strata_args: vec![],
         strata_processes: Some(vec![folder_entry(&cfg.strata_dir)]),
+        ..Default::default()
     };
     s.agent.set_managed(managed.clone()).unwrap();
     managed
@@ -370,6 +371,7 @@ async fn the_watchdog_notes_when_the_terminal_s_strata_answers() {
                 "8080",
             ),
             strata_processes: Some(terminal.processes()),
+            ..Default::default()
         })
         .unwrap();
     s.agent.watchdog_tick().await;
@@ -463,4 +465,24 @@ async fn a_model_with_picture_reading_keeps_it_in_the_switch() {
         "{:?}",
         setup.args
     );
+}
+
+#[tokio::test]
+async fn the_switch_keeps_relay_mode() {
+    let s = setup("switch-relay").await;
+    let old = old_folder(&s);
+    s.agent
+        .set_managed(Managed {
+            relay: Some(true),
+            ..old
+        })
+        .unwrap();
+    switchable(&s);
+
+    let done = job(&s, "switch_to_terminal").await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(s.agent.managed().relay, Some(true));
+    let (_, args) = s.fake.started.lock().unwrap().clone().unwrap();
+    let config = terminal_folder(&s).installation().config_path("iq3_xxs");
+    assert_eq!(args, Terminal::serve_args(&config, "127.0.0.1", "8080"));
 }

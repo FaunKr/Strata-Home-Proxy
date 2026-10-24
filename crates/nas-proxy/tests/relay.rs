@@ -177,3 +177,176 @@ async fn the_update_summary_s_chat_goes_through_the_relay() {
     assert!(s.pc.relay_requests.load(Ordering::SeqCst) >= 1);
     no_direct_request(&s);
 }
+
+/// The PC answers with an installed Strata; the proxy reaches Strata
+/// directly.
+async fn switchable() -> (Setup, Browser) {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    let b = logged_in(&s.url).await;
+    (s, b)
+}
+
+async fn switch(b: &mut Browser, on: bool) -> reqwest::Response {
+    b.call("strata-relay", &[("on", if on { "true" } else { "false" })])
+        .await
+}
+
+async fn relay_view(b: &mut Browser) -> serde_json::Value {
+    let resp = b.call("strata", &[]).await;
+    assert_eq!(resp.status(), 200);
+    resp.json::<serde_json::Value>().await.unwrap()["relay"].clone()
+}
+
+async fn refused(resp: reqwest::Response, why: &str) {
+    assert_eq!(resp.status(), 400);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains(why), "{text}");
+}
+
+#[tokio::test]
+async fn the_switch_starts_the_job_on_the_pc_and_notes_it_in_the_history() {
+    let (s, mut b) = switchable().await;
+    assert_eq!(
+        relay_view(&mut b).await,
+        json!({"on": false, "switching": false, "blocked": null})
+    );
+
+    assert_eq!(switch(&mut b, true).await.status(), 200);
+    assert_eq!(
+        s.pc.job_bodies.lock().unwrap().last().cloned().unwrap(),
+        json!({"kind": "set_relay", "on": true})
+    );
+    seen(&s, strata_nas_proxy::events::EventKind::RelayOn).await;
+    assert_eq!(relay_view(&mut b).await["switching"], true);
+
+    s.pc.update_job(|j| j.state = strata_pc_protocol::StrataJobState::Done);
+    s.pc.relay.store(true, Ordering::SeqCst);
+    assert_eq!(
+        relay_view(&mut b).await,
+        json!({"on": true, "switching": false, "blocked": null})
+    );
+    assert_eq!(switch(&mut b, false).await.status(), 200);
+    seen(&s, strata_nas_proxy::events::EventKind::RelayOff).await;
+}
+
+#[tokio::test]
+async fn requests_keep_the_old_path_until_strata_runs_in_the_new_mode() {
+    let (s, mut b) = switchable().await;
+    switch(&mut b, true).await;
+    assert_eq!(
+        post_json(&s, "/v1/chat/completions", json!({}))
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        s.pc.relay_requests.load(Ordering::SeqCst),
+        0,
+        "Strata straight"
+    );
+
+    s.pc.relay.store(true, Ordering::SeqCst);
+    s.state.ask_pc(&s.state.agent()).await.unwrap();
+    assert_eq!(
+        post_json(&s, "/v1/chat/completions", json!({}))
+            .await
+            .status(),
+        200,
+        "only the relay reaches Strata now"
+    );
+    no_direct_request(&s);
+}
+
+#[tokio::test]
+async fn a_sleeping_pc_is_not_woken_for_the_switch() {
+    let (s, mut b) = switchable().await;
+    s.pc.awake.store(false, Ordering::SeqCst);
+    refused(switch(&mut b, true).await, "asleep").await;
+    let view = relay_view(&mut b).await;
+    assert!(
+        view["blocked"].as_str().unwrap().contains("asleep"),
+        "{view}"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+    assert!(s.pc.job_bodies.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn without_a_pc_service_there_is_no_switch() {
+    let s = setup(true, |c| c.pc_agent_url = None).await;
+    let mut b = logged_in(&s.url).await;
+    refused(switch(&mut b, true).await, "PC_AGENT_URL").await;
+    let view = relay_view(&mut b).await;
+    assert!(
+        view["blocked"].as_str().unwrap().contains("PC_AGENT_URL"),
+        "{view}"
+    );
+}
+
+/// The switch shows `why` it cannot be used, and refuses with it.
+async fn blocked(s: &Setup, b: &mut Browser, why: &str) {
+    let view = relay_view(b).await;
+    let shown = view["blocked"].as_str().unwrap_or_default();
+    assert!(shown.contains(why), "{view}");
+    refused(switch(b, true).await, why).await;
+    assert!(s.pc.job_bodies.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_pc_service_without_the_switch_is_too_old() {
+    let (s, mut b) = switchable().await;
+    s.pc.no_switch.store(true, Ordering::SeqCst);
+    blocked(&s, &mut b, "too old").await;
+}
+
+#[tokio::test]
+async fn gaming_mode_blocks_the_switch() {
+    let (s, mut b) = switchable().await;
+    s.pc.gaming.store(true, Ordering::SeqCst);
+    blocked(&s, &mut b, "Gaming mode").await;
+}
+
+#[tokio::test]
+async fn an_old_strata_folder_blocks_the_switch() {
+    let (s, mut b) = switchable().await;
+    s.pc.strata_info
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .info
+        .install = Some(strata_pc_protocol::StrataInstall::Source);
+    let view = relay_view(&mut b).await;
+    let shown = view["blocked"].as_str().unwrap_or_default();
+    assert!(shown.contains("old Strata folder"), "{view}");
+}
+
+#[tokio::test]
+async fn a_mode_waiting_for_the_next_start_shows_as_switching() {
+    let (s, mut b) = switchable().await;
+    *s.pc.relay_wanted.lock().unwrap() = Some(true);
+    assert_eq!(
+        relay_view(&mut b).await,
+        json!({"on": true, "switching": true, "blocked": null})
+    );
+    assert_eq!(switch(&mut b, true).await.status(), 200);
+    assert!(
+        s.pc.job_bodies.lock().unwrap().is_empty(),
+        "set so already: no second job"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!kinds(&s.state).contains(&strata_nas_proxy::events::EventKind::RelayOn));
+}
+
+#[tokio::test]
+async fn the_pc_service_s_refusal_comes_back() {
+    let (s, mut b) = switchable().await;
+    *s.pc.refuse_job.lock().unwrap() = Some("The PC service is updating".into());
+    refused(switch(&mut b, true).await, "The PC service is updating").await;
+    assert!(
+        !kinds(&s.state).contains(&strata_nas_proxy::events::EventKind::RelayOn),
+        "no history event for a refused switch"
+    );
+}

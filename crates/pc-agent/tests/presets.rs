@@ -31,6 +31,7 @@ fn installed(s: &Setup) -> SetupLeaves {
             strata_start: Some(terminal.program()),
             strata_args: Terminal::serve_args(&served, "0.0.0.0", "8080"),
             strata_processes: Some(terminal.processes()),
+            ..Default::default()
         })
         .unwrap();
     leaves

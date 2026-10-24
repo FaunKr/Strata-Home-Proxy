@@ -23,6 +23,7 @@
   },
   "strata_key_generation": 7,
   "relay": {
-    "on": false
+    "on": false,
+    "wanted": true
   }
 }

@@ -41,10 +41,13 @@ pub enum StrataJobKind {
     /// Switches a model's active preset off: back to the standard settings,
     /// the preset stays saved.
     PresetOff,
+    /// Turns relay mode on or off, with one restart of Strata once it is
+    /// idle.
+    SetRelay,
 }
 
 impl StrataJobKind {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::Install,
         Self::AddModel,
         Self::Activate,
@@ -64,6 +67,7 @@ impl StrataJobKind {
         Self::SetUserArgs,
         Self::SetEngineSettings,
         Self::PresetOff,
+        Self::SetRelay,
     ];
 }
 
@@ -240,6 +244,11 @@ pub enum StrataJobRequest {
     PresetOff {
         model: String,
     },
+    /// Relay mode on or off: the Strata Terminal's Strata listens on the PC
+    /// only and the proxy reaches it through `/relay`, or the other way.
+    SetRelay {
+        on: bool,
+    },
 }
 
 impl StrataJobRequest {
@@ -264,6 +273,7 @@ impl StrataJobRequest {
             Self::SetUserArgs { .. } => StrataJobKind::SetUserArgs,
             Self::SetEngineSettings { .. } => StrataJobKind::SetEngineSettings,
             Self::PresetOff { .. } => StrataJobKind::PresetOff,
+            Self::SetRelay { .. } => StrataJobKind::SetRelay,
         }
     }
 }

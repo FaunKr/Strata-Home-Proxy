@@ -27,7 +27,13 @@ fn status() {
     let gpu = status.hardware.unwrap().gpu.unwrap();
     assert_eq!(gpu.fan_rpm, Some(0));
     assert_eq!(status.strata_key_generation, Some(7));
-    assert_eq!(status.relay, Some(Relay { on: false }));
+    assert_eq!(
+        status.relay,
+        Some(Relay {
+            on: false,
+            wanted: Some(true)
+        })
+    );
 }
 
 #[test]

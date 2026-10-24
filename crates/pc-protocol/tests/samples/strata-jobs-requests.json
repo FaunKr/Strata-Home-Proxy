@@ -109,5 +109,9 @@
   {
     "kind": "preset_off",
     "model": "IQ3_XXS"
+  },
+  {
+    "kind": "set_relay",
+    "on": true
   }
 ]

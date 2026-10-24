@@ -1,5 +1,5 @@
 //! Values the service sets itself once it manages the Strata installation:
-//! start script and Strata's programs. They live in
+//! start script, Strata's programs and relay mode. They live in
 //! `strata-managed.json` next to the configuration and come before the values
 //! in the TOML, which stays as the owner wrote it.
 
@@ -21,6 +21,9 @@ pub struct Managed {
     pub strata_args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strata_processes: Option<Vec<String>>,
+    /// Relay mode as the web UI set it; before `relay` in the TOML.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<bool>,
     // An older service kept `strata_api_key` here too; the Strata key now
     // comes with every start (see `strata_key`), so it is not read.
 }
@@ -58,6 +61,11 @@ impl Managed {
             (None, Some(start)) => Some((start, &cfg.strata_args)),
             (None, None) => None,
         }
+    }
+
+    /// Relay mode wanted: the web UI's choice, else the TOML's.
+    pub fn relay(&self, cfg: &Config) -> bool {
+        self.relay.unwrap_or(cfg.relay)
     }
 
     pub fn processes<'a>(&'a self, cfg: &'a Config) -> &'a [String] {

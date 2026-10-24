@@ -43,6 +43,7 @@ async fn start(s: &Setup, setup: &SetupLeaves, id: &str, lines: &[String], ends:
             strata_start: Some(script),
             strata_args: vec![],
             strata_processes: Some(vec![]),
+            ..Default::default()
         })
         .unwrap();
     post(s, "/gaming", json!({"enabled": true})).await;

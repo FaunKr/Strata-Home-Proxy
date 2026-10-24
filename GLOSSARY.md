@@ -138,7 +138,7 @@ Strata answers the PC service on the PC, but not the proxy: the network between 
 _Avoid_: unreachable (in UI text), Offline
 
 **Relay mode**:
-Strata listens only on the PC itself, and the PC service passes the proxy's requests on to it, adding the Strata key. Only for a Strata started from the Strata Terminal; there is no *Not reachable* in it.
+Strata listens only on the PC itself, and the PC service passes the proxy's requests on to it, adding the Strata key. Only for a Strata started from the Strata Terminal; there is no *Not reachable* in it. Switched in the web UI under *Strata → Connection* (*Relay through the PC service*).
 _Avoid_: tunnel, agent relay
 
 **Forced Strata restart**:

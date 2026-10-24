@@ -100,11 +100,15 @@ configuration holds a key; only services before the key per start lack it.
 
 `relay` is relay mode as the service runs Strata: `{"on": true}` when the
 last Strata it started is the Strata Terminal's on `127.0.0.1`, so the proxy
-reaches it only through `/relay` (below). `relay` in the TOML counts from
-the next start of Strata; before its first start the service counts a
-running Strata as started with the TOML. An old Strata folder's Strata is
-never in relay mode. Missing from services before relay mode, which cannot
-relay. The proxy follows `on` for every call to Strata and keeps the last
+reaches it only through `/relay` (below). The mode set with the job
+`set_relay` (kept in the managed values), else `relay` in the TOML, counts
+from the next start of Strata; before its first start the service counts a
+running Strata as started with that mode. `wanted` is the mode the next
+start takes (`false` for an old Strata folder); while it differs from `on`
+the web UI shows the switch as switching. An old Strata folder's Strata is
+never in relay mode. `relay` is missing from services before relay mode,
+which cannot relay; `wanted` from services before `set_relay` (0.2.0), whose
+switch the web UI disables as too old. The proxy follows `on` for every call to Strata and keeps the last
 value in `DATA_DIR` (`relay-mode`), so a request after a restart of the
 proxy or while the PC sleeps takes the same way.
 
@@ -547,6 +551,7 @@ before setup runs. Such a job has no `model`.
 | `apply_preset` | `model`, `preset` | Terminal only: `strata presets apply <preset>`; the active model restarts once Strata is not handling a request |
 | `undo_preset` | `model`, `preset` | Terminal only: `strata presets undo <preset>`, back to the preset active before (or the standard settings); the active model restarts as with `apply_preset` |
 | `preset_off` | `model` | Terminal only: `strata presets off <run config>`, back to the standard settings; the preset stays saved and can be applied again; the active model restarts as with `apply_preset` |
+| `set_relay` | `on` | keeps relay mode in the managed values (it outlasts a restart of the service and a switch to the Terminal); when Strata answers and runs in the other mode, waits until it is not handling a request and restarts it on the new host. `409` while Strata runs from an old Strata folder. The proxy shows a running `set_relay` as *switching* and keeps the old path until `/status` reports the new mode |
 | `tune` | `model`, `mode` (`quick`, `thorough`), `use` (`coding`, `chat`) | Terminal only: waits until Strata is not handling a request, stops it, runs `strata tune auto <run config> --goal speed` and starts Strata again; the result goes to `last_tune`, the active settings stay as they were |
 
 `tune` takes about 20 minutes (`quick`) or up to two hours (`thorough`).

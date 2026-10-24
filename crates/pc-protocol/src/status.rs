@@ -59,6 +59,11 @@ pub struct Relay {
     /// Strata runs for relay mode: the proxy reaches it through the PC
     /// service only.
     pub on: bool,
+    /// The mode the next start of Strata takes: the web UI's switch, else
+    /// the TOML. Differs from `on` while a switch waits for that start.
+    /// Missing from services before the switch, which cannot switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wanted: Option<bool>,
 }
 
 /// Everything under this path goes on to Strata, with the Strata key in

@@ -30,6 +30,7 @@ fn installed(s: &Setup) {
             strata_start: Some(setup.installation().run_script("iq3_xxs")),
             strata_args: vec![],
             strata_processes: Some(vec![format!("{}/", cfg.strata_dir.display())]),
+            ..Default::default()
         })
         .unwrap();
 }

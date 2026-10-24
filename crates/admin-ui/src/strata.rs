@@ -12,11 +12,12 @@ use crate::{
     api::{
         CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
         CodeBenchTaskInfo, ForceRestartStrata, ForcedRestart, GenerateUpdateSummary,
-        GetOptimizationPrompt, PcView, PresetState, SamplingField, SamplingSource, SamplingSupport,
-        StartCodeBench, StartCodeBenchAll, StartStrataJob, StrataBenchmark, StrataInfo, StrataJob,
-        StrataJobKind, StrataJobState, StrataModel, StrataPage, StrataPreset, StrataPresets,
-        StrataSampling, StrataSize, StrataTune, StrataUpdate, TuneMode, TuneSpeed, TuneUse,
-        UpdateSummary, error_text, get_code_bench, get_strata,
+        GetOptimizationPrompt, PcView, PresetState, RelayView, SamplingField, SamplingSource,
+        SamplingSupport, SetRelay, StartCodeBench, StartCodeBenchAll, StartStrataJob,
+        StrataBenchmark, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
+        StrataPage, StrataPreset, StrataPresets, StrataSampling, StrataSize, StrataTune,
+        StrataUpdate, TuneMode, TuneSpeed, TuneUse, UpdateSummary, error_text, get_code_bench,
+        get_strata,
     },
     confirm::{Confirm, Question},
     copy::CopyText,
@@ -39,6 +40,7 @@ struct Actions {
     start: ServerAction<StartStrataJob>,
     cancel: ServerAction<CancelStrataJob>,
     summarize: ServerAction<GenerateUpdateSummary>,
+    relay: ServerAction<SetRelay>,
 }
 
 impl Actions {
@@ -247,6 +249,7 @@ pub fn StrataArea() -> impl IntoView {
         start: ServerAction::new(),
         cancel: ServerAction::new(),
         summarize: ServerAction::new(),
+        relay: ServerAction::new(),
     };
     // The start of the failed job whose card was closed: a new page answer
     // must not bring it back.
@@ -280,6 +283,7 @@ pub fn StrataArea() -> impl IntoView {
                 started.get(),
                 actions.cancel.version().get(),
                 actions.summarize.version().get(),
+                actions.relay.version().get(),
                 job_ended.get(),
                 tick.get(),
             )
@@ -580,11 +584,16 @@ pub fn VersionTab() -> impl IntoView {
 #[component]
 pub fn ConnectionTab() -> impl IntoView {
     view! {
-        {with_page(|_, page| {
+        {with_page(|area, page| {
             let unreported = page.key_unreported;
-            page.info
+            let key = page
+                .info
                 .filter(|i| i.installed)
-                .map(|_| view! { <StrataKey unreported /> })
+                .map(|_| view! { <StrataKey unreported /> });
+            view! {
+                <Relay view=page.relay action=area.actions.relay />
+                {key}
+            }
         })}
         <SettingsSections sections=&[&STRATA_CONNECTION, &STRATA_TIMEOUTS] />
     }
@@ -3042,6 +3051,50 @@ fn BenchRow(
                     }
                 })}
         </li>
+    }
+}
+
+/// The switch for relay mode: Strata listens on the PC only, and the PC
+/// service passes the proxy's requests on to it.
+#[component]
+fn Relay(view: RelayView, action: ServerAction<SetRelay>) -> impl IntoView {
+    let RelayView {
+        on,
+        switching,
+        blocked,
+    } = view;
+    let locked = blocked.is_some() || switching;
+    let state = if switching {
+        "Switching: Strata runs with the new mode from its next start, once it has finished its requests."
+    } else if on {
+        "On: Strata listens on the PC only, and the PC service passes the proxy's requests on to it."
+    } else {
+        "Off: the proxy reaches Strata directly over the network."
+    };
+    view! {
+        <section class="card" aria-label="Relay mode">
+            <h2>"Relay mode"</h2>
+            <div>
+                <input
+                    id="relay-mode"
+                    type="checkbox"
+                    prop:checked=on
+                    disabled=move || locked || action.pending().get()
+                    on:change=move |ev| {
+                        action.dispatch(SetRelay { on: event_target_checked(&ev) });
+                    }
+                />
+                <label for="relay-mode" class="inline">
+                    " Relay through the PC service"
+                </label>
+            </div>
+            <p class="muted" role="status">{state}</p>
+            {blocked.map(|why| view! { <p class="hint">{why}</p> })}
+            <p class="hint">
+                "In relay mode other devices on the network no longer reach Strata. A switch restarts Strata once it is idle."
+            </p>
+            {action_error(action.value())}
+        </section>
     }
 }
 

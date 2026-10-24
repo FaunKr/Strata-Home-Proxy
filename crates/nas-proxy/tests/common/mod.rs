@@ -137,6 +137,11 @@ pub struct FakePc {
     /// Relay mode: Strata listens on the PC only, and the PC service's
     /// `/relay` passes requests on; the status reports it.
     pub relay: AtomicBool,
+    /// The PC service is older than the relay switch (0.2.0): `relay`
+    /// without `wanted` in its status.
+    pub no_switch: AtomicBool,
+    /// The mode the next start of Strata takes; `relay` if unset.
+    pub relay_wanted: Mutex<Option<bool>>,
     /// The PC service's relay is down although its status answers.
     pub relay_down: AtomicBool,
     /// Requests through the PC service's relay.
@@ -220,6 +225,12 @@ impl FakePc {
             strata_key_generation: self.reported_generation(),
             relay: Some(Relay {
                 on: self.relay.load(Ordering::SeqCst),
+                wanted: (!self.no_switch.load(Ordering::SeqCst)).then(|| {
+                    self.relay_wanted
+                        .lock()
+                        .unwrap()
+                        .unwrap_or(self.relay.load(Ordering::SeqCst))
+                }),
             }),
             ..PcStatus::default()
         }

@@ -27,7 +27,8 @@ const sample = name =>
   JSON.parse(fs.readFileSync(path.join(__dirname, '../crates/pc-protocol/tests/samples', name), 'utf8'));
 
 // No MAC: the check does not cover a reported one.
-const status = { ...sample('status.json'), version: '0.1.0+ui-check', user_idle_secs: 0, mac: undefined };
+const status = { ...sample('status.json'), version: '0.1.0+ui-check', user_idle_secs: 0, mac: undefined,
+  relay: { on: false, wanted: false } };
 const strataSample = sample('strata.json');
 
 const at = Math.floor(Date.now() / 1000) - 3600;
@@ -139,11 +140,12 @@ http.createServer((req, res) => {
     res.end();
   }
   else if (req.url.startsWith('/status')) {
-    // Only a tune is reported as running, so its card shows.
-    const tuning = strataJob?.kind === 'tune' && strataJob.state === 'running';
+    // Only a tune and a relay switch are reported as running, so their card
+    // shows and the page is read again when they end.
+    const shown = ['tune', 'set_relay'].includes(strataJob?.kind) && strataJob.state === 'running';
     json({ ...status, gaming_mode: pcState === 'gaming', strata_running: ['awake', 'loading', 'unreachable'].includes(pcState),
       strata_answers: ['awake', 'unreachable'].includes(pcState),
-      ...(tuning ? { strata_job: true, strata_job_kind: 'tune' } : {}) });
+      ...(shown ? { strata_job: true, strata_job_kind: strataJob.kind } : {}) });
   }
   else if (req.url.startsWith('/strata/key')) {
     json(sample('strata-key.json'));
@@ -186,7 +188,11 @@ http.createServer((req, res) => {
     res.end();
   }
   else if (req.url.startsWith('/health')) json({ status: 'ok', loaded: true, service: 'strata', model: 'Qwen3-30B-A3B', max_context: 32768, opencode: '1.19.3' });
-  else if (req.url === '/strata') json(strata);
+  // A running relay switch shows on the page, as the PC service reports it.
+  else if (req.url === '/strata') {
+    const relaying = strataJob?.kind === 'set_relay' && strataJob.state === 'running';
+    json(relaying ? { ...strata, job: strataJob } : strata);
+  }
   else if (req.method === 'POST' && req.url === '/strata/jobs') {
     let raw = '';
     req.on('data', (c) => { raw += c; });
@@ -194,6 +200,10 @@ http.createServer((req, res) => {
       const body = raw ? JSON.parse(raw) : {};
       // A picture switch ends by reporting the model with its new state.
       const picturesAfter = body.kind === 'set_pictures' ? (body.on ? 'gpu' : 'off') : null;
+      // A relay switch keeps the mode at once and ends with Strata running
+      // in it.
+      const relayAfter = body.kind === 'set_relay' ? { on: body.on, wanted: body.on } : null;
+      if (relayAfter) status.relay = { ...status.relay, wanted: body.on };
       strataJob = { id: 1, kind: body.kind ?? 'activate', model: body.model ?? null, state: 'running',
         lines: [], error: null, started: Math.floor(Date.now() / 1000), ended: null };
       // A run over all models activates each model; end the job shortly after,
@@ -202,6 +212,7 @@ http.createServer((req, res) => {
       setTimeout(() => {
         if (strataJob === job) {
           strataJob = { ...job, state: 'done', ended: Math.floor(Date.now() / 1000) };
+          if (relayAfter) status.relay = relayAfter;
           if (picturesAfter) {
             const switched = strata.models.find((m) => m.id === body.model);
             if (switched) switched.pictures = picturesAfter;

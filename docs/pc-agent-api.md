@@ -28,6 +28,12 @@ talks to a newer proxy. Therefore:
   lists no catalog before Strata is installed. A service from before the
   catalog read lists its own table there and needs the model; it refuses
   `install` without one with a `422`.
+- The proxy offers a new job or endpoint only when a response field shows a
+  service that takes it, and that field comes in the same version as the
+  job. A field that an earlier version of the same feature brought doesn't
+  count: a service of that version carries it without the job. Relay mode's
+  `relay.wanted` came with `set_relay` (0.2.1); `relay` itself came with
+  0.2.0, which refuses `set_relay`.
 
 The crate's tests read the saved responses plus responses that lack the
 newer fields. A PC service test checks that the samples show every field it

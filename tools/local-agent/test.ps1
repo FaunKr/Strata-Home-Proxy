@@ -541,15 +541,39 @@ function test_status {
     Assert-Contains $out 'the PC is in gaming mode'
 }
 
+# Whether a run holds a place in the queue.
+function Test-QueueTaken {
+    $queue = Join-Path $stateDir 'queue'
+    return [bool]((Test-Path -LiteralPath $queue) -and (Get-ChildItem -LiteralPath $queue -File | Where-Object { -not $_.Name.StartsWith('.') }))
+}
+
+# Runs $check every 0.1 s until it is true, for up to 20 s.
+function Wait-Until([scriptblock]$check, [string]$what) {
+    for ($i = 0; $i -lt 200; $i++) {
+        if (& $check) { return }
+        Start-Sleep -Milliseconds 100
+    }
+    Fail "timed out waiting for: $what"
+}
+
 function test_one_run_at_a_time {
     $env:FAKE_CLAUDE_MODE = 'slow'
-    $env:FAKE_CLAUDE_SLEEP = '2'
+    $env:FAKE_CLAUDE_SLEEP = '3'
     $runs = @()
     foreach ($task in 'A', 'B', 'C') {
-        $runs += Start-Runner (Join-Path $tmp "run-$task.out") @('run', $task)
-        Start-Sleep -Milliseconds 500
+        $runOut = Join-Path $tmp "run-$task.out"
+        $runs += Start-Runner $runOut @('run', $task)
+        # Each run is queued before the next starts: a fixed pause let a slow
+        # runner's status come before B and C were queued.
+        if ($task -eq 'A') {
+            Wait-Until { Test-QueueTaken } 'a place in the queue'
+        } else {
+            Wait-Until { (Test-Path -LiteralPath $runOut) -and (Get-Content -LiteralPath $runOut -Raw) -match 'waiting for run' } "run $task waiting"
+        }
     }
-    la status
+    # By its id: runs started in the same second sort by a random suffix.
+    $runC = if ((Get-Content -LiteralPath (Join-Path $tmp 'run-C.out') -Raw) -match '(?m)^local-agent: run (\S+)') { $Matches[1] }
+    la status $runC
     Assert-Contains $out 'queued'
     Assert-Contains (Get-Content -LiteralPath (Join-Path $tmp 'run-B.out') -Raw) 'waiting for run'
     foreach ($r in $runs) {

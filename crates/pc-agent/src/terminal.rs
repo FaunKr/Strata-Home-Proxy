@@ -29,7 +29,10 @@ const PROGRAM: [&str; 2] = ["bin", "strata.cmd"];
 /// for the run config named as its argument, what its engine prints for
 /// `--help`, run the way Strata's own tuner runs it
 /// (`strata_control/tuning.py`). The Terminal has no command for either.
-const OPTIONS_SCRIPT: &str = r#"import json, subprocess, sys
+/// Its first line names it for the tests' fake commands, which otherwise
+/// answer it as setup.
+const OPTIONS_SCRIPT: &str = r#"# options
+import json, subprocess, sys
 from pathlib import Path
 def plain(v):
     if isinstance(v, (tuple, list, set, frozenset)):

@@ -273,14 +273,14 @@ async fn strata_s_options_are_read_once_per_terminal_version() {
     let s = setup("terminal-options").await;
     let leaves = installed(&s);
     s.fake.command(
-        "python -c",
+        "python options",
         FakeCommand {
             lines: vec![OPTIONS.trim_end().to_string()],
             ..Default::default()
         },
     );
     let view = options_read(&s, "0.2.2").await;
-    assert_eq!(s.fake.runs_of("python").len(), 1);
+    assert_eq!(s.fake.runs_of("python options").len(), 1);
     let options = &view["options"];
     assert_eq!(options["version"], "0.2.2");
     let spec = options["tuner"]
@@ -297,7 +297,7 @@ async fn strata_s_options_are_read_once_per_terminal_version() {
             .unwrap()
             .starts_with("strata generate")
     );
-    let run = &s.fake.runs_of("python")[0];
+    let run = &s.fake.runs_of("python options")[0];
     let served = leaves.installation().config_path("iq3_xxs");
     assert_eq!(run.args.last().unwrap(), &served.display().to_string());
 
@@ -305,7 +305,7 @@ async fn strata_s_options_are_read_once_per_terminal_version() {
     get(&s, "/strata").await;
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert_eq!(
-        s.fake.runs_of("python").len(),
+        s.fake.runs_of("python options").len(),
         1,
         "read again without a change"
     );
@@ -313,7 +313,7 @@ async fn strata_s_options_are_read_once_per_terminal_version() {
     Terminal::of(&s.agent.cfg).fake_install("0.2.3");
     let view = options_read(&s, "0.2.3").await;
     assert_eq!(view["options"]["version"], "0.2.3");
-    assert_eq!(s.fake.runs_of("python").len(), 2);
+    assert_eq!(s.fake.runs_of("python options").len(), 2);
 }
 
 #[tokio::test]
@@ -326,7 +326,7 @@ async fn a_strata_folder_from_source_has_no_options() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let view = get(&s, "/strata").await;
     assert!(view.get("options").is_none(), "{view}");
-    assert!(s.fake.runs_of("python").is_empty());
+    assert!(s.fake.runs_of("python options").is_empty());
 }
 
 /// What `strata update --output jsonl` answers last (`run` in

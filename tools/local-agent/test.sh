@@ -393,15 +393,35 @@ test_watch() {
   [[ $(wc -l <<<"$out") == 2 ]] || fail "output without --watch: $out"
 }
 
+# Whether a run holds a place in the queue.
+queue_taken() { compgen -G "$XDG_STATE_HOME/local-agent/queue/[!.]*" >/dev/null; }
+
+# Runs `$@` every 0.1 s until it succeeds, for up to 20 s.
+wait_until() {
+  local i
+  for ((i = 0; i < 200; i++)); do
+    "$@" && return
+    sleep 0.1
+  done
+  fail "timed out waiting for: $*"
+}
+
 test_one_run_at_a_time() {
-  export FAKE_CLAUDE_MODE=slow FAKE_CLAUDE_SLEEP=2
+  export FAKE_CLAUDE_MODE=slow FAKE_CLAUDE_SLEEP=3
   local task pids=()
   for task in A B C; do
     "$here/local-agent" run "$task" >"$tmp/run-$task.out" 2>&1 &
     pids+=($!)
-    sleep 0.5
+    # Each run is queued before the next starts: a fixed pause let a slow
+    # runner's status come before B and C were queued.
+    if [[ $task == A ]]; then
+      wait_until queue_taken
+    else
+      wait_until grep -q "waiting for run" "$tmp/run-$task.out"
+    fi
   done
-  la status
+  # By its id: runs started in the same second sort by a random suffix.
+  la status "$(sed -n 's/^local-agent: run \([^ ]*\).*/\1/p' "$tmp/run-C.out")"
   contains "$out" "queued"
   for task in 0 1 2; do wait "${pids[$task]}" || fail "run $task failed"; done
   # The workers ran one after another, in the order the runs started.

@@ -217,9 +217,11 @@ async function forced(page, errors) {
     await dialog.getByText('The picture file stays on disk').waitFor(wait);
     await dialog.getByRole('button', { name: 'Switch off' }).click();
     // The fake PC finishes the job in 1.5 s; wait for it rather than guess.
+    // An earlier step's job stays done until this one reaches the fake PC, so
+    // only the switch's own job counts.
     for (let i = 0; i < 30; i++) {
       const job = await (await fetch(`${process.env.FAKE_PC}/strata/job`)).json();
-      if (job?.state === 'done') break;
+      if (job?.kind === 'set_pictures' && job.state === 'done') break;
       await page.waitForTimeout(500);
     }
     await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });

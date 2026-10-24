@@ -2755,6 +2755,10 @@ pub fn view(agent: &Agent) -> StrataReport {
                 memory_with_vram: s.with_vram,
                 fits: s.fits,
                 partly_downloaded: install.partly_downloaded(&s.id),
+                about: s.about.clone(),
+                verdict: s.verdict.clone(),
+                experimental: s.experimental,
+                pictures: Some(s.pictures),
             })
             .collect(),
         catalog_reading: matches!(now, CatalogNow::Reading),

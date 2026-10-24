@@ -82,10 +82,13 @@ const strata = {
     { id: 'deepseek41', title: 'DeepSeek-V4.1-Flash', speed_projection: false, pictures: false },
   ],
   catalog: [
-    { id: 'IQ3_S', family: 'qwen', size: 'IQ3_S', download_gb: 83.6, ram_gb: 62, memory_with_vram: false, fits: true, partly_downloaded: false },
+    { id: 'IQ3_S', family: 'qwen', size: 'IQ3_S', download_gb: 83.6, ram_gb: 62, memory_with_vram: false, fits: true, partly_downloaded: false,
+      about: '3.5-bit i-quant, the best quality (matches the full model), the slowest', verdict: 'fits', pictures: true },
+    // Gyro as an older PC service reports it, IQ3_S and DeepSeek with Strata's words.
     { id: 'gyro-Gyro-S', family: 'gyro', size: 'Gyro-S', download_gb: 58.5, ram_gb: 28, memory_with_vram: true, fits: true, partly_downloaded: false },
     { id: 'gyro-Gyro-M', family: 'gyro', size: 'Gyro-M', download_gb: 92, ram_gb: 35, memory_with_vram: true, fits: false, partly_downloaded: false },
-    { id: 'deepseek-v4.1-flash-UD-Q8_K_XL', family: 'deepseek41', size: 'UD-Q8_K_XL', download_gb: 508.4, ram_gb: 306, memory_with_vram: true, fits: false, partly_downloaded: false },
+    { id: 'deepseek-v4.1-flash-UD-Q8_K_XL', family: 'deepseek41', size: 'UD-Q8_K_XL', download_gb: 508.4, ram_gb: 306, memory_with_vram: true, fits: false, partly_downloaded: false,
+      about: '8-bit (Unsloth Dynamic), the reference quality', verdict: 'does not fit: about 225 GB of its experts would be read from the SSD while it answers', experimental: true, pictures: false },
   ],
   recommended: 'IQ3_S',
   contexts: [32768, 65536, 131072],
@@ -195,6 +198,15 @@ http.createServer((req, res) => {
       res.statusCode = 202;
       json(job);
     });
+  }
+  // The last job failed (state=failed) or ended well (state=done).
+  else if (req.method === 'POST' && req.url.startsWith('/fake/last-job')) {
+    const failed = new URL(req.url, 'http://fake').searchParams.get('state') === 'failed';
+    strata.job = failed ? { id: 1, kind: 'add_model', model: 'deepseek-v4.1-flash-IST-DAS-1.75bpw', state: 'failed', // language-check: allow
+      lines: ['=== Step 4: the DeepSeek engine ===', "  [X]  DeepSeek's engine is not available for this computer yet"],
+      error: "python.exe ended with code 1: DeepSeek's engine is not available for this computer yet. Nothing has been downloaded.",
+      started: Math.floor(Date.now() / 1000) - 60, ended: Math.floor(Date.now() / 1000) } : null;
+    res.end();
   }
   // A tune 12 minutes in with nothing measured yet, as a quick tune's status
   // file can stay to its end, for 8 s.

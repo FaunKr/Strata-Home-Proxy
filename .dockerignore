@@ -1,2 +1,7 @@
 target
 .git
+# Read by tests only, so a change to them publishes no image
+# (scripts/ci-select.sh); real code that reads them fails the image build.
+crates/*/tests
+crates/pc-agent/fixtures
+crates/pc-agent/strata-pc-agent.example.toml

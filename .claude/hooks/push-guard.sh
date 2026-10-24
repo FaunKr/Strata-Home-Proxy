@@ -5,13 +5,17 @@
 set -euo pipefail
 
 command -v jq >/dev/null || exit 0
-cmd=$(jq -r '.tool_input.command // empty')
+input=$(cat)
+cmd=$(jq -r '.tool_input.command // empty' <<<"$input")
 # Only where a command starts, so text such as a commit message passes.
 [[ $cmd =~ (^|[\;\&\|])[[:space:]]*git[[:space:]]+push([[:space:]]|$) ]] || exit 0
 # Deleting a remote branch pushes no code.
 [[ $cmd == *--delete* ]] && exit 0
 
-cd "$CLAUDE_PROJECT_DIR"
+# Where the command runs: a worktree (a local-agent run's, say) pushes its own
+# HEAD, which check.sh marked in the main checkout's target/.
+cwd=$(jq -r '.cwd // empty' <<<"$input")
+cd "${cwd:-$CLAUDE_PROJECT_DIR}"
 common_dir=$(git rev-parse --path-format=absolute --git-common-dir)
 target_dir=${CARGO_TARGET_DIR:-${common_dir%/.git}/target}
 tree=$(git rev-parse 'HEAD^{tree}')

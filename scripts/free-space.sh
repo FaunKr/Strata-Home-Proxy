@@ -9,7 +9,7 @@ free_gb=$(($(df -Pk . | awk 'NR == 2 {print $4}') / 1024 / 1024))
 # keeps the dependencies built. Locally that happens without asking.
 if ((free_gb < 10)) && [[ -z ${CI:-} && -d $target_dir/debug/deps ]]; then
   echo "Little space left (${free_gb} GB): deleting the test binaries in $target_dir/debug/deps" >&2
-  find "$target_dir/debug/deps" -maxdepth 1 -type f -executable ! -name '*.so' -delete
+  find "$target_dir/debug/deps" -maxdepth 1 -type f -perm -u+x ! -name '*.so' -delete
   rm -rf "$target_dir/debug/incremental"
   free_gb=$(($(df -Pk . | awk 'NR == 2 {print $4}') / 1024 / 1024))
 fi

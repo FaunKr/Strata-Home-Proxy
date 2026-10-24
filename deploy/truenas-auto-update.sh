@@ -177,8 +177,11 @@ restore_data() {
     return 1
   fi
   mkdir -p "$failed"
-  # `mv -t` is GNU only; the test runs this on macOS too.
-  find "$DATA_DIR" -mindepth 1 -maxdepth 1 -exec mv {} "$failed"/ \; &&
+  # Not `mv -t`, which BSD mv (macOS, where scripts/check.sh also runs this)
+  # lacks. Not `-exec mv {} … \;` either: find ignores that exit code, and a
+  # failed move must stop the rollback.
+  # shellcheck disable=SC2016 # expanded by the inner sh.
+  find "$DATA_DIR" -mindepth 1 -maxdepth 1 -exec sh -c 'mv "$@" "$0"' "$failed" {} + &&
     tar -C "$DATA_DIR" --numeric-owner -xzpf "$backup"
 }
 

@@ -22,7 +22,7 @@
 - A refactor that lands as one PR is one ticket with a checklist, not a tree of sub-tickets.
 - A spec that lands as one PR is implemented in the thread itself: no implementer subagents, worktrees or merger.
 - When Strata changed something the PC service reads (setup's output, a file it writes), extend the reader's unit test with the new line copied from Strata's source, not a made-up one, and update `docs/strata-api.md`.
-- When a spec adds a rule that data the PR itself writes must follow (the first changelog section, a migrated file), check that data against the rule before publishing the spec: the rule and the first data can contradict each other.
+- When grilling or a spec adds a rule that data the PR itself writes must follow (the first section of the PC service changelog, a migrated file), check that data against the rule before publishing the spec: the rule and the first data can contradict each other.
 - Before a spec refuses values in a run config field, check what Strata itself writes there (`docs/strata-api.md`, Strata's source): a value Strata put there must still come back unchanged, or saving the field always fails.
 - If a spec says "X only in the module", that applies to code, helpers and fixtures. Tests may spell out the outer names they pin down (file names Strata itself reads).
 - Issues, specs, PR text, commit messages and retros are written in English, using the terms in `GLOSSARY.md`.

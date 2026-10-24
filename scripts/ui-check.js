@@ -6,7 +6,8 @@ const { chromium } = require('playwright');
 const base = process.env.BASE;
 const areas = ['/admin', '/admin/pc', '/admin/pc/history', '/admin/strata', '/admin/strata/output',
   '/admin/strata/version', '/admin/strata/connection', '/admin/access', '/admin/system'];
-// Texts an area must show: the overview's Power row comes from
+// Texts an area must show, as innerText gives them: with CSS text-transform
+// applied, so e.g. an h3 reads in capitals. The overview's Power row comes from
 // scripts/fake-shelly.js, its Hardware card from scripts/fake-pc.js.
 const expected = {
   '/admin': ['87 W', 'Awake', '11.8 / 16.0 GB', '0 rpm', '41 % of limit', 'Last 7 days', 'kWh'],
@@ -228,9 +229,11 @@ async function forced(page, errors) {
     await dialog.getByText('The picture file stays on disk').waitFor(wait);
     await dialog.getByRole('button', { name: 'Switch off' }).click();
     // The fake PC finishes the job in 1.5 s; wait for it rather than guess.
+    // An earlier step's job stays done until this one reaches the fake PC, so
+    // only the switch's own job counts.
     for (let i = 0; i < 30; i++) {
       const job = await (await fetch(`${process.env.FAKE_PC}/strata/job`)).json();
-      if (job?.state === 'done') break;
+      if (job?.kind === 'set_pictures' && job.state === 'done') break;
       await page.waitForTimeout(500);
     }
     await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });

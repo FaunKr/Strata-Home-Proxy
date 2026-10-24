@@ -161,6 +161,10 @@ _Avoid_: optimize, auto-tune, Optimierung
 Strata's saved settings from a tune, for one model file and its choices (context among them). Strata starts the model with the active one; *Apply* makes a preset active, *Undo* brings back the one before, *Turn off* goes back to the standard settings and keeps the preset saved. Strata says whether the active one still fits: a re-check is offered after a new driver or engine, it is not applied after a new graphics card or model file. After a context switch the model has none until it is tuned again.
 _Avoid_: profile, tuning (for the saved result), Voreinstellung
 
+**Pictures**:
+Picture reading for a model: setup's *Pictures* tick in the web UI's install and add-model form, on by default, which makes setup write a picture reader into the run config. An installed model shows *Pictures: on (CPU)*, *on (GPU)* or *off* and switches it with one setup run; a model without a picture reader reads no pictures.
+_Avoid_: vision (except `--vision` and the `vision` section in configs and code), image support, multimodal
+
 ## Code benchmark
 
 **Code benchmark**:

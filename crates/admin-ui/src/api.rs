@@ -689,6 +689,7 @@ mod strata_job {
         context: Option<u32>,
         model: Option<String>,
         speed_projection: Option<bool>,
+        pictures: Option<bool>,
         tune_mode: Option<TuneMode>,
         tune_use: Option<TuneUse>,
         preset: Option<String>,
@@ -703,6 +704,7 @@ mod strata_job {
             context,
             model,
             speed_projection: speed_projection.unwrap_or(false),
+            pictures: pictures.unwrap_or(false),
             tune_mode: tune_mode.unwrap_or_default(),
             tune_use: tune_use.unwrap_or_default(),
             preset,
@@ -920,6 +922,8 @@ pub struct StrataJobForm {
     /// Strata's experimental speed projection, for setup and another model;
     /// on or off for an installed one.
     pub speed_projection: bool,
+    /// Picture reading for a model being installed or added.
+    pub pictures: bool,
     /// How a tune looks and what it judges speed by.
     pub tune_mode: TuneMode,
     pub tune_use: TuneUse,

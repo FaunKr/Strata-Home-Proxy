@@ -121,6 +121,11 @@ pub struct StrataModel {
     /// version cannot be read, or from older services.
     #[serde(default)]
     pub sampling: Option<StrataSampling>,
+    /// Whether its run config has a picture reader: without a `vision`
+    /// section `off`, with one `gpu` or `cpu` by `vision.gpu`; `None` for a
+    /// config that cannot be read, or from older services.
+    #[serde(default)]
+    pub pictures: Option<Pictures>,
     /// Its run config as JSON text, laid out as Strata writes it, without
     /// `api_key` and with every path cut to its file name; `None` if it
     /// cannot be read, or from older services.
@@ -160,6 +165,18 @@ pub struct StrataModel {
     /// without the Strata Terminal, or from older services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presets: Option<crate::StrataPresets>,
+}
+
+/// Picture reading of an installed model, as its run config has it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pictures {
+    /// No `vision` section: the model reads no pictures.
+    Off,
+    /// A `vision` section whose reader is the CPU one.
+    Cpu,
+    /// A `vision` section with the GPU reader (`vision.gpu` is true).
+    Gpu,
 }
 
 /// Which defaults the PC's Strata applies to a request without sampling
@@ -207,6 +224,10 @@ pub struct StrataFamily {
     /// not say so.
     #[serde(default)]
     pub speed_projection: bool,
+    /// Setup can set up picture reading for this family; older services do
+    /// not say so.
+    #[serde(default)]
+    pub pictures: bool,
 }
 
 /// A size from Strata's catalog.

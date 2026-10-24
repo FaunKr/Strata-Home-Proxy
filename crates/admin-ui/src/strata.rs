@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use leptos::{html::Dialog, prelude::*};
 use leptos_router::components::{A, Outlet};
-use strata_pc_protocol::{BenchTool, MAX_SWITCHED_CONTEXT, StrataInstall};
+use strata_pc_protocol::{BenchTool, MAX_SWITCHED_CONTEXT, Pictures, StrataFamily, StrataInstall};
 
 use crate::{
     api::{
@@ -28,6 +28,12 @@ use crate::{
 /// What the experimental speed projection does, for whoever switches it on.
 const SPEED_PROJECTION_TEXT: &str = "Experimental, and despite the name not faster: Strata removes the model's refusal direction, so it hardly refuses requests any more.";
 
+/// What picture reading costs and does, for whoever ticks it.
+const PICTURES_TEXT: &str = "Lets the model read pictures. About 0.9 GB extra download. On cards under 24 GB, pictures are read on the CPU (a few seconds each).";
+
+/// What switching picture reading off does.
+const PICTURES_OFF_TEXT: &str = "The model stops reading pictures. The picture file stays on disk, so switching on again needs no download.";
+
 #[derive(Clone, Copy)]
 struct Actions {
     start: ServerAction<StartStrataJob>,
@@ -44,6 +50,7 @@ impl Actions {
             context: None,
             model: None,
             speed_projection: None,
+            pictures: None,
             tune_mode: None,
             tune_use: None,
             preset: None,
@@ -60,6 +67,7 @@ impl Actions {
             context: None,
             model: Some(model),
             speed_projection: None,
+            pictures: None,
             tune_mode: None,
             tune_use: None,
             preset: None,
@@ -76,6 +84,24 @@ impl Actions {
             context: None,
             model: Some(model),
             speed_projection: Some(on),
+            pictures: None,
+            tune_mode: None,
+            tune_use: None,
+            preset: None,
+            options: None,
+            env: None,
+        });
+    }
+
+    fn pictures(&self, model: String, on: bool) {
+        self.start.dispatch(StartStrataJob {
+            kind: StrataJobKind::SetPictures,
+            family: None,
+            size: None,
+            context: None,
+            model: Some(model),
+            speed_projection: None,
+            pictures: Some(on),
             tune_mode: None,
             tune_use: None,
             preset: None,
@@ -92,6 +118,7 @@ impl Actions {
             context: Some(context),
             model: Some(model),
             speed_projection: None,
+            pictures: None,
             tune_mode: None,
             tune_use: None,
             preset: None,
@@ -110,6 +137,7 @@ impl Actions {
             context: None,
             model: Some(model),
             speed_projection: None,
+            pictures: None,
             tune_mode: None,
             tune_use: None,
             preset: None,
@@ -126,6 +154,7 @@ impl Actions {
             context: None,
             model: Some(model),
             speed_projection: None,
+            pictures: None,
             tune_mode: Some(mode),
             tune_use: Some(usage),
             preset: None,
@@ -147,6 +176,7 @@ impl Actions {
             context: None,
             model: Some(model),
             speed_projection: None,
+            pictures: None,
             tune_mode: None,
             tune_use: None,
             preset: Some(preset),
@@ -164,6 +194,7 @@ impl Actions {
             context: None,
             model: Some(model),
             speed_projection: None,
+            pictures: None,
             tune_mode: None,
             tune_use: None,
             preset: None,
@@ -745,19 +776,21 @@ fn ModelChoice(
     let choice = RwSignal::new(first);
     let context = RwSignal::new(info.default_context);
     let speed_projection = RwSignal::new(false);
-    let takes_projection = {
+    let pictures = RwSignal::new(true);
+    let takes = |field: fn(&StrataFamily) -> bool| {
         let sizes = sizes.clone();
         let families = info.families.clone();
         Memo::new(move |_| {
             choice.with(|id| {
-                sizes.iter().filter(|s| &s.id == id).any(|s| {
-                    families
-                        .iter()
-                        .any(|f| f.id == s.family && f.speed_projection)
-                })
+                sizes
+                    .iter()
+                    .filter(|s| &s.id == id)
+                    .any(|s| families.iter().any(|f| f.id == s.family && field(f)))
             })
         })
     };
+    let takes_projection = takes(|f| f.speed_projection);
+    let takes_pictures = takes(|f| f.pictures);
     let family_title = |id: &str| {
         info.families
             .iter()
@@ -832,6 +865,7 @@ fn ModelChoice(
             context: Some(context.get()),
             model: None,
             speed_projection: Some(takes_projection.get() && speed_projection.get()),
+            pictures: Some(takes_pictures.get() && pictures.get()),
             tune_mode: None,
             tune_use: None,
             preset: None,
@@ -842,6 +876,7 @@ fn ModelChoice(
     let picker = format!("{kind:?}-size");
     let ctx = format!("{kind:?}-context");
     let projection = format!("{kind:?}-speed-projection");
+    let pictures_field = format!("{kind:?}-pictures");
     view! {
         <div class="stack">
             <div>
@@ -888,6 +923,20 @@ fn ModelChoice(
                         <code>"\"experimental_speed_projection\": false"</code>
                         "."
                     </p>
+                </div>
+            </Show>
+            <Show when=move || takes_pictures.get()>
+                <div>
+                    <input
+                        id=pictures_field.clone()
+                        type="checkbox"
+                        prop:checked=move || pictures.get()
+                        on:change=move |ev| pictures.set(event_target_checked(&ev))
+                    />
+                    <label for=pictures_field.clone() class="inline">
+                        " Pictures"
+                    </label>
+                    <p class="hint">{PICTURES_TEXT}</p>
                 </div>
             </Show>
             <div>
@@ -1008,6 +1057,13 @@ fn ModelRow(
             _ => " · loop recovery off",
         });
     }
+    if let Some(pictures) = model.pictures {
+        meta.push_str(match pictures {
+            Pictures::Gpu => " · Pictures: on (GPU)",
+            Pictures::Cpu => " · Pictures: on (CPU)",
+            Pictures::Off => " · Pictures: off",
+        });
+    }
     let activate = (!model.active).then(|| {
         let id = model.id.clone();
         view! {
@@ -1082,6 +1138,40 @@ fn ModelRow(
                 on:click=move |_| {
                     let id = id.clone();
                     confirm.ask(question.clone(), move || actions.speed_projection(id.clone(), !on));
+                }
+            >
+                {label}
+            </button>
+        }
+    });
+    // Only with word from the PC service on the picture state: an older one
+    // does not say. Switching runs setup for that model again.
+    let pictures = model.pictures.map(|current| {
+        let on = current == Pictures::Off;
+        let id = model.id.clone();
+        let label = if on {
+            "Switch picture reading on"
+        } else {
+            "Switch picture reading off"
+        };
+        let question = Question {
+            title: format!(
+                "Switch picture reading {} for {id}?",
+                if on { "on" } else { "off" }
+            ),
+            text: if on { PICTURES_TEXT } else { PICTURES_OFF_TEXT }.into(),
+            confirm: if on { "Switch on" } else { "Switch off" },
+            danger: false,
+        };
+        let confirm = expect_context::<Confirm>();
+        view! {
+            <button
+                type="button"
+                class="secondary"
+                disabled=move || blocked.get()
+                on:click=move |_| {
+                    let id = id.clone();
+                    confirm.ask(question.clone(), move || actions.pictures(id.clone(), on));
                 }
             >
                 {label}
@@ -1170,7 +1260,7 @@ fn ModelRow(
             {preset_line}
             {switch}
             <div class="model-actions">
-                {activate}{projection}{engine}<OptimizationPrompt model=model.id.clone() />{preset_button}{preset_off}{tune}
+                {activate}{projection}{pictures}{engine}<OptimizationPrompt model=model.id.clone() />{preset_button}{preset_off}{tune}
                 {delete}
             </div>
         </li>

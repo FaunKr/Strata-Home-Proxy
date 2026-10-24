@@ -291,6 +291,7 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
             let family = form.family.clone().ok_or_else(|| need("family"))?;
             let size = form.size.clone().ok_or_else(|| need("size"))?;
             let experimental_speed_projection = form.speed_projection;
+            let pictures = form.pictures;
             if form.kind == StrataJobKind::Install {
                 StrataJobRequest::Install {
                     family,
@@ -300,6 +301,7 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
                     // start refuses an empty key, so it gets a random one.
                     api_key: hex(&random_key()),
                     experimental_speed_projection,
+                    pictures,
                 }
             } else {
                 StrataJobRequest::AddModel {
@@ -308,6 +310,7 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
                     context: context()?,
                     api_key: None,
                     experimental_speed_projection,
+                    pictures,
                 }
             }
         }
@@ -325,6 +328,10 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
         StrataJobKind::SetContext => StrataJobRequest::SetContext {
             model: model()?,
             context: context()?,
+        },
+        StrataJobKind::SetPictures => StrataJobRequest::SetPictures {
+            model: model()?,
+            on: form.pictures,
         },
         StrataJobKind::CompareModels => StrataJobRequest::CompareModels,
         StrataJobKind::SwitchToTerminal => StrataJobRequest::SwitchToTerminal,

@@ -150,8 +150,9 @@ the web UI then asks for a PC service update.
 
 The forced restart of Strata behind *Force restart Strata* in the Strata area,
 with no request body. The service cancels a running Strata job and waits for it
-to end, at most `cancel_wait_secs` (a cancelled `activate` or `set_context`
-may restart Strata itself while rolling back; the kill comes after that). Then
+to end, at most `cancel_wait_secs` (a cancelled `activate`, `set_context` or
+`set_pictures` may restart Strata itself while rolling back; the kill comes
+after that). Then
 it ends Strata as gaming mode does, with `taskkill /F /T` by the configured
 programs and folders; that also hits a Strata started by hand. With a start
 script and `auto_start` it starts Strata again after the usual pause, unless a
@@ -272,6 +273,10 @@ setup's own figure (27.6 GB for Gyro-S). The recommended size always fits,
 because setup's low-RAM mode starts it. `vram_gb` is that card's VRAM, missing
 without a card. An older PC service leaves these fields out.
 
+Each family in `families` says with `pictures` whether setup can set up
+picture reading for it. Every family in the catalog has one; an older PC
+service leaves the field out, which reads as `false`.
+
 Each installed model says with `speed_projection` whether its configuration
 loads a control vector (`--control-vector-scaled`, Strata's or a custom one).
 An older PC service leaves the field out. This and `context` are read from
@@ -297,6 +302,11 @@ PC service leaves the field out.
 `loop_recovery` is `reasoning_loop_recovery` from its configuration, as
 Strata reads it: `recover` (also `true`), `stop` or `off` (if the value is
 missing or unknown). An older PC service leaves the field out.
+
+`pictures` is `off`, `cpu` or `gpu`: no `vision` section in its
+configuration is `off`, `vision.gpu` true is the GPU reader and false the
+CPU one (see [strata-api.md](strata-api.md)). It is `null` when the
+configuration cannot be read, and left out by an older PC service.
 
 `sampling` says what a request without sampling fields gets: `support`
 is `model_card`, `config` or `none` (this Strata reads none and is
@@ -452,18 +462,19 @@ little space, deleting the active model).
 
 | `kind` | Fields | What happens |
 | --- | --- | --- |
-| `install` | `family`, `size`, `context`, `api_key`, optional `experimental_speed_projection` | the Strata Terminal with Strata's `install.ps1` (if it is not there yet), the engine for this PC with `strata update`, setup without questions in its install mode, then serves the model with `strata serve`; a Strata folder from source keeps its own setup (`START-HERE.bat`) |
-| `add_model` | `family`, `size`, `context`, optional `api_key` and `experimental_speed_projection` | setup with `--setup` (for the Strata Terminal in its install mode) and the key Strata runs with, the active model stays active |
+| `install` | `family`, `size`, `context`, `api_key`, optional `experimental_speed_projection` and `pictures` | the Strata Terminal with Strata's `install.ps1` (if it is not there yet), the engine for this PC with `strata update`, setup without questions in its install mode, then serves the model with `strata serve`; a Strata folder from source keeps its own setup (`START-HERE.bat`) |
+| `add_model` | `family`, `size`, `context`, optional `api_key`, `experimental_speed_projection` and `pictures` | setup with `--setup` (for the Strata Terminal in its install mode) and the key Strata runs with, the active model stays active |
 | `activate` | `model` | waits until Strata is not handling a request, restarts with the other run config (`strata serve --profile`) or start script |
 | `delete` | `model` | deletes this model's model folder, pack, configuration, start script and log |
 | `update` | – | Terminal: `strata update --output jsonl` (engine and Terminal files, each after a test start) with Strata stopped, its phases as steps and its downloads as figures, restarts; a part that is not in place fails the job with Strata's reason. Folder from source: `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts |
 | `benchmark` | – | Terminal: `strata bench run --url <strata_url> --out <new folder> --output json` with the Strata key in `STRATA_API_KEY`. Folder from source: `BENCH.bat --config <active model>`. Keeps tokens/s with model, date and tool |
 | `compare_models` | – | `benchmark` for each installed model in turn, each as it is set up; activates each model for this and at the end (also after cancelling) the previously active one again |
-| `switch_to_terminal` | – | only while Strata runs from an old Strata folder: the Strata Terminal and its engine as with `install`, the Terminal's setup in its install mode for the active model with its context and speed projection on the same Strata data folder (no new download of files already there), its Chat settings copied; once Strata is idle, the old Strata stops and `strata serve` starts with the new run config. Until the old Strata stops, `GET /strata` still shows the old folder (`install: source`), also after a restart of the service, which undoes the unfinished switch. Until the Terminal's Strata answers on `/health` (within `context_start_secs`), a failure or a cancel removes the Terminal's run config, restores the managed start and starts the old Strata again |
+| `switch_to_terminal` | – | only while Strata runs from an old Strata folder: the Strata Terminal and its engine as with `install`, the Terminal's setup in its install mode for the active model with its context, speed projection and picture reading on the same Strata data folder (no new download of files already there), its Chat settings copied; once Strata is idle, the old Strata stops and `strata serve` starts with the new run config. Until the old Strata stops, `GET /strata` still shows the old folder (`install: source`), also after a restart of the service, which undoes the unfinished switch. Until the Terminal's Strata answers on `/health` (within `context_start_secs`), a failure or a cancel removes the Terminal's run config, restores the managed start and starts the old Strata again |
 | `remove_old_strata_folder` | – | deletes `strata_dir`, leaving the Strata data folder, the Terminal's folders and the service's state folder; `409` while Strata runs from the old folder, without one, and before the Terminal's Strata has answered once (`terminal_served`) |
 | `set_key` | `api_key` | waits until Strata is not handling a request and restarts it, which brings a new key |
 | `set_speed_projection` | `model`, `on` | turns speed projection on or off in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_context` | `model`, `context` | sets the context in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
+| `set_pictures` | `model`, `on` | setup again for this model with `--vision yes` or `--vision no`, keeping its family, size, context and speed projection; for the active model it then waits until Strata is not handling a request and restarts it once |
 | `set_user_args` | `model`, `user_args` | replaces the engine options set by hand in this model's configuration, without setup; for the active model it waits until Strata is not handling a request, and restarts it |
 | `set_engine_settings` | `model`, `env`, `user_args` (optional) | replaces the engine environment and, if given, the engine options set by hand, as `set_user_args` does; one restart for both |
 | `apply_preset` | `model`, `preset` | Terminal only: `strata presets apply <preset>`; the active model restarts once Strata is not handling a request |
@@ -501,6 +512,12 @@ there is one. The job's output shows `***` instead of the key.
 other families, `true` is a `400`. The proxy sends the field only when it is
 checked (see "Older PC services").
 
+`pictures` (`false` if not given) asks setup for `--vision yes` instead of
+`--vision no`, so the model gets a picture reader (see
+[strata-api.md](strata-api.md)). Every family in the catalog has one, so no
+family refuses the field; the proxy sends it only when the *Pictures* tick in
+the install and add-model form is checked.
+
 `set_speed_projection` only changes `args` in `strata-<id>.json`, and
 `args_written` the same way if the configuration has it, so that Strata does
 not take the change for one set by hand; the four flags and `--control-vector`
@@ -527,6 +544,28 @@ setup sets up (`400`). What setup derived from the old context
 (KV streaming with `--kv-resident`, `--kv`, parallel slots, calibration)
 stays. A model from the catalog that is not installed is a
 `409`. The modification time stays as with `set_speed_projection`.
+
+`set_pictures` takes a model of the catalog that is installed (`400` for
+one the catalog does not know, `409` for one that is not installed). Setup
+runs as with `add_model`, with the model's family, size and the context its
+configuration has (the catalog's default when it has none), its speed
+projection as it is, and the key Strata runs with, only `--vision`
+differing. A model that is not active is done there, Strata untouched. The
+active one waits until Strata is idle and restarts it once. If that start
+does not come up within `context_start_secs`, the whole run config from
+before setup is written back, Strata is started with it, and the job fails
+with a plain message naming the settings from before; the job's lines show
+what Strata printed. A cancel brings that config back as well and ends the
+job cancelled: before the stop Strata keeps running as it was, after the
+stop it is started with the config from before again. Setup itself failing
+or being cancelled writes the config from before back, fails the job with
+setup's output, and restarts nothing. After setup the service puts back
+what it keeps in every config (loop recovery, the sampling block) and the
+config's modification time, so a Strata without its own start script still
+starts the model it started before. Switching on needs room for the picture
+file (`409` otherwise); `install` and `add_model` with `pictures` count it
+beside the model. Switching off only leaves out the `vision` section; the
+picture file stays on disk.
 
 `set_user_args` replaces `user_args` with the list as given (an empty
 list removes the key); `args`, `args_written` and the modification time

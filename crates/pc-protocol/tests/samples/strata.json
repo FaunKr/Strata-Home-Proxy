@@ -51,6 +51,7 @@
       "speed_projection": true,
       "context": 262144,
       "loop_recovery": "recover",
+      "pictures": "off",
       "sampling": {
         "support": "model_card",
         "thinking": [
@@ -131,6 +132,7 @@
       "speed_projection": false,
       "context": null,
       "loop_recovery": "stop",
+      "pictures": null,
       "sampling": null,
       "tunable": false,
       "tune_unavailable": "Tuning needs the Strata Terminal; this Strata is a folder from source"
@@ -140,17 +142,20 @@
     {
       "id": "qwen",
       "title": "Qwen3.8-Flash-Next",
-      "speed_projection": true
+      "speed_projection": true,
+      "pictures": true
     },
     {
       "id": "swift",
       "title": "Swift 1.5",
-      "speed_projection": false
+      "speed_projection": false,
+      "pictures": true
     },
     {
       "id": "coder",
       "title": "Qwen3.8-Flash-Next Coder",
-      "speed_projection": true
+      "speed_projection": true,
+      "pictures": true
     }
   ],
   "catalog": [

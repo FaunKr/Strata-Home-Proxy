@@ -34,8 +34,8 @@ const sampling = (temperature) => ({
   thinking: [temperature, field('top_p', 0.95), field('top_k', 20)],
   instruct: [field('temperature', 0.7), field('top_p', 0.8), field('top_k', 20), field('presence_penalty', 1.5)],
 });
-const model = (id, family, size, active, context, projection, temperature = field('temperature', 1)) => ({
-  ...strataSample.models[0], id, family, size, disk_bytes: 60e9, active, speed_projection: projection, context,
+const model = (id, family, size, active, context, projection, pictures, temperature = field('temperature', 1)) => ({
+  ...strataSample.models[0], id, family, size, disk_bytes: 60e9, active, speed_projection: projection, context, pictures,
   loop_recovery: 'recover', sampling: sampling(temperature), tunable: true, tune_unavailable: undefined,
 });
 const firstUpstream = 'fedcba9876543210fedcba9876543210fedcba98';
@@ -66,17 +66,17 @@ const strata = {
     ],
   },
   models: [
-    model('IQ3_XXS', 'qwen', 'IQ3_XXS', true, 65536, false),
+    model('IQ3_XXS', 'qwen', 'IQ3_XXS', true, 65536, false, 'gpu'),
     // The presets: the sample's active one, one that waits for Apply, none for a switched context.
-    { ...model('coder-IQ1_M', 'coder', 'IQ1_M', false, 65536, true, field('temperature', 0.6, 'chat_settings')),
+    { ...model('coder-IQ1_M', 'coder', 'IQ1_M', false, 65536, true, 'cpu', field('temperature', 0.6, 'chat_settings')),
       presets: { latest: { ...strataSample.models[0].presets.latest, active: false, state: null, reasons: [] }, other_context: false } },
-    { ...model('swift-IQ2_XS', 'swift', 'IQ2_XS', false, 32768, false), presets: { latest: null, other_context: true } },
+    { ...model('swift-IQ2_XS', 'swift', 'IQ2_XS', false, 32768, false, 'off'), presets: { latest: null, other_context: true } },
   ],
   families: [
-    { id: 'qwen', title: 'Qwen3.8-Flash-Next', speed_projection: true },
-    { id: 'coder', title: 'Coder', speed_projection: true },
-    { id: 'swift', title: 'Swift', speed_projection: false },
-    { id: 'gyro', title: 'Qwen3.8-Flash-Next (Gyro)', speed_projection: false },
+    { id: 'qwen', title: 'Qwen3.8-Flash-Next', speed_projection: true, pictures: true },
+    { id: 'coder', title: 'Coder', speed_projection: true, pictures: true },
+    { id: 'swift', title: 'Swift', speed_projection: false, pictures: true },
+    { id: 'gyro', title: 'Qwen3.8-Flash-Next (Gyro)', speed_projection: false, pictures: true },
   ],
   catalog: [
     { id: 'IQ3_S', family: 'qwen', size: 'IQ3_S', download_gb: 83.6, ram_gb: 62, memory_with_vram: false, fits: true, partly_downloaded: false },
@@ -162,7 +162,9 @@ http.createServer((req, res) => {
     req.on('data', (c) => { raw += c; });
     req.on('end', () => {
       const body = raw ? JSON.parse(raw) : {};
-      strataJob = { id: 1, kind: 'activate', model: body.model ?? null, state: 'running',
+      // A picture switch ends by reporting the model with its new state.
+      const picturesAfter = body.kind === 'set_pictures' ? (body.on ? 'gpu' : 'off') : null;
+      strataJob = { id: 1, kind: body.kind ?? 'activate', model: body.model ?? null, state: 'running',
         lines: [], error: null, started: Math.floor(Date.now() / 1000), ended: null };
       // A run over all models activates each model; end the job shortly after,
       // so the proxy moves on to that model's run.
@@ -170,6 +172,10 @@ http.createServer((req, res) => {
       setTimeout(() => {
         if (strataJob === job) {
           strataJob = { ...job, state: 'done', ended: Math.floor(Date.now() / 1000) };
+          if (picturesAfter) {
+            const switched = strata.models.find((m) => m.id === body.model);
+            if (switched) switched.pictures = picturesAfter;
+          }
         }
       }, 1500);
       res.statusCode = 202;

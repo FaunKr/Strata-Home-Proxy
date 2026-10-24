@@ -87,11 +87,13 @@ enum Plan {
         size: &'static Size,
         context: u32,
         speed_projection: bool,
+        pictures: bool,
     },
     AddModel {
         size: &'static Size,
         context: u32,
         speed_projection: bool,
+        pictures: bool,
     },
     Activate {
         id: String,
@@ -112,6 +114,10 @@ enum Plan {
     SetContext {
         id: String,
         context: u32,
+    },
+    SetPictures {
+        id: String,
+        on: bool,
     },
     /// Benchmarks `ids` in turn, then `active` is the active model again.
     CompareModels {
@@ -154,6 +160,7 @@ impl Plan {
             | Self::Benchmark { id }
             | Self::SetSpeedProjection { id, .. }
             | Self::SetContext { id, .. }
+            | Self::SetPictures { id, .. }
             | Self::SetUserArgs { id, .. }
             | Self::SetEngineSettings { id, .. }
             | Self::SwitchToTerminal { id }
@@ -180,8 +187,17 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
             "Gaming mode is on: switch it off first".into(),
         ));
     }
-    if let Plan::Install { size, .. } | Plan::AddModel { size, .. } = &plan {
-        check_space(agent, size)?;
+    match &plan {
+        Plan::Install { size, pictures, .. } | Plan::AddModel { size, pictures, .. } => {
+            let pictures_gb = if *pictures { catalog::PICTURES_GB } else { 0.0 };
+            check_space(
+                agent,
+                model_gb(agent, size) + pictures_gb + catalog::DISK_SPARE_GB,
+            )?;
+        }
+        // The picture file and a little room beside it: the model is there.
+        Plan::SetPictures { on: true, .. } => check_space(agent, catalog::PICTURES_GB + 1.0)?,
+        _ => {}
     }
     let (job, record) = JobContext::begin(agent, kind, plan.model()).map_err(|running| {
         Refusal::Conflict(format!("A job is running already ({})", kind_text(running)))
@@ -239,12 +255,14 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             // The key comes with the start (see `strata_key`).
             api_key: _,
             experimental_speed_projection: wanted,
+            pictures,
         } => {
             let size = size(&family, &s)?;
             Ok(Plan::Install {
                 size,
                 context: context(c)?,
                 speed_projection: check_speed_projection(size, wanted)?,
+                pictures,
             })
         }
         StrataJobRequest::AddModel {
@@ -253,12 +271,14 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             context: c,
             api_key: _,
             experimental_speed_projection: wanted,
+            pictures,
         } => {
             let size = size(&family, &s)?;
             let plan = Plan::AddModel {
                 size,
                 context: context(c)?,
                 speed_projection: check_speed_projection(size, wanted)?,
+                pictures,
             };
             strata_installed(&install)?;
             Ok(plan)
@@ -315,6 +335,10 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             }
             let id = installed_model(&install, &model)?;
             Ok(Plan::SetContext { id, context })
+        }
+        StrataJobRequest::SetPictures { model, on } => {
+            let id = installed_model(&install, &model)?;
+            Ok(Plan::SetPictures { id, on })
         }
         StrataJobRequest::SetUserArgs { model, user_args } => {
             let id = installed_model(&install, &model)?;
@@ -493,15 +517,19 @@ pub(crate) fn active_model(agent: &Agent) -> Option<String> {
     Some(catalog::by_id(&id).map_or(id, Size::id))
 }
 
-/// Refuses a download that does not fit on the data drive. Of a model partly
-/// downloaded, only the rest counts.
-fn check_space(agent: &Agent, size: &Size) -> Result<(), Refusal> {
+/// What is left to download of a model: of one partly downloaded, only the
+/// rest counts.
+fn model_gb(agent: &Agent, size: &Size) -> f64 {
+    let have_gb = Installation::of(&agent.cfg).downloaded_bytes(&size.id()) as f64 / 1e9;
+    (size.download_gb - have_gb).max(0.0)
+}
+
+/// Refuses a job whose downloads need more than the data drive has free.
+fn check_space(agent: &Agent, need_gb: f64) -> Result<(), Refusal> {
     let data = &agent.cfg.strata_data_dir;
     let Some(free) = agent.platform().disk_free(data) else {
         return Ok(());
     };
-    let have_gb = Installation::of(&agent.cfg).downloaded_bytes(&size.id()) as f64 / 1e9;
-    let need_gb = (size.download_gb - have_gb).max(0.0) + catalog::DISK_SPARE_GB;
     let free_gb = free as f64 / 1e9;
     if free_gb < need_gb {
         return Err(Refusal::Conflict(format!(
@@ -518,12 +546,14 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
             size,
             context,
             speed_projection,
-        } => install(job, size, context, speed_projection).await,
+            pictures,
+        } => install(job, size, context, speed_projection, pictures).await,
         Plan::AddModel {
             size,
             context,
             speed_projection,
-        } => add_model(job, size, context, speed_projection).await,
+            pictures,
+        } => add_model(job, size, context, speed_projection, pictures).await,
         Plan::Activate { id } => activate(job, &id).await,
         Plan::Delete { id } => delete(job, &id).await,
         Plan::Update => update(job).await,
@@ -531,6 +561,7 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::SetKey => set_key(job).await,
         Plan::SetSpeedProjection { id, on } => set_speed_projection(job, &id, on).await,
         Plan::SetContext { id, context } => set_context(job, &id, context).await,
+        Plan::SetPictures { id, on } => set_pictures(job, &id, on).await,
         Plan::SetUserArgs { id, user_args } => set_user_args(job, &id, user_args).await,
         Plan::SetEngineSettings { id, user_args, env } => {
             set_engine_settings(job, &id, user_args, env).await
@@ -548,6 +579,7 @@ async fn install(
     size: &Size,
     context: u32,
     speed_projection: bool,
+    pictures: bool,
 ) -> Result<Option<String>, Step> {
     let agent = job.agent();
     let strata = Installation::of(&agent.cfg);
@@ -557,7 +589,16 @@ async fn install(
     // Setup writes a key only if one is known; the start below makes the
     // one Strata runs with.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
-    setup(job, &strata, size, context, &key, speed_projection).await?;
+    setup(
+        job,
+        &strata,
+        size,
+        context,
+        &key,
+        speed_projection,
+        pictures,
+    )
+    .await?;
     // A Strata started by hand ends with the old values, the new one starts
     // with the managed ones.
     agent.strata().stop();
@@ -652,13 +693,23 @@ async fn add_model(
     size: &Size,
     context: u32,
     speed_projection: bool,
+    pictures: bool,
 ) -> Result<Option<String>, Step> {
     let agent = job.agent();
     // The key Strata runs with: a model with another key would answer the
     // proxy with 401 until the next start.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
     let install = Installation::of(&agent.cfg);
-    setup(job, &install, size, context, &key, speed_projection).await?;
+    setup(
+        job,
+        &install,
+        size,
+        context,
+        &key,
+        speed_projection,
+        pictures,
+    )
+    .await?;
     if active_changed(agent, &manage(agent).await) {
         agent.strata().restart_when_idle(job).await?;
     }
@@ -1214,6 +1265,7 @@ async fn switch_to_terminal(job: &JobContext, id: &str) -> Result<Option<String>
             context,
             &key,
             model.speed_projection(),
+            model.pictures(),
         )
         .await?;
         if !terminal.has(id) {
@@ -1419,6 +1471,91 @@ async fn set_context(job: &JobContext, id: &str, context: u32) -> Result<Option<
         model.set_context(context)
     })
     .await
+}
+
+/// Turns picture reading for an installed model on or off: setup runs for
+/// that model again, with its family, size, context, speed projection and
+/// the key Strata runs with, and `--vision yes` or `--vision no`. A model
+/// that is not active is left running as it is. If the active model does not
+/// come up with the new config, the whole config from before the setup comes
+/// back, Strata starts with it and the job fails.
+async fn set_pictures(job: &JobContext, id: &str, on: bool) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    let install = Installation::of(&agent.cfg);
+    let size = catalog::by_id(id).expect("installed_model checks the catalog");
+    job.step(if on {
+        "Setting up picture reading"
+    } else {
+        "Setting up without picture reading"
+    });
+    // Setup rewrites the config: all of it is kept to bring back, and the
+    // active model is known before setup touches any file (a Strata without
+    // its own start script starts the config touched last).
+    let before = load_model(agent, id).await?;
+    let active = active_model(agent).as_deref() == Some(id);
+    let touched = install.modified(id);
+    // The key Strata runs with: a model with another one would answer the
+    // proxy with 401 until the next start.
+    let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
+    let ran = setup(
+        job,
+        &install,
+        size,
+        before.context().unwrap_or(catalog::DEFAULT_CONTEXT),
+        &key,
+        before.speed_projection(),
+        on,
+    )
+    .await;
+    if let Err(step) = ran {
+        // A failed or cancelled setup leaves no unproven config behind.
+        save_model(agent, before).await?;
+        install.set_modified(id, touched);
+        return Err(step);
+    }
+    // What the service keeps in every config (loop recovery, sampling),
+    // and the place of this config among the ones touched last.
+    manage(agent).await;
+    install.set_modified(id, touched);
+    if !active {
+        return Ok(None);
+    }
+    let failed = format!(
+        "Strata did not start {} picture reading; the settings from before apply again",
+        if on { "with" } else { "without" }
+    );
+    let applied = agent
+        .strata()
+        .restart_or_roll_back(job, "Restoring the settings from before", || async {
+            save_model(agent, before.clone()).await?;
+            install.set_modified(id, touched);
+            Ok(())
+        })
+        .await?;
+    match applied {
+        Applied::Kept => Ok(None),
+        Applied::RolledBack => Err(Step::Failed(failed)),
+    }
+}
+
+/// A model's config as it is, off the runtime's threads; an error for one
+/// that cannot be read (unlike [`Installation::read_model`]).
+async fn load_model(agent: &Agent, id: &str) -> Result<Model, Step> {
+    let install = Installation::of(&agent.cfg);
+    let id = id.to_string();
+    tokio::task::spawn_blocking(move || install.model(&id))
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))?
+        .map_err(Step::Failed)
+}
+
+/// A whole model config back as it was, off the runtime's threads.
+async fn save_model(agent: &Agent, model: Model) -> Result<(), Step> {
+    let install = Installation::of(&agent.cfg);
+    tokio::task::spawn_blocking(move || install.save(&model))
+        .await
+        .map_err(|e| Step::Failed(e.to_string()))?
+        .map_err(Step::Failed)
 }
 
 /// Replaces a model's engine options set by hand. The active model restarts
@@ -2029,7 +2166,7 @@ fn parse_numstat(line: &str) -> Option<ChangedFile> {
 }
 
 /// Runs the setup of `install` without questions, with the fixed values
-/// and the key.
+/// and the key; with `pictures`, setup also sets up the picture reader.
 async fn setup(
     job: &JobContext,
     install: &Installation,
@@ -2037,6 +2174,7 @@ async fn setup(
     context: u32,
     api_key: &str,
     speed_projection: bool,
+    pictures: bool,
 ) -> Result<(), Step> {
     let agent = job.agent();
     let mut args: Vec<String> = vec!["--yes".into(), "--no-start".into(), "--no-browser".into()];
@@ -2052,7 +2190,7 @@ async fn setup(
             "--context",
             &context.to_string(),
             "--vision",
-            "no",
+            if pictures { "yes" } else { "no" },
             "--host",
             STRATA_HOST,
             "--port",
@@ -2203,6 +2341,7 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::SetKey => "Set Strata key",
         StrataJobKind::SetSpeedProjection => "Switch speed projection",
         StrataJobKind::SetContext => "Change context",
+        StrataJobKind::SetPictures => "Switch picture reading",
         StrataJobKind::SetUserArgs => "Save engine options",
         StrataJobKind::SetEngineSettings => "Save engine settings",
         StrataJobKind::PresetOff => "Turn the preset off",
@@ -2245,6 +2384,7 @@ pub fn view(agent: &Agent) -> StrataReport {
                 speed_projection: Some(model.speed_projection()),
                 context: model.context(),
                 loop_recovery: Some(model.loop_recovery().into()),
+                pictures: model.picture_state(),
                 sampling: support.map(|support| model.sampling(support)),
                 config: model.shareable_config(),
                 user_args: model.shareable_user_args(),
@@ -2285,6 +2425,7 @@ pub fn view(agent: &Agent) -> StrataReport {
                 id: f.id.into(),
                 title: f.title.into(),
                 speed_projection: f.speed_projection,
+                pictures: f.pictures,
             })
             .collect(),
         catalog: catalog::SIZES

@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use strata_pc_protocol::Pictures;
 
 use crate::{
     sampling::{self, SamplingSupport, StrataSampling},
@@ -229,6 +230,22 @@ impl Installation {
     /// the same model stays active. Chat settings are only read, never written.
     pub fn save(&self, model: &Model) -> Result<(), String> {
         write_config(&self.config_path(&model.id), &model.fields)
+    }
+
+    /// When a model's config was last modified; `None` without one.
+    pub fn modified(&self, id: &str) -> Option<std::time::SystemTime> {
+        std::fs::metadata(self.config_path(id))
+            .and_then(|m| m.modified())
+            .ok()
+    }
+
+    /// Gives a model's config back the modification time `time` from
+    /// [`Self::modified`], after setup wrote it anew: Strata without its own
+    /// start script starts the config touched last. Nothing without a time.
+    pub fn set_modified(&self, id: &str, time: Option<std::time::SystemTime>) {
+        if let Some(time) = time {
+            set_modified(&self.config_path(id), time);
+        }
     }
 
     /// The Strata key in the model configs: the first config's in the order
@@ -677,6 +694,33 @@ impl Model {
         args.get(at + 1)?.as_str()?.parse().ok()
     }
 
+    /// Whether the config has a picture reader, and which one: no `vision`
+    /// section is `off`, `vision.gpu` the GPU reader or the CPU one. `None`
+    /// for a config that cannot be read, as [`Self::shareable_config`] says.
+    pub fn picture_state(&self) -> Option<Pictures> {
+        if self.fields.is_empty() {
+            return None;
+        }
+        // Strata starts a reader for a `vision` section that is a non-empty
+        // object (`if cfg.get("vision")` in serve/server.py).
+        let vision = self
+            .fields
+            .get("vision")
+            .and_then(Value::as_object)
+            .filter(|vision| !vision.is_empty());
+        Some(match vision {
+            Some(vision) if vision.get("gpu") == Some(&Value::Bool(true)) => Pictures::Gpu,
+            Some(_) => Pictures::Cpu,
+            None => Pictures::Off,
+        })
+    }
+
+    /// Whether the config has a picture reader: setup writes a `vision`
+    /// section only when asked for `--vision yes`.
+    pub fn pictures(&self) -> bool {
+        matches!(self.picture_state(), Some(Pictures::Cpu | Pictures::Gpu))
+    }
+
     /// Whether the config loads a control vector, Strata's or another one.
     pub fn speed_projection(&self) -> bool {
         self.started_args()
@@ -989,19 +1033,24 @@ fn write_config(path: &Path, fields: &ConfigFields) -> Result<(), String> {
     write_keeping_time(path, &config_text(fields))
 }
 
+/// Sets a file's modification time; a failure is only logged.
+fn set_modified(path: &Path, time: std::time::SystemTime) {
+    let kept = std::fs::File::options()
+        .write(true)
+        .open(path)
+        .and_then(|f| f.set_modified(time));
+    if let Err(e) = kept {
+        tracing::warn!("Kept no modification time on {}: {e}", path.display());
+    }
+}
+
 /// Replaces the file's text and gives it back its modification time.
 fn write_keeping_time(path: &Path, text: &str) -> Result<(), String> {
     let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
     crate::write_replacing(path, text)
         .map_err(|e| format!("{} not written: {e}", path.display()))?;
     if let Some(time) = modified {
-        let kept = std::fs::File::options()
-            .write(true)
-            .open(path)
-            .and_then(|f| f.set_modified(time));
-        if let Err(e) = kept {
-            tracing::warn!("Kept no modification time on {}: {e}", path.display());
-        }
+        set_modified(path, time);
     }
     Ok(())
 }
@@ -1660,6 +1709,51 @@ mod tests {
         model.set_speed_projection(false).unwrap();
         assert_eq!(model.fields()["args"], json!(["a.gguf", "--threads", "8"]));
         assert!(!model.speed_projection());
+    }
+
+    #[test]
+    fn picture_reading_is_the_vision_section_of_the_config() {
+        let f = Folders::new("vision");
+        let s = f.setup();
+        // Setup's `VR.vision_section` for the GPU reader and the CPU one.
+        s.config(
+            "gpu",
+            json!({"exe": "strata.exe", "args": [], "vision": {
+                "exe": "C:\\Strata\\engine\\strata-vision-hip.exe",
+                "mmproj": "D:\\models\\mmproj-Qwen3.8-Flash-Next-BF16.gguf",
+                "model": "model.gguf", "gpu": true, "max_tokens": 1024,
+                "cpu_exe": "C:\\Strata\\engine\\strata-vision.exe"
+            }}),
+        );
+        s.config(
+            "cpu",
+            json!({"exe": "strata.exe", "args": [], "vision": {
+                "exe": "C:\\Strata\\engine\\strata-vision.exe",
+                "mmproj": "mmproj.gguf",
+                "model": "model.gguf", "gpu": false, "max_tokens": 300, "threads": 8
+            }}),
+        );
+        s.config("plain", config(json!(["--native"])));
+        s.config(
+            "empty",
+            json!({"exe": "strata.exe", "args": [], "vision": {}}),
+        );
+        s.config(
+            "null",
+            json!({"exe": "strata.exe", "args": [], "vision": null}),
+        );
+        let install = s.installation();
+        for id in ["empty", "null"] {
+            assert!(!install.read_model(id).pictures(), "{id}");
+            assert_eq!(
+                install.read_model(id).picture_state(),
+                Some(Pictures::Off),
+                "{id}"
+            );
+        }
+        assert!(install.read_model("gpu").pictures());
+        assert!(install.read_model("cpu").pictures());
+        assert!(!install.read_model("plain").pictures());
     }
 
     #[test]

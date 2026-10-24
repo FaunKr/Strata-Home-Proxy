@@ -478,6 +478,70 @@ async fn the_speed_projection_reaches_the_pc_service_when_ticked() {
 }
 
 #[tokio::test]
+async fn the_picture_tick_reaches_the_pc_service_when_ticked() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(install(&mut b).await.status(), 200);
+    assert_eq!(last_body(&s).get("pictures"), None);
+    for kind in ["install", "add_model"] {
+        let resp = b
+            .call(
+                "strata-job",
+                &[
+                    ("kind", kind),
+                    ("family", "qwen"),
+                    ("size", "IQ3_XXS"),
+                    ("context", "65536"),
+                    ("pictures", "true"),
+                ],
+            )
+            .await;
+        assert_eq!(resp.status(), 200);
+        assert_eq!(last_body(&s)["pictures"], true, "{kind}");
+    }
+}
+
+#[tokio::test]
+async fn the_page_offers_picture_reading_for_families_that_have_it() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(false);
+    report.info.families = vec![
+        family("qwen", "Qwen3.8-Flash-Next", true, true),
+        family("swift", "Swift 1.5", false, false),
+    ];
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("Pictures"), "{html}");
+    assert!(html.contains("0.9 GB extra download"), "{html}");
+    assert_eq!(html.matches("id=\"Install-pictures\"").count(), 1, "{html}");
+}
+
+#[tokio::test]
+async fn a_family_without_picture_reading_offers_no_tick() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(false);
+    report.info.families = vec![family("swift", "Swift 1.5", false, false)];
+    report.info.catalog = vec![StrataSize {
+        id: "swift-IQ2_XS".into(),
+        family: "swift".into(),
+        size: "IQ2_XS".into(),
+        download_gb: 68.0,
+        ram_gb: 48,
+        memory_with_vram: false,
+        fits: true,
+        partly_downloaded: false,
+    }];
+    report.info.recommended = None;
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("swift-IQ2_XS"), "{html}");
+    assert!(!html.contains("id=\"Install-pictures\""), "{html}");
+    assert!(!html.contains("Pictures"), "{html}");
+}
+
+#[tokio::test]
 async fn connection_tab_holds_exactly_the_strata_settings() {
     let s = setup(true, |_| {}).await;
     let b = logged_in(&s.url).await;
@@ -537,8 +601,8 @@ async fn the_setup_offers_the_speed_projection_with_what_it_does() {
 fn with_two_models(projection: Option<bool>) -> StrataReport {
     let mut report = strata_info(true);
     report.info.families = vec![
-        family("qwen", "Qwen3.8-Flash-Next", true),
-        family("swift", "Swift 1.5", false),
+        family("qwen", "Qwen3.8-Flash-Next", true, true),
+        family("swift", "Swift 1.5", false, true),
     ];
     let mut qwen = model("IQ3_XXS", Some("qwen"), 81_000_000_000, true);
     let mut swift = model("swift-IQ2_XS", Some("swift"), 40_000_000_000, false);
@@ -618,6 +682,116 @@ async fn only_models_that_take_it_offer_to_switch_the_speed_projection() {
     page(&mut b).await;
     let html = b.page("/admin/strata").await;
     assert!(!html.contains("Switch speed projection"), "{html}");
+}
+
+// --- #326 the picture state of installed models ---
+
+/// The same two models, with the PC service saying `pictures` about each.
+fn with_picture_state(qwen: Option<Pictures>, swift: Option<Pictures>) -> StrataReport {
+    let mut report = with_two_models(None);
+    report.info.models[0].pictures = qwen;
+    report.info.models[1].pictures = swift;
+    report
+}
+
+#[tokio::test]
+async fn installed_models_show_their_picture_state() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() =
+        Some(with_picture_state(Some(Pictures::Gpu), Some(Pictures::Cpu)));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(html.matches("Pictures: on (GPU)").count(), 1, "{html}");
+    assert_eq!(html.matches("Pictures: on (CPU)").count(), 1, "{html}");
+}
+
+#[tokio::test]
+async fn a_model_without_picture_reading_shows_it_off() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() =
+        Some(with_picture_state(Some(Pictures::Off), Some(Pictures::Off)));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(html.matches("Pictures: off").count(), 2, "{html}");
+    assert!(!html.contains("Pictures: on"), "{html}");
+}
+
+#[tokio::test]
+async fn without_word_from_the_pc_service_no_picture_state_shows() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(with_picture_state(None, None));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("IQ3_XXS"), "{html}");
+    assert!(!html.contains("Pictures:"), "{html}");
+}
+
+// --- #327 switching picture reading for an installed model ---
+
+#[tokio::test]
+async fn switching_picture_reading_sends_only_its_fields() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
+    let resp = b
+        .call(
+            "strata-job",
+            &[
+                ("kind", "set_pictures"),
+                ("model", "IQ3_XXS"),
+                ("pictures", "true"),
+                ("family", "qwen"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        last_body(&s),
+        json!({"kind": "set_pictures", "model": "IQ3_XXS", "on": true})
+    );
+    let resp = b
+        .call(
+            "strata-job",
+            &[
+                ("kind", "set_pictures"),
+                ("model", "swift-IQ2_XS"),
+                ("pictures", "false"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        last_body(&s),
+        json!({"kind": "set_pictures", "model": "swift-IQ2_XS", "on": false})
+    );
+}
+
+#[tokio::test]
+async fn only_models_with_a_known_picture_state_offer_the_switch() {
+    let s = setup(true, |_| {}).await;
+    // A model with a reader can switch it off, one without can switch it on.
+    *s.pc.strata_info.lock().unwrap() =
+        Some(with_picture_state(Some(Pictures::Gpu), Some(Pictures::Off)));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert_eq!(
+        html.matches("Switch picture reading off").count(),
+        1,
+        "{html}"
+    );
+    assert_eq!(
+        html.matches("Switch picture reading on").count(),
+        1,
+        "{html}"
+    );
+    // An older PC service says nothing about picture reading: no switch.
+    *s.pc.strata_info.lock().unwrap() = Some(with_picture_state(None, None));
+    page(&mut b).await;
+    let html = b.page("/admin/strata").await;
+    assert!(!html.contains("Switch picture reading"), "{html}");
 }
 
 // --- #101 the context of installed models ---

@@ -149,6 +149,42 @@ async function forced(page, errors) {
     await page.locator('.strata-state .badge', { hasText: 'Paused' }).waitFor(wait);
     if (await restart.count()) throw new Error('Force restart Strata shows in gaming mode');
   });
+  await step('the model form offers picture reading, ticked by default', 'pictures', async () => {
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    const tick = page.locator('input[id$="-pictures"]').first();
+    await tick.waitFor(wait);
+    await sees('Lets the model read pictures');
+    if (!(await tick.isChecked())) throw new Error('the Pictures tick is off by default');
+  });
+  await step("the models list shows each model's picture state", 'pictures-state', async () => {
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await sees('Pictures: on (GPU)');
+    await sees('Pictures: on (CPU)');
+    await sees('Pictures: off');
+  });
+  await step('the picture reading switch asks, then the model shows its new state', 'pictures-switch', async () => {
+    // No Strata job starts in gaming mode, which the steps above left on.
+    await fakePc('awake');
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    // The first row: another one's text can name IQ3_XXS too.
+    const row = page.locator('li.model', { hasText: 'IQ3_XXS' }).first();
+    const switchOff = row.getByRole('button', { name: 'Switch picture reading off' });
+    await switchOff.waitFor(wait);
+    await switchOff.click();
+    await dialog.getByText('Switch picture reading off for IQ3_XXS?').waitFor(wait);
+    await dialog.getByText('The picture file stays on disk').waitFor(wait);
+    await dialog.getByRole('button', { name: 'Switch off' }).click();
+    // The fake PC finishes the job in 1.5 s; wait for it rather than guess.
+    for (let i = 0; i < 30; i++) {
+      const job = await (await fetch(`${process.env.FAKE_PC}/strata/job`)).json();
+      if (job?.state === 'done') break;
+      await page.waitForTimeout(500);
+    }
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await row.getByText('Pictures: off').waitFor(wait);
+    await row.getByRole('button', { name: 'Switch picture reading on' }).waitFor(wait);
+    await fakePc('gaming');
+  });
   await step('Force sleep in the gaming state', 'gaming-overview', async () => {
     await page.goto(base + '/admin', { waitUntil: 'domcontentloaded' });
     await force.click(wait);

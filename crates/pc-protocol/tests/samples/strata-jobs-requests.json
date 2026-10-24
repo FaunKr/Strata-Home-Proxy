@@ -5,7 +5,8 @@
     "size": "IQ3_XXS",
     "context": 65536,
     "api_key": "0123abcd",
-    "experimental_speed_projection": true
+    "experimental_speed_projection": true,
+    "pictures": true
   },
   {
     "kind": "install",
@@ -54,6 +55,16 @@
     "kind": "set_context",
     "model": "IQ3_XXS",
     "context": 131072
+  },
+  {
+    "kind": "set_pictures",
+    "model": "IQ3_XXS",
+    "on": true
+  },
+  {
+    "kind": "set_pictures",
+    "model": "coder-IQ1_M",
+    "on": false
   },
   {
     "kind": "compare_models"

@@ -16,6 +16,9 @@ pub struct Family {
     /// Setup offers Strata's experimental speed projection; made for the
     /// original Qwen3.8-Flash-Next, which the Coder shares.
     pub speed_projection: bool,
+    /// Setup can set up picture reading for this family: every family in
+    /// Strata's tables has a vision model.
+    pub pictures: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -36,36 +39,42 @@ pub const FAMILIES: &[Family] = &[
         title: "Qwen3.8-Flash-Next",
         tag: "",
         speed_projection: true,
+        pictures: true,
     },
     Family {
         id: "swift",
         title: "Swift 1.5",
         tag: "swift-",
         speed_projection: false,
+        pictures: true,
     },
     Family {
         id: "coder",
         title: "Qwen3.8-Flash-Next Coder",
         tag: "coder-",
         speed_projection: true,
+        pictures: true,
     },
     Family {
         id: "unsloth",
         title: "Qwen3.8-Flash-Next (Unsloth)",
         tag: "unsloth-",
         speed_projection: false,
+        pictures: true,
     },
     Family {
         id: "qwen36",
         title: "Qwen3.6-35B-A3B",
         tag: "qwen36-",
         speed_projection: false,
+        pictures: true,
     },
     Family {
         id: "gyro",
         title: "Qwen3.8-Flash-Next (Gyro)",
         tag: "gyro-",
         speed_projection: false,
+        pictures: true,
     },
 ];
 
@@ -126,6 +135,11 @@ pub const DEFAULT_CONTEXT: u32 = 65536;
 
 /// Free space the setup needs beside the download.
 pub const DISK_SPARE_GB: f64 = 8.0;
+
+/// The picture file setup downloads with `--vision yes`: 0.91 GB for the
+/// Qwen3.8-Flash-Next families, 0.90 GB for Qwen3.6 (`sha256` sizes of
+/// `mmproj-Qwen3.8-Flash-Next-BF16.gguf` and `mmproj-F16.gguf` in `setup.py`).
+pub const PICTURES_GB: f64 = 0.91;
 
 /// The model family Strata's tuner knows a family's models as
 /// (`detect_family` in `strata_control/autotune.py`): Qwen3.6 is `qwen36`,

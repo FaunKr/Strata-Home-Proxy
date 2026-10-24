@@ -326,6 +326,24 @@ async fn install_turns_the_experimental_speed_projection_on_or_off() {
 }
 
 #[tokio::test]
+async fn install_sets_up_picture_reading_when_asked_for_it() {
+    for (pictures, value) in [(true, "yes"), (false, "no")] {
+        let s = setup(&format!("strata-pictures-{value}")).await;
+        installable(&s);
+        let mut body = install();
+        body["pictures"] = json!(pictures);
+        let (code, job) = post(&s, "/strata/jobs", body).await;
+        assert_eq!(code, 202, "{job}");
+        assert_eq!(finished(&s).await["state"], "done");
+        let args = &s.fake.runs_of("python")[0].args;
+        assert!(
+            args.windows(2).any(|w| w == ["--vision", value]),
+            "{value}: {args:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn the_speed_projection_is_refused_for_other_families() {
     let s = setup("strata-esp-swift").await;
     let body = json!({"kind": "install", "family": "swift", "size": "IQ2_XS", "context": 65536,
@@ -483,6 +501,11 @@ async fn the_catalog_marks_what_fits_and_recommends_setups_pick() {
         .map(|f| f["id"].as_str().unwrap())
         .collect();
     assert_eq!(projection, ["qwen", "coder"]);
+    let families = view["families"].as_array().unwrap();
+    assert!(
+        families.iter().all(|f| f["pictures"] == true),
+        "{families:?}"
+    );
 }
 
 /// A PC with this much RAM and a card with this much VRAM, in GiB as setup

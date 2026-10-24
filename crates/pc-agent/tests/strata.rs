@@ -151,6 +151,137 @@ async fn free_values_are_refused_before_anything_runs() {
     assert!(s.fake.ran.lock().unwrap().is_empty());
 }
 
+/// Install as the proxy sends it: Strata alone.
+fn strata_alone() -> Value {
+    json!({"kind": "install", "api_key": KEY})
+}
+
+/// A PC on which Install put Strata alone. Setup's fake comes back for
+/// what follows.
+async fn strata_alone_installed(name: &str) -> Setup {
+    let s = setup(name).await;
+    installable(&s);
+    // A page visit reads the Terminal's options with the same Python, which
+    // setup's fake would answer by putting a model there.
+    let setup_fake = s.fake.commands.lock().unwrap().remove("python").unwrap();
+    let (code, job) = post(&s, "/strata/jobs", strata_alone()).await;
+    assert_eq!(code, 202, "{job}");
+    assert!(job.get("model").is_none(), "{job}");
+    let job = finished(&s).await;
+    assert_eq!(job["state"], "done", "{job}");
+    let view = get(&s, "/strata").await;
+    s.fake.command("python", setup_fake);
+    assert_eq!(view["installed"], true, "{view}");
+    s
+}
+
+#[tokio::test]
+async fn install_without_a_model_puts_only_strata_on_the_pc() {
+    let s = strata_alone_installed("strata-alone").await;
+    assert!(Terminal::of(&s.agent.cfg).is_installed());
+    let engine = s.fake.runs_of("strata.cmd");
+    assert_eq!(
+        engine[0].args[..2],
+        ["update", "--no-control"],
+        "the engine"
+    );
+    assert_eq!(s.fake.runs_of("python catalog").len(), 1);
+    assert!(
+        s.fake.started.lock().unwrap().is_none(),
+        "no model to serve"
+    );
+    let view = get(&s, "/strata").await;
+    assert_eq!(view["models"], json!([]));
+    assert_eq!(view["recommended"], "IQ3_S");
+    assert!(
+        view["catalog"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|size| size["id"] == "IQ3_XXS"),
+        "{view}"
+    );
+}
+
+#[tokio::test]
+async fn the_first_added_model_is_the_one_strata_serves() {
+    let s = strata_alone_installed("strata-first-model").await;
+    let add = json!({"kind": "add_model", "family": "qwen", "size": "IQ3_XXS", "context": 65536});
+    let (code, answer) = post(&s, "/strata/jobs", add).await;
+    assert_eq!(code, 202, "{answer}");
+    assert_eq!(finished(&s).await["state"], "done");
+    let cfg = &s.agent.cfg;
+    let terminal = cfg.strata_home.join("terminal").join("current");
+    let config = cfg.strata_home.join("install").join("strata-iq3_xxs.json");
+    let (program, args) = s.fake.started.lock().unwrap().clone().unwrap();
+    assert_eq!(program, terminal.join("bin").join("strata.cmd"));
+    assert_eq!(
+        args[..3],
+        ["serve", "--profile", &config.display().to_string()]
+    );
+    let view = get(&s, "/strata").await;
+    assert_eq!(view["models"][0]["id"], "IQ3_XXS");
+    assert_eq!(view["models"][0]["active"], true);
+}
+
+#[tokio::test]
+async fn an_unreadable_catalog_leaves_strata_installed_and_says_why() {
+    let s = setup("strata-alone-unreadable").await;
+    installable(&s);
+    s.fake.command(
+        "python catalog",
+        FakeCommand {
+            lines: lines(&["Traceback (most recent call last):"]),
+            exit: Some(1),
+            ..FakeCommand::default()
+        },
+    );
+    post(&s, "/strata/jobs", strata_alone()).await;
+    assert_eq!(finished(&s).await["state"], "done");
+    let view = get(&s, "/strata").await;
+    assert_eq!(view["installed"], true);
+    assert!(view["catalog_unreadable"].is_string(), "{view}");
+    let add = json!({"kind": "add_model", "family": "qwen", "size": "IQ3_XXS", "context": 65536});
+    let (code, answer) = post(&s, "/strata/jobs", add).await;
+    assert_eq!(code, 409, "{answer}");
+    assert!(
+        answer
+            .to_string()
+            .contains("update Strata to choose a model"),
+        "{answer}"
+    );
+}
+
+#[tokio::test]
+async fn an_install_takes_a_whole_model_or_none() {
+    let s = setup("strata-half-model").await;
+    let half = json!({"kind": "install", "family": "qwen", "size": "IQ3_XXS", "api_key": KEY});
+    let (code, answer) = post(&s, "/strata/jobs", half).await;
+    assert_eq!(code, 400, "{answer}");
+    assert!(
+        answer
+            .to_string()
+            .contains("family, size and context together, or none of them"),
+        "{answer}"
+    );
+    assert!(s.fake.ran.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_install_without_a_model_takes_no_model_ticks() {
+    let s = setup("strata-alone-ticks").await;
+    let ticks = json!({"kind": "install", "api_key": KEY, "pictures": true});
+    let (code, answer) = post(&s, "/strata/jobs", ticks).await;
+    assert_eq!(code, 400, "{answer}");
+    assert!(
+        answer
+            .to_string()
+            .contains("Without a model there is no speed projection or picture reading"),
+        "{answer}"
+    );
+    assert!(s.fake.ran.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn install_sets_up_the_strata_terminal_and_serves_the_new_model() {
     let s = setup("strata-install").await;

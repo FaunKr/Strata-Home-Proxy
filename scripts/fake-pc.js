@@ -12,6 +12,8 @@
 // answers nothing.
 // POST /fake/catalog?state=unreadable|read makes Strata's catalog unreadable
 // or brings it back.
+// POST /fake/strata?state=none|first|installed puts no Strata on the PC, Strata
+// without a model, or Strata with its models again.
 // Sleep now is refused; a forced sleep puts the fake PC to sleep, and a forced
 // Strata restart finds nothing to start.
 // The answers start from the PC service's samples in the protocol crate, so a
@@ -122,7 +124,7 @@ const runFor = (model, state) => ({
 let held = [];
 const summary = '- **Run setup again** after this update.\n- Long prompts are read faster.\n- A crash when an answer hits max_tokens in a tool call is fixed.';
 
-const { catalog, contexts } = strata;
+const { catalog, contexts, models, recommended } = strata;
 
 http.createServer((req, res) => {
   const json = body => {
@@ -168,6 +170,17 @@ http.createServer((req, res) => {
     strata.catalog_unreadable = unreadable ? 'Strata gave no catalog' : undefined;
     strata.catalog = unreadable ? [] : catalog;
     strata.contexts = unreadable ? [] : contexts;
+    res.end();
+  }
+  else if (req.method === 'POST' && req.url.startsWith('/fake/strata')) {
+    const state = new URL(req.url, 'http://fake').searchParams.get('state');
+    // Without Strata, Strata's catalog is not there either.
+    strata.installed = state !== 'none';
+    strata.install = state === 'none' ? undefined : 'terminal';
+    strata.models = state === 'installed' ? models : [];
+    strata.catalog = state === 'none' ? [] : catalog;
+    strata.contexts = state === 'none' ? [] : contexts;
+    strata.recommended = state === 'none' ? undefined : recommended;
     res.end();
   }
   else if (req.method === 'POST' && req.url.startsWith('/fake/pc')) {

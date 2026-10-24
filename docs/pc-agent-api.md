@@ -22,6 +22,12 @@ talks to a newer proxy. Therefore:
   older one accepts: older services keep checking it (the `api_key` of
   `install` is a random throwaway key, because older services refuse an
   empty one).
+- A required request field may become optional, never the other way. The
+  web UI leaves it out only where the answer shows a PC service that takes
+  that: its setup sends `install` without a model only when `GET /strata`
+  lists no catalog before Strata is installed. A service from before the
+  catalog read lists its own table there and needs the model; it refuses
+  `install` without one with a `422`.
 
 The crate's tests read the saved responses plus responses that lack the
 newer fields. A PC service test checks that the samples show every field it
@@ -515,14 +521,20 @@ job (`StrataJob`). `400` (`Refused`) for a family, size or context of
 `install` and `add_model` that is not in the catalog read last and for a
 `model` that is no plain id (letters, digits, `.`, `_`, `-`), `409` if it is not possible right now (gaming on, a job is running, too
 little space, deleting the active model, no catalog: being read, unreadable).
-`install` on a PC without Strata checks the model only once the Strata
-Terminal is there: the job reads its catalog after the engine step and fails
-with the same plain message, before setup runs; such a job has no `model`.
+`install` takes `family`, `size` and `context` together or none of them
+(`400` otherwise). Without them it puts only Strata on the PC: the Strata
+Terminal, its engine, then a read of Strata's catalog. The job ends with no
+model installed, also when the catalog can't be read (`GET /strata` then says
+why), and the first model comes with `add_model`. This is what the proxy
+sends. An older proxy sends a model with `install`. On a PC without Strata
+that model is checked only once the Strata Terminal is there: the job reads
+its catalog after the engine step and fails with the same plain message,
+before setup runs. Such a job has no `model`.
 
 | `kind` | Fields | What happens |
 | --- | --- | --- |
-| `install` | `family`, `size`, `context`, `api_key`, optional `experimental_speed_projection` and `pictures` | the Strata Terminal with Strata's `install.ps1` (if it is not there yet), the engine for this PC with `strata update`, setup without questions in its install mode, then serves the model with `strata serve`; a Strata folder from source keeps its own setup (`START-HERE.bat`) |
-| `add_model` | `family`, `size`, `context`, optional `api_key`, `experimental_speed_projection` and `pictures` | setup with `--setup` (for the Strata Terminal in its install mode) and the key Strata runs with, the active model stays active |
+| `install` | `api_key`, optional `family`, `size` and `context` (together), `experimental_speed_projection` and `pictures` (only with a model) | the Strata Terminal with Strata's `install.ps1` (if it is not there yet), the engine for this PC with `strata update`, then Strata's catalog; with a model, setup without questions in its install mode, then serves the model with `strata serve`; a Strata folder from source keeps its own setup (`START-HERE.bat`) |
+| `add_model` | `family`, `size`, `context`, optional `api_key`, `experimental_speed_projection` and `pictures` | setup with `--setup` (for the Strata Terminal in its install mode) and the key Strata runs with, the active model stays active; the first model of a Strata without models becomes the active one and Strata starts with it |
 | `activate` | `model` | waits until Strata is not handling a request, restarts with the other run config (`strata serve --profile`) or start script |
 | `delete` | `model` | deletes this model's model folder, pack, configuration, start script and log |
 | `update` | – | Terminal: `strata update --output jsonl` (engine and Terminal files, each after a test start) with Strata stopped, its phases as steps and its downloads as figures, restarts; a part that is not in place fails the job with Strata's reason. Folder from source: `git pull --ff-only`, then `START-HERE.bat --update` with Strata stopped, restarts |

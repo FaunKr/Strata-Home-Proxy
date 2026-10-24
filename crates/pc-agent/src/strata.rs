@@ -132,8 +132,9 @@ enum Choice {
 
 /// A checked request: what the job runs with.
 enum Plan {
+    /// Strata, and the model an older proxy sends with it.
     Install {
-        choice: Choice,
+        choice: Option<Choice>,
     },
     AddModel {
         model: NewModel,
@@ -206,11 +207,11 @@ impl Plan {
     fn model(&self) -> Option<String> {
         match self {
             Self::Install {
-                choice: Choice::Checked(model),
+                choice: Some(Choice::Checked(model)),
             }
             | Self::AddModel { model } => Some(model.size.id.clone()),
             Self::Install {
-                choice: Choice::Later(_),
+                choice: Some(Choice::Later(_)) | None,
             } => None,
             Self::Activate { id }
             | Self::Delete { id }
@@ -248,7 +249,7 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
     let plan = check(agent, request)?;
     match &plan {
         Plan::Install {
-            choice: Choice::Checked(model),
+            choice: Some(Choice::Checked(model)),
         }
         | Plan::AddModel { model } => check_model_space(agent, model)?,
         // The picture file and a little room beside it: the model is there.
@@ -345,6 +346,24 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             experimental_speed_projection: wanted,
             pictures,
         } => {
+            let (family, s, c) = match (family, s, c) {
+                (Some(family), Some(s), Some(c)) => (family, s, c),
+                // Strata alone; the first model comes with Add model.
+                (None, None, None) => {
+                    if wanted || pictures {
+                        return Err(Refusal::BadRequest(
+                            "Without a model there is no speed projection or picture reading to set up".into(),
+                        ));
+                    }
+                    return Ok(Plan::Install { choice: None });
+                }
+                _ => {
+                    return Err(Refusal::BadRequest(
+                        "An install takes family, size and context together, or none of them"
+                            .into(),
+                    ));
+                }
+            };
             let wanted = Wanted {
                 family,
                 size: s,
@@ -358,7 +377,9 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
                 CatalogNow::NoStrata => Choice::Later(wanted),
                 _ => Choice::Checked(new_model(catalog()?, wanted)?),
             };
-            Ok(Plan::Install { choice })
+            Ok(Plan::Install {
+                choice: Some(choice),
+            })
         }
         StrataJobRequest::AddModel {
             family,
@@ -705,17 +726,25 @@ async fn set_relay(job: &JobContext, on: bool) -> Result<Option<String>, Step> {
     Ok(None)
 }
 
-async fn install(job: &JobContext, choice: Choice) -> Result<Option<String>, Step> {
+/// Strata on the PC, then its catalog; with a model (from an older
+/// proxy), that model as the active one.
+async fn install(job: &JobContext, choice: Option<Choice>) -> Result<Option<String>, Step> {
     let agent = job.agent();
     let strata = Installation::of(&agent.cfg);
     if strata.kind() == Kind::Terminal {
         install_terminal(job).await?;
     }
     let model = match choice {
-        Choice::Checked(model) => model,
-        Choice::Later(wanted) => {
+        Some(Choice::Checked(model)) => model,
+        later => {
             job.step("Reading Strata's model list");
-            let catalog = read_catalog(agent).await.map_err(Step::Failed)?;
+            let catalog = read_catalog(agent).await;
+            // Without a model the choice comes from this catalog. Strata is
+            // installed also when it can't be read: the page then says why.
+            let Some(Choice::Later(wanted)) = later else {
+                return Ok(None);
+            };
+            let catalog = catalog.map_err(Step::Failed)?;
             let model = new_model(&catalog, wanted).map_err(|r| Step::Failed(r.into_text()))?;
             check_model_space(agent, &model).map_err(|r| Step::Failed(r.into_text()))?;
             model
@@ -725,12 +754,21 @@ async fn install(job: &JobContext, choice: Choice) -> Result<Option<String>, Ste
     // one Strata runs with.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
     setup(job, &strata, &model, &key).await?;
+    serve_first(agent, &strata, &model.size.id).await
+}
+
+/// Makes `id` the active model that the service starts Strata with.
+async fn serve_first(
+    agent: &Agent,
+    strata: &Installation,
+    id: &str,
+) -> Result<Option<String>, Step> {
     // A Strata started by hand ends with the old values, the new one starts
     // with the managed ones.
     agent.strata().stop();
     manage(agent).await;
     agent
-        .set_managed(managed_start(agent, &strata, &model.size.id))
+        .set_managed(managed_start(agent, strata, id))
         .map_err(|e| Step::Failed(e.to_string()))?;
     agent.strata().start_again().await;
     Ok(None)
@@ -824,7 +862,12 @@ async fn add_model(job: &JobContext, model: &NewModel) -> Result<Option<String>,
     // proxy with 401 until the next start.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
     let install = Installation::of(&agent.cfg);
+    // After an install without a model, the first one is the one served.
+    let first = install.models().is_empty();
     setup(job, &install, model, &key).await?;
+    if first {
+        return serve_first(agent, &install, &model.size.id).await;
+    }
     if active_changed(agent, &manage(agent).await) {
         agent.strata().restart_when_idle(job).await?;
     }

@@ -149,10 +149,16 @@ pub struct StrataJob {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StrataJobRequest {
+    /// Puts Strata on the PC. `family`, `size` and `context` come together
+    /// or not at all: an older proxy sends a model to install with Strata,
+    /// a newer one none, and the first model comes with `AddModel`.
     Install {
-        family: String,
-        size: String,
-        context: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        family: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<u32>,
         api_key: String,
         /// Strata's experimental speed projection; only for families whose
         /// catalog entry offers it.

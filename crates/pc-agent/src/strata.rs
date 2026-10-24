@@ -1,7 +1,8 @@
 //! Strata management for the web UI: what is installed, and jobs that set up,
 //! add, switch, delete, update, benchmark or compare models. At most one job runs at a
 //! time; it keeps the PC awake and the watchdog away. Every job runs fixed
-//! programs with values from [`crate::catalog`]; requests carry no commands.
+//! programs with values from Strata's catalog as the installed Strata reads
+//! it ([`crate::catalog`]); requests carry no commands.
 //!
 //! Each job is a short script: it works through its [`JobContext`] (steps,
 //! cancel, waiting, commands, cleanup) and starts and stops Strata only
@@ -22,7 +23,7 @@ use std::{
 
 use crate::{
     agent::Agent,
-    catalog::{self, Size},
+    catalog::{self, Catalog, Size},
     command::CommandSpec,
     install::{Installation, Kind, Model, SWITCH_FILE},
     job::{JobContext, KEPT_LINES, POLL, Step, unix_now},
@@ -57,6 +58,11 @@ const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
 /// How soon Strata's options are read again after a read that failed or
 /// lacked a part.
 const OPTIONS_RETRY: Duration = Duration::from_secs(600);
+/// How soon Strata's catalog is read again after a read that failed.
+const CATALOG_RETRY: Duration = Duration::from_secs(600);
+/// How long reading Strata's catalog may take: Strata detects the hardware
+/// for it (`nvidia-smi`, the display adapters).
+const CATALOG_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long reading Strata's options may take; the engine's `--help` alone
 /// may take 20 s in Strata's own read.
 const OPTIONS_TIMEOUT: Duration = Duration::from_secs(60);
@@ -81,19 +87,45 @@ pub enum Refusal {
     Conflict(String),
 }
 
+impl Refusal {
+    fn into_text(self) -> String {
+        match self {
+            Self::BadRequest(why) | Self::Conflict(why) => why,
+        }
+    }
+}
+
+/// A model to install, as a request asks for it.
+struct Wanted {
+    family: String,
+    size: String,
+    context: u32,
+    speed_projection: bool,
+    pictures: bool,
+}
+
+/// A model to install, checked against Strata's catalog.
+struct NewModel {
+    size: Size,
+    context: u32,
+    speed_projection: bool,
+    pictures: bool,
+}
+
+/// The model of an install: checked, or checked once the Strata Terminal
+/// is there and Strata's catalog can be read.
+enum Choice {
+    Checked(NewModel),
+    Later(Wanted),
+}
+
 /// A checked request: what the job runs with.
 enum Plan {
     Install {
-        size: &'static Size,
-        context: u32,
-        speed_projection: bool,
-        pictures: bool,
+        choice: Choice,
     },
     AddModel {
-        size: &'static Size,
-        context: u32,
-        speed_projection: bool,
-        pictures: bool,
+        model: NewModel,
     },
     Activate {
         id: String,
@@ -118,6 +150,8 @@ enum Plan {
     SetPictures {
         id: String,
         on: bool,
+        /// Setup runs for it again, with its family and size.
+        size: Size,
     },
     /// Benchmarks `ids` in turn, then `active` is the active model again.
     CompareModels {
@@ -128,6 +162,8 @@ enum Plan {
     /// Strata folder.
     SwitchToTerminal {
         id: String,
+        /// The Terminal's setup runs for it, with its family and size.
+        size: Size,
     },
     RemoveOldStrataFolder,
     Tune {
@@ -154,7 +190,13 @@ enum Plan {
 impl Plan {
     fn model(&self) -> Option<String> {
         match self {
-            Self::Install { size, .. } | Self::AddModel { size, .. } => Some(size.id()),
+            Self::Install {
+                choice: Choice::Checked(model),
+            }
+            | Self::AddModel { model } => Some(model.size.id.clone()),
+            Self::Install {
+                choice: Choice::Later(_),
+            } => None,
             Self::Activate { id }
             | Self::Delete { id }
             | Self::Benchmark { id }
@@ -163,7 +205,7 @@ impl Plan {
             | Self::SetPictures { id, .. }
             | Self::SetUserArgs { id, .. }
             | Self::SetEngineSettings { id, .. }
-            | Self::SwitchToTerminal { id }
+            | Self::SwitchToTerminal { id, .. }
             | Self::Tune { id, .. }
             | Self::Preset { id, .. } => Some(id.clone()),
             Self::Update
@@ -181,20 +223,18 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
         return Err(Refusal::Conflict("The PC service is updating".into()));
     }
     let kind = request.kind();
-    let plan = check(agent, request)?;
+    // Before the checks: gaming mode reads no catalog for them.
     if agent.gaming() {
         return Err(Refusal::Conflict(
             "Gaming mode is on: switch it off first".into(),
         ));
     }
+    let plan = check(agent, request)?;
     match &plan {
-        Plan::Install { size, pictures, .. } | Plan::AddModel { size, pictures, .. } => {
-            let pictures_gb = if *pictures { catalog::PICTURES_GB } else { 0.0 };
-            check_space(
-                agent,
-                model_gb(agent, size) + pictures_gb + catalog::DISK_SPARE_GB,
-            )?;
+        Plan::Install {
+            choice: Choice::Checked(model),
         }
+        | Plan::AddModel { model } => check_model_space(agent, model)?,
         // The picture file and a little room beside it: the model is there.
         Plan::SetPictures { on: true, .. } => check_space(agent, catalog::PICTURES_GB + 1.0)?,
         _ => {}
@@ -203,9 +243,12 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
         Refusal::Conflict(format!("A job is running already ({})", kind_text(running)))
     })?;
     tracing::info!(kind = ?record.kind, model = ?record.model, "Strata job started");
+    let agent = Arc::clone(agent);
     tokio::spawn(async move {
         let result = run(&job, plan).await;
         job.finish(result);
+        // An install or update may have brought another Strata.
+        check_catalog_after_job(&agent);
     });
     Ok(record)
 }
@@ -227,22 +270,55 @@ pub(crate) fn takes_speed_projection(family: &str) -> bool {
     matches!(family, "qwen" | "coder")
 }
 
+/// A model of Strata's catalog with values it takes.
+fn new_model(catalog: &Catalog, wanted: Wanted) -> Result<NewModel, Refusal> {
+    let size = catalog.find(&wanted.family, &wanted.size).ok_or_else(|| {
+        Refusal::BadRequest(format!(
+            "{} {} is not in Strata's catalog",
+            wanted.family, wanted.size
+        ))
+    })?;
+    Ok(NewModel {
+        context: context_of(catalog, wanted.context)?,
+        speed_projection: check_speed_projection(
+            &size.id,
+            Some(&size.family),
+            wanted.speed_projection,
+        )?,
+        pictures: wanted.pictures,
+        size: size.clone(),
+    })
+}
+
+/// A context length Strata's setup offers.
+fn context_of(catalog: &Catalog, n: u32) -> Result<u32, Refusal> {
+    if catalog.contexts.contains(&n) {
+        Ok(n)
+    } else {
+        Err(Refusal::BadRequest(format!(
+            "There is no context length {n}"
+        )))
+    }
+}
+
+/// Room for a new model's download beside what is there of it.
+fn check_model_space(agent: &Agent, model: &NewModel) -> Result<(), Refusal> {
+    let pictures_gb = if model.pictures {
+        catalog::PICTURES_GB
+    } else {
+        0.0
+    };
+    check_space(
+        agent,
+        model_gb(agent, &model.size) + pictures_gb + catalog::DISK_SPARE_GB,
+    )
+}
+
 fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
     let dir = &agent.cfg.strata_dir;
     let install = Installation::of(&agent.cfg);
-    let size = |family: &str, size: &str| {
-        catalog::find(family, size)
-            .ok_or_else(|| Refusal::BadRequest(format!("{family} {size} is not in the catalog")))
-    };
-    let context = |n: u32| {
-        if catalog::CONTEXTS.contains(&n) {
-            Ok(n)
-        } else {
-            Err(Refusal::BadRequest(format!(
-                "There is no context length {n}"
-            )))
-        }
-    };
+    let now = agent.catalog.now(catalog_key(agent).as_deref());
+    let catalog = || now.catalog();
     match request {
         StrataJobRequest::Install {
             family,
@@ -253,13 +329,20 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             experimental_speed_projection: wanted,
             pictures,
         } => {
-            let size = size(&family, &s)?;
-            Ok(Plan::Install {
-                size,
-                context: context(c)?,
-                speed_projection: check_speed_projection(&size.id(), Some(size.family), wanted)?,
+            let wanted = Wanted {
+                family,
+                size: s,
+                context: c,
+                speed_projection: wanted,
                 pictures,
-            })
+            };
+            // Without Strata the Terminal comes first; its catalog checks
+            // the model then.
+            let choice = match now {
+                CatalogNow::NoStrata => Choice::Later(wanted),
+                _ => Choice::Checked(new_model(catalog()?, wanted)?),
+            };
+            Ok(Plan::Install { choice })
         }
         StrataJobRequest::AddModel {
             family,
@@ -269,25 +352,26 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             experimental_speed_projection: wanted,
             pictures,
         } => {
-            let size = size(&family, &s)?;
-            let plan = Plan::AddModel {
-                size,
-                context: context(c)?,
-                speed_projection: check_speed_projection(&size.id(), Some(size.family), wanted)?,
+            let wanted = Wanted {
+                family,
+                size: s,
+                context: c,
+                speed_projection: wanted,
                 pictures,
             };
+            let model = new_model(catalog()?, wanted)?;
             strata_installed(&install)?;
-            Ok(plan)
+            Ok(Plan::AddModel { model })
         }
         StrataJobRequest::Activate { model } => {
-            let id = installed_model(&install, &model)?;
+            let id = installed_model(agent, &install, &model)?;
             if active_model(agent).as_deref() == Some(id.as_str()) {
                 return Err(Refusal::Conflict(format!("{id} is active already")));
             }
             Ok(Plan::Activate { id })
         }
         StrataJobRequest::Delete { model } => {
-            let id = installed_model(&install, &model)?;
+            let id = installed_model(agent, &install, &model)?;
             if active_model(agent).as_deref() == Some(id.as_str()) {
                 return Err(Refusal::Conflict(format!(
                     "{id} is active and cannot be deleted; activate another model first"
@@ -317,27 +401,34 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             Ok(Plan::SetKey)
         }
         StrataJobRequest::SetSpeedProjection { model, on } => {
-            let id = installed_model(&install, &model)?;
-            check_speed_projection(&id, catalog::by_id(&id).map(|s| s.family), true)?;
+            let id = installed_model(agent, &install, &model)?;
+            let family = now.found(&id).map(|s| s.family.clone());
+            check_speed_projection(&id, family.as_deref(), true)?;
             Ok(Plan::SetSpeedProjection { id, on })
         }
         StrataJobRequest::SetContext { model, context: c } => {
-            let context = context(c)?;
+            // An installed model goes by its run config: without a catalog
+            // any length up to the switched limit is written there.
+            let context = match catalog() {
+                Ok(catalog) => context_of(catalog, c)?,
+                Err(_) if c > 0 => c,
+                Err(_) => return Err(Refusal::BadRequest("There is no context length 0".into())),
+            };
             if context > MAX_SWITCHED_CONTEXT {
                 return Err(Refusal::BadRequest(format!(
                     "Context length {context} needs rope scaling and only works through setup"
                 )));
             }
-            let id = installed_model(&install, &model)?;
+            let id = installed_model(agent, &install, &model)?;
             Ok(Plan::SetContext { id, context })
         }
         StrataJobRequest::SetPictures { model, on } => {
-            let id = installed_model(&install, &model)?;
-            in_catalog(&id, "setup cannot set it up again")?;
-            Ok(Plan::SetPictures { id, on })
+            let id = installed_model(agent, &install, &model)?;
+            let size = in_catalog(catalog()?, &id, "setup cannot set it up again")?;
+            Ok(Plan::SetPictures { id, on, size })
         }
         StrataJobRequest::SetUserArgs { model, user_args } => {
-            let id = installed_model(&install, &model)?;
+            let id = installed_model(agent, &install, &model)?;
             let current = install.read_model(&id);
             if !current.keeps_user_args() {
                 return Err(Refusal::Conflict(format!(
@@ -354,7 +445,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             user_args,
             env,
         } => {
-            let id = installed_model(&install, &model)?;
+            let id = installed_model(agent, &install, &model)?;
             let current = install.read_model(&id);
             if let Some(user_args) = &user_args {
                 if !current.keeps_user_args() {
@@ -379,7 +470,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             let mut ids: Vec<String> = install
                 .models()
                 .into_iter()
-                .map(|id| model_id(&install, &id))
+                .map(|id| model_id(agent, &install, &id))
                 .collect();
             ids.sort();
             Ok(Plan::CompareModels { ids, active })
@@ -394,8 +485,8 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             let id = active_model(agent).ok_or_else(|| {
                 Refusal::Conflict("No active model known; activate a model first".into())
             })?;
-            in_catalog(&id, "the Strata Terminal cannot take it over")?;
-            Ok(Plan::SwitchToTerminal { id })
+            let size = in_catalog(catalog()?, &id, "the Strata Terminal cannot take it over")?;
+            Ok(Plan::SwitchToTerminal { id, size })
         }
         StrataJobRequest::RemoveOldStrataFolder => {
             if !Installation::old(&agent.cfg).exists() {
@@ -416,19 +507,21 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             Ok(Plan::RemoveOldStrataFolder)
         }
         StrataJobRequest::Tune { model, mode, usage } => {
-            let id = installed_model(&install, &model)?;
+            let id = installed_model(agent, &install, &model)?;
             if let Some(why) = tune_unavailable(&install) {
                 return Err(Refusal::Conflict(why));
             }
             Ok(Plan::Tune { id, mode, usage })
         }
         StrataJobRequest::ApplyPreset { model, preset } => {
-            preset_plan(&install, &model, PresetChange::Apply(preset))
+            preset_plan(agent, &install, &model, PresetChange::Apply(preset))
         }
         StrataJobRequest::UndoPreset { model, preset } => {
-            preset_plan(&install, &model, PresetChange::Undo(preset))
+            preset_plan(agent, &install, &model, PresetChange::Undo(preset))
         }
-        StrataJobRequest::PresetOff { model } => preset_plan(&install, &model, PresetChange::Off),
+        StrataJobRequest::PresetOff { model } => {
+            preset_plan(agent, &install, &model, PresetChange::Off)
+        }
     }
 }
 
@@ -444,8 +537,13 @@ enum PresetChange {
 
 /// Changing the preset of `model`: only on the Strata Terminal, which keeps
 /// them, and only for a preset id as Strata makes them.
-fn preset_plan(install: &Installation, model: &str, change: PresetChange) -> Result<Plan, Refusal> {
-    let id = installed_model(install, model)?;
+fn preset_plan(
+    agent: &Agent,
+    install: &Installation,
+    model: &str,
+    change: PresetChange,
+) -> Result<Plan, Refusal> {
+    let id = installed_model(agent, install, model)?;
     if install.kind() != Kind::Terminal {
         return Err(Refusal::Conflict(
             "Presets need the Strata Terminal; this Strata is a folder from source".into(),
@@ -477,34 +575,31 @@ fn strata_installed(install: &Installation) -> Result<(), Refusal> {
 }
 
 /// An installed model's id, as [`model_id`] spells it.
-fn installed_model(install: &Installation, model: &str) -> Result<String, Refusal> {
+fn installed_model(agent: &Agent, install: &Installation, model: &str) -> Result<String, Refusal> {
     if !Installation::plain_id(model) {
         return Err(Refusal::BadRequest(format!("{model} is no model id")));
     }
     if !install.has(model) {
         return Err(Refusal::Conflict(format!("{model} is not installed")));
     }
-    Ok(model_id(install, model))
+    Ok(model_id(agent, install, model))
 }
 
 /// A model's id in the letter case it is shown and kept in: its download
 /// folder's as setup named it, else the catalog's, else the run config's.
-pub(crate) fn model_id(install: &Installation, id: &str) -> String {
+pub(crate) fn model_id(agent: &Agent, install: &Installation, id: &str) -> String {
     install
         .download_name(id)
-        .or_else(|| catalog::by_id(id).map(Size::id))
+        .or_else(|| agent.catalog.id_of(id))
         .unwrap_or_else(|| id.to_string())
 }
 
-/// Refuses a job that runs setup for an installed model the catalog does
-/// not know: setup needs the model's family and size.
-fn in_catalog(id: &str, otherwise: &str) -> Result<(), Refusal> {
-    match catalog::by_id(id) {
-        Some(_) => Ok(()),
-        None => Err(Refusal::Conflict(format!(
-            "{id} is not in Strata's catalog, so {otherwise}"
-        ))),
-    }
+/// The size of an installed model for a job that runs setup for it, which
+/// needs the model's family and size.
+fn in_catalog(catalog: &Catalog, id: &str, otherwise: &str) -> Result<Size, Refusal> {
+    catalog.by_id(id).cloned().ok_or_else(|| {
+        Refusal::Conflict(format!("{id} is not in Strata's catalog, so {otherwise}"))
+    })
 }
 
 /// The model the managed start starts, in the catalog's letter case: the
@@ -518,13 +613,13 @@ pub(crate) fn active_model(agent: &Agent) -> Option<String> {
     let (script, args) = managed.start(&agent.cfg)?;
     let install = Installation::of(&agent.cfg);
     let id = install.active_model(script, args)?;
-    Some(model_id(&install, &id))
+    Some(model_id(agent, &install, &id))
 }
 
 /// What is left to download of a model: of one partly downloaded, only the
 /// rest counts.
 fn model_gb(agent: &Agent, size: &Size) -> f64 {
-    let have_gb = Installation::of(&agent.cfg).downloaded_bytes(&size.id()) as f64 / 1e9;
+    let have_gb = Installation::of(&agent.cfg).downloaded_bytes(&size.id) as f64 / 1e9;
     (size.download_gb - have_gb).max(0.0)
 }
 
@@ -546,18 +641,8 @@ fn check_space(agent: &Agent, need_gb: f64) -> Result<(), Refusal> {
 
 async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
     match plan {
-        Plan::Install {
-            size,
-            context,
-            speed_projection,
-            pictures,
-        } => install(job, size, context, speed_projection, pictures).await,
-        Plan::AddModel {
-            size,
-            context,
-            speed_projection,
-            pictures,
-        } => add_model(job, size, context, speed_projection, pictures).await,
+        Plan::Install { choice } => install(job, choice).await,
+        Plan::AddModel { model } => add_model(job, &model).await,
         Plan::Activate { id } => activate(job, &id).await,
         Plan::Delete { id } => delete(job, &id).await,
         Plan::Update => update(job).await,
@@ -565,50 +650,45 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::SetKey => set_key(job).await,
         Plan::SetSpeedProjection { id, on } => set_speed_projection(job, &id, on).await,
         Plan::SetContext { id, context } => set_context(job, &id, context).await,
-        Plan::SetPictures { id, on } => set_pictures(job, &id, on).await,
+        Plan::SetPictures { id, on, size } => set_pictures(job, &id, on, &size).await,
         Plan::SetUserArgs { id, user_args } => set_user_args(job, &id, user_args).await,
         Plan::SetEngineSettings { id, user_args, env } => {
             set_engine_settings(job, &id, user_args, env).await
         }
         Plan::CompareModels { ids, active } => compare_models(job, &ids, &active).await,
-        Plan::SwitchToTerminal { id } => switch_to_terminal(job, &id).await,
+        Plan::SwitchToTerminal { id, size } => switch_to_terminal(job, &id, &size).await,
         Plan::RemoveOldStrataFolder => remove_old_strata_folder(job).await,
         Plan::Tune { id, mode, usage } => tune(job, &id, mode, usage).await,
         Plan::Preset { id, change } => change_preset(job, &id, change).await,
     }
 }
 
-async fn install(
-    job: &JobContext,
-    size: &Size,
-    context: u32,
-    speed_projection: bool,
-    pictures: bool,
-) -> Result<Option<String>, Step> {
+async fn install(job: &JobContext, choice: Choice) -> Result<Option<String>, Step> {
     let agent = job.agent();
     let strata = Installation::of(&agent.cfg);
     if strata.kind() == Kind::Terminal {
         install_terminal(job).await?;
     }
+    let model = match choice {
+        Choice::Checked(model) => model,
+        Choice::Later(wanted) => {
+            job.step("Reading Strata's model list");
+            let catalog = read_catalog(agent).await.map_err(Step::Failed)?;
+            let model = new_model(&catalog, wanted).map_err(|r| Step::Failed(r.into_text()))?;
+            check_model_space(agent, &model).map_err(|r| Step::Failed(r.into_text()))?;
+            model
+        }
+    };
     // Setup writes a key only if one is known; the start below makes the
     // one Strata runs with.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
-    setup(
-        job,
-        &strata,
-        size,
-        context,
-        &key,
-        speed_projection,
-        pictures,
-    )
-    .await?;
+    setup(job, &strata, &model, &key).await?;
     // A Strata started by hand ends with the old values, the new one starts
     // with the managed ones.
     agent.strata().stop();
     manage(agent).await;
     agent
-        .set_managed(managed_start(agent, &strata, &size.id()))
+        .set_managed(managed_start(agent, &strata, &model.size.id))
         .map_err(|e| Step::Failed(e.to_string()))?;
     agent.strata().start_again().await;
     Ok(None)
@@ -692,28 +772,13 @@ fn managed_start(agent: &Agent, install: &Installation, id: &str) -> Managed {
     }
 }
 
-async fn add_model(
-    job: &JobContext,
-    size: &Size,
-    context: u32,
-    speed_projection: bool,
-    pictures: bool,
-) -> Result<Option<String>, Step> {
+async fn add_model(job: &JobContext, model: &NewModel) -> Result<Option<String>, Step> {
     let agent = job.agent();
     // The key Strata runs with: a model with another key would answer the
     // proxy with 401 until the next start.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
     let install = Installation::of(&agent.cfg);
-    setup(
-        job,
-        &install,
-        size,
-        context,
-        &key,
-        speed_projection,
-        pictures,
-    )
-    .await?;
+    setup(job, &install, model, &key).await?;
     if active_changed(agent, &manage(agent).await) {
         agent.strata().restart_when_idle(job).await?;
     }
@@ -749,7 +814,7 @@ async fn delete(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
     job.step("Deleting files");
     let install = Installation::of(&job.agent().cfg);
     // Before the download folder that may hold its letter case is gone.
-    let id = model_id(&install, id);
+    let id = model_id(job.agent(), &install, id);
     let model = id.clone();
     tokio::task::spawn_blocking(move || install.remove(&model))
         .await
@@ -1253,12 +1318,15 @@ fn load_benchmarks(agent: &Agent) -> Vec<StrataBenchmark> {
 /// Strata ([`SWITCH_FILE`]), also across a restart of the service. Until the
 /// Terminal's Strata answers, a failure or a cancel takes the Terminal's
 /// run config away again and the old start serves again.
-async fn switch_to_terminal(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
+async fn switch_to_terminal(
+    job: &JobContext,
+    id: &str,
+    size: &Size,
+) -> Result<Option<String>, Step> {
     let agent = job.agent();
     let cfg = &agent.cfg;
     let old = Installation::of(cfg);
     let terminal = Installation::terminal(&Terminal::of(cfg), &cfg.strata_data_dir);
-    let size = catalog::by_id(id).expect("the check finds the model in the catalog");
     let model = old.read_model(id);
     let switch = Switch {
         model: id.to_string(),
@@ -1268,17 +1336,13 @@ async fn switch_to_terminal(job: &JobContext, id: &str) -> Result<Option<String>
     let prepared = async {
         install_terminal(job).await?;
         let key = agent.strata_key.key(cfg).unwrap_or_default();
-        let context = model.context().unwrap_or(catalog::DEFAULT_CONTEXT);
-        setup(
-            job,
-            &terminal,
-            size,
-            context,
-            &key,
-            model.speed_projection(),
-            model.pictures(),
-        )
-        .await?;
+        let new = NewModel {
+            size: size.clone(),
+            context: model.context().unwrap_or(catalog::DEFAULT_CONTEXT),
+            speed_projection: model.speed_projection(),
+            pictures: model.pictures(),
+        };
+        setup(job, &terminal, &new, &key).await?;
         if !terminal.has(id) {
             return Err(Step::Failed(format!(
                 "The Strata Terminal's setup ended without a run config for {id}"
@@ -1490,10 +1554,14 @@ async fn set_context(job: &JobContext, id: &str, context: u32) -> Result<Option<
 /// that is not active is left running as it is. If the active model does not
 /// come up with the new config, the whole config from before the setup comes
 /// back, Strata starts with it and the job fails.
-async fn set_pictures(job: &JobContext, id: &str, on: bool) -> Result<Option<String>, Step> {
+async fn set_pictures(
+    job: &JobContext,
+    id: &str,
+    on: bool,
+    size: &Size,
+) -> Result<Option<String>, Step> {
     let agent = job.agent();
     let install = Installation::of(&agent.cfg);
-    let size = catalog::by_id(id).expect("installed_model checks the catalog");
     job.step(if on {
         "Setting up picture reading"
     } else {
@@ -1508,16 +1576,13 @@ async fn set_pictures(job: &JobContext, id: &str, on: bool) -> Result<Option<Str
     // The key Strata runs with: a model with another one would answer the
     // proxy with 401 until the next start.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
-    let ran = setup(
-        job,
-        &install,
-        size,
-        before.context().unwrap_or(catalog::DEFAULT_CONTEXT),
-        &key,
-        before.speed_projection(),
-        on,
-    )
-    .await;
+    let model = NewModel {
+        size: size.clone(),
+        context: before.context().unwrap_or(catalog::DEFAULT_CONTEXT),
+        speed_projection: before.speed_projection(),
+        pictures: on,
+    };
+    let ran = setup(job, &install, &model, &key).await;
     if let Err(step) = ran {
         // A failed or cancelled setup leaves no unproven config behind.
         save_model(agent, before).await?;
@@ -1888,6 +1953,237 @@ pub fn check_options(agent: &Arc<Agent>) {
     });
 }
 
+/// Strata's catalog as the installed Strata read it last, for the Strata it
+/// was read from ([`catalog_key`]).
+#[derive(Default)]
+pub struct CatalogCheck {
+    inner: Mutex<CatalogState>,
+}
+
+#[derive(Default)]
+struct CatalogState {
+    asking: bool,
+    read: Option<CatalogRead>,
+}
+
+struct CatalogRead {
+    key: String,
+    catalog: Result<Catalog, String>,
+    at: Instant,
+}
+
+/// What is known of Strata's catalog for the Strata on the PC now.
+pub enum CatalogNow {
+    Read(Catalog),
+    Unreadable(String),
+    /// Not read yet for this Strata.
+    Reading,
+    /// There is no Strata to read it from.
+    NoStrata,
+}
+
+impl CatalogNow {
+    /// The catalog, or why a job that needs it is refused.
+    fn catalog(&self) -> Result<&Catalog, Refusal> {
+        match self {
+            Self::Read(catalog) => Ok(catalog),
+            Self::Unreadable(why) => Err(Refusal::Conflict(format!(
+                "{why}; update Strata to choose a model"
+            ))),
+            Self::Reading => Err(Refusal::Conflict(
+                "Strata's model list is being read; try again in a moment".into(),
+            )),
+            Self::NoStrata => Err(Refusal::Conflict("Strata is not set up yet".into())),
+        }
+    }
+
+    /// The catalog's size for model `id`, if the catalog is read and has it.
+    fn found(&self, id: &str) -> Option<&Size> {
+        self.catalog().ok()?.by_id(id)
+    }
+
+    fn unreadable(&self) -> Option<String> {
+        match self {
+            Self::Unreadable(why) => Some(why.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl CatalogCheck {
+    pub fn now(&self, key: Option<&str>) -> CatalogNow {
+        let Some(key) = key else {
+            return CatalogNow::NoStrata;
+        };
+        let state = self.inner.lock().unwrap();
+        match state.read.as_ref().filter(|read| read.key == key) {
+            Some(CatalogRead {
+                catalog: Ok(catalog),
+                ..
+            }) => CatalogNow::Read(catalog.clone()),
+            Some(CatalogRead {
+                catalog: Err(why), ..
+            }) => CatalogNow::Unreadable(why.clone()),
+            None => CatalogNow::Reading,
+        }
+    }
+
+    /// Model `id` in the letter case of the catalog read last.
+    fn id_of(&self, id: &str) -> Option<String> {
+        let state = self.inner.lock().unwrap();
+        let catalog = state.read.as_ref()?.catalog.as_ref().ok()?;
+        catalog.by_id(id).map(|s| s.id.clone())
+    }
+
+    fn claim(&self) -> bool {
+        let mut state = self.inner.lock().unwrap();
+        !std::mem::replace(&mut state.asking, true)
+    }
+
+    /// Whether it was read for `key`, with or without success.
+    fn has(&self, key: &str) -> bool {
+        let state = self.inner.lock().unwrap();
+        state.read.as_ref().is_some_and(|read| read.key == key)
+    }
+
+    /// Whether to read it for `key`: not read for it yet, or failed at
+    /// least `retry` ago.
+    fn due(&self, key: &str, retry: Duration) -> bool {
+        let state = self.inner.lock().unwrap();
+        state.read.as_ref().is_none_or(|read| {
+            read.key != key || (read.catalog.is_err() && read.at.elapsed() >= retry)
+        })
+    }
+
+    fn keep(&self, key: String, catalog: Result<Catalog, String>) {
+        self.inner.lock().unwrap().read = Some(CatalogRead {
+            key,
+            catalog,
+            at: Instant::now(),
+        });
+    }
+
+    fn done(&self) {
+        self.inner.lock().unwrap().asking = false;
+    }
+}
+
+/// What Strata's catalog is read for: the Terminal's build, or the commit
+/// of a Strata folder from source; `None` without Strata.
+fn catalog_key(agent: &Agent) -> Option<String> {
+    let install = Installation::of(&agent.cfg);
+    match install.kind() {
+        Kind::Terminal => Terminal::of(&agent.cfg)
+            .build()
+            .map(|build| format!("terminal {build}")),
+        Kind::Source => install.exists().then(|| {
+            format!(
+                "source {}",
+                git_commit(&agent.cfg.strata_dir).unwrap_or_default()
+            )
+        }),
+    }
+}
+
+/// How Strata's catalog is read: [`catalog::SCRIPT`] with the Python of
+/// the Strata files that run.
+fn catalog_command(agent: &Agent) -> CommandSpec {
+    let cfg = &agent.cfg;
+    let install = Installation::of(cfg);
+    let data = &cfg.strata_data_dir;
+    match install.kind() {
+        Kind::Terminal => Terminal::of(cfg).catalog(install.dir(), data),
+        Kind::Source => {
+            let dir = &cfg.strata_dir;
+            // As `START-HERE.bat`: Strata's own Python when the folder has
+            // one, else the one setup made.
+            let bundled = dir.join("python").join("python.exe");
+            let program = if bundled.exists() {
+                bundled
+            } else {
+                dir.join(".venv").join("Scripts").join("python.exe")
+            };
+            CommandSpec {
+                program,
+                args: vec![
+                    "-c".into(),
+                    catalog::SCRIPT.into(),
+                    dir.display().to_string(),
+                    data.display().to_string(),
+                ],
+                dir: Some(dir.clone()),
+                env: vec![("PYTHONNOUSERSITE".into(), "1".into())],
+            }
+        }
+    }
+}
+
+/// Reads Strata's catalog now and keeps it.
+async fn read_catalog(agent: &Agent) -> Result<Catalog, String> {
+    let wanted = catalog_key(agent).map(|key| (key, catalog_command(agent)));
+    let Some((key, spec)) = wanted else {
+        return Err("Strata is not set up yet".into());
+    };
+    let catalog = output_within(agent, &spec, CATALOG_TIMEOUT)
+        .await
+        .ok_or_else(|| format!("{} did not start", spec.program.display()))
+        .and_then(|lines| catalog::read(&lines));
+    if let Err(why) = &catalog {
+        tracing::warn!("Strata's catalog: {why}");
+    }
+    agent.catalog.keep(key, catalog.clone());
+    catalog
+}
+
+/// Reads Strata's catalog in the background unless it is read for the
+/// Strata on the PC: at the service's start and after each job. A page
+/// visit never waits for it and runs the script only when another Strata
+/// is on the PC (one Strata's own app updated) or a failed read is due
+/// again.
+pub fn check_catalog(agent: &Arc<Agent>) {
+    read_catalog_in_background(agent, CATALOG_RETRY);
+}
+
+/// After a job: as [`check_catalog`], and a failed read is tried again at
+/// once, so an Install or Update that repaired Strata brings its catalog.
+fn check_catalog_after_job(agent: &Arc<Agent>) {
+    read_catalog_in_background(agent, Duration::ZERO);
+}
+
+fn read_catalog_in_background(agent: &Arc<Agent>, retry: Duration) {
+    if agent.gaming() || !agent.catalog.claim() {
+        return;
+    }
+    let agent = Arc::clone(agent);
+    tokio::spawn(async move {
+        let key = {
+            let agent = Arc::clone(&agent);
+            tokio::task::spawn_blocking(move || catalog_key(&agent))
+                .await
+                .ok()
+                .flatten()
+        };
+        if key.is_some_and(|key| agent.catalog.due(&key, retry)) {
+            let _ = read_catalog(&agent).await;
+        }
+        agent.catalog.done();
+    });
+}
+
+/// Reads Strata's catalog now unless it was read for the Strata on the PC,
+/// as the read at the service's start does; for tests that put Strata on
+/// the PC after the service started.
+pub async fn read_catalog_if_new(agent: &Agent) {
+    if agent.gaming() {
+        return;
+    }
+    if let Some(key) = catalog_key(agent)
+        && !agent.catalog.has(&key)
+    {
+        let _ = read_catalog(agent).await;
+    }
+}
+
 /// Each model's presets (`StrataModel.presets`), read in the background
 /// when the page is looked at: again when the model's run config, its last
 /// tune or the Terminal's build changed, after a job changed them, and every
@@ -2028,7 +2324,7 @@ fn presets_wanted(agent: &Agent) -> Vec<(String, u64, CommandSpec, Option<String
         .models()
         .into_iter()
         .map(|id| {
-            let id = model_id(&install, &id);
+            let id = model_id(agent, &install, &id);
             let tune = tunes
                 .iter()
                 .find(|(model, _)| model.eq_ignore_ascii_case(&id))
@@ -2176,7 +2472,7 @@ fn parse_numstat(line: &str) -> Option<ChangedFile> {
     })
 }
 
-/// Runs the setup of `install` without questions, with the fixed values
+/// Runs the setup of `install` without questions, with the model's values
 /// and the key; with `pictures`, setup also sets up the picture reader.
 ///
 /// Setup rewrites a model's whole run config. A job that runs it again for
@@ -2188,13 +2484,11 @@ fn parse_numstat(line: &str) -> Option<ChangedFile> {
 async fn setup(
     job: &JobContext,
     install: &Installation,
-    size: &Size,
-    context: u32,
+    model: &NewModel,
     api_key: &str,
-    speed_projection: bool,
-    pictures: bool,
 ) -> Result<(), Step> {
     let agent = job.agent();
+    let size = &model.size;
     let mut args: Vec<String> = vec!["--yes".into(), "--no-start".into(), "--no-browser".into()];
     if !install.models().is_empty() {
         args.push("--setup".into());
@@ -2202,13 +2496,13 @@ async fn setup(
     args.extend(
         [
             "--family",
-            size.family,
+            &size.family,
             "--model",
-            size.size,
+            &size.size,
             "--context",
-            &context.to_string(),
+            &model.context.to_string(),
             "--vision",
-            if pictures { "yes" } else { "no" },
+            if model.pictures { "yes" } else { "no" },
             "--host",
             STRATA_HOST,
             "--port",
@@ -2222,9 +2516,9 @@ async fn setup(
         args.extend(["--api-key".into(), api_key.to_string()]);
         job.hide(api_key);
     }
-    if takes_speed_projection(size.family) {
+    if takes_speed_projection(&size.family) {
         // Always explicit: otherwise setup takes it over from an earlier install.
-        let value = if speed_projection { "on" } else { "off" };
+        let value = if model.speed_projection { "on" } else { "off" };
         args.extend(["--experimental-speed-projection".into(), value.into()]);
     }
     let spec = match install.kind() {
@@ -2379,6 +2673,8 @@ pub fn view(agent: &Agent) -> StrataReport {
     let vram_gb = agent.platform().vram_bytes() as f64 / (1u64 << 30) as f64;
     let active = active_model(agent);
     let install = Installation::of(cfg);
+    let now = agent.catalog.now(catalog_key(agent).as_deref());
+    let catalog = now.catalog().ok().cloned().unwrap_or_default();
     let support = install.support();
     let tunes = load_tunes(agent);
     let build = (install.kind() == Kind::Terminal)
@@ -2388,8 +2684,8 @@ pub fn view(agent: &Agent) -> StrataReport {
         .models()
         .into_iter()
         .map(|id| {
-            let size = catalog::by_id(&id);
-            let id = model_id(&install, &id);
+            let size = now.found(&id);
+            let id = model_id(agent, &install, &id);
             let model = install.read_model(&id);
             let no_tune = tune_unavailable(&install);
             let last_tune = tunes
@@ -2417,8 +2713,8 @@ pub fn view(agent: &Agent) -> StrataReport {
                     agent.presets.current(&id, key)
                 }),
                 last_tune,
-                family: size.map(|s| s.family.to_string()),
-                size: size.map(|s| s.size.to_string()),
+                family: size.map(|s| s.family.clone()),
+                size: size.map(|s| s.size.clone()),
                 id,
             }
         })
@@ -2437,31 +2733,35 @@ pub fn view(agent: &Agent) -> StrataReport {
         options,
         update_available: agent.updates.available(),
         models,
-        families: catalog::FAMILIES
+        families: catalog
+            .families
             .iter()
             .map(|f| StrataFamily {
-                id: f.id.into(),
-                title: f.title.into(),
-                speed_projection: takes_speed_projection(f.id),
+                id: f.id.clone(),
+                title: f.title.clone(),
+                speed_projection: takes_speed_projection(&f.id),
                 pictures: f.pictures,
             })
             .collect(),
-        catalog: catalog::SIZES
+        catalog: catalog
+            .sizes
             .iter()
             .map(|s| StrataSize {
-                id: s.id(),
-                family: s.family.into(),
-                size: s.size.into(),
+                id: s.id.clone(),
+                family: s.family.clone(),
+                size: s.size.clone(),
                 download_gb: s.download_gb,
-                ram_gb: s.ram_gb,
+                ram_gb: s.ram_gb.ceil() as u32,
                 memory_with_vram: s.with_vram,
-                fits: ram_gb == 0.0 || s.fits(ram_gb, vram_gb),
-                partly_downloaded: install.partly_downloaded(&s.id()),
+                fits: s.fits,
+                partly_downloaded: install.partly_downloaded(&s.id),
             })
             .collect(),
-        recommended: catalog::recommend(ram_gb, vram_gb).map(Size::id),
-        contexts: catalog::CONTEXTS.to_vec(),
-        default_context: catalog::DEFAULT_CONTEXT,
+        catalog_reading: matches!(now, CatalogNow::Reading),
+        catalog_unreadable: now.unreadable(),
+        recommended: catalog.recommended.clone(),
+        contexts: catalog.contexts.clone(),
+        default_context: catalog.default_context,
         ram_gb,
         vram_gb: (vram_gb > 0.0).then_some(vram_gb),
         disk_free_gb: agent

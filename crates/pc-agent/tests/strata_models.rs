@@ -705,9 +705,9 @@ async fn adding_a_model_with_pictures_counts_the_picture_file() {
     use strata_pc_agent::catalog;
     let s = setup("pictures-space-add").await;
     installed(&s);
-    let size = catalog::find("swift", "IQ2_XS").unwrap();
-    // Room for the model and setup's spare, not for the picture file.
-    let free = (size.download_gb + catalog::DISK_SPARE_GB + catalog::PICTURES_GB / 2.0) * 1e9;
+    // Swift IQ2_XS is 68.0 GB in Strata's catalog. Room for the model and
+    // setup's spare, not for the picture file.
+    let free = (68.0 + catalog::DISK_SPARE_GB + catalog::PICTURES_GB / 2.0) * 1e9;
     *s.fake.disk_free.lock().unwrap() = Some(free as u64);
     let add = |pictures: bool| {
         let mut body =

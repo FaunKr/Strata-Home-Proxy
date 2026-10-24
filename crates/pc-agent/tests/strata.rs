@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 
 use common::*;
 use serde_json::{Value, json};
+use strata_pc_agent::terminal::Terminal;
 
 const KEY: &str = "0123456789abcdef0123456789abcdef";
 
@@ -83,17 +84,70 @@ fn env<'a>(spec: &'a CommandSpec, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// An install on a PC without Strata: the Terminal comes first, then its
+/// catalog checks the model; setup never runs for a model it lacks.
+async fn install_failing(name: &str, body: Value, why: &str) {
+    let s = setup(name).await;
+    installable(&s);
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 202, "{answer}");
+    let job = finished(&s).await;
+    assert_eq!(job["state"], "failed", "{job}");
+    assert!(job["error"].as_str().unwrap().contains(why), "{job}");
+    assert!(Terminal::of(&s.agent.cfg).is_installed());
+    assert_eq!(s.fake.runs_of("python catalog").len(), 1);
+    assert!(s.fake.runs_of("python").is_empty(), "no setup");
+}
+
 #[tokio::test]
-async fn values_outside_the_catalog_are_refused() {
-    let s = setup("strata-catalog").await;
-    for body in [
+async fn an_install_checks_the_model_against_the_new_strata_s_catalog() {
+    install_failing(
+        "strata-catalog-size",
         json!({"kind": "install", "family": "qwen", "size": "XXL", "context": 65536, "api_key": KEY}),
+        "qwen XXL is not in Strata's catalog",
+    )
+    .await;
+    install_failing(
+        "strata-catalog-context",
         json!({"kind": "install", "family": "qwen", "size": "IQ3_XXS", "context": 12345, "api_key": KEY}),
-        json!({"kind": "install", "family": "qwen", "size": "IQ3_XXS", "context": 65536, "api_key": KEY, "args": "--evil"}),
-    ] {
-        let (code, answer) = post(&s, "/strata/jobs", body.clone()).await;
-        assert!(code == 400 || code == 422, "{body}: {code} {answer}");
-    }
+        "There is no context length 12345",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn the_speed_projection_is_refused_for_other_families() {
+    install_failing(
+        "strata-esp-swift",
+        json!({"kind": "install", "family": "swift", "size": "IQ2_XS", "context": 65536,
+            "api_key": KEY, "experimental_speed_projection": true}),
+        "not for swift-IQ2_XS",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_download_that_does_not_fit_is_refused() {
+    let s = setup("strata-space").await;
+    installable(&s);
+    *s.fake.disk_free.lock().unwrap() = Some(50_000_000_000);
+    post(&s, "/strata/jobs", install()).await;
+    let job = finished(&s).await;
+    assert_eq!(job["state"], "failed", "{job}");
+    assert!(
+        job["error"].as_str().unwrap().contains("Not enough space"),
+        "{job}"
+    );
+    assert!(s.fake.runs_of("python").is_empty(), "no setup");
+}
+
+#[tokio::test]
+async fn free_values_are_refused_before_anything_runs() {
+    let s = setup("strata-free-args").await;
+    let body = json!({"kind": "install", "family": "qwen", "size": "IQ3_XXS", "context": 65536,
+        "api_key": KEY, "args": "--evil"});
+    let (code, answer) = post(&s, "/strata/jobs", body).await;
+    assert_eq!(code, 422, "{answer}");
     assert!(s.fake.ran.lock().unwrap().is_empty());
 }
 
@@ -344,20 +398,6 @@ async fn install_sets_up_picture_reading_when_asked_for_it() {
 }
 
 #[tokio::test]
-async fn the_speed_projection_is_refused_for_other_families() {
-    let s = setup("strata-esp-swift").await;
-    let body = json!({"kind": "install", "family": "swift", "size": "IQ2_XS", "context": 65536,
-        "api_key": KEY, "experimental_speed_projection": true});
-    let (code, answer) = post(&s, "/strata/jobs", body).await;
-    assert_eq!(code, 400, "{answer}");
-    assert!(
-        answer.to_string().contains("not for swift-IQ2_XS"),
-        "{answer}"
-    );
-    assert!(s.fake.ran.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
 async fn a_second_job_is_refused_while_one_runs() {
     let s = setup("strata-second").await;
     installable(&s);
@@ -427,22 +467,6 @@ async fn gaming_mode_refuses_jobs() {
 }
 
 #[tokio::test]
-async fn a_download_that_does_not_fit_is_refused() {
-    let s = setup("strata-space").await;
-    installable(&s);
-    *s.fake.disk_free.lock().unwrap() = Some(50_000_000_000);
-    let (code, answer) = post(&s, "/strata/jobs", install()).await;
-    assert_eq!(code, 409);
-    assert!(
-        answer["reason"]
-            .as_str()
-            .unwrap()
-            .contains("Not enough space"),
-        "{answer}"
-    );
-}
-
-#[tokio::test]
 async fn a_failed_setup_shows_its_error_and_last_lines() {
     let s = setup("strata-fail").await;
     installable(&s);
@@ -474,40 +498,6 @@ async fn a_failed_setup_shows_its_error_and_last_lines() {
     );
 }
 
-#[tokio::test]
-async fn the_catalog_marks_what_fits_and_recommends_setups_pick() {
-    let s = setup("strata-view").await;
-    let view = get(&s, "/strata").await;
-    assert_eq!(view["installed"], false);
-    assert_eq!(view["recommended"], "IQ3_S", "64 GB of RAM, no card");
-    assert_eq!(view["default_context"], 65536);
-    let entry = |id: &str| {
-        view["catalog"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|e| e["id"] == id)
-            .unwrap()
-            .clone()
-    };
-    assert_eq!(entry("IQ3_S")["fits"], true);
-    assert_eq!(entry("unsloth-Q8_0")["fits"], false);
-    assert_eq!(entry("unsloth-Q8_0")["ram_gb"], 136);
-    let projection: Vec<_> = view["families"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|f| f["speed_projection"] == true)
-        .map(|f| f["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(projection, ["qwen", "coder"]);
-    let families = view["families"].as_array().unwrap();
-    assert!(
-        families.iter().all(|f| f["pictures"] == true),
-        "{families:?}"
-    );
-}
-
 /// A PC with this much RAM and a card with this much VRAM, in GiB as setup
 /// counts them; no card for 0.
 fn pc_with(s: &Setup, ram_gib: f64, vram_gib: f64) {
@@ -519,49 +509,6 @@ fn pc_with(s: &Setup, ram_gib: f64, vram_gib: f64) {
     });
 }
 
-fn catalog_entry(view: &Value, id: &str) -> Value {
-    view["catalog"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["id"] == id)
-        .unwrap_or_else(|| panic!("{id} missing: {view}"))
-        .clone()
-}
-
-/// Setup's `MEMORY_TIERS` (Strata aa82a886) by RAM + VRAM, below them the
-/// older rule by RAM alone.
-#[tokio::test]
-async fn the_recommendation_follows_setups_memory_tiers() {
-    let s = setup("strata-tiers").await;
-    for (ram, vram, expected) in [
-        (64.0, 0.0, json!("IQ3_S")),
-        (32.0, 30.0, json!("IQ3_S")),
-        (61.9, 0.0, json!("IQ3_XXS")),
-        (32.0, 14.0, json!("IQ3_XXS")),
-        (45.9, 0.0, json!("swift-IQ2_XS")),
-        (24.0, 14.0, json!("swift-IQ2_XS")),
-        (37.9, 0.0, json!("coder-IQ1_M")),
-        (28.0, 8.0, json!("coder-IQ1_M")),
-        (16.0, 16.0, Value::Null),
-    ] {
-        pc_with(&s, ram, vram);
-        let view = get(&s, "/strata").await;
-        assert_eq!(
-            view["recommended"], expected,
-            "{ram} GB RAM + {vram} GB VRAM"
-        );
-        if let Some(id) = expected.as_str() {
-            // Setup's low-RAM mode starts it where RAM alone is short.
-            assert_eq!(
-                catalog_entry(&view, id)["fits"],
-                true,
-                "{ram} + {vram}: {id}"
-            );
-        }
-    }
-}
-
 #[tokio::test]
 async fn the_page_says_the_vram_it_counts() {
     let s = setup("strata-vram").await;
@@ -569,56 +516,6 @@ async fn the_page_says_the_vram_it_counts() {
     assert_eq!(get(&s, "/strata").await["vram_gb"], 16.0);
     pc_with(&s, 32.0, 0.0);
     assert_eq!(get(&s, "/strata").await["vram_gb"], Value::Null);
-}
-
-#[tokio::test]
-async fn gyro_fits_from_setups_own_figure() {
-    let s = setup("strata-gyro-edge").await;
-    pc_with(&s, 16.0, 11.5);
-    let view = get(&s, "/strata").await;
-    assert_eq!(
-        catalog_entry(&view, "gyro-Gyro-S")["fits"],
-        false,
-        "27.5 GB"
-    );
-    pc_with(&s, 16.0, 11.7);
-    let view = get(&s, "/strata").await;
-    assert_eq!(catalog_entry(&view, "gyro-Gyro-S")["fits"], true, "27.7 GB");
-}
-
-#[tokio::test]
-async fn gyro_fits_by_ram_and_vram_and_is_never_recommended() {
-    let s = setup("strata-gyro-view").await;
-    pc_with(&s, 16.0, 16.0);
-    let view = get(&s, "/strata").await;
-    let gyro_s = catalog_entry(&view, "gyro-Gyro-S");
-    assert_eq!(gyro_s["family"], "gyro");
-    assert_eq!(gyro_s["download_gb"], 58.5);
-    assert_eq!(gyro_s["ram_gb"], 28);
-    assert_eq!(gyro_s["memory_with_vram"], true);
-    assert_eq!(gyro_s["fits"], true, "16 + 16 GB: {gyro_s}");
-    let gyro_m = catalog_entry(&view, "gyro-Gyro-M");
-    assert_eq!(gyro_m["download_gb"], 92.0);
-    assert_eq!(gyro_m["ram_gb"], 35);
-    assert_eq!(gyro_m["fits"], false, "{gyro_m}");
-    assert_eq!(
-        catalog_entry(&view, "coder-IQ1_M")["memory_with_vram"],
-        false
-    );
-    assert_eq!(
-        catalog_entry(&view, "coder-IQ1_M")["fits"],
-        false,
-        "RAM alone"
-    );
-    assert_eq!(view["recommended"], Value::Null, "{view}");
-    let gyro = view["families"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|f| f["id"] == "gyro")
-        .unwrap();
-    assert_eq!(gyro["title"], "Qwen3.8-Flash-Next (Gyro)");
-    assert_eq!(gyro["speed_projection"], false);
 }
 
 #[tokio::test]
@@ -810,7 +707,8 @@ async fn a_job_running_at_a_restart_is_interrupted() {
         .await
         .unwrap();
     assert_eq!(job["state"], "interrupted");
-    assert_eq!(job["model"], "IQ3_XXS");
+    // Without Strata the model is checked only once the Terminal is there.
+    assert_eq!(job["model"], Value::Null);
 }
 
 #[tokio::test]

@@ -54,7 +54,17 @@ pub struct StrataInfo {
     pub update_available: Option<bool>,
     pub models: Vec<StrataModel>,
     pub families: Vec<StrataFamily>,
+    /// Strata's catalog as the installed Strata reads it; empty while it is
+    /// being read, when it cannot be read and without Strata.
     pub catalog: Vec<StrataSize>,
+    /// The PC service is reading Strata's catalog; `false` from older
+    /// services.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub catalog_reading: bool,
+    /// Why Strata's catalog could not be read (an older Strata, a failed
+    /// read): the model choice asks for a Strata update instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_unreadable: Option<String>,
     #[serde(default)]
     pub recommended: Option<String>,
     pub contexts: Vec<u32>,
@@ -328,4 +338,8 @@ pub struct ChangedFile {
     pub path: String,
     pub added: u64,
     pub removed: u64,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }

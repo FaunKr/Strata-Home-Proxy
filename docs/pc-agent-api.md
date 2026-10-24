@@ -245,9 +245,15 @@ started download resumes next time.
 ### `GET /strata`
 
 Response: `StrataReport`, that is `StrataInfo` and `update` next to it. What
-is installed, Strata's catalog with a recommendation for the PC's RAM and
-VRAM (setup's memory tiers, see [strata-api.md](strata-api.md)),
-free space, last benchmark and the running or last job.
+is installed, Strata's catalog as the installed Strata reads it with its
+recommendation and contexts (see *Catalog read* in
+[strata-api.md](strata-api.md)), free space, last benchmark and the running
+or last job. The PC service reads the catalog at its start and after each
+job and keeps it; a visit never waits for the read. While it is read,
+`catalog_reading` is `true`; when it cannot be read, `catalog_unreadable`
+says why. In both cases, and without Strata, `catalog` is empty, and so is
+`contexts` without a read catalog. Both fields are missing when they say
+nothing and from an older PC service.
 Never contains the Strata key. Installed models are every run config, also
 one the catalog does not know (then without `family` and `size`); a model's
 `id` is in the catalog's letter case, else its download folder's as setup
@@ -276,11 +282,11 @@ tag; `remote` is Strata's repository. If GitHub does not answer, `update`
 is missing and `update_available` stays. The proxy keeps all of this on the NAS; the web UI only gets
 short hash, subject and date.
 
-In the catalog, `memory_with_vram` says that `ram_gb` is RAM and VRAM
-together (Gyro), and `fits` then counts the biggest card's VRAM too, against
-setup's own figure (27.6 GB for Gyro-S). The recommended size always fits,
-because setup's low-RAM mode starts it. `vram_gb` is that card's VRAM, missing
-without a card. An older PC service leaves these fields out.
+In the catalog, `fits` is Strata's verdict for this PC (see
+[strata-api.md](strata-api.md)) and `ram_gb` Strata's memory figure,
+rounded up; `memory_with_vram` says that it is RAM and VRAM together (Gyro).
+`vram_gb` is the biggest card's VRAM, missing without a card. An older PC
+service leaves these fields out.
 
 Each family in `families` says with `pictures` whether setup can set up
 picture reading for it. Every family in the catalog has one; an older PC
@@ -465,9 +471,13 @@ and `update` Strata starts with it anyway.
 ### `POST /strata/jobs`
 
 Request: `StrataJobRequest`, one case per kind. Response `202` with the
-job (`StrataJob`). `400` (`Refused`) for values outside the catalog and for a
+job (`StrataJob`). `400` (`Refused`) for a family, size or context of
+`install` and `add_model` that is not in the catalog read last and for a
 `model` that is no plain id (letters, digits, `.`, `_`, `-`), `409` if it is not possible right now (gaming on, a job is running, too
-little space, deleting the active model).
+little space, deleting the active model, no catalog: being read, unreadable).
+`install` on a PC without Strata checks the model only once the Strata
+Terminal is there: the job reads its catalog after the engine step and fails
+with the same plain message, before setup runs; such a job has no `model`.
 
 | `kind` | Fields | What happens |
 | --- | --- | --- |
@@ -546,7 +556,7 @@ most recently modified one.
 is missing, it appends it) and removes `--rope-scaling` and `--rope-scale` with
 their values; `args_written` and `user_args` as with `set_speed_projection`,
 with `--max-context`, `--rope-scaling` and `--rope-scale`. It only takes
-contexts from the catalog up to 262144, the
+contexts from the catalog (any context while there is no catalog) up to 262144, the
 trained length
 (`MAX_SWITCHED_CONTEXT`): above that the model needs rope scaling, which only
 setup sets up (`400`). What setup derived from the old context

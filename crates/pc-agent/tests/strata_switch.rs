@@ -251,7 +251,12 @@ async fn the_switch_is_only_for_an_old_strata_folder() {
         refused(&s, "switch_to_terminal").await,
         "Strata runs on the Strata Terminal already"
     );
-    assert!(s.fake.ran.lock().unwrap().is_empty());
+    let ran = s.fake.ran.lock().unwrap().len();
+    assert_eq!(
+        ran,
+        s.fake.runs_of("python catalog").len(),
+        "only the catalog read"
+    );
 }
 
 #[tokio::test]

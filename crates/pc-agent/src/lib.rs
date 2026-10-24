@@ -96,6 +96,7 @@ pub async fn run(agent: Arc<Agent>) -> anyhow::Result<()> {
     });
     // Before the first job can change a config too.
     tokio::spawn(strata::manage_configs_at_start(&agent).await);
+    strata::check_catalog(&agent);
     agent.spawn_watchdog(WATCHDOG_EVERY);
     tracing::info!("PC service {VERSION} listening on {}", agent.cfg.listen);
     axum::serve(

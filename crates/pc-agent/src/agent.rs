@@ -39,7 +39,9 @@ use crate::{
     managed::Managed,
     output::{StrataOutput, StrataOutputMessage, StrataOutputNotice},
     platform::Platform,
-    strata::{self, OptionsCheck, PresetsCheck, Refusal, StrataJobRequest, UpdateCheck},
+    strata::{
+        self, CatalogCheck, OptionsCheck, PresetsCheck, Refusal, StrataJobRequest, UpdateCheck,
+    },
     strata_key::StrataKey,
     strata_process::{StrataProcess, Times},
     update::UpdateError,
@@ -92,6 +94,8 @@ pub struct Agent {
     pub(crate) times: Times,
     pub(crate) updates: UpdateCheck,
     pub(crate) options: OptionsCheck,
+    /// Strata's catalog as the installed Strata read it last.
+    pub(crate) catalog: CatalogCheck,
     pub(crate) presets: PresetsCheck,
     /// An update of this program is under way.
     pub(crate) updating: AtomicBool,
@@ -153,6 +157,7 @@ impl Agent {
             times: Times::default(),
             updates: UpdateCheck::default(),
             options: OptionsCheck::default(),
+            catalog: CatalogCheck::default(),
             presets: PresetsCheck::default(),
             updating: AtomicBool::new(false),
             standby_pending: AtomicBool::new(false),
@@ -579,6 +584,7 @@ async fn gaming(State(agent): State<Arc<Agent>>, Json(req): Json<GamingRequest>)
 async fn strata_view(State(agent): State<Arc<Agent>>) -> Json<strata::StrataReport> {
     strata::check_for_update(&agent);
     strata::check_options(&agent);
+    strata::check_catalog(&agent);
     strata::check_presets(&agent);
     let view = tokio::task::spawn_blocking(move || strata::view(&agent))
         .await

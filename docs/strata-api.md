@@ -2,7 +2,7 @@
 
 Strata is its own engine ([Niko1221/Strata](https://github.com/Niko1221/Strata)), not llama-server. Some endpoints carry llama-server or vLLM names so that third-party tools work. What they really return is only in Strata's code.
 
-In the proxy, only `crates/nas-proxy/src/strata_client.rs` talks to Strata: `/health`, the metrics, the request for an update's summary and the forwarding. A new call belongs there.
+In the proxy, only `crates/nas-proxy/src/strata_client.rs` talks to Strata: `/health`, the metrics, the request for an update's summary, the list of models after a wake-up and the forwarding. A new call belongs there.
 
 As of: commit [`cbfd5b9`](https://github.com/Niko1221/Strata/tree/cbfd5b9) (2026-10-20). The line numbers refer to it.
 
@@ -60,6 +60,17 @@ Always 200 and without a key (line 6213):
 ```
 
 `loaded` is false as long as the model is not in memory. Strata loads it with the next request. If `/health` does not answer at all, Strata is not running or not up yet. `images` is true when the served model reads pictures, that is when the run config it was started with has a non-empty `vision` section (below; `svc.vision is not None` in `serve/server.py`, at 7ddc17a3).
+
+## List of models: `GET /v1/models` and `GET /models`
+
+Both paths are one branch, with the key (line 6245):
+
+```json
+{"object": "list", "data": [{"id": "…", "object": "model", "status": {"value": "loaded"},
+ "meta": {"n_ctx": 32768}, "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}}]}
+```
+
+Aliases follow as entries of their own, the image model as one more. While no model is loaded and Strata does not unload on idle, `data` is empty. The proxy keeps the last `200` answer that lists a model (from a forwarded request, and its own `GET /v1/models` after each wake-up) in `DATA_DIR` (`models.json`) and answers it while Strata is not ready; an empty list does not replace it.
 
 ## Summary of an update: `POST /v1/chat/completions`
 

@@ -153,6 +153,14 @@ pub struct FakePc {
     pub direct_requests: AtomicUsize,
     /// Strata's address, for the relay.
     pub strata_addr: Mutex<Option<SocketAddr>>,
+    /// Strata lists no model, as while none is loaded.
+    pub no_model: AtomicBool,
+    /// The model Strata lists; `Qwen3-30B-A3B` if unset.
+    pub listed_model: Mutex<Option<String>>,
+    pub models_requests: AtomicUsize,
+    /// How long the PC service takes before it answers `/status`, also
+    /// while the PC sleeps, like a connection that runs into its timeout.
+    pub status_delay: Mutex<Duration>,
 }
 
 /// Credential headers as Strata saw them.
@@ -290,6 +298,27 @@ pub async fn health(State(pc): State<Pc>, headers: HeaderMap) -> Response {
     }
 }
 
+/// Like Strata's `GET /v1/models` and `/models`: the model, or none at
+/// all while none is loaded.
+pub async fn models(State(pc): State<Pc>) -> Response {
+    pc.models_requests.fetch_add(1, Ordering::SeqCst);
+    if !pc.strata_up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    let id = pc
+        .listed_model
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| "Qwen3-30B-A3B".into());
+    let data = if pc.no_model.load(Ordering::SeqCst) {
+        vec![]
+    } else {
+        vec![json!({"id": id, "object": "model", "status": {"value": "loaded"}})]
+    };
+    Json(json!({"object": "list", "data": data})).into_response()
+}
+
 /// An event stream with a pause in the middle, like a model thinking.
 pub fn sse(events: Vec<String>, pause_after_first: Duration) -> Response {
     let s = stream::unfold(
@@ -381,6 +410,8 @@ pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Val
 }
 
 pub async fn agent_status(State(pc): State<Pc>) -> Response {
+    let delay = *pc.status_delay.lock().unwrap();
+    tokio::time::sleep(delay).await;
     let misses = pc.status_misses.load(Ordering::SeqCst);
     let missed = misses > 0
         && pc
@@ -842,6 +873,8 @@ pub async fn serve_strata(pc: Pc) -> SocketAddr {
             .route("/metrics", get(metrics))
             .route("/v1/messages", post(messages))
             .route("/v1/chat/completions", post(chat))
+            .route("/v1/models", get(models))
+            .route("/models", get(models))
             .layer(axum::middleware::from_fn_with_state(pc.clone(), pc_only))
             .with_state(pc.clone()),
     )

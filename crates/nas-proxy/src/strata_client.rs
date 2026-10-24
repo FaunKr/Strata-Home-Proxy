@@ -1,5 +1,6 @@
 //! The one place where the Proxy talks to Strata: `/health`, the metrics,
-//! the update summary's chat request, and forwarding the clients' requests.
+//! the update summary's chat request, the list of models after a wake-up,
+//! and forwarding the clients' requests.
 //! It knows Strata's address and key, which HTTP client each call takes and
 //! how to read the answers (see `docs/strata-api.md`). In relay mode it asks
 //! the PC service's relay instead, with the PC service's token; no caller
@@ -140,6 +141,24 @@ impl StrataClient {
             return Err(NONE.into());
         }
         parse_metrics(&resp.text().await.map_err(|_| NONE)?).ok_or_else(|| NONE.into())
+    }
+
+    /// `GET /v1/models`: its `Content-Type` and body, for a `200` only.
+    pub async fn models(&self) -> Result<(Option<String>, Bytes), String> {
+        let resp = self
+            .send(self.request(&self.probe, Method::GET, "/v1/models"))
+            .await
+            .map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("/v1/models answers {}", resp.status()));
+        }
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+        let body = resp.bytes().await.map_err(|e| e.to_string())?;
+        Ok((content_type, body))
     }
 
     /// `POST /v1/chat/completions` with `body`, waiting at most `limit`.

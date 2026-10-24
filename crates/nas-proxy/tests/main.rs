@@ -12,6 +12,7 @@ mod forced;
 mod hardware;
 mod history;
 mod login;
+mod models_list;
 mod optimization_prompt;
 mod overview;
 mod pc_service_changelog;

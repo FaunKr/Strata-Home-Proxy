@@ -629,6 +629,8 @@ struct Progress {
     resume: Option<Option<String>>,
     /// Bytes at the last speed measurement.
     last: Option<(Instant, u64)>,
+    /// The last line was setup's error: the next one may be its hint.
+    after_error: bool,
 }
 
 impl Progress {
@@ -677,6 +679,7 @@ impl Progress {
     }
 
     fn read_at(&mut self, line: &str, job: &mut StrataJob, now: Instant) {
+        let hint = std::mem::take(&mut self.after_error);
         if let Some((n, title)) = parse_step(line) {
             job.step = Some(step_text(n, title));
             job.percent = None;
@@ -728,8 +731,21 @@ impl Progress {
             }
             return;
         }
+        // Setup's `fail` prints the error and on the next line what to do
+        // about it, indented; then a blank line and "Setup stopped …".
         if let Some(error) = line.trim().strip_prefix("[X]") {
             job.error = Some(error.trim().to_string());
+            self.after_error = true;
+        } else if hint
+            && line.starts_with("       ")
+            && let Some(error) = job.error.as_mut()
+        {
+            let stop = if error.ends_with(['.', '!', '?', ':']) {
+                ""
+            } else {
+                "."
+            };
+            *error = format!("{error}{stop} {}", line.trim());
         }
     }
 }
@@ -833,6 +849,48 @@ mod tests {
         for (i, line) in lines.iter().enumerate() {
             progress.read_at(line, job, start + Duration::from_secs(i as u64));
         }
+    }
+
+    /// What setup's `fail` prints when the feed has no DeepSeek engine for
+    /// the card (`setup.py`, Strata 7dd5cf18), with the engine folder as on
+    /// Windows.
+    const NO_DEEPSEEK_ENGINE: &[&str] = &[
+        "=== Step 4: the DeepSeek engine ===",
+        "",
+        "  [X]  DeepSeek's engine is not available for this computer yet",
+        "       Supported graphics cards: NVIDIA RTX 30 and RTX 50 series, and the Radeon AI PRO R9700. If you downloaded the DeepSeek engine package from the release page (the file strata-dsv41-...-windows-....zip), run the same command again with --dsv41-package PATH-OF-THE-FILE (strata launch accepts it too), or put the file in C:\\Strata\\engine-dsv41 and run it again. Strata checks it before it is used. Or update Strata later (a newer version may add your card), or pick another model. Nothing has been downloaded.",
+        "",
+        "Setup stopped. Fix the item above and run it again - everything already done is kept and skipped.",
+    ];
+
+    #[test]
+    fn setup_s_error_comes_with_its_hint() {
+        let (mut progress, mut job, start) = (Progress::default(), job(), Instant::now());
+        feed(&mut progress, &mut job, start, NO_DEEPSEEK_ENGINE);
+        let error = job.error.unwrap();
+        assert!(
+            error.starts_with(
+                "DeepSeek's engine is not available for this computer yet. Supported graphics cards: NVIDIA RTX 30"
+            ),
+            "{error}"
+        );
+        assert!(error.ends_with("Nothing has been downloaded."), "{error}");
+    }
+
+    #[test]
+    fn an_error_without_a_hint_stays_as_it_is() {
+        let (mut progress, mut job, start) = (Progress::default(), job(), Instant::now());
+        feed(
+            &mut progress,
+            &mut job,
+            start,
+            &[
+                "  [X] out of memory",
+                "",
+                "Setup stopped. Fix the item above and run it again.",
+            ],
+        );
+        assert_eq!(job.error.as_deref(), Some("out of memory"));
     }
 
     #[test]

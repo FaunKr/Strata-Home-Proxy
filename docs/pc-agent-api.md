@@ -288,6 +288,13 @@ rounded up; `memory_with_vram` says that it is RAM and VRAM together (Gyro).
 `vram_gb` is the biggest card's VRAM, missing without a card. An older PC
 service leaves these fields out.
 
+Each size also carries Strata's own words: `about` (its one line about the
+size), `verdict` (its full verdict for this PC, e.g. `tight: it needs about
+263 GB of free disk space …`), `experimental` and `pictures` (setup can set up
+picture reading for this size). An older PC service leaves them out: the web
+UI then words the fit as before ("not enough RAM") and takes picture reading
+from the family's `pictures`. An older proxy ignores them.
+
 Each family in `families` says with `pictures` whether setup can set up
 picture reading for it. Every family in the catalog has one; an older PC
 service leaves the field out, which reads as `false`.

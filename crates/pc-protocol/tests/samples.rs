@@ -243,7 +243,12 @@ fn an_older_strata_answer_still_parses() {
     assert!(!info.families[0].pictures);
     assert!(info.benchmarks.is_empty());
     assert_eq!(info.benchmark.unwrap().decode_tps, None);
-    assert!(!info.catalog[0].memory_with_vram);
+    let size = &info.catalog[0];
+    assert!(!size.memory_with_vram);
+    assert!(size.about.is_empty());
+    assert_eq!(size.verdict, None);
+    assert!(!size.experimental);
+    assert_eq!(size.pictures, None);
     assert_eq!(info.vram_gb, None);
 }
 

@@ -31,8 +31,9 @@ talks to a newer proxy. Therefore:
 - The proxy offers a new job or endpoint only when a response field shows a
   service that takes it, and that field comes in the same version as the
   job. A field that an earlier version of the same feature brought doesn't
-  count: a build from main can carry it without the job. Relay mode's
-  `wanted` came with `set_relay`; `relay` itself came one version earlier.
+  count: a service of that version carries it without the job. Relay mode's
+  `relay.wanted` came with `set_relay` (0.2.1); `relay` itself came with
+  0.2.0, which refuses `set_relay`.
 
 The crate's tests read the saved responses plus responses that lack the
 newer fields. A PC service test checks that the samples show every field it

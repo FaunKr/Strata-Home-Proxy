@@ -156,21 +156,16 @@ fn strata_alone() -> Value {
     json!({"kind": "install", "api_key": KEY})
 }
 
-/// A PC on which Install put Strata alone. Setup's fake comes back for
-/// what follows.
+/// A PC on which Install put Strata alone.
 async fn strata_alone_installed(name: &str) -> Setup {
     let s = setup(name).await;
     installable(&s);
-    // A page visit reads the Terminal's options with the same Python, which
-    // setup's fake would answer by putting a model there.
-    let setup_fake = s.fake.commands.lock().unwrap().remove("python").unwrap();
     let (code, job) = post(&s, "/strata/jobs", strata_alone()).await;
     assert_eq!(code, 202, "{job}");
     assert!(job.get("model").is_none(), "{job}");
     let job = finished(&s).await;
     assert_eq!(job["state"], "done", "{job}");
     let view = get(&s, "/strata").await;
-    s.fake.command("python", setup_fake);
     assert_eq!(view["installed"], true, "{view}");
     s
 }

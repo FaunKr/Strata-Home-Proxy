@@ -30,8 +30,8 @@ pub use machine::{CpuFacts, GpuFacts, MachineFacts, RamStick, WindowsFacts};
 pub use options::{NeverRule, StrataOptions, TunerOption, TunerTry};
 pub use output::{LOAD_LINES, LoadLines, StrataOutputMessage, StrataOutputNotice};
 pub use status::{
-    Answer, Cpu, ForcedRestart, ForcedSleep, GamingRequest, Gpu, Hardware, PcStatus, Refused,
-    StrataKey,
+    Answer, Cpu, ForcedRestart, ForcedSleep, GamingRequest, Gpu, Hardware, PcStatus,
+    RELAY_NO_STRATA, RELAY_PATH, Refused, Relay, StrataKey,
 };
 pub use strata::{
     BenchTool, ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, Pictures,

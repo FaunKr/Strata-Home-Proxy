@@ -20,6 +20,7 @@ mod power;
 mod power_samples;
 mod presets;
 mod proxy;
+mod relay;
 mod reported_mac;
 mod settings;
 mod settings_page;

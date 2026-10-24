@@ -109,6 +109,11 @@ pub struct Config {
     /// Where the setup puts the model files (60–190 GB each).
     #[serde(default = "default_strata_data_dir")]
     pub strata_data_dir: PathBuf,
+    /// Relay mode: the Strata Terminal's Strata listens on this PC only,
+    /// and the proxy reaches it through this service's `/relay`. Takes
+    /// effect with the next start of Strata.
+    #[serde(default)]
+    pub relay: bool,
 }
 
 fn default_listen() -> SocketAddr {

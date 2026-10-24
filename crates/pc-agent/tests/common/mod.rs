@@ -18,6 +18,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing,
 };
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 #[allow(unused_imports)]
 pub use strata_pc_agent::{
@@ -103,6 +104,8 @@ pub struct Fake {
     /// A started Strata prints the key of this config where its lines say
     /// `{key}`, as it reads the config at its start.
     pub key_config: Mutex<Option<PathBuf>>,
+    /// The caller of Strata's endless `/v1/stream` went away.
+    pub stream_dropped: AtomicBool,
 }
 
 impl Fake {
@@ -346,6 +349,52 @@ async fn health(State(f): State<Arc<Fake>>, headers: HeaderMap) -> StatusCode {
     }
 }
 
+/// Strata's answer shows what it was asked: for the relay.
+async fn echo(
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    body: String,
+) -> Json<Value> {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    Json(json!({
+        "method": method.as_str(),
+        "path": uri.path(),
+        "query": uri.query(),
+        "authorization": header("authorization"),
+        "x_custom": header("x-custom"),
+        "body": body,
+    }))
+}
+
+/// One of Strata's own errors.
+async fn fail() -> (StatusCode, &'static str) {
+    (StatusCode::INTERNAL_SERVER_ERROR, "engine says no")
+}
+
+/// An answer that streams one event and then goes on until its caller
+/// leaves, like a long generation.
+async fn endless(State(f): State<Arc<Fake>>) -> axum::response::Response {
+    struct Dropped(Arc<Fake>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.stream_dropped.store(true, Ordering::SeqCst);
+        }
+    }
+    let first = futures_util::stream::once(async {
+        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from("data: first\n\n"))
+    });
+    let dropped = Dropped(f);
+    let rest = futures_util::stream::pending().map(move |b| {
+        let _ = &dropped;
+        b
+    });
+    axum::response::Response::builder()
+        .header("content-type", "text/event-stream")
+        .body(axum::body::Body::from_stream(first.chain(rest)))
+        .unwrap()
+}
+
 async fn slots(State(f): State<Arc<Fake>>) -> Json<Value> {
     Json(json!([{ "id": 0, "is_processing": f.strata_busy.load(Ordering::SeqCst) }]))
 }
@@ -419,6 +468,7 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         strata_home: dir.join("StrataTerminal"),
         strata_components: dir.join("StrataTerminal").join("components"),
         strata_data_dir: dir.join("Strata-data"),
+        relay: false,
     }
 }
 
@@ -443,6 +493,9 @@ pub async fn setup_with(name: &str, tweak: impl FnOnce(&mut Config)) -> Setup {
         Router::new()
             .route("/health", routing::get(health))
             .route("/slots", routing::get(slots))
+            .route("/v1/echo", routing::any(echo))
+            .route("/v1/fail", routing::get(fail))
+            .route("/v1/stream", routing::get(endless))
             .with_state(fake.clone()),
     )
     .await;

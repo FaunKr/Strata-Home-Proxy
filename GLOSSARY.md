@@ -37,6 +37,10 @@ The dialog of an installed model with its Engine options and its Engine environm
 The small program on the PC that reports state, gaming mode and user activity to the proxy and triggers standby on request. In code and file names it is `pc-agent`.
 _Avoid_: agent, PC agent (except `pc-agent` in code and file names), PC-Dienst
 
+**PC service changelog**:
+What each PC service version brings, in short lines for the user: `crates/pc-agent/CHANGELOG.md`. The PC service card lists the versions an update brings and marks one that needs a step on the PC. Rules in `docs/pc-service.md`.
+_Avoid_: release notes, agent changelog
+
 **Proxy**:
 The service on the NAS that all requests to Strata go through. In code and file names it is `nas-proxy`.
 _Avoid_: NAS proxy (except `nas-proxy` in code and file names), gateway

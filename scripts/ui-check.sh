@@ -28,6 +28,9 @@ cp scripts/ui-check-code-bench.json "$data/code-bench.json"
 now=$(date +%s)
 printf '{"ts":%d,"kind":"pc_seen_asleep"}\n{"ts":%d,"kind":"pc_seen_awake"}\n{"ts":%d,"kind":"proxy_stopped"}\n' \
   $((now - 3 * 86400)) $((now - 86400)) $((now - 3600)) >"$data/events.jsonl"
+# A newer PC service in the image than scripts/fake-pc.js reports, with a
+# changelog of four versions, so the PC service card lists what it brings.
+printf 'MZ strata-pc-agent-version:0.3.1+ui-check-new\n' >"$data/strata-pc-agent.exe"
 cargo leptos build --project admin-ui >"$data/build.log" 2>&1 || { cat "$data/build.log"; exit 1; }
 
 port="${UI_CHECK_PORT:-18099}"
@@ -41,7 +44,7 @@ trap 'kill $plug $pc 2>/dev/null; rm -rf "$data"' EXIT
 LISTEN_ADDR="127.0.0.1:$port" DATA_DIR="$data" LEPTOS_SITE_ROOT=target/site \
   SHELLY_URL="127.0.0.1:$plug_port" CODE_BENCH_URL="http://127.0.0.1:$pc_port" \
   STRATA_URL="http://127.0.0.1:$pc_port" PC_AGENT_URL="http://127.0.0.1:$pc_port" PC_MAC=10:20:30:40:50:60 \
-  SLEEP_SETTLE_SECS=2 \
+  SLEEP_SETTLE_SECS=2 PC_AGENT_EXE="$data/strata-pc-agent.exe" PC_AGENT_CHANGELOG=scripts/ui-check-changelog.md \
   target/debug/strata-nas-proxy >"$data/proxy.log" 2>&1 &
 proxy=$!
 trap 'kill $proxy $plug $pc 2>/dev/null; rm -rf "$data"' EXIT
@@ -53,5 +56,5 @@ done
 
 mkdir -p target/ui-check
 # The proxy's log goes with the data directory; a failure shows its end.
-BASE="http://127.0.0.1:$port" FAKE_PC="http://127.0.0.1:$pc_port" OUT=target/ui-check node scripts/ui-check.js ||
+BASE="http://127.0.0.1:$port" PROGRAM="$data/strata-pc-agent.exe" FAKE_PC="http://127.0.0.1:$pc_port" OUT=target/ui-check node scripts/ui-check.js ||
   { echo "--- proxy.log" >&2; tail -n 200 "$data/proxy.log" >&2; exit 1; }

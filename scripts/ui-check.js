@@ -11,6 +11,8 @@ const expected = {
   '/admin': ['87 W', 'Awake', '11.8 / 16.0 GB', '0 rpm', '41 % of limit', 'Last 7 days', 'kWh'],
   // The catalog from scripts/fake-pc.js: Gyro's memory is RAM + VRAM.
   '/admin/strata': ['needs 62 GB RAM (recommended)', 'needs 28 GB RAM + VRAM', 'needs 35 GB RAM + VRAM (not enough RAM + VRAM)', 'DeepSeek-V4.1-Flash UD-Q8_K_XL'],
+  // The program and changelog from scripts/ui-check.sh.
+  '/admin/pc': ['Needs a step on the PC', 'Show older changes', 'Reports the PC\'s fan speed', 'Update to 0.3.1+ui-check-new'],
   '/admin/pc/history': ['Awake and asleep', 'Last 7 days', 'Last 12 months', 'From', 'Energy', 'Saved', "today's price"],
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
@@ -468,6 +470,12 @@ async function codeBench(page, errors) {
         if (mode === 'fail') await page.goto(base + '/admin/strata/version', { waitUntil: 'domcontentloaded' });
         findings += await check(page, errors, name, `/admin/strata/version (${state})`, texts, `_admin_strata_version-${state}`);
       }
+      // A program that differs only in its build brings only internal changes.
+      const fs = require('fs');
+      const program = fs.readFileSync(process.env.PROGRAM);
+      fs.writeFileSync(process.env.PROGRAM, 'MZ strata-pc-agent-version:0.1.0+ui-check-internal\n');
+      findings += await check(page, errors, name, '/admin/pc (internal changes)', ['Only internal changes.'], '_admin_pc-internal');
+      fs.writeFileSync(process.env.PROGRAM, program);
       // The phone pass starts again from the first upstream and a written summary.
       await fetch(`${process.env.FAKE_PC}/fake/summary?mode=answer`, { method: 'POST' });
       // An unreadable catalog asks for a Strata update instead of the list.

@@ -23,7 +23,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use strata_admin_ui::api::{PcServiceView, PcSetupCommand};
 
-use crate::{agent::UpdateAnswer, events::EventKind, files::write_private, state::AppState};
+use crate::{
+    agent::UpdateAnswer,
+    events::EventKind,
+    files::write_private,
+    pc_changelog::{Changelog, Changes},
+    state::AppState,
+};
 
 /// Where the image puts `strata-pc-agent.exe`, unless `PC_AGENT_EXE` says otherwise.
 const DEFAULT_PROGRAM: &str = "/usr/local/share/strata-proxy/strata-pc-agent.exe";
@@ -53,6 +59,9 @@ pub struct PcSetup {
     program_version: Mutex<Option<(FileStamp, Option<String>)>>,
     update: Mutex<UpdateState>,
     update_timeout: Mutex<Duration>,
+    /// Another changelog than the built-in one: from `PC_AGENT_CHANGELOG`
+    /// (the UI check) or a test.
+    changelog: Mutex<Option<Arc<Changelog>>>,
 }
 
 type FileStamp = (u64, Option<std::time::SystemTime>);
@@ -102,7 +111,14 @@ impl PcSetup {
                 ..UpdateState::default()
             }),
             update_timeout: Mutex::new(UPDATE_TIMEOUT),
+            changelog: Mutex::new(changelog_from_env().map(Arc::new)),
         }
+    }
+
+    /// Uses `text` as the PC service's changelog, e.g. one of a test.
+    pub fn set_changelog(&self, text: &str) -> Result<(), String> {
+        *self.changelog.lock().unwrap() = Some(Arc::new(Changelog::parse(text)?));
+        Ok(())
     }
 
     /// Serves another file as the program, e.g. a stand-in in tests.
@@ -201,13 +217,27 @@ impl PcSetup {
         let available = self.program_version();
         let mut update = self.update.lock().unwrap();
         let timed_out = self.expire(&mut update);
-        let view = update.reported.clone().map(|version| PcServiceView {
-            update_available: available.is_some() && version != available,
-            version,
-            available,
-            updating: update.running_since.is_some(),
-            update_error: update.error.clone(),
-            reported_mac: None,
+        let changelog = self.changelog.lock().unwrap().clone();
+        let view = update.reported.clone().map(|version| {
+            let update_available = available.is_some() && version != available;
+            let changes = if update_available {
+                changelog
+                    .as_deref()
+                    .unwrap_or(&crate::pc_changelog::PARSED)
+                    .changes(version.as_deref(), available.as_deref())
+            } else {
+                Changes::default()
+            };
+            PcServiceView {
+                update_available,
+                version,
+                available,
+                updating: update.running_since.is_some(),
+                update_error: update.error.clone(),
+                reported_mac: None,
+                changes: changes.listed,
+                only_internal_changes: changes.only_internal,
+            }
         });
         (view, timed_out)
     }
@@ -289,6 +319,18 @@ impl PcSetup {
         current
             .is_some_and(|c| c.value.eq_ignore_ascii_case(code.trim()) && Instant::now() < c.until)
     }
+}
+
+/// The changelog `PC_AGENT_CHANGELOG` names; `None` without one, or when it
+/// cannot be read or is invalid (then the built-in one applies).
+fn changelog_from_env() -> Option<Changelog> {
+    let path = std::env::var_os("PC_AGENT_CHANGELOG")?;
+    let parsed = std::fs::read_to_string(&path)
+        .map_err(|e| e.to_string())
+        .and_then(|text| Changelog::parse(&text));
+    parsed
+        .inspect_err(|e| tracing::warn!("PC_AGENT_CHANGELOG {path:?} not used: {e}"))
+        .ok()
 }
 
 /// The version text after the marker, up to the line end. The prefix may

@@ -348,6 +348,24 @@ pub struct PcServiceView {
     pub update_error: Option<String>,
     /// The MAC address the service reported, e.g. `3c:7c:3f:12:a4:9e`.
     pub reported_mac: Option<String>,
+    /// The changelog's versions the update brings, newest first; empty
+    /// without an update.
+    #[serde(default)]
+    pub changes: Vec<PcServiceChange>,
+    /// An update is available, but the changelog lists nothing for it.
+    #[serde(default)]
+    pub only_internal_changes: bool,
+}
+
+/// One version of the PC service's changelog, as the update card shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PcServiceChange {
+    /// E.g. `0.3.0`.
+    pub version: String,
+    /// It bumped the minor number: the update button alone is not enough,
+    /// its lines say what to do on the PC.
+    pub needs_step: bool,
+    pub lines: Vec<String>,
 }
 
 /// One message of the Strata output stream (`/admin/api/strata-output-stream`).

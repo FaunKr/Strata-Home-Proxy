@@ -14,6 +14,7 @@ mod history;
 mod login;
 mod optimization_prompt;
 mod overview;
+mod pc_service_changelog;
 mod pc_service_update;
 mod pc_setup;
 mod power;

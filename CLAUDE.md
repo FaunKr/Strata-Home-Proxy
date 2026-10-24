@@ -12,6 +12,7 @@
 - Flaky or hanging tests: `scripts/repeat-test.sh` runs one test file many times and names the one that hangs. Before pushing a new or changed proxy test file, run it 20 times this way: CI is slower and catches races the session misses. For a rare timing failure that full runs at 32 threads don't show, run three full runs of the test binary side by side: `scripts/side-by-side.sh <package>` names the failed tests of each run.
 - CPU-heavy work in the proxy, such as password hashing, runs on the blocking pool (`spawn_blocking`), never in an async function. Each proxy test's single-thread runtime also plays the PC, Strata and the runner, so blocking it makes their answers miss timeouts. When a test misses a timeout only under load, first check whether something blocks the runtime.
 - CI costs, Actions minutes, which jobs a PR starts: `docs/ci.md`.
+- A PR that changes what the PC service does for the user adds a section to `crates/pc-agent/CHANGELOG.md` and bumps the version in `crates/pc-agent/Cargo.toml` to it: the minor number when the user has to act on the PC, else the patch number. Refactors and test-only changes add none. Rules: `docs/pc-service.md`.
 - local-agent has two runners, `tools/local-agent/local-agent` (Bash) and `local-agent.ps1` (Windows). A change to its behaviour goes into both runners and both test scripts in the same PR; each test in `test.sh` has one of the same name in `test.ps1`.
 
 ## Process

@@ -10,6 +10,10 @@
 # down to the published commits and a docker login to ghcr.io.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# A shallow clone has no published commit to diff against: everything publishes.
+if [[ $(git rev-parse --is-shallow-repository) == true ]]; then
+  echo "::warning::shallow clone: both images publish without a diff (fetch-depth 0 is needed)" >&2
+fi
 
 # The revision label of an image's :latest, empty if there is none. A
 # single-platform image or an index (buildx adds an attestation to it).

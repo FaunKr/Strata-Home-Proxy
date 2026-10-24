@@ -321,6 +321,12 @@ impl AppState {
 
     /// Asks Strata's `/health`. A ready answer marks the PC awake, except
     /// while a PC that accepted sleep may still answer.
+    ///
+    /// `Down` does not only mean Strata did not answer: it is also what a
+    /// proxy without a Strata address gets, and a PC settling into sleep
+    /// even when Strata answered. A caller that sets `Down` against another
+    /// view of Strata, such as the PC service's status, rules both out
+    /// first (`strata()`, `settling()`).
     pub async fn strata_health(&self) -> Health {
         let Some(strata) = self.strata() else {
             return Health::Down;

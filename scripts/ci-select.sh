@@ -57,6 +57,8 @@ while IFS= read -r path; do
     # The NAS proxy links the web UI.
     crates/admin-ui/*) packages+=(strata-admin-ui strata-nas-proxy) ui=true ;;
     crates/nas-proxy/*) packages+=(strata-nas-proxy) ui=true ;;
+    # The proxy embeds the changelog and its unit test reads the crate's version.
+    crates/pc-agent/CHANGELOG.md | crates/pc-agent/Cargo.toml) packages+=(strata-pc-agent strata-nas-proxy) ;;
     crates/pc-agent/*) packages+=(strata-pc-agent) ;;
     # The protocol between them: the PC service writes it, the proxy and the web UI read it.
     crates/pc-protocol/*) packages+=(strata-pc-protocol strata-pc-agent strata-admin-ui strata-nas-proxy) ui=true ;;

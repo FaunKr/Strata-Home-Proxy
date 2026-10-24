@@ -6,7 +6,7 @@ use leptos::prelude::*;
 use leptos_router::components::{A, Outlet};
 
 use crate::{
-    api::{NewPcSetupCommand, PcServiceView, PcView, UpdatePcService, error_text},
+    api::{NewPcSetupCommand, PcServiceChange, PcServiceView, PcView, UpdatePcService, error_text},
     copy::CopyField,
     labels::{PC_CONNECTION, PC_WAKE_SLEEP},
     overview::Live,
@@ -125,6 +125,14 @@ fn ServiceState(
             )
         },
     );
+    let changes = service.update_available.then(|| {
+        view! {
+            <WhatsNew
+                changes=service.changes.clone()
+                only_internal=service.only_internal_changes
+            />
+        }
+    });
     let button = (service.update_available && !service.updating).then(|| {
         view! {
             <div class="actions">
@@ -166,7 +174,71 @@ fn ServiceState(
         {service
             .update_error
             .map(|e| view! { <p class="error" role="alert">{format!("Last update failed: {e}")}</p> })}
+        {changes}
         {button}
+    }
+}
+
+/// How many versions show open; older ones wait behind a toggle.
+const OPEN_VERSIONS: usize = 2;
+
+/// What the update brings, from the PC service's changelog: newest first,
+/// the oldest behind *Show older changes*.
+#[component]
+fn WhatsNew(changes: Vec<PcServiceChange>, only_internal: bool) -> impl IntoView {
+    if only_internal {
+        return view! { <p class="muted">"Only internal changes."</p> }.into_any();
+    }
+    if changes.is_empty() {
+        return ().into_any();
+    }
+    let versions = |changes: Vec<PcServiceChange>| {
+        changes
+            .into_iter()
+            .map(|c| view! { <ChangeVersion change=c /> })
+            .collect_view()
+    };
+    let mut open = changes;
+    let older = open.split_off(OPEN_VERSIONS.min(open.len()));
+    let older = (!older.is_empty()).then(|| {
+        view! {
+            <details class="update-commits">
+                <summary>"Show older changes"</summary>
+                {versions(older)}
+            </details>
+        }
+    });
+    view! {
+        <div class="service-changes">
+            <h3>"What's new"</h3>
+            {versions(open)}
+            {older}
+        </div>
+    }
+    .into_any()
+}
+
+#[component]
+fn ChangeVersion(change: PcServiceChange) -> impl IntoView {
+    view! {
+        <div class="service-change">
+            <h4 class="service-change-head">
+                {change.version}
+                {change
+                    .needs_step
+                    .then(|| {
+                        view! {
+                            <span class="badge is-warn">
+                                <span class="dot"></span>
+                                "Needs a step on the PC"
+                            </span>
+                        }
+                    })}
+            </h4>
+            <ul class="service-change-lines">
+                {change.lines.into_iter().map(|l| view! { <li>{l}</li> }).collect_view()}
+            </ul>
+        </div>
     }
 }
 

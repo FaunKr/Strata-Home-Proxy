@@ -13,7 +13,7 @@ runs what a change needs (spec #146).
 - The Actions cache holds 10 GB and then evicts the oldest entries.
   A pull request's caches are visible only to that pull request, those of `main`
   to all. So only `main` writes caches (rust-cache `save-if`, Docker
-  `cache-to` only in the `publish` job).
+  `cache-to` only in the `publish` and `publish-bench` jobs).
 - rust-cache holds the dependencies; its key includes Cargo.lock, the
   manifests and the rustc version. On `main` the `test` job only checks
   whether the cache is there, and only runs in full to refill it.
@@ -41,7 +41,7 @@ Reference values after #151:
 | PR that changes the web UI, the proxy or the protocol | as above, plus ui | approx. 5–10; 18 when the Ubuntu mirror is slow (#321) |
 | PR that changes only `tools/local-agent/` or the code-bench runner (not its `tasks/`) | changes, test without Cargo (`cargo=false`, `check.sh --no-cargo`), ci-ok | approx. 1–2 (estimate) |
 | PR that changes a workflow, Cargo.lock or scripts/ | everything except Windows | approx. 5–18 (#309: 5, #308: 15) |
-| Push to `main` | changes, test (check only), publish, ci-ok | approx. 5–10 |
+| Push to `main` | changes, test (check only), publish and publish-bench if their image changed, ci-ok | approx. 1–10 |
 
 The `ui` job installs Chromium's system packages with Playwright's
 `--with-deps` (fonts, xvfb, libnss3) from the runner's Ubuntu mirror. That
@@ -53,21 +53,31 @@ The code-bench image's build also builds its repo task: it vendors the
 crates, prebuilds and runs the PC service's tests three times (the checkout,
 the real commit, the checkout with the commit's tests), about 2 minutes
 outside the cache. `tools/code-bench/prepare_repo_task.py` and a task's
-`repo.json` select it (`bench=true`).
+`repo.json` select it (`bench=true`, and `publish-bench=true` on `main`).
 
 The `changes` job also checks a PR's commit messages for Claude session
 links (`scripts/pr-text.sh`), at no extra job. The body is checked by the
 workflow `PR text` (`pr-text.yml`) when the PR opens and on each edit: one
 short job (1 minute), so fixing the body does not start the whole CI.
 
-The `publish` job never runs twice at the same time and ends after 30 minutes.
-A newer push to `main` waits until the running one is finished; that way no
-older commit resets `:latest`.
-
 ## What gets published
 
-- `publish` pushes both images to ghcr.io as `:latest` and `:<commit>`. The
-  NAS and `deploy/truenas-auto-update.sh` follow `:latest`.
+- `publish` pushes the proxy's image and `publish-bench` the code benchmark
+  runner's image to ghcr.io, each as `:latest` and `:<commit>`. The NAS and
+  `deploy/truenas-auto-update.sh` follow `:latest`.
+- Each job only runs when the files that go into its image changed since the
+  commit its `:latest` was built from (the `org.opencontainers.image.revision`
+  label, read by `scripts/ci-publish.sh`). The lists are in
+  `scripts/ci-select.sh` (`publish=`, `publish-bench=`). Test-only files
+  (`crates/*/tests`, the PC service's fixtures and example config) publish
+  nothing, and `.dockerignore` keeps them out of the image. A change to
+  `ci.yml` publishes both, and so does a manual run of the workflow on `main`,
+  e.g. to pick up a newer base image.
+- Each job runs once at a time and ends after 30 minutes. A newer push to
+  `main` cancels a publish that is still running: only the newest commit's
+  image is published. `:latest` only moves once an image is pushed in full,
+  and the next push catches up on what a cancelled or failed one missed. A
+  commit whose publish was cancelled gets no `:<commit>` tag.
 - The version is the crate version from each `Cargo.toml`. The web UI shows
   the proxy's under *System* (`crates/nas-proxy/src/admin.rs`). The PC service
   reports its own with the build commit appended, e.g. `0.1.0+5e8b9f1`

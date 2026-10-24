@@ -32,32 +32,39 @@ expect_selects() {
 package_of() { sed -n 's/^name *= *"\(.*\)"/\1/p' "$1/Cargo.toml" | head -1; }
 
 # Fixed cases.
-all="test=true packages= cargo=true image=true bench=true ui=true"
-expect "test=false packages= cargo=false image=false bench=false ui=false" README.md docs/strata-api.md
-expect "$all" Cargo.lock
-expect "$all" .github/workflows/ci.yml
-expect "$all" .config/nextest.toml
-expect "$all" scripts/check-exe-version.sh
+shared="test=true packages= cargo=true image=true bench=true ui=true"
+expect "test=false packages= cargo=false image=false bench=false ui=false publish=false publish-bench=false" README.md docs/strata-api.md
+expect "$shared publish=true publish-bench=false" Cargo.lock
+expect "$shared publish=true publish-bench=true" .github/workflows/ci.yml
+expect "$shared publish=false publish-bench=false" .config/nextest.toml
+expect "$shared publish=true publish-bench=false" scripts/check-exe-version.sh
 # Code alone runs the tests of its crates; the images build only when their
 # build definition changes.
-expect "test=true packages=strata-pc-agent cargo=true image=false bench=false ui=false" crates/pc-agent/src/agent.rs
-expect "test=true packages=strata-admin-ui strata-nas-proxy cargo=true image=false bench=false ui=true" crates/admin-ui/src/app.rs
-expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=false" deploy/windows/install.ps1
-expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=true" crates/nas-proxy/src/admin.rs
-expect "test=false packages= cargo=false image=true bench=false ui=true" Dockerfile
-expect "test=false packages= cargo=false image=true bench=false ui=false" .dockerignore
-expect "test=false packages= cargo=false image=false bench=false ui=false" deploy/docker-compose.yml
-expect "test=true packages= cargo=false image=false bench=false ui=false" tools/local-agent/local-agent
-expect "test=true packages= cargo=false image=false bench=true ui=false" tools/code-bench/runner.py
-expect "test=true packages= cargo=false image=false bench=true ui=false" tools/code-bench/Dockerfile
-expect "test=true packages= cargo=false image=false bench=false ui=false" tools/code-bench/test_runner.py
-expect "test=true packages= cargo=false image=false bench=true ui=false" tools/code-bench/prepare_repo_task.py
-expect "test=false packages= cargo=false image=false bench=true ui=false" tools/code-bench/tasks/pc-force-endpoints/repo.json
-expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=false" tools/code-bench/tasks/roman/TASK.md
+expect "test=true packages=strata-pc-agent cargo=true image=false bench=false ui=false publish=true publish-bench=false" crates/pc-agent/src/agent.rs
+expect "test=true packages=strata-admin-ui strata-nas-proxy cargo=true image=false bench=false ui=true publish=true publish-bench=false" crates/admin-ui/src/app.rs
+expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=false publish=true publish-bench=false" deploy/windows/install.ps1
+expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=true publish=true publish-bench=false" crates/nas-proxy/src/admin.rs
+expect "test=false packages= cargo=false image=true bench=false ui=true publish=true publish-bench=false" Dockerfile
+expect "test=false packages= cargo=false image=true bench=false ui=false publish=true publish-bench=false" .dockerignore
+expect "test=false packages= cargo=false image=false bench=false ui=false publish=false publish-bench=false" deploy/docker-compose.yml
+expect "test=true packages= cargo=false image=false bench=false ui=false publish=false publish-bench=false" tools/local-agent/local-agent
+expect "test=true packages= cargo=false image=false bench=true ui=false publish=false publish-bench=true" tools/code-bench/runner.py
+expect "test=true packages= cargo=false image=false bench=true ui=false publish=false publish-bench=true" tools/code-bench/Dockerfile
+expect "test=true packages= cargo=false image=false bench=false ui=false publish=false publish-bench=false" tools/code-bench/test_runner.py
+expect "test=true packages= cargo=false image=false bench=true ui=false publish=false publish-bench=true" tools/code-bench/prepare_repo_task.py
+expect "test=false packages= cargo=false image=false bench=true ui=false publish=true publish-bench=true" tools/code-bench/tasks/pc-force-endpoints/repo.json
+expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=false publish=true publish-bench=false" tools/code-bench/tasks/roman/TASK.md
 # A runner change next to a crate change: check.sh gets the crate and runs the
 # runners' tests anyway.
-expect "test=true packages=strata-pc-agent cargo=true image=false bench=true ui=false" tools/code-bench/runner.py crates/pc-agent/src/agent.rs
-[[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$all " ]] || fail "--all -> not everything"
+expect "test=true packages=strata-pc-agent cargo=true image=false bench=true ui=false publish=true publish-bench=true" tools/code-bench/runner.py crates/pc-agent/src/agent.rs
+[[ $(scripts/ci-select.sh --all </dev/null | tr '\n' ' ') == "$shared publish=true publish-bench=true " ]] || fail "--all -> not everything"
+# On main: test-only files publish nothing, other workflows and scripts neither.
+expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=true publish=false publish-bench=false" crates/nas-proxy/tests/proxy.rs
+expect "test=true packages=strata-pc-agent cargo=true image=false bench=false ui=false publish=false publish-bench=false" crates/pc-agent/fixtures/strata-tune.json
+expect "test=true packages=strata-pc-agent cargo=true image=false bench=false ui=false publish=false publish-bench=false" crates/pc-agent/strata-pc-agent.example.toml
+expect "test=true packages=strata-nas-proxy cargo=true image=false bench=false ui=true publish=true publish-bench=false" crates/nas-proxy/src/tests/x.rs
+expect "$shared publish=false publish-bench=false" .github/workflows/windows.yml
+expect "$shared publish=false publish-bench=false" scripts/check.sh
 
 # Every crate selects itself.
 for dir in crates/*/; do
@@ -108,6 +115,27 @@ dockerfile_sources() {
 while read -r src; do expect_checked "$src" image; done < <(dockerfile_sources .)
 # The runner's image holds nothing a test job builds, so only bench counts.
 while read -r src; do expect_selects "$src" bench true; done < <(dockerfile_sources tools/code-bench)
+# Every file that goes into an image publishes it, unless .dockerignore keeps
+# it out as test-only; each test-only entry publishes nothing.
+dockerignored() {
+  local pattern
+  while read -r pattern; do
+    # shellcheck disable=SC2053 # The patterns are globs.
+    [[ -n $pattern && $pattern != "#"* && ($1 == $pattern || $1 == $pattern/*) ]] && return 0
+  done <.dockerignore
+  return 1
+}
+while read -r src; do
+  for file in $(git ls-files "${src%/x}"); do
+    dockerignored "$file" && continue
+    expect_selects "$file" publish true
+  done
+done < <(dockerfile_sources .)
+while read -r pattern; do
+  [[ $pattern == crates/* ]] || continue
+  for file in $(git ls-files "$pattern"); do expect_selects "$file" publish false; done
+done <.dockerignore
+while read -r src; do expect_selects "$src" publish-bench true; done < <(dockerfile_sources tools/code-bench)
 # The image definitions themselves select their image.
 expect_selects Dockerfile image true
 expect_selects tools/code-bench/Dockerfile bench true

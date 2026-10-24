@@ -12,7 +12,7 @@
 - Flaky or hanging tests: `scripts/repeat-test.sh` runs one test file many times and names the one that hangs. Before pushing a new or changed proxy test file, run it 20 times this way: CI is slower and catches races the session misses. For a rare timing failure that full runs at 32 threads don't show, run three full runs of the test binary side by side: `scripts/side-by-side.sh <package>` names the failed tests of each run.
 - CPU-heavy work in the proxy, such as password hashing, runs on the blocking pool (`spawn_blocking`), never in an async function. Each proxy test's single-thread runtime also plays the PC, Strata and the runner, so blocking it makes their answers miss timeouts. When a test misses a timeout only under load, first check whether something blocks the runtime.
 - CI costs, Actions minutes, which jobs a PR starts: `docs/ci.md`.
-- A PR that changes what the PC service does for the user adds a section to `crates/pc-agent/CHANGELOG.md` and bumps the version in `crates/pc-agent/Cargo.toml` to it: the minor number when the user has to act on the PC, else the patch number. Refactors and test-only changes add none. The update button offers only a higher version, so a PC service change without a bump (a fix included) reaches PCs only with the next bump or a new install command. Rules: `docs/pc-service.md`.
+- A PR that changes what the PC service does for the user adds a section to `crates/pc-agent/CHANGELOG.md` and bumps the version in `crates/pc-agent/Cargo.toml` to it: the minor number when the user has to act on the PC, else the patch number. Refactors and test-only changes add none. A fix counts too: without a bump it reaches PCs only with the next bump or a new install command. Rules: `docs/pc-service.md`.
 - local-agent has two runners, `tools/local-agent/local-agent` (Bash) and `local-agent.ps1` (Windows). A change to its behaviour goes into both runners and both test scripts in the same PR; each test in `test.sh` has one of the same name in `test.ps1`.
 
 ## Process
@@ -23,6 +23,7 @@
 - A spec that lands as one PR is implemented in the thread itself: no implementer subagents, worktrees or merger.
 - When Strata changed something the PC service reads (setup's output, a file it writes), extend the reader's unit test with the new line copied from Strata's source, not a made-up one, and update `docs/strata-api.md`.
 - When grilling or a spec adds a rule that data the PR itself writes must follow (the first section of the PC service changelog, a migrated file), check that data against the rule before publishing the spec: the rule and the first data can contradict each other.
+- A spec states a comparison rule as the outcome User sees ("no update for a PC on that version or a newer one"), not as an operator ("equals"): the spec review reads it word for word.
 - Before a spec refuses values in a run config field, check what Strata itself writes there (`docs/strata-api.md`, Strata's source): a value Strata put there must still come back unchanged, or saving the field always fails.
 - If a spec says "X only in the module", that applies to code, helpers and fixtures. Tests may spell out the outer names they pin down (file names Strata itself reads).
 - Issues, specs, PR text, commit messages and retros are written in English, using the terms in `GLOSSARY.md`.

@@ -8,20 +8,20 @@
 //! the file. Versions follow semver under 0.x: the minor number goes up when
 //! the user has to act on the PC, the patch number for features and fixes.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use strata_admin_ui::api::PcServiceChange;
 
 /// The changelog the image carries.
 pub const BUILT_IN: &str = include_str!("../../pc-agent/CHANGELOG.md");
 
-/// The version a service that reports none, or 0.1.0, counts as: the one
-/// before the changelog began.
+/// The version a service that reports none counts as: the one before the
+/// changelog began.
 const BEFORE_CHANGELOG: Version = Version(0, 1, 0);
 
 /// [`BUILT_IN`], parsed; its unit test keeps it valid.
-pub static PARSED: LazyLock<Changelog> =
-    LazyLock::new(|| Changelog::parse(BUILT_IN).expect("pc-agent/CHANGELOG.md is valid"));
+pub static PARSED: LazyLock<Arc<Changelog>> =
+    LazyLock::new(|| Arc::new(Changelog::parse(BUILT_IN).expect("pc-agent/CHANGELOG.md is valid")));
 
 /// A version's numbers; build metadata (`+abc1234`) is left out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -47,10 +47,15 @@ impl Version {
     }
 }
 
+/// Whether `text` is a version the proxy can compare, like `0.2.0+abc1234`.
+pub fn is_version(text: &str) -> bool {
+    Version::parse(text).is_some()
+}
+
 #[derive(Debug)]
 struct Section {
     version: Version,
-    text: String,
+    heading: String,
     lines: Vec<String>,
 }
 
@@ -81,39 +86,43 @@ impl Changelog {
                     .ok_or_else(|| format!("{heading:?} is no version like 0.3.1"))?;
                 if let Some(last) = sections.last() {
                     if last.lines.is_empty() {
-                        return Err(format!("{} lists no change", last.text));
+                        return Err(format!("{} lists no change", last.heading));
                     }
                     if version >= last.version {
-                        return Err(format!("{heading} stands below {}", last.text));
+                        return Err(format!("{heading} stands below {}", last.heading));
                     }
                 }
                 sections.push(Section {
                     version,
-                    text: heading.to_string(),
+                    heading: heading.to_string(),
                     lines: Vec::new(),
                 });
             } else if let Some(section) = sections.last_mut() {
                 if let Some(entry) = line.strip_prefix("- ") {
                     section.lines.push(entry.trim().to_string());
                 } else if !line.trim().is_empty() {
-                    return Err(format!("{line:?} under {} is no \"- \" line", section.text));
+                    return Err(format!(
+                        "{line:?} under {} is no \"- \" line",
+                        section.heading
+                    ));
                 }
             }
         }
         match sections.last() {
             None => Err("the changelog lists no version".into()),
-            Some(last) if last.lines.is_empty() => Err(format!("{} lists no change", last.text)),
+            Some(last) if last.lines.is_empty() => Err(format!("{} lists no change", last.heading)),
             Some(_) => Ok(Self { sections }),
         }
     }
 
     /// The newest version.
     pub fn newest(&self) -> String {
-        self.sections[0].text.clone()
+        self.sections[0].heading.clone()
     }
 
     /// What an update from `installed` to `available` brings: the versions
-    /// above `installed` up to `available`. Only internal changes when there
+    /// above `installed` up to `available`, each marked when its minor
+    /// number is above that of the version before it in the changelog. Only internal changes when there
     /// are none; nothing at all when `available` is older. Call it only while
     /// an update is available.
     pub fn changes(&self, installed: Option<&str>, available: Option<&str>) -> Changes {
@@ -126,18 +135,17 @@ impl Changelog {
         if available < installed {
             return Changes::default();
         }
-        let brought: Vec<&Section> = self
+        let listed = self
             .sections
             .iter()
-            .filter(|s| s.version > installed && s.version <= available)
-            .collect();
-        let listed = brought
-            .iter()
             .enumerate()
+            .filter(|(_, s)| s.version > installed && s.version <= available)
             .map(|(i, s)| {
-                let before = brought.get(i + 1).map_or(installed, |b| b.version);
+                // Against the version before it in the changelog; the first
+                // one, which the changelog starts with, needs none.
+                let before = self.sections.get(i + 1).map_or(s.version, |b| b.version);
                 PcServiceChange {
-                    version: s.text.clone(),
+                    version: s.heading.clone(),
                     needs_step: s.version.needs_step_after(before),
                     lines: s.lines.clone(),
                 }

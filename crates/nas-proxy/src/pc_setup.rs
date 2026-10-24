@@ -115,6 +115,15 @@ impl PcSetup {
         }
     }
 
+    /// The changelog set for a test or the UI check, else the built-in one.
+    fn changelog(&self) -> Arc<Changelog> {
+        self.changelog
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| Arc::clone(&crate::pc_changelog::PARSED))
+    }
+
     /// Uses `text` as the PC service's changelog, e.g. one of a test.
     pub fn set_changelog(&self, text: &str) -> Result<(), String> {
         *self.changelog.lock().unwrap() = Some(Arc::new(Changelog::parse(text)?));
@@ -152,9 +161,11 @@ impl PcSetup {
         {
             return version.clone();
         }
+        // A version the changelog cannot compare counts like no program.
         let version = std::fs::read(&path)
             .ok()
-            .and_then(|bytes| version_in(&bytes));
+            .and_then(|bytes| version_in(&bytes))
+            .filter(|v| crate::pc_changelog::is_version(v));
         *cached = Some((stamp, version.clone()));
         version
     }
@@ -217,14 +228,11 @@ impl PcSetup {
         let available = self.program_version();
         let mut update = self.update.lock().unwrap();
         let timed_out = self.expire(&mut update);
-        let changelog = self.changelog.lock().unwrap().clone();
+        let changelog = self.changelog();
         let view = update.reported.clone().map(|version| {
             let update_available = available.is_some() && version != available;
             let changes = if update_available {
-                changelog
-                    .as_deref()
-                    .unwrap_or(&crate::pc_changelog::PARSED)
-                    .changes(version.as_deref(), available.as_deref())
+                changelog.changes(version.as_deref(), available.as_deref())
             } else {
                 Changes::default()
             };

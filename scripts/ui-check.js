@@ -1,5 +1,6 @@
 // Run through scripts/ui-check.sh. Prints one line per area and viewport and
 // exits with 1 when any area has a finding.
+const fs = require('fs');
 const { chromium } = require('playwright');
 
 const base = process.env.BASE;
@@ -45,6 +46,23 @@ async function login(page) {
     page.click('button[type=submit]'),
   ]);
   await page.waitForSelector('#repeat', { state: 'detached' });
+}
+
+// A program that differs only in its build brings only internal changes; the
+// card hides the older versions behind the toggle otherwise.
+async function internalChanges(page, errors, name) {
+  await page.goto(base + '/admin/pc', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(1500);
+  const hidden = !(await page.getByText('Fixes gaming mode staying on').isVisible());
+  const program = fs.readFileSync(process.env.PROGRAM);
+  fs.writeFileSync(process.env.PROGRAM, 'MZ strata-pc-agent-version:0.1.0+ui-check-internal\n');
+  try {
+    const findings = await check(page, errors, name, '/admin/pc (internal changes)', ['Only internal changes.'], '_admin_pc-internal');
+    if (!hidden) console.log(`FAIL ${name} /admin/pc: 0.2.1 shows outside "Show older changes"`);
+    return findings + (hidden ? 0 : 1);
+  } finally {
+    fs.writeFileSync(process.env.PROGRAM, program);
+  }
 }
 
 // Console errors of the current area, listed when the area fails.
@@ -462,6 +480,7 @@ async function codeBench(page, errors) {
     findings += await oldFolder(page, errors, name);
     findings += await tune(page, errors, name);
     findings += await engineOptions(page, errors, name);
+    findings += await internalChanges(page, errors, name);
     if (name === 'desk') {
       for (const [state, mode, texts] of summaryStates) {
         const upstream = state.padEnd(40, '0');
@@ -470,12 +489,6 @@ async function codeBench(page, errors) {
         if (mode === 'fail') await page.goto(base + '/admin/strata/version', { waitUntil: 'domcontentloaded' });
         findings += await check(page, errors, name, `/admin/strata/version (${state})`, texts, `_admin_strata_version-${state}`);
       }
-      // A program that differs only in its build brings only internal changes.
-      const fs = require('fs');
-      const program = fs.readFileSync(process.env.PROGRAM);
-      fs.writeFileSync(process.env.PROGRAM, 'MZ strata-pc-agent-version:0.1.0+ui-check-internal\n');
-      findings += await check(page, errors, name, '/admin/pc (internal changes)', ['Only internal changes.'], '_admin_pc-internal');
-      fs.writeFileSync(process.env.PROGRAM, program);
       // The phone pass starts again from the first upstream and a written summary.
       await fetch(`${process.env.FAKE_PC}/fake/summary?mode=answer`, { method: 'POST' });
       // An unreadable catalog asks for a Strata update instead of the list.

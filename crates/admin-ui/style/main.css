@@ -562,7 +562,9 @@ input[type="date"] {
 .update-commits { margin-top: 8px; }
 .service-changes { margin: 8px 0; }
 .service-change { margin: 8px 0; }
-.service-change-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0; }
+.service-change-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0; font-size: 1rem; font-weight: 600; }
+.service-change-lines { margin: 4px 0; padding-left: 20px; }
+.service-change-lines li { margin: 2px 0; }
 .update-commits summary { cursor: pointer; min-height: 24px; color: var(--muted); }
 .update-commits ul { list-style: none; margin: 8px 0 0; padding: 0; font-size: 0.9rem; }
 .update-commits li { padding: 4px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }

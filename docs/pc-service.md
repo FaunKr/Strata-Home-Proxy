@@ -88,8 +88,10 @@ for the user adds a `## x.y.z` section with short `- ` lines written for the
 user and sets the same version in `crates/pc-agent/Cargo.toml`; refactors and
 test-only changes add none. The minor number goes up when the user has to act
 on the PC (run the install command again, change the config, anything the
-update button can't do): the card marks that version *Needs a step on the PC*,
-and its lines say what to do. The patch number goes up for features and fixes.
+update button can't do): the card marks a version whose minor number is above
+that of the version before it in the changelog *Needs a step on the PC*, and
+its lines say what to do. The first version, 0.2.0, needs none. A program on
+the NAS whose version is no `x.y.z` counts as no program. The patch number goes up for features and fixes.
 A unit test fails when the newest section and the crate version differ, the
 versions do not descend, or a section is empty.
 

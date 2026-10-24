@@ -357,7 +357,7 @@ pub struct PcServiceView {
     pub only_internal_changes: bool,
 }
 
-/// One version of the PC service's changelog, as the update card shows it.
+/// One version of the PC service's changelog, as the PC service card shows it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PcServiceChange {
     /// E.g. `0.3.0`.

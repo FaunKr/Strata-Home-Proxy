@@ -192,20 +192,26 @@ fn WhatsNew(changes: Vec<PcServiceChange>, only_internal: bool) -> impl IntoView
     if changes.is_empty() {
         return ().into_any();
     }
+    let versions = |changes: Vec<PcServiceChange>| {
+        changes
+            .into_iter()
+            .map(|c| view! { <ChangeVersion change=c /> })
+            .collect_view()
+    };
     let mut open = changes;
     let older = open.split_off(OPEN_VERSIONS.min(open.len()));
     let older = (!older.is_empty()).then(|| {
         view! {
             <details class="update-commits">
                 <summary>"Show older changes"</summary>
-                {older.into_iter().map(|c| view! { <ChangeVersion change=c /> }).collect_view()}
+                {versions(older)}
             </details>
         }
     });
     view! {
         <div class="service-changes">
             <h3>"What's new"</h3>
-            {open.into_iter().map(|c| view! { <ChangeVersion change=c /> }).collect_view()}
+            {versions(open)}
             {older}
         </div>
     }
@@ -216,8 +222,8 @@ fn WhatsNew(changes: Vec<PcServiceChange>, only_internal: bool) -> impl IntoView
 fn ChangeVersion(change: PcServiceChange) -> impl IntoView {
     view! {
         <div class="service-change">
-            <p class="service-change-head">
-                <span class="strong">{change.version}</span>
+            <h4 class="service-change-head">
+                {change.version}
                 {change
                     .needs_step
                     .then(|| {
@@ -228,8 +234,8 @@ fn ChangeVersion(change: PcServiceChange) -> impl IntoView {
                             </span>
                         }
                     })}
-            </p>
-            <ul class="update-summary">
+            </h4>
+            <ul class="service-change-lines">
                 {change.lines.into_iter().map(|l| view! { <li>{l}</li> }).collect_view()}
             </ul>
         </div>

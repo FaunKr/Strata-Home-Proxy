@@ -1,6 +1,6 @@
 //! The PC service card lists what an update brings, from the changelog:
 //! the versions above the installed one up to the one on the NAS, a step
-//! on the PC where the minor number goes up.
+//! on the PC where the minor number goes up against the version before it.
 
 use crate::common;
 
@@ -32,6 +32,10 @@ const CHANGELOG: &str = "\
 ## 0.2.0
 
 - Two adds
+
+## 0.1.0
+
+- What a service without a version already has
 ";
 
 /// An awake PC whose service runs `installed`, with `available` in the
@@ -107,12 +111,33 @@ async fn a_service_without_a_version_gets_every_version() {
     let s = update("no-version", None, "0.4.1+neu5678").await;
     let v = service(&s).await;
     assert!(v["version"].is_null());
+    // It counts as 0.1.0, so the changelog's 0.1.0 is not listed.
     assert_eq!(listed(&v).len(), 5);
     assert_eq!(listed(&v)[4], ("0.2.0".to_string(), true));
 }
 
 #[tokio::test]
-async fn a_step_counts_against_the_installed_version() {
+async fn the_version_the_changelog_starts_with_needs_no_step() {
+    let s = update("first", Some("0.1.0+alt1234"), "0.2.0+neu5678").await;
+    s.state
+        .pc_setup
+        .set_changelog("## 0.2.0\n- Two adds\n")
+        .unwrap();
+    let v = service(&s).await;
+    assert_eq!(listed(&v), pairs(&[("0.2.0", false)]));
+}
+
+#[tokio::test]
+async fn a_program_without_a_comparable_version_counts_as_none() {
+    let s = update("dev", Some("0.1.0+alt1234"), "dev").await;
+    let v = service(&s).await;
+    assert!(v["available"].is_null());
+    assert_eq!(v["update_available"], false);
+    assert_eq!(listed(&v), vec![]);
+}
+
+#[tokio::test]
+async fn a_version_needs_a_step_when_its_minor_number_rises() {
     // 0.3.2 to 0.4.0 needs a step; 0.4.0 to 0.4.1 does not.
     let s = update("step", Some("0.3.2+alt1234"), "0.4.1+neu5678").await;
     let v = service(&s).await;

@@ -1,8 +1,10 @@
 //! The one place where the Proxy talks to Strata: `/health`, the metrics,
 //! the update summary's chat request, and forwarding the clients' requests.
 //! It knows Strata's address and key, which HTTP client each call takes and
-//! how to read the answers (see `docs/strata-api.md`). It only asks and
-//! reads; what an answer means for the PC is up to the caller.
+//! how to read the answers (see `docs/strata-api.md`). In relay mode it asks
+//! the PC service's relay instead, with the PC service's token; no caller
+//! learns which way a call went. It only asks and reads; what an answer means
+//! for the PC is up to the caller.
 
 use std::time::Duration;
 
@@ -13,6 +15,8 @@ use reqwest::{
 };
 use serde::Deserialize;
 use serde_json::Value;
+
+use strata_pc_protocol::{RELAY_NO_STRATA, RELAY_PATH};
 
 use crate::config::Config;
 
@@ -43,10 +47,13 @@ pub struct ChatAnswer {
     pub model: Option<String>,
 }
 
-/// Strata at the address of the current settings.
+/// Strata at the address of the current settings, or through the PC
+/// service's relay.
 pub struct StrataClient {
     base: String,
     auth: Option<HeaderValue>,
+    /// Through the relay: its marked `502` is no answer of Strata's.
+    relayed: bool,
     /// Short timeout, for `/health` and the metrics.
     probe: Client,
     /// No overall timeout, for answers that take long.
@@ -54,14 +61,51 @@ pub struct StrataClient {
 }
 
 impl StrataClient {
-    /// `None` without a Strata address.
-    pub fn new(cfg: &Config, key: Option<&str>, probe: Client, upstream: Client) -> Option<Self> {
+    /// `None` without a Strata address. With `relay`, and the PC service's
+    /// address set, the calls go through its relay with its token, and `key`
+    /// is not used: the PC service adds the Strata key.
+    pub fn new(
+        cfg: &Config,
+        key: Option<&str>,
+        relay: bool,
+        probe: Client,
+        upstream: Client,
+    ) -> Option<Self> {
+        let direct = cfg.strata_url.clone()?;
+        let bearer = |secret: &str| HeaderValue::from_str(&format!("Bearer {secret}")).ok();
+        let (base, auth, relayed) = match (&cfg.pc_agent_url, relay) {
+            (Some(agent), true) => (
+                format!("{agent}{RELAY_PATH}"),
+                cfg.pc_agent_token.as_deref().and_then(bearer),
+                true,
+            ),
+            _ => (direct, key.and_then(bearer), false),
+        };
         Some(Self {
-            base: cfg.strata_url.clone()?,
-            auth: key.and_then(|key| HeaderValue::from_str(&format!("Bearer {key}")).ok()),
+            base,
+            auth,
+            relayed,
             probe,
             upstream,
         })
+    }
+
+    /// Sends `req`; the relay's marked `502` counts as no answer, like a
+    /// failed connection.
+    async fn send(&self, req: reqwest::RequestBuilder) -> Result<Response, Unanswered> {
+        let resp = req.send().await.map_err(|e| {
+            if e.is_timeout() {
+                Unanswered::TimedOut
+            } else {
+                Unanswered::Failed(e.to_string())
+            }
+        })?;
+        if self.relayed && resp.headers().contains_key(RELAY_NO_STRATA) {
+            return Err(Unanswered::Failed(
+                "Strata does not answer the PC service".into(),
+            ));
+        }
+        Ok(resp)
     }
 
     /// A request with Strata's key, when one is set.
@@ -75,8 +119,7 @@ impl StrataClient {
 
     pub async fn health(&self) -> Result<StrataHealth, String> {
         let resp = self
-            .request(&self.probe, Method::GET, "/health")
-            .send()
+            .send(self.request(&self.probe, Method::GET, "/health"))
             .await
             .map_err(|e| e.to_string())?;
         if !resp.status().is_success() {
@@ -90,8 +133,7 @@ impl StrataClient {
         // Not `/metrics/prometheus`: its tokens/s counts finished requests only,
         // and each scrape resets that window for other scrapers.
         let resp = self
-            .request(&self.probe, Method::GET, "/metrics?format=prometheus")
-            .send()
+            .send(self.request(&self.probe, Method::GET, "/metrics?format=prometheus"))
             .await
             .map_err(|_| NONE)?;
         if !resp.status().is_success() {
@@ -102,19 +144,16 @@ impl StrataClient {
 
     /// `POST /v1/chat/completions` with `body`, waiting at most `limit`.
     pub async fn chat(&self, body: &Value, limit: Duration) -> Result<ChatAnswer, String> {
-        let resp = self
+        let req = self
             .request(&self.upstream, Method::POST, "/v1/chat/completions")
             .timeout(limit)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    format!("Strata did not answer within {} s", limit.as_secs_f64())
-                } else {
-                    e.to_string()
-                }
-            })?;
+            .json(body);
+        let resp = self.send(req).await.map_err(|e| match e {
+            Unanswered::TimedOut => {
+                format!("Strata did not answer within {} s", limit.as_secs_f64())
+            }
+            Unanswered::Failed(e) => e,
+        })?;
         if !resp.status().is_success() {
             return Err(format!("Strata answers {}", resp.status()));
         }
@@ -138,13 +177,28 @@ impl StrataClient {
         path_and_query: &str,
         mut headers: HeaderMap,
         body: Bytes,
-    ) -> reqwest::Result<Response> {
+    ) -> Result<Response, String> {
         headers.remove(AUTHORIZATION);
-        self.request(&self.upstream, method, path_and_query)
+        let req = self
+            .request(&self.upstream, method, path_and_query)
             .headers(headers)
-            .body(body)
-            .send()
-            .await
+            .body(body);
+        self.send(req).await.map_err(|e| e.to_string())
+    }
+}
+
+/// Why a call to Strata got no answer.
+enum Unanswered {
+    TimedOut,
+    Failed(String),
+}
+
+impl std::fmt::Display for Unanswered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TimedOut => f.write_str("Strata did not answer in time"),
+            Self::Failed(e) => f.write_str(e),
+        }
     }
 }
 

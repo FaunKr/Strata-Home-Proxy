@@ -134,6 +134,20 @@ pub struct FakePc {
     pub plug_down: AtomicBool,
     /// The power plug takes longer than any probe timeout to answer.
     pub plug_hangs: AtomicBool,
+    /// Relay mode: Strata listens on the PC only, and the PC service's
+    /// `/relay` passes requests on; the status reports it.
+    pub relay: AtomicBool,
+    /// The PC service's relay is down although its status answers.
+    pub relay_down: AtomicBool,
+    /// Requests through the PC service's relay.
+    pub relay_requests: AtomicUsize,
+    /// `Authorization` of the last request to the relay.
+    pub relay_auth: Mutex<Option<String>>,
+    /// Requests that reached Strata from the NAS directly while it listens
+    /// on the PC only.
+    pub direct_requests: AtomicUsize,
+    /// Strata's address, for the relay.
+    pub strata_addr: Mutex<Option<SocketAddr>>,
 }
 
 /// Credential headers as Strata saw them.
@@ -204,6 +218,9 @@ impl FakePc {
             version: self.version.lock().unwrap().clone(),
             hardware: self.hardware.lock().unwrap().clone(),
             strata_key_generation: self.reported_generation(),
+            relay: Some(Relay {
+                on: self.relay.load(Ordering::SeqCst),
+            }),
             ..PcStatus::default()
         }
     }
@@ -790,17 +807,80 @@ pub async fn wol_listener(pc: Pc) -> SocketAddr {
     addr
 }
 
+/// Marks a request the fake PC service's relay passed on to Strata.
+const RELAYED: &str = "x-test-relayed";
+
+/// In relay mode Strata listens on the PC only: a request from the NAS
+/// reaches it no more. A refusal stands in for the failed connection.
+async fn pc_only(
+    State(pc): State<Pc>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if pc.relay.load(Ordering::SeqCst) && !req.headers().contains_key(RELAYED) {
+        pc.direct_requests.fetch_add(1, Ordering::SeqCst);
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    next.run(req).await
+}
+
 /// A fake Strata for `pc`; returns its address.
 pub async fn serve_strata(pc: Pc) -> SocketAddr {
-    serve(
+    let addr = serve(
         Router::new()
             .route("/health", get(health))
             .route("/metrics", get(metrics))
             .route("/v1/messages", post(messages))
             .route("/v1/chat/completions", post(chat))
-            .with_state(pc),
+            .layer(axum::middleware::from_fn_with_state(pc.clone(), pc_only))
+            .with_state(pc.clone()),
     )
-    .await
+    .await;
+    *pc.strata_addr.lock().unwrap() = Some(addr);
+    addr
+}
+
+/// The PC service's relay: passes the request on to Strata with the Strata
+/// key in place of the token, and streams the answer back; a marked `502`
+/// while Strata does not answer.
+pub async fn agent_relay(State(pc): State<Pc>, req: axum::extract::Request) -> Response {
+    if !pc.up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    pc.relay_requests.fetch_add(1, Ordering::SeqCst);
+    let (parts, body) = req.into_parts();
+    *pc.relay_auth.lock().unwrap() = parts
+        .headers
+        .get("authorization")
+        .map(|v| v.to_str().unwrap().to_string());
+    if !pc.strata_up() || pc.relay_down.load(Ordering::SeqCst) {
+        return (StatusCode::BAD_GATEWAY, [(RELAY_NO_STRATA, "1")]).into_response();
+    }
+    let strata = pc.strata_addr.lock().unwrap().unwrap();
+    let path = parts.uri.path().strip_prefix(RELAY_PATH).unwrap();
+    let query = parts
+        .uri
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
+    let mut headers = parts.headers.clone();
+    headers.remove("authorization");
+    headers.remove("host");
+    headers.insert(RELAYED, "1".parse().unwrap());
+    if let Some(key) = pc.strata_key.lock().unwrap().clone() {
+        headers.insert("authorization", format!("Bearer {key}").parse().unwrap());
+    }
+    let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+    let answer = reqwest::Client::new()
+        .request(parts.method, format!("http://{strata}{path}{query}"))
+        .headers(headers)
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    let mut resp = Response::builder().status(answer.status());
+    resp.headers_mut().unwrap().extend(answer.headers().clone());
+    resp.body(Body::from_stream(answer.bytes_stream())).unwrap()
 }
 
 /// A stand-in for the image's `strata-pc-agent.exe` that carries `version`
@@ -866,6 +946,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
             .route("/update", post(agent_update))
             .route("/strata-log", get(agent_strata_log))
             .route("/strata/key", get(agent_strata_key))
+            .route("/relay/{*path}", axum::routing::any(agent_relay))
             .with_state(pc.clone()),
     )
     .await;

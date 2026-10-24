@@ -258,16 +258,18 @@ async fn probe_pc(
     let (metrics, pc) = tokio::join!(metrics(state), state.check_pc(up));
     // Strata answered the PC service but not the proxy: asked once more, so
     // a Strata that came up between the two answers does not count. Not
-    // while the PC settles into sleep, when the proxy ignores its answers.
+    // while the PC settles into sleep, when the proxy ignores its answers,
+    // and not in relay mode, where the PC service passes the requests on.
     let answers_pc = pc
         .as_ref()
         .is_some_and(|s| s.strata_answers && !s.gaming_mode);
-    let unreachable = if !up && answers_pc && state.strata().is_some() && !state.settling() {
-        health = state.strata_health().await;
-        !matches!(health, Health::Up { .. })
-    } else {
-        false
-    };
+    let unreachable =
+        if !up && answers_pc && !state.relay() && state.strata().is_some() && !state.settling() {
+            health = state.strata_health().await;
+            !matches!(health, Health::Up { .. })
+        } else {
+            false
+        };
     let job = match &pc {
         Some(status) if status.strata_job => state
             .agent()

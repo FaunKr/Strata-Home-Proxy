@@ -371,6 +371,20 @@ impl Terminal {
         .to_vec()
     }
 
+    /// `args` with `host` in place of the host they name, when they are
+    /// [`serve_args`](Self::serve_args); others (an old Strata folder's own
+    /// arguments) stay as they are.
+    pub fn on_host(args: &[String], host: &str) -> Vec<String> {
+        let mut args = args.to_vec();
+        if args.first().map(String::as_str) == Some("serve")
+            && let Some(at) = args.iter().position(|a| a == "--host")
+            && let Some(value) = args.get_mut(at + 1)
+        {
+            *value = host.to_string();
+        }
+        args
+    }
+
     /// The run config that start arguments from [`serve_args`](Self::serve_args) serve.
     pub fn served_config(args: &[String]) -> Option<PathBuf> {
         let at = args.iter().position(|a| a == "--profile")?;

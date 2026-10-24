@@ -92,6 +92,16 @@ starts at a random value with each start of the service, so the proxy
 compares it only for a change. It is there even while no model
 configuration holds a key; only services before the key per start lack it.
 
+`relay` is relay mode as the service runs Strata: `{"on": true}` when the
+last Strata it started is the Strata Terminal's on `127.0.0.1`, so the proxy
+reaches it only through `/relay` (below). `relay` in the TOML counts from
+the next start of Strata; before its first start the service counts a
+running Strata as started with the TOML. An old Strata folder's Strata is
+never in relay mode. Missing from services before relay mode, which cannot
+relay. The proxy follows `on` for every call to Strata and keeps the last
+value in `DATA_DIR` (`relay-mode`), so a request after a restart of the
+proxy or while the PC sleeps takes the same way.
+
 If the service does not answer, the proxy assumes the PC is asleep and wakes
 it.
 
@@ -114,6 +124,25 @@ service restarted beside a running Strata still knows it. When
 started by hand, the key stays.
 
 `strata_api_key` in the TOML is ignored, with a warning in the log.
+
+## `/relay/…` (relay mode)
+
+Every method and path under `/relay` goes on to Strata at `strata_url`
+without the prefix: `GET /relay/health` is Strata's `GET /health`. Method,
+query, headers and body pass unchanged, except that the token's
+`Authorization` is replaced by `Bearer <Strata key>` and headers of one
+connection (`Host`, `Connection`, `Transfer-Encoding`, …) stay behind.
+Strata's answer comes back unchanged, its errors and redirects included. Both bodies are
+streamed with no overall timeout (an event stream arrives event by event);
+when the caller's connection ends, the request to Strata ends too.
+
+When Strata does not take the connection, the answer is `502` with the
+header `x-relay-no-strata` (`RELAY_NO_STRATA`): the PC service says it, not
+Strata. The proxy counts it like a Strata that does not answer.
+
+In relay mode the proxy fetches no Strata key: the service adds it. The
+relay answers in either mode, so a hand-started Strata gets requests
+through it too.
 
 ## `POST /sleep`
 

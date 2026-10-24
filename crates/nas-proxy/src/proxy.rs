@@ -233,11 +233,13 @@ struct Incoming {
 
 /// Sends the request to Strata. If Strata refuses the Strata key, the PC
 /// service may have started it with a new one the proxy has not fetched yet:
-/// the request goes once more with the new key.
+/// the request goes once more with the new key. Not in relay mode, where the
+/// PC service adds the key.
 async fn send_upstream(st: &AppState, req: &Incoming) -> Result<reqwest::Response, String> {
     let used = st.strata_key.key();
+    let relayed = st.relay();
     let resp = send_once(st, req, used.as_deref()).await?;
-    if resp.status() != StatusCode::UNAUTHORIZED {
+    if resp.status() != StatusCode::UNAUTHORIZED || relayed {
         return Ok(resp);
     }
     match crate::strata_key::refresh(st, used.as_deref()).await {
@@ -261,7 +263,6 @@ async fn send_once(
             req.body.clone(),
         )
         .await
-        .map_err(|e| e.to_string())
 }
 
 /// Passes upstream chunks through and inserts a ping whenever the stream has

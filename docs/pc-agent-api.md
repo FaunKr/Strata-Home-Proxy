@@ -242,7 +242,10 @@ Response: `StrataReport`, that is `StrataInfo` and `update` next to it. What
 is installed, Strata's catalog with a recommendation for the PC's RAM and
 VRAM (setup's memory tiers, see [strata-api.md](strata-api.md)),
 free space, last benchmark and the running or last job.
-Never contains the Strata key. `install` says how Strata is installed:
+Never contains the Strata key. Installed models are every run config, also
+one the catalog does not know (then without `family` and `size`); a model's
+`id` is in the catalog's letter case, else its download folder's as setup
+named it, else the run config's lower-case one. `install` says how Strata is installed:
 `terminal` (the Strata Terminal in `strata_home`) or `source` (a Strata folder
 from source in `strata_dir`); missing when Strata is not installed and from an
 older PC service. `old_strata_folder` says whether an old Strata folder from
@@ -358,8 +361,8 @@ successful run, for proxies that only know one. An older PC service
 leaves out `benchmarks`.
 
 `tunable` says whether `tune` can run for this model; when it is `false`,
-`tune_unavailable` says why (a Strata folder from source, or a family the
-tuner does not know). `last_tune` is the model's last finished tune: `at`,
+`tune_unavailable` says why (a Strata folder from source). Which model
+families the tuner knows is Strata's to say: its refusal is the job's error. `last_tune` is the model's last finished tune: `at`,
 `mode`, `use`, `code` (Strata's: `faster`, `already_fastest`, `busy_pc`,
 `failed`), `base_tps` and `tuned_tps` (tokens/s before and with the tuned
 settings), `gain_pct`, `changed` (each setting the tuner changed: `flag
@@ -456,8 +459,8 @@ and `update` Strata starts with it anyway.
 ### `POST /strata/jobs`
 
 Request: `StrataJobRequest`, one case per kind. Response `202` with the
-job (`StrataJob`). `400` (`Refused`) for values outside the catalog,
-`409` if it is not possible right now (gaming on, a job is running, too
+job (`StrataJob`). `400` (`Refused`) for values outside the catalog and for a
+`model` that is no plain id (letters, digits, `.`, `_`, `-`), `409` if it is not possible right now (gaming on, a job is running, too
 little space, deleting the active model).
 
 | `kind` | Fields | What happens |
@@ -499,8 +502,8 @@ tuned settings wait in the preset; also after a cancel. If Strata refuses
 the undo, the job fails and says the tuned settings stay active, and the
 result is kept. A cancelled tune keeps nothing. While a tune runs, the proxy
 does not trust Strata's `/health`: the tuner's engine may answer there. A source
-folder or a family the tuner does not know is a `409` with the reason of
-`tune_unavailable`.
+folder is a `409` with the reason of `tune_unavailable`; when Strata's tuner
+refuses the model, the job fails with Strata's message.
 
 The service ignores `api_key` in every job: the key comes with the next start
 of Strata (see `GET /strata/key`). The proxy still sends a random one with
@@ -528,8 +531,8 @@ removes setup's flags and appends them again, with Strata's vector from the
 Strata folder (see [strata-api.md](strata-api.md)); if the vector is missing,
 the job fails and the configuration stays. `on: false` removes the
 four flags with their values, including a custom vector. Families other
-than Qwen and Coder (also Gyro) are a `400`, a model from the catalog that is
-not installed is a `409`, as with `activate`. The configuration's modification
+than Qwen and Coder (also Gyro, and a model the catalog does not know) are a
+`400`, a model that is not installed is a `409`, as with `activate`. The configuration's modification
 time stays, because without its own start script Strata starts the
 most recently modified one.
 
@@ -542,11 +545,12 @@ trained length
 (`MAX_SWITCHED_CONTEXT`): above that the model needs rope scaling, which only
 setup sets up (`400`). What setup derived from the old context
 (KV streaming with `--kv-resident`, `--kv`, parallel slots, calibration)
-stays. A model from the catalog that is not installed is a
+stays. A model that is not installed is a
 `409`. The modification time stays as with `set_speed_projection`.
 
-`set_pictures` takes a model of the catalog that is installed (`400` for
-one the catalog does not know, `409` for one that is not installed). Setup
+`set_pictures` takes an installed model of the catalog (`409` for one that
+is not installed, and for one the catalog does not know: setup needs its
+family and size). Setup
 runs as with `add_model`, with the model's family, size and the context its
 configuration has (the catalog's default when it has none), its speed
 projection as it is, and the key Strata runs with, only `--vision`
@@ -578,7 +582,7 @@ with `--control-vector`, `--host`, `--port` or `--api-key` (also as
 `--flag=value`): context and speed projection have their own jobs, and the
 proxy reaches Strata through the others. Such a group Strata put there
 itself may come back unchanged. A configuration without `args_written`
-(its Strata reads no `user_args`) and a model from the catalog that is not
+(its Strata reads no `user_args`) and a model that is not
 installed are a `409`. Whether Strata knows an option is not checked: the
 restart below shows it.
 

@@ -448,6 +448,11 @@ fn refused(answer: &Value, fallback: &str) -> Result<(), String> {
     }
 }
 
+/// Whether `output` holds an answer of Strata's, a refusal among them.
+pub fn answered(output: &[String]) -> bool {
+    json_answer(output).is_some()
+}
+
 /// The last line of `output` that is a JSON object and no event: what
 /// `--output json` answers, and `--output jsonl` after its events.
 fn json_answer(output: &[String]) -> Option<Value> {

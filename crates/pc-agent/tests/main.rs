@@ -16,5 +16,6 @@ mod strata_output;
 mod strata_process;
 mod strata_switch;
 mod strata_terminal;
+mod strata_uncatalogued;
 mod tune;
 mod update;

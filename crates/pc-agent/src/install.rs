@@ -191,6 +191,16 @@ impl Installation {
         self.models().iter().any(|m| m.eq_ignore_ascii_case(id))
     }
 
+    /// Whether `id` can name a model's files: letters, digits, `.`, `_`
+    /// and `-`, never `..`; a path never comes from a request.
+    pub fn plain_id(id: &str) -> bool {
+        !id.is_empty()
+            && !id.contains("..")
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    }
+
     /// The name of a model's download folder, in the letter case setup gave
     /// it (the run config's file name is lower case), if there is one.
     pub fn download_name(&self, id: &str) -> Option<String> {

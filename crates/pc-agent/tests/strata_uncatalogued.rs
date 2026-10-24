@@ -19,6 +19,11 @@ fn config_json(gguf: &str) -> Value {
 
 /// The Terminal with IQ3_XXS (served) and [`ID`].
 fn installed(s: &Setup) -> SetupLeaves {
+    installed_serving(s, "iq3_xxs")
+}
+
+/// The Terminal with IQ3_XXS and [`ID`], `served` served.
+fn installed_serving(s: &Setup, served: &str) -> SetupLeaves {
     let cfg = &s.agent.cfg;
     let leaves = SetupLeaves::terminal(&cfg.strata_home, &cfg.strata_data_dir, "0.2.2");
     leaves
@@ -27,7 +32,7 @@ fn installed(s: &Setup) -> SetupLeaves {
         .download("IQ3_XXS", "a.gguf", "0123456789")
         .download(ID, "d.gguf", "0123");
     let terminal = Terminal::of(cfg);
-    let config = leaves.installation().config_path("iq3_xxs");
+    let config = leaves.installation().config_path(served);
     s.agent
         .set_managed(Managed {
             strata_start: Some(terminal.program()),
@@ -167,4 +172,25 @@ async fn a_model_that_is_not_installed_is_refused() {
     .await;
     assert_eq!(code, 409, "{answer}");
     assert!(answer.to_string().contains("not installed"), "{answer}");
+}
+
+#[tokio::test]
+async fn it_is_benchmarked_when_it_serves() {
+    let s = setup("uncatalogued-bench").await;
+    installed_serving(&s, &ID.to_lowercase());
+    s.fake.command(
+        "strata.cmd bench",
+        FakeCommand {
+            lines: vec![
+                r#"{"schema_version": 1, "ok": true, "status": "complete", "summaries": [{"phase": "performance", "case_id": "short", "metric": "decode_tps", "median": 21.5}]}"#
+                    .into(),
+            ],
+            ..FakeCommand::default()
+        },
+    );
+    let done = job(&s, json!({"kind": "benchmark"})).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let result = &get(&s, "/strata").await["benchmark"];
+    assert_eq!(result["model"], ID, "{result}");
+    assert_eq!(result["result"], "21.5 Token/s");
 }

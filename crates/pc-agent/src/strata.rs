@@ -478,10 +478,7 @@ fn strata_installed(install: &Installation) -> Result<(), Refusal> {
 
 /// An installed model's id, as [`model_id`] spells it.
 fn installed_model(install: &Installation, model: &str) -> Result<String, Refusal> {
-    let plain = model
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
-    if model.is_empty() || !plain || model.contains("..") {
+    if !Installation::plain_id(model) {
         return Err(Refusal::BadRequest(format!("{model} is no model id")));
     }
     if !install.has(model) {
@@ -490,12 +487,12 @@ fn installed_model(install: &Installation, model: &str) -> Result<String, Refusa
     Ok(model_id(install, model))
 }
 
-/// A model's id in the letter case it is shown and kept in: the catalog's,
-/// else its download folder's as setup named it, else the run config's.
+/// A model's id in the letter case it is shown and kept in: its download
+/// folder's as setup named it, else the catalog's, else the run config's.
 pub(crate) fn model_id(install: &Installation, id: &str) -> String {
-    catalog::by_id(id)
-        .map(Size::id)
-        .or_else(|| install.download_name(id))
+    install
+        .download_name(id)
+        .or_else(|| catalog::by_id(id).map(Size::id))
         .unwrap_or_else(|| id.to_string())
 }
 

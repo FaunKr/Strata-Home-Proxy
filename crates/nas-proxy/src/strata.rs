@@ -13,12 +13,13 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use strata_admin_ui::{
-    api::{StrataJobForm, StrataPage},
+    api::{RelayView, StrataJobForm, StrataPage},
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED, strata_job_label},
 };
 
 use strata_pc_protocol::{
-    PcStatus, StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState, is_env_name,
+    PcStatus, StrataInfo, StrataInstall, StrataJob, StrataJobKind, StrataJobRequest,
+    StrataJobState, is_env_name,
 };
 
 use crate::{
@@ -39,6 +40,10 @@ const LAST_FILE: &str = "strata-last.json";
 pub(crate) const BY_UI: &str = "for Strata, from the web UI";
 const ASLEEP: &str = "The PC is asleep or its service does not answer. A button here wakes it.";
 const TOO_OLD: &str = "The PC service cannot manage Strata yet. Please update the PC service.";
+const RELAY_ASLEEP: &str = "The PC is asleep: wake it on the Overview to switch relay mode.";
+const RELAY_TOO_OLD: &str = "The PC service is too old for relay mode: update it in the PC area.";
+const RELAY_GAMING: &str = "Gaming mode is on: switch it off to switch relay mode.";
+const RELAY_OLD_FOLDER: &str = "Relay mode needs the Strata Terminal: Strata still runs from the old Strata folder. Switch to the Terminal under Models first.";
 
 pub struct StrataState {
     /// The last answer of the PC service, shown while the PC sleeps.
@@ -160,6 +165,10 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             as_of: None,
             update: None,
             key_unreported: false,
+            relay: RelayView {
+                blocked: Some(NO_AGENT.into()),
+                ..RelayView::default()
+            },
         };
     }
     let Some(status) = state.ask_pc(&agent).await else {
@@ -172,6 +181,11 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             info,
             update: state.strata.update.stale(),
             key_unreported: false,
+            relay: RelayView {
+                on: state.relay(),
+                switching: false,
+                blocked: Some(RELAY_ASLEEP.into()),
+            },
         };
     };
     let Some((mut info, incoming)) = agent.strata().await else {
@@ -183,6 +197,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             as_of: None,
             update: None,
             key_unreported: false,
+            relay: relay_view(&status, None),
         };
     };
     with_local_times(&mut info);
@@ -206,12 +221,65 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
     StrataPage {
         problem: None,
         gaming: status.gaming_mode,
+        relay: relay_view(&status, Some(&info)),
         info: Some(info),
         stale: false,
         as_of: None,
         update,
         key_unreported: state.strata_key.unreported(),
     }
+}
+
+/// Relay mode as an answering PC service reports it, and why its switch
+/// cannot be used now.
+fn relay_view(status: &PcStatus, info: Option<&StrataInfo>) -> RelayView {
+    let job = info.and_then(|i| i.job.as_ref());
+    let switching = job
+        .is_some_and(|j| j.kind == StrataJobKind::SetRelay && j.state == StrataJobState::Running);
+    let blocked = if status.relay.is_none() {
+        Some(RELAY_TOO_OLD)
+    } else if status.gaming_mode {
+        Some(RELAY_GAMING)
+    } else if info.and_then(|i| i.install) == Some(StrataInstall::Source) {
+        Some(RELAY_OLD_FOLDER)
+    } else {
+        None
+    };
+    RelayView {
+        on: status.relay_on(),
+        switching,
+        blocked: blocked.map(String::from),
+    }
+}
+
+/// Turns relay mode on or off with a job on the PC, which keeps the mode
+/// and restarts Strata once it is idle; never wakes the PC. The PC
+/// service's own refusals (an update, a job running) come back as they are.
+pub async fn set_relay(state: &AppState, on: bool) -> Result<(), String> {
+    let agent = state.agent();
+    if !agent.configured() {
+        return Err(NO_AGENT.into());
+    }
+    let Some(status) = state.ask_pc(&agent).await else {
+        return Err(RELAY_ASLEEP.into());
+    };
+    if let Some(why) = relay_view(&status, None).blocked {
+        return Err(why);
+    }
+    agent
+        .start_strata_job(&StrataJobRequest::SetRelay { on })
+        .await?;
+    state.strata.job_running.store(true, Ordering::SeqCst);
+    state.events.record(
+        if on {
+            EventKind::RelayOn
+        } else {
+            EventKind::RelayOff
+        },
+        None,
+    );
+    state.overview.refresh_now();
+    Ok(())
 }
 
 /// Benchmark times in local time, relative to today.
@@ -320,6 +388,9 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
         StrataJobKind::Benchmark => StrataJobRequest::Benchmark,
         StrataJobKind::SetKey => {
             return Err("A new Strata key comes with every start of Strata.".into());
+        }
+        StrataJobKind::SetRelay => {
+            return Err("Relay mode is switched under Strata → Connection.".into());
         }
         StrataJobKind::SetSpeedProjection => StrataJobRequest::SetSpeedProjection {
             model: model()?,

@@ -25,7 +25,6 @@ use crate::{
     agent::Agent,
     catalog::{self, Catalog, Size},
     command::CommandSpec,
-    config::Config,
     install::{Installation, Kind, Model, SWITCH_FILE},
     job::{JobContext, KEPT_LINES, POLL, Step, unix_now},
     managed::Managed,
@@ -80,9 +79,16 @@ const READY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const STRATA_PORT: &str = "8080";
 
 /// Where Strata listens: on this PC only in relay mode, else for the NAS too.
-pub(crate) fn strata_host(cfg: &Config) -> &'static str {
-    if cfg.relay { "127.0.0.1" } else { "0.0.0.0" }
+pub(crate) fn strata_host(agent: &Agent) -> &'static str {
+    if agent.managed().relay(&agent.cfg) {
+        RELAY_HOST
+    } else {
+        "0.0.0.0"
+    }
 }
+
+/// Strata's host in relay mode.
+pub(crate) const RELAY_HOST: &str = "127.0.0.1";
 
 /// Why a job was not started: a value outside the catalog (400), or a state
 /// that forbids it now (409).
@@ -171,6 +177,10 @@ enum Plan {
         size: Size,
     },
     RemoveOldStrataFolder,
+    /// Relay mode on or off.
+    SetRelay {
+        on: bool,
+    },
     Tune {
         id: String,
         mode: TuneMode,
@@ -216,6 +226,7 @@ impl Plan {
             Self::Update
             | Self::SetKey
             | Self::CompareModels { .. }
+            | Self::SetRelay { .. }
             | Self::RemoveOldStrataFolder => None,
         }
     }
@@ -493,6 +504,15 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             let size = in_catalog(catalog()?, &id, "the Strata Terminal cannot take it over")?;
             Ok(Plan::SwitchToTerminal { id, size })
         }
+        StrataJobRequest::SetRelay { on } => {
+            if install.kind() == Kind::Source {
+                return Err(Refusal::Conflict(
+                    "Relay mode needs the Strata Terminal; Strata still runs from the old Strata folder, switch to the Terminal first"
+                        .into(),
+                ));
+            }
+            Ok(Plan::SetRelay { on })
+        }
         StrataJobRequest::RemoveOldStrataFolder => {
             if !Installation::old(&agent.cfg).exists() {
                 return Err(Refusal::Conflict("There is no old Strata folder".into()));
@@ -663,9 +683,26 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::CompareModels { ids, active } => compare_models(job, &ids, &active).await,
         Plan::SwitchToTerminal { id, size } => switch_to_terminal(job, &id, &size).await,
         Plan::RemoveOldStrataFolder => remove_old_strata_folder(job).await,
+        Plan::SetRelay { on } => set_relay(job, on).await,
         Plan::Tune { id, mode, usage } => tune(job, &id, mode, usage).await,
         Plan::Preset { id, change } => change_preset(job, &id, change).await,
     }
+}
+
+/// Keeps relay mode `on` and restarts Strata with it once Strata is idle,
+/// unless it runs that way already; a Strata that does not run starts with
+/// it next time.
+async fn set_relay(job: &JobContext, on: bool) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    let mut managed = agent.managed();
+    managed.relay = Some(on);
+    agent
+        .set_managed(managed)
+        .map_err(|e| Step::Failed(e.to_string()))?;
+    if agent.relay_on() != on && agent.strata_healthy().await {
+        agent.strata().restart_when_idle(job).await?;
+    }
+    Ok(None)
 }
 
 async fn install(job: &JobContext, choice: Choice) -> Result<Option<String>, Step> {
@@ -763,16 +800,20 @@ fn managed_start(agent: &Agent, install: &Installation, id: &str) -> Managed {
                 strata_start: Some(terminal.program()),
                 strata_args: Terminal::serve_args(
                     &install.config_path(id),
-                    strata_host(&agent.cfg),
+                    strata_host(agent),
                     STRATA_PORT,
                 ),
                 strata_processes: Some(terminal.processes()),
+                // The mode stays across a new model and the switch to the
+                // Terminal.
+                relay: agent.managed().relay,
             }
         }
         Kind::Source => Managed {
             strata_start: Some(install.run_script(id)),
             strata_args: Vec::new(),
             strata_processes: Some(vec![crate::platform::folder_entry(&agent.cfg.strata_dir)]),
+            relay: agent.managed().relay,
         },
     }
 }
@@ -799,6 +840,7 @@ async fn activate(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
         strata_start,
         strata_args,
         strata_processes,
+        ..
     } = managed_start(agent, &Installation::of(&agent.cfg), id);
     let mut managed = agent.managed();
     managed.strata_start = strata_start;
@@ -2509,7 +2551,7 @@ async fn setup(
             "--vision",
             if model.pictures { "yes" } else { "no" },
             "--host",
-            strata_host(&agent.cfg),
+            strata_host(agent),
             "--port",
             STRATA_PORT,
             "--data-dir",
@@ -2668,6 +2710,7 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::Tune => "Tune",
         StrataJobKind::ApplyPreset => "Apply preset",
         StrataJobKind::UndoPreset => "Undo preset",
+        StrataJobKind::SetRelay => "Switch relay mode",
     }
 }
 

@@ -310,6 +310,11 @@ impl Backend for UiBackend {
         async move { crate::strata::start_job(&state, form).await }.boxed()
     }
 
+    fn set_relay(&self, on: bool) -> BoxFuture<'static, Result<(), String>> {
+        let state = Arc::clone(&self.0);
+        async move { crate::strata::set_relay(&state, on).await }.boxed()
+    }
+
     fn cancel_strata_job(&self) -> BoxFuture<'static, Result<(), String>> {
         let state = Arc::clone(&self.0);
         async move { crate::strata::cancel(&state).await }.boxed()

@@ -125,8 +125,10 @@ If the service sets up Strata itself (*Strata* area of the web UI),
 it stores what starts Strata and what belongs to it in
 `strata-managed.json` next to the TOML. For the Strata Terminal that is
 `strata.cmd` with `serve --profile <run config> --host 0.0.0.0 --port 8080`
-(`--host 127.0.0.1` in relay mode, `relay = true` in the TOML: the service
-sets the host at every start, so the mode counts from the next start) and
+(`--host 127.0.0.1` in relay mode, switched under *Strata → Connection* or
+`relay = true` in the TOML; the web UI's switch, kept here as `relay`, takes
+precedence. The service sets the host at every start, so the mode counts
+from the next start; the switch restarts Strata once it is idle) and
 the folder `strata_home` (default `%LOCALAPPDATA%\Strata`); for a Strata folder
 from source, its start script and the folder `strata_dir`. These values take precedence over `strata_start`,
 `strata_args` and `strata_processes` from the TOML; the TOML

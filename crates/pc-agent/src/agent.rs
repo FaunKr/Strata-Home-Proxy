@@ -233,11 +233,11 @@ impl Agent {
     /// Strata runs for relay mode: the last start put it on this PC only.
     /// Before the first start, a Strata already running counts as started
     /// with the configuration.
-    fn relay_on(&self) -> bool {
+    pub(crate) fn relay_on(&self) -> bool {
         let started = *self.strata_local.lock().unwrap();
         started.unwrap_or_else(|| {
             let managed = self.managed();
-            self.cfg.relay
+            managed.relay(&self.cfg)
                 && managed
                     .start(&self.cfg)
                     .is_some_and(|(_, args)| Terminal::served_config(args).is_some())

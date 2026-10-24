@@ -26,6 +26,7 @@ fn installed(s: &Setup, version: &str) {
             strata_start: Some(terminal.program()),
             strata_args: Terminal::serve_args(&config, "0.0.0.0", "8080"),
             strata_processes: Some(terminal.processes()),
+            ..Default::default()
         })
         .unwrap();
 }

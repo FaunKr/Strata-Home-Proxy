@@ -90,6 +90,9 @@ pub trait Backend: Send + Sync + 'static {
     /// it refuses.
     fn start_strata_job(&self, form: StrataJobForm) -> BoxFuture<'static, Result<(), String>>;
     fn cancel_strata_job(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// Starts the job that switches relay mode; why not if it cannot, never
+    /// waking the PC.
+    fn set_relay(&self, on: bool) -> BoxFuture<'static, Result<(), String>>;
     /// The optimization prompt for an installed model, never waking the PC;
     /// why not if there is none.
     fn optimization_prompt(&self, model: String) -> BoxFuture<'static, Result<String, String>>;

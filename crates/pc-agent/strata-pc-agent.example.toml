@@ -74,5 +74,6 @@ update_stop_wait_secs = 10
 
 # Relay mode: the Strata Terminal's Strata listens on this PC only, and the
 # NAS reaches it through this service (/relay). Takes effect with the next
-# start of Strata (e.g. Force restart Strata in the web UI).
+# start of Strata (e.g. Force restart Strata in the web UI). The switch in
+# the web UI (Strata > Connection) takes precedence once used.
 #relay = true

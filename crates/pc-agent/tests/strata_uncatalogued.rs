@@ -38,6 +38,7 @@ fn installed_serving(s: &Setup, served: &str) -> SetupLeaves {
             strata_start: Some(terminal.program()),
             strata_args: Terminal::serve_args(&config, "0.0.0.0", "8080"),
             strata_processes: Some(terminal.processes()),
+            ..Default::default()
         })
         .unwrap();
     leaves

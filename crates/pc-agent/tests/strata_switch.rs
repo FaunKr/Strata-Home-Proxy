@@ -54,6 +54,7 @@ fn old_folder_config(s: &Setup, config: Value) -> Managed {
         strata_start: Some(leaves.installation().run_script("iq3_xxs")),
         strata_args: vec![],
         strata_processes: Some(vec![folder_entry(&cfg.strata_dir)]),
+        ..Default::default()
     };
     s.agent.set_managed(managed.clone()).unwrap();
     managed
@@ -370,6 +371,7 @@ async fn the_watchdog_notes_when_the_terminal_s_strata_answers() {
                 "8080",
             ),
             strata_processes: Some(terminal.processes()),
+            ..Default::default()
         })
         .unwrap();
     s.agent.watchdog_tick().await;

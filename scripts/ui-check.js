@@ -17,6 +17,7 @@ const expected = {
   '/admin/pc/history': ['Awake and asleep', 'Last 7 days', 'Last 12 months', 'From', 'Energy', 'Saved', "today's price"],
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
+  '/admin/strata/connection': ['Relay through the PC service', 'Off: the proxy reaches Strata directly over the network.'],
   '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', 'Decode 52.3 tok/s', 'BENCH.bat, not comparable', 'Compare models', 'Total: 25/33 tests', 'Total: 3 of 4 tasks', 'A later run failed', 'Broken: 1 earlier test fails now', 'Run code benchmark', 'Benchmark all models', 'swift-IQ2_XS: model did not load', 'Remove old Strata folder'],
 };
 // After the areas, scripts/fake-pc.js moves upstream on and holds or refuses
@@ -313,6 +314,33 @@ async function oldFolder(page, errors, name) {
   return issue ? 1 : 0;
 }
 
+// Turns relay mode on under Strata → Connection, sees the switch and its
+// end as scripts/fake-pc.js reports them, and turns it off again.
+// Returns the number of findings.
+async function relay(page, errors, name) {
+  const wait = { timeout: 15000 };
+  errors.length = 0;
+  let issue = null;
+  try {
+    await page.goto(base + '/admin/strata/connection', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    const toggle = page.getByLabel('Relay through the PC service');
+    await toggle.check(wait);
+    await page.getByText('Switching: Strata restarts with the new mode').waitFor(wait);
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/${name}_relay-switching.jpg`, type: 'jpeg', quality: 60 });
+    }
+    await page.getByText('On: Strata listens on the PC only').waitFor(wait);
+    await toggle.uncheck(wait);
+    await page.getByText('Off: the proxy reaches Strata directly').waitFor(wait);
+  } catch (e) {
+    issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
+  }
+  if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+  console.log(`${issue ? 'FAIL' : 'ok  '} ${name} relay mode${issue ? '\n     ' + issue : ''}`);
+  return issue ? 1 : 0;
+}
+
 // Opens the active model's Engine settings: both fields as the PC service
 // reported them, Save and restart once changed; a refused save keeps the
 // dialog open; Cancel drops the edits.
@@ -511,6 +539,7 @@ async function codeBench(page, errors) {
       await fetch(`${process.env.FAKE_PC}/fake/catalog?state=unreadable`, { method: 'POST' });
       findings += await check(page, errors, name, '/admin/strata (catalog unreadable)', ['Update Strata to choose a model', 'IQ3_XXS'], '_admin_strata-unreadable');
       await fetch(`${process.env.FAKE_PC}/fake/catalog?state=read`, { method: 'POST' });
+      findings += await relay(page, errors, name);
       findings += await forced(page, errors);
       findings += await codeBench(page, errors);
     }

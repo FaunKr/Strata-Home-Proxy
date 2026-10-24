@@ -443,6 +443,9 @@ pub enum EventKind {
     KeepAwakeEnded,
     /// Strata jobs on the PC; detail: kind and model, and why it failed.
     StrataJobStarted,
+    /// Relay mode switched from the web UI (the switch's job follows).
+    RelayOn,
+    RelayOff,
     StrataJobDone,
     StrataJobFailed,
     StrataJobCancelled,
@@ -643,6 +646,21 @@ pub struct StrataPage {
     /// start of Strata.
     #[serde(default)]
     pub key_unreported: bool,
+    /// Relay mode and its switch.
+    #[serde(default)]
+    pub relay: RelayView,
+}
+
+/// Relay mode on the *Connection* tab: Strata listens on the PC only, and
+/// the PC service passes the proxy's requests on to it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayView {
+    /// Strata runs in relay mode, as the PC service last reported.
+    pub on: bool,
+    /// A switch waits for Strata to finish its requests and restart.
+    pub switching: bool,
+    /// Why the switch cannot be used now; `None` if it can.
+    pub blocked: Option<String>,
 }
 
 /// What a Strata update brings since the installed version.
@@ -734,6 +752,14 @@ mod strata_job {
         };
         backend()?.start_strata_job(form).await.map_err(bad_request)
     }
+}
+
+/// Turns relay mode on or off: a job on the PC that restarts Strata once
+/// it is idle. Never wakes the PC.
+#[server(prefix = "/admin/api", endpoint = "strata-relay")]
+pub async fn set_relay(on: bool) -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?.set_relay(on).await.map_err(bad_request)
 }
 
 /// A forced Strata restart: the PC service cancels a running job, kills

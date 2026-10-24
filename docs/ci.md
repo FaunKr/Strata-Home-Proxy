@@ -57,8 +57,9 @@ outside the cache. `tools/code-bench/prepare_repo_task.py` and a task's
 
 The `changes` job also checks a PR's commit messages for Claude session
 links (`scripts/pr-text.sh`), at no extra job. The body is checked by the
-workflow `PR text` (`pr-text.yml`) when the PR opens and on each edit: one
-short job (1 minute), so fixing the body does not start the whole CI.
+workflow `PR text` (`pr-text.yml`, check run `session-links`) when the PR
+opens and on each edit: one short job (1 minute), so fixing the body does
+not start the whole CI.
 
 ## What gets published
 

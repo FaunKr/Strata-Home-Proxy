@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use crate::{
     events::EventKind,
     models::{self, SavedList},
-    state::{ActivityGuard, AppState, PcState, Readiness, WakeError},
+    state::{ActivityGuard, AppState, Readiness, WakeError},
 };
 
 /// Header that tells clients (e.g. the `local-agent` skill) why Strata is not
@@ -456,16 +456,19 @@ async fn wake_and_pass_on(
     held: bool,
     tx: mpsc::Sender<Bytes>,
 ) {
-    if tx.send(flavor.ping()).await.is_err() {
-        return;
-    }
+    // A client that hangs up ends the pings, not the wake-up.
     let wake = wait_and_wake(&st, held);
     tokio::pin!(wake);
+    if tx.send(flavor.ping()).await.is_err() {
+        let _ = wake.await;
+        return;
+    }
     let woke = loop {
         tokio::select! {
             r = &mut wake => break r,
             _ = tokio::time::sleep(st.cfg().ping_interval) => {
                 if tx.send(flavor.ping()).await.is_err() {
+                    let _ = wake.await;
                     return;
                 }
             }
@@ -572,16 +575,9 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
         .uri
         .path_and_query()
         .map_or_else(|| "/".to_string(), |p| p.as_str().to_string());
-    // A PC known to be asleep, waking or in gaming mode is not asked: a
-    // sleeping one lets the probe run into its timeout.
     if models::is_list(&parts.method, &path_and_query)
         && let Some(list) = st.models.get()
-        && (held
-            || matches!(
-                st.pc_state(),
-                PcState::Asleep | PcState::Waking | PcState::Gaming
-            )
-            || !st.strata_ready().await)
+        && (held || !st.strata_ready().await)
     {
         return saved_list(list);
     }

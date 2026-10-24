@@ -35,6 +35,7 @@ async fn with_saved_list(name: &str, tweak: impl FnOnce(&mut strata_nas_proxy::C
     let resp = get(&s.url, &s.key, "/v1/models").await;
     assert_eq!(resp.status(), 200);
     assert!(resp.headers().get(STATUS_HEADER).is_none());
+    saved_on_disk(&s, "Qwen3-30B-A3B").await;
     s.pc.awake.store(false, Ordering::SeqCst);
     let state = restarted(&s);
     state.spawn_idle_loop();
@@ -43,6 +44,16 @@ async fn with_saved_list(name: &str, tweak: impl FnOnce(&mut strata_nas_proxy::C
         state,
         ..s
     }
+}
+
+/// Waits until the copy in `DATA_DIR` lists `model`; a restarted proxy
+/// reads it from there.
+async fn saved_on_disk(s: &Setup, model: &str) {
+    let file = s.state.cfg().data_dir.clone().unwrap().join("models.json");
+    eventually(&format!("{model} saved"), || {
+        std::fs::read_to_string(&file).is_ok_and(|text| text.contains(model))
+    })
+    .await;
 }
 
 fn listed(body: &str) -> Value {
@@ -96,6 +107,23 @@ async fn gaming_mode_answers_the_list_at_once() {
 }
 
 #[tokio::test]
+async fn a_tune_answers_the_list_at_once() {
+    let s = with_saved_list("models-tune", |_| {}).await;
+    // The PC as it is while a tune runs: the service answers, Strata does not.
+    s.pc.awake.store(true, Ordering::SeqCst);
+    s.pc.starting.store(true, Ordering::SeqCst);
+    *s.pc.strata_job.lock().unwrap() = Some(job(StrataJobKind::Tune, StrataJobState::Running));
+    // A request notes the tune first.
+    let resp = post_json(&s, "/v1/messages", json!({})).await;
+    assert_eq!(resp.headers()[STATUS_HEADER], "tuning");
+
+    let resp = get(&s.url, &s.key, "/models").await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()[STATUS_HEADER], "models_saved");
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn an_awake_strata_answers_the_list_itself() {
     let s = with_saved_list("models-awake", |_| {}).await;
     s.pc.awake.store(true, Ordering::SeqCst);
@@ -105,6 +133,7 @@ async fn an_awake_strata_answers_the_list_itself() {
     assert_eq!(listed(&resp.text().await.unwrap()), "coder-IQ1_M");
 
     // The new list is the copy now.
+    saved_on_disk(&s, "coder-IQ1_M").await;
     s.pc.starting.store(true, Ordering::SeqCst);
     let state = restarted(&s);
     let url = serve_proxy(state).await;
@@ -156,36 +185,21 @@ async fn a_wake_up_saves_the_list_without_any_app_asking() {
     let s = setup(false, |c| c.data_dir = Some(dir)).await;
     let resp = post_json(&s, "/v1/chat/completions", json!({})).await;
     assert_eq!(resp.status(), 200);
-    eventually("the list fetched", || {
-        s.pc.models_requests.load(Ordering::SeqCst) == 1
-    })
-    .await;
+    saved_on_disk(&s, "Qwen3-30B-A3B").await;
+    assert_eq!(s.pc.models_requests.load(Ordering::SeqCst), 1);
 
     s.pc.awake.store(false, Ordering::SeqCst);
     let url = serve_proxy(restarted(&s)).await;
-    eventually_async("the list saved", || async {
-        let resp = get(&url, &s.key, "/v1/models").await;
-        resp.headers()
-            .get(STATUS_HEADER)
-            .is_some_and(|v| v == "models_saved")
-    })
-    .await;
+    let resp = get(&url, &s.key, "/v1/models").await;
+    assert_eq!(resp.headers()[STATUS_HEADER], "models_saved");
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 1);
-}
-
-/// `eventually` for a check that asks the proxy.
-async fn eventually_async<F: Future<Output = bool>>(what: &str, check: impl Fn() -> F) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !check().await {
-        assert!(Instant::now() < deadline, "{what} did not happen");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
 }
 
 #[tokio::test]
 async fn the_first_packet_goes_out_before_the_pc_service_answers() {
     let s = setup(false, |_| {}).await;
-    *s.pc.status_delay.lock().unwrap() = Duration::from_millis(1500);
+    s.state.set_packet_ahead_after(Duration::from_millis(100));
+    *s.pc.status_delay.lock().unwrap() = Duration::from_secs(3);
     let (url, key) = (s.url.clone(), s.key.clone());
     let request = tokio::spawn(async move { get(&url, &key, "/v1/models").await.status() });
     let started = Instant::now();
@@ -220,7 +234,8 @@ async fn hang_up(s: &Setup, after: Duration) {
 #[tokio::test]
 async fn a_client_that_hangs_up_while_the_pc_service_is_asked_still_wakes_the_pc() {
     let s = setup(false, |_| {}).await;
-    *s.pc.status_delay.lock().unwrap() = Duration::from_millis(800);
+    s.state.set_packet_ahead_after(Duration::from_millis(100));
+    *s.pc.status_delay.lock().unwrap() = Duration::from_millis(2500);
     hang_up(&s, Duration::from_millis(300)).await;
     eventually("the packet sent ahead", || {
         s.pc.wol_packets.load(Ordering::SeqCst) == 1

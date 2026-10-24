@@ -115,10 +115,12 @@ pub struct AppState {
     lost_after: Mutex<Duration>,
     lifecycle: Mutex<Lifecycle>,
     wake_lock: tokio::sync::Mutex<()>,
-    /// When the last magic packet went out, by a wake-up or ahead of one.
+    /// When the last wake packet went out, by a wake-up or ahead of one.
     last_wol: Mutex<Option<Instant>>,
     /// A packet sent ahead of a wake-up that no wake-up took over yet.
     packet_ahead: Mutex<Option<Instant>>,
+    /// `PACKET_AHEAD_AFTER`; shorter in tests.
+    packet_ahead_after: Mutex<Duration>,
 }
 
 /// How long Strata may show nothing running or waiting while requests are in
@@ -129,7 +131,7 @@ pub struct AppState {
 const LOST_AFTER: Duration = Duration::from_secs(300);
 
 /// How long the PC service may take to answer a request's question before a
-/// magic packet goes out ahead of the wake-up. A PC that is up answers within
+/// wake packet goes out ahead of the wake-up. A PC that is up answers within
 /// milliseconds; a sleeping one only lets the probe timeout run out.
 const PACKET_AHEAD_AFTER: Duration = Duration::from_millis(500);
 
@@ -184,6 +186,7 @@ impl AppState {
             wake_lock: tokio::sync::Mutex::new(()),
             last_wol: Mutex::new(None),
             packet_ahead: Mutex::new(None),
+            packet_ahead_after: Mutex::new(PACKET_AHEAD_AFTER),
             settings,
         });
         // Before this start the proxy saw nothing, so the time until the first
@@ -430,7 +433,7 @@ impl AppState {
 
     /// What a request should do. When Strata does not answer, the PC
     /// service is asked; a sleeping PC lets that run into the probe timeout,
-    /// so a magic packet goes out ahead once it takes `PACKET_AHEAD_AFTER`.
+    /// so a wake packet goes out ahead once it takes `PACKET_AHEAD_AFTER`.
     pub async fn readiness(self: &Arc<Self>) -> Readiness {
         if self.strata_ready().await {
             return Readiness::Ready;
@@ -439,18 +442,23 @@ impl AppState {
         // request, and the wake-up it needs is then started here.
         let (tx, rx) = tokio::sync::oneshot::channel();
         let state = Arc::clone(self);
+        let ahead_after = *self.packet_ahead_after.lock().unwrap();
         tokio::spawn(async move {
             let ask = state.pc_readiness();
             tokio::pin!(ask);
             let readiness = tokio::select! {
                 readiness = &mut ask => readiness,
-                () = tokio::time::sleep(PACKET_AHEAD_AFTER) => {
+                () = tokio::time::sleep(ahead_after) => {
                     if !state.tuning.load(Ordering::SeqCst) {
                         state.send_packet_ahead().await;
                     }
                     ask.await
                 }
             };
+            if readiness != Readiness::NeedsWake {
+                // Gaming mode or a tune: the packet ahead starts no wake-up.
+                state.packet_ahead.lock().unwrap().take();
+            }
             if let Err(Readiness::NeedsWake) = tx.send(readiness) {
                 let _ = state.ensure_awake().await;
             }
@@ -568,7 +576,7 @@ impl AppState {
         tokio::spawn(crate::models::fetch(Arc::clone(self)));
     }
 
-    /// Sends a magic packet unless the last one, also one sent ahead of the
+    /// Sends a wake packet unless the last one, also one sent ahead of the
     /// wake-up, is younger than `WOL_RESEND_SECS`. The wake-up's first one
     /// is recorded.
     async fn send_wake_packet(&self, cfg: &Config, first: &mut bool) -> Result<(), WakeError> {
@@ -585,7 +593,7 @@ impl AppState {
         Ok(())
     }
 
-    /// A magic packet ahead of a wake-up, recorded by none: the PC service
+    /// A wake packet ahead of a wake-up, recorded by none: the PC service
     /// has not told yet whether the PC is up in gaming mode. Not to a PC
     /// known to be in gaming mode.
     async fn send_packet_ahead(&self) {
@@ -602,7 +610,7 @@ impl AppState {
         }
     }
 
-    /// No magic packet went out within `WOL_RESEND_SECS`; notes one now.
+    /// No wake packet went out within `WOL_RESEND_SECS`; notes one now.
     fn packet_due(&self, cfg: &Config) -> bool {
         let mut last = self.last_wol.lock().unwrap();
         if last.is_some_and(|t| t.elapsed() < cfg.wol_resend) {
@@ -642,6 +650,11 @@ impl AppState {
         if before.is_none_or(|b| b < since) {
             tracing::warn!("Open requests given up: Strata no longer shows them");
         }
+    }
+
+    /// Changes `PACKET_AHEAD_AFTER`; for tests.
+    pub fn set_packet_ahead_after(&self, after: Duration) {
+        *self.packet_ahead_after.lock().unwrap() = after;
     }
 
     /// Changes `LOST_AFTER`; for tests.

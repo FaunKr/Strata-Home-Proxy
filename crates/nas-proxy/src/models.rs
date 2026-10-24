@@ -65,17 +65,23 @@ impl SavedModels {
             content_type: content_type.unwrap_or("application/json").to_string(),
             body: body.to_string(),
         };
-        let mut held = self.list.lock().unwrap();
-        if held.as_ref() == Some(&list) {
-            return;
+        let json = serde_json::to_vec(&list).expect("serializes");
+        {
+            let mut held = self.list.lock().unwrap();
+            if held.as_ref() == Some(&list) {
+                return;
+            }
+            *held = Some(list);
         }
-        if let Some(dir) = &self.data_dir {
-            let json = serde_json::to_vec(&list).expect("serializes");
-            if let Err(e) = crate::files::write_private(dir, MODELS_FILE, &json) {
+        let Some(dir) = self.data_dir.clone() else {
+            return;
+        };
+        // On the blocking pool: the caller is a request.
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = crate::files::write_private(&dir, MODELS_FILE, &json) {
                 tracing::warn!("List of models not saved: {e}");
             }
-        }
-        *held = Some(list);
+        });
     }
 }
 

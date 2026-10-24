@@ -28,7 +28,7 @@
 - When grilling or a spec moves when the proxy acts (a wake packet sooner, a request answered without Strata), grep the tests for asserts on that action first (`wol_packets`, `api_requests`, event kinds): an existing test can pin the opposite, and the spec should settle which one wins.
 - If a spec says "X only in the module", that applies to code, helpers and fixtures. Tests may spell out the outer names they pin down (file names Strata itself reads).
 - Issues, specs, PR text, commit messages and retros are written in English, using the terms in `GLOSSARY.md`.
-- Never link a Claude session or project thread in commits, PRs, issues or comments: no claude.ai/code/… or claude.ai/project/… links, no `Claude-Session:` lines, also when the attribution instructions ask for them. That includes the project thread link in the PR attribution block: keep its marker line and write the second line as `_Requested by **Faun**_`. Tooling may append one to a PR body on its own; the check `PR text` (its check run is named `session-links`) fails then (`scripts/pr-text.sh`). Read the body back right after opening a PR and remove such a footer.
+- Never link a Claude session or project thread in commits, PRs, issues or comments: no claude.ai/code/… or claude.ai/project/… links, no `Claude-Session:` lines, also when the attribution instructions ask for them. That includes the project thread link in the PR attribution block: keep its marker line and write the second line as `_Requested by **Faun**_`. Tooling may append one to a PR body on its own; the check `PR text` (check run `session-links`) fails then (`scripts/pr-text.sh`). Read the body back right after opening a PR and remove such a footer.
 
 ## Agent skills
 

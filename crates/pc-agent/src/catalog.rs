@@ -292,6 +292,22 @@ mod tests {
     }
 
     #[test]
+    fn an_experimental_size_says_so() {
+        let mut answer: Value = serde_json::from_str(RTX_4090).unwrap();
+        // Strata marks none experimental today; NVFP4-QAD as it would.
+        let nvfp4 = answer["catalog"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|f| f["family"] == "nvfp4")
+            .unwrap();
+        nvfp4["sizes"][2]["experimental"] = true.into();
+        let catalog = read(&[answer.to_string()]).unwrap();
+        assert!(catalog.by_id("nvfp4-NVFP4-QAD").unwrap().experimental);
+        assert!(!catalog.by_id("nvfp4-NVFP4").unwrap().experimental);
+    }
+
+    #[test]
     fn a_catalog_that_strata_did_not_read_from_setup_is_none() {
         let mut answer: Value = serde_json::from_str(RTX_4090).unwrap();
         answer["source"] = "built-in table (setup.py not importable)".into();

@@ -212,16 +212,44 @@ async fn an_update_brings_the_new_strata_s_catalog() {
     let (code, answer) = post(&s, "/strata/jobs", json!({"kind": "update"})).await;
     assert_eq!(code, 202, "{answer}");
     assert_eq!(finished(&s).await["state"], "done");
-    // The read after the job runs in the background.
-    for _ in 0..100 {
-        if get(&s, "/strata").await["catalog"]
+    // The read after the job, without a page visit.
+    eventually("the new Strata's catalog read", || {
+        s.fake.runs_of("python catalog").len() == 2
+    })
+    .await;
+    assert!(
+        get(&s, "/strata").await["catalog"]
             .to_string()
             .contains("IQ4_NEW")
-        {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+    );
     let (code, answer) = post(&s, "/strata/jobs", add("IQ4_NEW", 65536)).await;
     assert_eq!(code, 202, "{answer}");
+}
+
+#[tokio::test]
+async fn a_failed_read_is_tried_again_after_the_next_job() {
+    let s = setup("catalog-again").await;
+    installed(&s, "0.2.2");
+    catalog_answers(
+        &s,
+        vec!["Traceback (most recent call last):".into()],
+        Some(1),
+    );
+    assert!(get(&s, "/strata").await["catalog_unreadable"].is_string());
+    catalog_answers(&s, vec![CATALOG.trim_end().to_string()], None);
+    let (code, answer) = post(
+        &s,
+        "/strata/jobs",
+        json!({"kind": "set_context", "model": "IQ3_XXS", "context": 32768}),
+    )
+    .await;
+    assert_eq!(code, 202, "{answer}");
+    assert_eq!(finished(&s).await["state"], "done");
+    eventually("the catalog read again", || {
+        s.fake.runs_of("python catalog").len() == 2
+    })
+    .await;
+    let view = get(&s, "/strata").await;
+    assert!(view.get("catalog_unreadable").is_none(), "{view}");
+    assert_eq!(view["recommended"], "IQ3_S");
 }

@@ -517,7 +517,8 @@ pub async fn get(s: &Setup, path: &str) -> Value {
 /// visited; a test's Strata comes after the start, so its catalog is read
 /// before the first call that may need it.
 async fn catalog_as_at_start(s: &Setup, path: &str) {
-    if path.starts_with("/strata") {
+    // Not for `/strata/job`, so a test can wait for a job without it.
+    if path == "/strata" || path == "/strata/jobs" {
         strata_pc_agent::strata::read_catalog_if_new(&s.agent).await;
     }
 }

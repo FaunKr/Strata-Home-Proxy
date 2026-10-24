@@ -248,7 +248,7 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
         let result = run(&job, plan).await;
         job.finish(result);
         // An install or update may have brought another Strata.
-        check_catalog(&agent);
+        check_catalog_after_job(&agent);
     });
     Ok(record)
 }
@@ -2046,10 +2046,12 @@ impl CatalogCheck {
         state.read.as_ref().is_some_and(|read| read.key == key)
     }
 
-    fn due(&self, key: &str) -> bool {
+    /// Whether to read it for `key`: not read for it yet, or failed at
+    /// least `retry` ago.
+    fn due(&self, key: &str, retry: Duration) -> bool {
         let state = self.inner.lock().unwrap();
         state.read.as_ref().is_none_or(|read| {
-            read.key != key || (read.catalog.is_err() && read.at.elapsed() >= CATALOG_RETRY)
+            read.key != key || (read.catalog.is_err() && read.at.elapsed() >= retry)
         })
     }
 
@@ -2139,6 +2141,16 @@ async fn read_catalog(agent: &Agent) -> Result<Catalog, String> {
 /// is on the PC (one Strata's own app updated) or a failed read is due
 /// again.
 pub fn check_catalog(agent: &Arc<Agent>) {
+    read_catalog_in_background(agent, CATALOG_RETRY);
+}
+
+/// After a job: as [`check_catalog`], and a failed read is tried again at
+/// once, so an Install or Update that repaired Strata brings its catalog.
+fn check_catalog_after_job(agent: &Arc<Agent>) {
+    read_catalog_in_background(agent, Duration::ZERO);
+}
+
+fn read_catalog_in_background(agent: &Arc<Agent>, retry: Duration) {
     if agent.gaming() || !agent.catalog.claim() {
         return;
     }
@@ -2151,7 +2163,7 @@ pub fn check_catalog(agent: &Arc<Agent>) {
                 .ok()
                 .flatten()
         };
-        if key.is_some_and(|key| agent.catalog.due(&key)) {
+        if key.is_some_and(|key| agent.catalog.due(&key, retry)) {
             let _ = read_catalog(&agent).await;
         }
         agent.catalog.done();

@@ -201,9 +201,9 @@ if command -v actionlint >/dev/null; then
 else
   echo "WARNING: actionlint missing, .github/workflows not checked (scripts/install-actionlint.sh)" >&2
 fi
-# `cond && x || y` gives y whenever x is falsy (0, false, ''), whatever cond
-# is; actionlint does not catch it (#344's fetch-depth).
-if grep -nE "&& *(0|false|''|\"\")( |\)|\}|$).*\|\|" .github/workflows/*.yml; then
+# In an expression, `cond && x || y` gives y whenever x is falsy (0, false,
+# ''), whatever cond is; actionlint does not catch it (#344's fetch-depth).
+if grep -nE "\\$\\{\\{[^}]*&& *(0|false|''|\"\") *\\)? *\\|\\|" .github/workflows/*.yml; then
   echo "workflows: a falsy value after && always falls through to ||; quote it ('0') or flip the condition" >&2
   exit 1
 fi

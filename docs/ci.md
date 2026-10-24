@@ -77,7 +77,8 @@ short job (1 minute), so fixing the body does not start the whole CI.
   `main` cancels a publish that is still running: only the newest commit's
   image is published. `:latest` only moves once an image is pushed in full,
   and the next push catches up on what a cancelled or failed one missed. A
-  commit whose publish was cancelled gets no `:<commit>` tag.
+  commit whose publish was cancelled gets no `:<commit>` tag, and its run
+  on `main` is listed as cancelled although its other jobs passed.
 - The version is the crate version from each `Cargo.toml`. The web UI shows
   the proxy's under *System* (`crates/nas-proxy/src/admin.rs`). The PC service
   reports its own with the build commit appended, e.g. `0.1.0+5e8b9f1`

@@ -95,6 +95,8 @@ pub struct AppState {
     pub pc_setup: crate::pc_setup::PcSetup,
     /// The code benchmark in the container code-bench.
     pub code_bench: crate::code_bench::CodeBench,
+    /// Strata's last list of models, answered while Strata is not ready.
+    pub models: crate::models::SavedModels,
     in_flight: AtomicUsize,
     /// The PC service last reported a tune. The tuner's engine may answer on
     /// Strata's port meanwhile, so Strata's health says nothing then.
@@ -113,6 +115,12 @@ pub struct AppState {
     lost_after: Mutex<Duration>,
     lifecycle: Mutex<Lifecycle>,
     wake_lock: tokio::sync::Mutex<()>,
+    /// When the last wake packet went out, by a wake-up or ahead of one.
+    last_wol: Mutex<Option<Instant>>,
+    /// A packet sent ahead of a wake-up that no wake-up took over yet.
+    packet_ahead: Mutex<Option<Instant>>,
+    /// `PACKET_AHEAD_AFTER`; shorter in tests.
+    packet_ahead_after: Mutex<Duration>,
 }
 
 /// How long Strata may show nothing running or waiting while requests are in
@@ -121,6 +129,11 @@ pub struct AppState {
 /// never comes, a connection left open) would otherwise keep the PC awake,
 /// since the pings keep the client waiting too.
 const LOST_AFTER: Duration = Duration::from_secs(300);
+
+/// How long the PC service may take to answer a request's question before a
+/// wake packet goes out ahead of the wake-up. A PC that is up answers within
+/// milliseconds; a sleeping one only lets the probe timeout run out.
+const PACKET_AHEAD_AFTER: Duration = Duration::from_millis(500);
 
 /// How often the PC service is asked for its status while waiting for a wake-up.
 const AGENT_CHECK_WHILE_WAKING: Duration = Duration::from_secs(3);
@@ -161,6 +174,7 @@ impl AppState {
             strata_key: Default::default(),
             pc_setup: crate::pc_setup::PcSetup::new(cfg.data_dir.clone()),
             code_bench: crate::code_bench::CodeBench::new(cfg.data_dir.clone()),
+            models: crate::models::SavedModels::new(cfg.data_dir.clone()),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
             tuning: AtomicBool::new(false),
@@ -170,6 +184,9 @@ impl AppState {
             lost_after: Mutex::new(LOST_AFTER),
             lifecycle: Mutex::new(Lifecycle::new(Now::read(), keep_awake_until)),
             wake_lock: tokio::sync::Mutex::new(()),
+            last_wol: Mutex::new(None),
+            packet_ahead: Mutex::new(None),
+            packet_ahead_after: Mutex::new(PACKET_AHEAD_AFTER),
             settings,
         });
         // Before this start the proxy saw nothing, so the time until the first
@@ -399,19 +416,57 @@ impl AppState {
         status
     }
 
-    pub async fn readiness(&self) -> Readiness {
-        // During a tune only the PC service knows when Strata is back.
-        if !self.tuning.load(Ordering::SeqCst) {
-            {
-                let (lifecycle, now, t) = self.lifecycle();
-                if lifecycle.healthy_lately(now, t) {
-                    return Readiness::Ready;
-                }
-            }
-            if self.strata_healthy().await {
-                return Readiness::Ready;
+    /// Strata answers, without asking the PC service. False during a tune:
+    /// then only the PC service knows when Strata is back.
+    pub async fn strata_ready(&self) -> bool {
+        if self.tuning.load(Ordering::SeqCst) {
+            return false;
+        }
+        {
+            let (lifecycle, now, t) = self.lifecycle();
+            if lifecycle.healthy_lately(now, t) {
+                return true;
             }
         }
+        self.strata_healthy().await
+    }
+
+    /// What a request should do. When Strata does not answer, the PC
+    /// service is asked; a sleeping PC lets that run into the probe timeout,
+    /// so a wake packet goes out ahead once it takes `PACKET_AHEAD_AFTER`.
+    pub async fn readiness(self: &Arc<Self>) -> Readiness {
+        if self.strata_ready().await {
+            return Readiness::Ready;
+        }
+        // In a task of its own: a client that hangs up meanwhile drops its
+        // request, and the wake-up it needs is then started here.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let state = Arc::clone(self);
+        let ahead_after = *self.packet_ahead_after.lock().unwrap();
+        tokio::spawn(async move {
+            let ask = state.pc_readiness();
+            tokio::pin!(ask);
+            let readiness = tokio::select! {
+                readiness = &mut ask => readiness,
+                () = tokio::time::sleep(ahead_after) => {
+                    if !state.tuning.load(Ordering::SeqCst) {
+                        state.send_packet_ahead().await;
+                    }
+                    ask.await
+                }
+            };
+            if readiness != Readiness::NeedsWake {
+                // Gaming mode or a tune: the packet ahead starts no wake-up.
+                state.packet_ahead.lock().unwrap().take();
+            }
+            if let Err(Readiness::NeedsWake) = tx.send(readiness) {
+                let _ = state.ensure_awake().await;
+            }
+        });
+        rx.await.unwrap_or(Readiness::NeedsWake)
+    }
+
+    async fn pc_readiness(&self) -> Readiness {
         match self.ask_pc(&self.agent()).await {
             Some(status) if status.gaming_mode => {
                 self.seen_gaming();
@@ -429,20 +484,46 @@ impl AppState {
     }
 
     /// Wakes the PC if needed and waits until Strata answers on `/health`.
-    /// Concurrent callers share one wake-up.
-    pub async fn ensure_awake(&self) -> Result<(), WakeError> {
+    /// Concurrent callers share one wake-up. It runs in a task of its own,
+    /// so a caller that is dropped, such as the request of a client that
+    /// hung up, does not end it.
+    pub async fn ensure_awake(self: &Arc<Self>) -> Result<(), WakeError> {
+        let state = Arc::clone(self);
+        tokio::spawn(state.wake())
+            .await
+            .expect("the wake-up does not panic")
+    }
+
+    async fn wake(self: Arc<Self>) -> Result<(), WakeError> {
         let _lock = self.wake_lock.lock().await;
+        // A packet sent ahead started this wake-up: it is the wake-up's
+        // first, the wait counts from it, and a PC it woke already is this
+        // wake-up's. It went out only after the PC service took its time
+        // answering, so it went to no PC known in gaming mode.
+        let ahead = self
+            .packet_ahead
+            .lock()
+            .unwrap()
+            .take()
+            .filter(|sent| sent.elapsed() < self.cfg().wake_timeout);
+        if ahead.is_some() {
+            self.lifecycle.lock().unwrap().wake_started();
+            self.events.record(EventKind::WakeSent, None);
+        }
         if self.strata_healthy().await {
+            if let Some(sent) = ahead {
+                self.woke(sent);
+            }
             return Ok(());
         }
-        let started = Instant::now();
-        let mut last_wol: Option<Instant> = None;
+        let started = ahead.unwrap_or_else(Instant::now);
+        let mut first_packet = ahead.is_none();
         let mut last_agent_check: Option<Instant> = None;
         let mut pc_answers = false;
         // A PC in gaming mode is asked first: a miss that gaming mode
         // outlasts needs the PC still in gaming mode.
-        let mut waking = self.pc_state() != PcState::Gaming;
-        if waking {
+        let mut waking = ahead.is_some() || self.pc_state() != PcState::Gaming;
+        if waking && ahead.is_none() {
             self.lifecycle.lock().unwrap().wake_started();
         }
         loop {
@@ -468,13 +549,12 @@ impl AppState {
                 self.lifecycle.lock().unwrap().wake_started();
             }
             let settling = self.settling();
-            if !pc_answers && let Err(e) = self.send_wake_packet(&cfg, &mut last_wol).await {
+            if !pc_answers && let Err(e) = self.send_wake_packet(&cfg, &mut first_packet).await {
                 self.lifecycle.lock().unwrap().wake_failed();
                 return Err(e);
             }
             if !settling && self.strata_healthy().await {
-                let mut lifecycle = self.lifecycle.lock().unwrap();
-                self.record(lifecycle.woke(started.elapsed(), Now::read()));
+                self.woke(started);
                 return Ok(());
             }
             if started.elapsed() >= cfg.wake_timeout {
@@ -486,27 +566,58 @@ impl AppState {
         }
     }
 
-    /// Sends a magic packet unless the last one is younger than `WOL_RESEND_SECS`;
-    /// the first one of a wake-up is recorded.
-    async fn send_wake_packet(
-        &self,
-        cfg: &Config,
-        last_wol: &mut Option<Instant>,
-    ) -> Result<(), WakeError> {
-        if last_wol.is_some_and(|t| t.elapsed() < cfg.wol_resend) {
-            return Ok(());
+    /// The wake-up that started at `started` reached Strata. Strata's list
+    /// of models is fetched for the copy, without holding up the requests.
+    fn woke(self: &Arc<Self>, started: Instant) {
+        {
+            let mut lifecycle = self.lifecycle.lock().unwrap();
+            self.record(lifecycle.woke(started.elapsed(), Now::read()));
         }
+        tokio::spawn(crate::models::fetch(Arc::clone(self)));
+    }
+
+    /// Sends a wake packet unless the last one, also one sent ahead of the
+    /// wake-up, is younger than `WOL_RESEND_SECS`. The wake-up's first one
+    /// is recorded.
+    async fn send_wake_packet(&self, cfg: &Config, first: &mut bool) -> Result<(), WakeError> {
         let Some(mac) = cfg.pc_mac else {
             tracing::warn!("{NO_MAC}");
             return Err(WakeError::NoMac);
         };
-        match wol::send(mac, cfg.wol_addr).await {
-            Ok(()) if last_wol.is_none() => self.events.record(EventKind::WakeSent, None),
-            Ok(()) => {}
-            Err(e) => tracing::warn!("Wake packet not sent: {e}"),
+        if std::mem::take(first) {
+            self.events.record(EventKind::WakeSent, None);
         }
-        *last_wol = Some(Instant::now());
+        if self.packet_due(cfg) {
+            send_packet(mac, cfg).await;
+        }
         Ok(())
+    }
+
+    /// A wake packet ahead of a wake-up, recorded by none: the PC service
+    /// has not told yet whether the PC is up in gaming mode. Not to a PC
+    /// known to be in gaming mode.
+    async fn send_packet_ahead(&self) {
+        let cfg = self.cfg();
+        let Some(mac) = cfg.pc_mac else {
+            return;
+        };
+        if self.pc_state() != PcState::Gaming && self.packet_due(&cfg) {
+            send_packet(mac, &cfg).await;
+            self.packet_ahead
+                .lock()
+                .unwrap()
+                .get_or_insert_with(Instant::now);
+        }
+    }
+
+    /// No wake packet went out within `WOL_RESEND_SECS`; notes one now.
+    fn packet_due(&self, cfg: &Config) -> bool {
+        let mut last = self.last_wol.lock().unwrap();
+        if last.is_some_and(|t| t.elapsed() < cfg.wol_resend) {
+            return false;
+        }
+        *last = Some(Instant::now());
+        true
     }
 
     /// Gives up the requests in flight that were sent to Strata at least
@@ -539,6 +650,11 @@ impl AppState {
         if before.is_none_or(|b| b < since) {
             tracing::warn!("Open requests given up: Strata no longer shows them");
         }
+    }
+
+    /// Changes `PACKET_AHEAD_AFTER`; for tests.
+    pub fn set_packet_ahead_after(&self, after: Duration) {
+        *self.packet_ahead_after.lock().unwrap() = after;
     }
 
     /// Changes `LOST_AFTER`; for tests.
@@ -598,13 +714,13 @@ impl AppState {
     pub async fn wake_until_agent(&self) -> Result<(), WakeError> {
         let _lock = self.wake_lock.lock().await;
         let started = Instant::now();
-        let mut last_wol: Option<Instant> = None;
+        let mut first_packet = true;
         loop {
             let cfg = self.cfg();
             // A PC that just accepted sleep may still answer: not awake yet.
             if !self.settling() && self.ask_pc(&self.agent()).await.is_some() {
                 let mut lifecycle = self.lifecycle.lock().unwrap();
-                if last_wol.is_some() {
+                if !first_packet {
                     self.record(lifecycle.woke(started.elapsed(), Now::read()));
                 } else {
                     // Woken by someone else, e.g. at the desk.
@@ -612,10 +728,10 @@ impl AppState {
                 }
                 return Ok(());
             }
-            if last_wol.is_none() && cfg.pc_mac.is_some() {
+            if first_packet && cfg.pc_mac.is_some() {
                 self.lifecycle.lock().unwrap().wake_started();
             }
-            self.send_wake_packet(&cfg, &mut last_wol).await?;
+            self.send_wake_packet(&cfg, &mut first_packet).await?;
             if started.elapsed() >= cfg.wake_timeout {
                 let mut lifecycle = self.lifecycle.lock().unwrap();
                 self.record(lifecycle.wake_timed_out());
@@ -709,6 +825,12 @@ impl AppState {
             Some(watts) => self.events.record_sample(Sample { ts, watts }),
             None => tracing::debug!("Power plug {url} gave no reading"),
         }
+    }
+}
+
+async fn send_packet(mac: [u8; 6], cfg: &Config) {
+    if let Err(e) = wol::send(mac, cfg.wol_addr).await {
+        tracing::warn!("Wake packet not sent: {e}");
     }
 }
 

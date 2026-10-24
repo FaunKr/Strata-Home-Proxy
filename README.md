@@ -30,6 +30,13 @@ and asks it to go to sleep after the idle timeout.
 - **PC asleep:** Send the wake packet (repeated every 10 s), wait until Strata
   answers on `/health`, then forward. Several simultaneous requests
   share one wake-up.
+  The first packet goes out as soon as Strata does not answer, and the
+  wake-up goes on when the client hangs up meanwhile.
+- **List of models:** While Strata is not ready (PC asleep or waking, gaming
+  mode, a tune, a run over all models), `GET /v1/models` and `GET /models`
+  get Strata's last list right away, with `x-strata-proxy-status:
+  models_saved`, and do not wake the PC; apps that ask for the list first
+  then send their real request. Without a saved list they wait for the PC.
 - **Streamed requests** get a response right away and a ping event every
   15 s, even while Strata computes silently for a long time (Claude Code aborts
   after 300 s without data). Anthropic: `event: ping`, OpenAI: SSE comment.

@@ -1038,6 +1038,34 @@ async fn other_keys_wait_for_a_run_over_all_models_and_its_own_key_passes() {
 }
 
 #[tokio::test]
+async fn a_held_key_gets_the_saved_list_of_models_at_once() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let (other, _) = s.state.api_keys.create("laptop").unwrap();
+    let list = |key: String| {
+        let url = s.url.clone();
+        async move {
+            reqwest::Client::new()
+                .get(format!("{url}/v1/models"))
+                .bearer_auth(key)
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+    // Saved while nothing holds the key.
+    assert_eq!(list(other.clone()).await.status(), 200);
+    let mut b = logged_in(&s.url).await;
+    all_models_run_started(&s, &runner, &mut b).await;
+
+    let resp = tokio::time::timeout(Duration::from_secs(1), list(other))
+        .await
+        .expect("the list waited for the run");
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-strata-proxy-status"], "models_saved");
+}
+
+#[tokio::test]
 async fn a_held_request_answers_as_a_wake_timeout_when_its_time_runs_out() {
     let ids = ["IQ3_XXS", "coder-IQ1_M"];
     let (s, runner) = with_models(&ids).await;

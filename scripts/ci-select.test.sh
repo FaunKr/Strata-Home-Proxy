@@ -120,8 +120,9 @@ while read -r src; do expect_selects "$src" bench true; done < <(dockerfile_sour
 dockerignored() {
   local pattern
   while read -r pattern; do
-    # shellcheck disable=SC2053 # The patterns are globs.
-    [[ -n $pattern && $pattern != "#"* && ($1 == $pattern || $1 == $pattern/*) ]] && return 0
+    [[ -z $pattern || $pattern == "#"* ]] && continue
+    # As in Docker, * does not match across a /.
+    [[ $1 =~ ^${pattern//\*/[^/]*}(/|$) ]] && return 0
   done <.dockerignore
   return 1
 }

@@ -41,7 +41,7 @@ Reference values after #151:
 | PR that changes the web UI, the proxy or the protocol | as above, plus ui | approx. 5–10; 18 when the Ubuntu mirror is slow (#321) |
 | PR that changes only `tools/local-agent/` or the code-bench runner (not its `tasks/`) | changes, test without Cargo (`cargo=false`, `check.sh --no-cargo`), ci-ok | approx. 1–2 (estimate) |
 | PR that changes a workflow, Cargo.lock or scripts/ | everything except Windows | approx. 5–18 (#309: 5, #308: 15) |
-| Push to `main` | changes, test (check only), publish and publish-bench if their image changed, ci-ok | approx. 1–10 |
+| Push to `main` | changes, test (check only), publish and publish-bench if their image changed, ci-ok | approx. 1–10 (estimate without a publish) |
 
 The `ui` job installs Chromium's system packages with Playwright's
 `--with-deps` (fonts, xvfb, libnss3) from the runner's Ubuntu mirror. That

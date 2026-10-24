@@ -17,8 +17,11 @@
 # scripts/ci-select.test.sh checks this mapping against the workspace.
 set -euo pipefail
 
+# Every pull request job, with the whole workspace.
+all_checks() { printf '%s\n' test=true packages= cargo=true image=true bench=true ui=true; }
 if [[ ${1:-} == --all ]]; then
-  printf '%s\n' test=true packages= cargo=true image=true bench=true ui=true publish=true publish-bench=true
+  all_checks
+  printf '%s\n' publish=true publish-bench=true
   exit 0
 fi
 everything=false
@@ -33,8 +36,9 @@ ui=false
 publish=false
 publish_bench=false
 while IFS= read -r path; do
-  # The publish jobs: what goes into each image. The CI workflow publishes both,
-  # so a broken publish step shows up at its merge.
+  # The proxy's publish job: what goes into its image. The CI workflow publishes
+  # both images, so a broken publish step shows up at its merge; the code
+  # benchmark's image publishes with bench below.
   if [[ $path == .github/workflows/ci.yml ]]; then
     publish=true publish_bench=true
   elif [[ $path =~ ^crates/[^/]+/tests/ || $path == crates/pc-agent/fixtures/* || $path == crates/pc-agent/strata-pc-agent.example.toml ]]; then
@@ -45,9 +49,6 @@ while IFS= read -r path; do
       Cargo.toml | Cargo.lock | crates/* | deploy/windows/install.ps1 | tools/code-bench/tasks/* | scripts/check-exe-version.sh | Dockerfile | .dockerignore) publish=true ;;
     esac
   fi
-  case $path in
-    tools/code-bench/Dockerfile | tools/code-bench/runner.py | tools/code-bench/prepare_repo_task.py | tools/code-bench/tasks/*/repo.json) publish_bench=true ;;
-  esac
   case $path in
     # Shared: whatever changes here can break any job.
     Cargo.toml | Cargo.lock | rust-toolchain* | .cargo/* | .config/* | .github/workflows/* | scripts/* | deploy/truenas-auto-update.sh)
@@ -73,15 +74,15 @@ while IFS= read -r path; do
     # The code benchmark: the proxy embeds its tasks (include_str!), check.sh
     # runs the runner's tests; its image holds the runner and the repo task,
     # built from repo.json by prepare_repo_task.py.
-    tools/code-bench/tasks/*/repo.json) bench=true ;;
+    tools/code-bench/tasks/*/repo.json) bench=true publish_bench=true ;;
     tools/code-bench/tasks/*) packages+=(strata-nas-proxy) ;;
-    tools/code-bench/Dockerfile | tools/code-bench/runner.py | tools/code-bench/prepare_repo_task.py) runners=true bench=true ;;
+    tools/code-bench/Dockerfile | tools/code-bench/runner.py | tools/code-bench/prepare_repo_task.py) runners=true bench=true publish_bench=true ;;
     tools/code-bench | tools/code-bench/*) runners=true ;;
   esac
 done
 
 if [[ $everything == true ]]; then
-  printf '%s\n' test=true packages= cargo=true image=true bench=true ui=true
+  all_checks
   echo "publish=$publish"
   echo "publish-bench=$publish_bench"
   exit 0

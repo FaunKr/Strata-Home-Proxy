@@ -21,7 +21,11 @@ published() {
 
 select_since() {
   local image=$1 key=$2 revision
-  revision=$(published "$image") || revision=
+  if ! revision=$(published "$image"); then
+    echo "$image: could not read :latest, publishing" >&2
+    echo "$key=true"
+    return
+  fi
   if [[ -z $revision ]] || ! git merge-base --is-ancestor "$revision" HEAD 2>/dev/null; then
     echo "$image: no published commit in HEAD's history (${revision:-no label}), publishing" >&2
     echo "$key=true"
@@ -29,7 +33,7 @@ select_since() {
   fi
   echo "$image: :latest is $revision" >&2
   # Renames count with their old path too.
-  git diff --no-renames --name-only "$revision" HEAD | scripts/ci-select.sh | grep "^$key="
+  git diff --no-renames --name-only "$revision" HEAD | scripts/ci-select.sh | sed -n "/^$key=/p"
 }
 
 select_since strata-home-proxy publish

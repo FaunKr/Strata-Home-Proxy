@@ -12,8 +12,8 @@ on:
   # changes job runs and skips everything else.
   pull_request:
   workflow_dispatch:
-# A new push to a PR cancels the run for the commit before it; runs on main are
-# never cancelled (only their publish jobs are, see there).
+# A new push to a PR cancels the run for the commit before it; a push to main
+# never cancels the run before it (only its publish jobs, see there).
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true

@@ -1725,7 +1725,7 @@ async fn switching_the_speed_projection_is_refused_where_it_does_not_fit() {
         ),
         (
             json!({"kind": "set_speed_projection", "model": "nothing", "on": true}),
-            400,
+            409,
         ),
     ] {
         let (code, answer) = post(&s, "/strata/jobs", body.clone()).await;
@@ -1976,7 +1976,7 @@ async fn switching_the_context_is_refused_outside_what_it_takes() {
         ),
         (
             json!({"kind": "set_context", "model": "nothing", "context": 65536}),
-            400,
+            409,
         ),
     ] {
         let (code, answer) = post(&s, "/strata/jobs", body.clone()).await;

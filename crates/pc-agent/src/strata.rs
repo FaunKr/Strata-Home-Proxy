@@ -211,24 +211,20 @@ pub fn start(agent: &Arc<Agent>, request: StrataJobRequest) -> Result<StrataJob,
 }
 
 /// Strata's experimental speed projection, only where setup offers it.
-fn check_speed_projection(size: &Size, wanted: bool) -> Result<bool, Refusal> {
-    if wanted && !takes_speed_projection(size) {
-        let offered: Vec<_> = catalog::FAMILIES
-            .iter()
-            .filter(|f| f.speed_projection)
-            .map(|f| f.title)
-            .collect();
+fn check_speed_projection(id: &str, family: Option<&str>, wanted: bool) -> Result<bool, Refusal> {
+    if wanted && !family.is_some_and(takes_speed_projection) {
         return Err(Refusal::BadRequest(format!(
-            "The experimental speed projection is only for {}, not for {}",
-            offered.join(" and "),
-            size.id()
+            "The experimental speed projection is only for Qwen3.8-Flash-Next and its Coder, not for {id}"
         )));
     }
     Ok(wanted)
 }
 
-fn takes_speed_projection(size: &Size) -> bool {
-    catalog::family(size.family).is_some_and(|f| f.speed_projection)
+/// The families setup offers the speed projection for: its vector is made
+/// for the original Qwen3.8-Flash-Next, which the Coder shares (`setup.py`
+/// hard-codes them, there is no table to read).
+pub(crate) fn takes_speed_projection(family: &str) -> bool {
+    matches!(family, "qwen" | "coder")
 }
 
 fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
@@ -261,7 +257,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             Ok(Plan::Install {
                 size,
                 context: context(c)?,
-                speed_projection: check_speed_projection(size, wanted)?,
+                speed_projection: check_speed_projection(&size.id(), Some(size.family), wanted)?,
                 pictures,
             })
         }
@@ -277,7 +273,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             let plan = Plan::AddModel {
                 size,
                 context: context(c)?,
-                speed_projection: check_speed_projection(size, wanted)?,
+                speed_projection: check_speed_projection(&size.id(), Some(size.family), wanted)?,
                 pictures,
             };
             strata_installed(&install)?;
@@ -322,8 +318,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         }
         StrataJobRequest::SetSpeedProjection { model, on } => {
             let id = installed_model(&install, &model)?;
-            let size = catalog::by_id(&id).expect("installed_model checks the catalog");
-            check_speed_projection(size, true)?;
+            check_speed_projection(&id, catalog::by_id(&id).map(|s| s.family), true)?;
             Ok(Plan::SetSpeedProjection { id, on })
         }
         StrataJobRequest::SetContext { model, context: c } => {
@@ -338,6 +333,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         }
         StrataJobRequest::SetPictures { model, on } => {
             let id = installed_model(&install, &model)?;
+            in_catalog(&id, "setup cannot set it up again")?;
             Ok(Plan::SetPictures { id, on })
         }
         StrataJobRequest::SetUserArgs { model, user_args } => {
@@ -383,7 +379,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             let mut ids: Vec<String> = install
                 .models()
                 .into_iter()
-                .map(|id| catalog::by_id(&id).map_or(id, Size::id))
+                .map(|id| model_id(&install, &id))
                 .collect();
             ids.sort();
             Ok(Plan::CompareModels { ids, active })
@@ -398,11 +394,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             let id = active_model(agent).ok_or_else(|| {
                 Refusal::Conflict("No active model known; activate a model first".into())
             })?;
-            if catalog::by_id(&id).is_none() {
-                return Err(Refusal::Conflict(format!(
-                    "{id} is not in Strata's catalog, so the Strata Terminal cannot take it over"
-                )));
-            }
+            in_catalog(&id, "the Strata Terminal cannot take it over")?;
             Ok(Plan::SwitchToTerminal { id })
         }
         StrataJobRequest::RemoveOldStrataFolder => {
@@ -425,7 +417,7 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         }
         StrataJobRequest::Tune { model, mode, usage } => {
             let id = installed_model(&install, &model)?;
-            if let Some(why) = tune_unavailable(&install, &id) {
+            if let Some(why) = tune_unavailable(&install) {
                 return Err(Refusal::Conflict(why));
             }
             Ok(Plan::Tune { id, mode, usage })
@@ -468,21 +460,12 @@ fn preset_plan(install: &Installation, model: &str, change: PresetChange) -> Res
     Ok(Plan::Preset { id, change })
 }
 
-/// Why Strata's tuner cannot tune model `id`, if it cannot: it runs only
-/// from the Strata Terminal and knows only some model families.
-fn tune_unavailable(install: &Installation, id: &str) -> Option<String> {
-    if install.kind() != Kind::Terminal {
-        return Some(
-            "Tuning needs the Strata Terminal; this Strata is a folder from source".into(),
-        );
-    }
-    let family = catalog::by_id(id).map(|s| s.family);
-    if family.and_then(catalog::tuner_family).is_none() {
-        return Some(format!(
-            "Strata's tuner does not know the model family of {id}"
-        ));
-    }
-    None
+/// Why Strata's tuner cannot tune a model, if it cannot: it runs only from
+/// the Strata Terminal. Which families it knows is Strata's to say: a
+/// refusal is the tune job's error.
+fn tune_unavailable(install: &Installation) -> Option<String> {
+    (install.kind() != Kind::Terminal)
+        .then(|| "Tuning needs the Strata Terminal; this Strata is a folder from source".into())
 }
 
 fn strata_installed(install: &Installation) -> Result<(), Refusal> {
@@ -493,15 +476,35 @@ fn strata_installed(install: &Installation) -> Result<(), Refusal> {
     }
 }
 
-/// The catalog id of an installed model, in the catalog's letter case.
+/// An installed model's id, as [`model_id`] spells it.
 fn installed_model(install: &Installation, model: &str) -> Result<String, Refusal> {
-    let id = catalog::by_id(model)
-        .ok_or_else(|| Refusal::BadRequest(format!("{model} is not in the catalog")))?
-        .id();
-    if !install.has(&id) {
-        return Err(Refusal::Conflict(format!("{id} is not installed")));
+    if !Installation::plain_id(model) {
+        return Err(Refusal::BadRequest(format!("{model} is no model id")));
     }
-    Ok(id)
+    if !install.has(model) {
+        return Err(Refusal::Conflict(format!("{model} is not installed")));
+    }
+    Ok(model_id(install, model))
+}
+
+/// A model's id in the letter case it is shown and kept in: its download
+/// folder's as setup named it, else the catalog's, else the run config's.
+pub(crate) fn model_id(install: &Installation, id: &str) -> String {
+    install
+        .download_name(id)
+        .or_else(|| catalog::by_id(id).map(Size::id))
+        .unwrap_or_else(|| id.to_string())
+}
+
+/// Refuses a job that runs setup for an installed model the catalog does
+/// not know: setup needs the model's family and size.
+fn in_catalog(id: &str, otherwise: &str) -> Result<(), Refusal> {
+    match catalog::by_id(id) {
+        Some(_) => Ok(()),
+        None => Err(Refusal::Conflict(format!(
+            "{id} is not in Strata's catalog, so {otherwise}"
+        ))),
+    }
 }
 
 /// The model the managed start starts, in the catalog's letter case: the
@@ -513,8 +516,9 @@ fn installed_model(install: &Installation, model: &str) -> Result<String, Refusa
 pub(crate) fn active_model(agent: &Agent) -> Option<String> {
     let managed = agent.managed();
     let (script, args) = managed.start(&agent.cfg)?;
-    let id = Installation::of(&agent.cfg).active_model(script, args)?;
-    Some(catalog::by_id(&id).map_or(id, Size::id))
+    let install = Installation::of(&agent.cfg);
+    let id = install.active_model(script, args)?;
+    Some(model_id(&install, &id))
 }
 
 /// What is left to download of a model: of one partly downloaded, only the
@@ -744,12 +748,12 @@ async fn activate(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
 async fn delete(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
     job.step("Deleting files");
     let install = Installation::of(&job.agent().cfg);
-    let id = id.to_string();
+    // Before the download folder that may hold its letter case is gone.
+    let id = model_id(&install, id);
     let model = id.clone();
     tokio::task::spawn_blocking(move || install.remove(&model))
         .await
         .map_err(|e| Step::Failed(e.to_string()))??;
-    let id = catalog::by_id(&id).map_or(id, Size::id);
     job.agent().output.forget_load(&id);
     keep_tune(job.agent(), &id, None);
     job.agent().presets.forget(&id);
@@ -1068,8 +1072,15 @@ async fn tune(
     let found = match (ran, read) {
         (Err(Step::Cancelled), _) => return Err(Step::Cancelled),
         (_, Ok(found)) => found,
-        // The command's own reason says more than its missing answer.
-        (Err(failed), Err(_)) => return Err(failed),
+        // Strata's refusal says why; without an answer the command's own
+        // reason says more.
+        (Err(failed), Err(why)) => {
+            return Err(if terminal::answered(&output) {
+                Step::Failed(why)
+            } else {
+                failed
+            });
+        }
         (Ok(()), Err(why)) => return Err(Step::Failed(why)),
     };
     let text = tune_text(&found);
@@ -2017,7 +2028,7 @@ fn presets_wanted(agent: &Agent) -> Vec<(String, u64, CommandSpec, Option<String
         .models()
         .into_iter()
         .map(|id| {
-            let id = catalog::by_id(&id).map_or(id, Size::id);
+            let id = model_id(&install, &id);
             let tune = tunes
                 .iter()
                 .find(|(model, _)| model.eq_ignore_ascii_case(&id))
@@ -2211,7 +2222,7 @@ async fn setup(
         args.extend(["--api-key".into(), api_key.to_string()]);
         job.hide(api_key);
     }
-    if takes_speed_projection(size) {
+    if takes_speed_projection(size.family) {
         // Always explicit: otherwise setup takes it over from an earlier install.
         let value = if speed_projection { "on" } else { "off" };
         args.extend(["--experimental-speed-projection".into(), value.into()]);
@@ -2378,9 +2389,9 @@ pub fn view(agent: &Agent) -> StrataReport {
         .into_iter()
         .map(|id| {
             let size = catalog::by_id(&id);
-            let id = size.map_or(id, |s| s.id());
+            let id = model_id(&install, &id);
             let model = install.read_model(&id);
-            let no_tune = tune_unavailable(&install, &id);
+            let no_tune = tune_unavailable(&install);
             let last_tune = tunes
                 .iter()
                 .find(|(model, _)| model.eq_ignore_ascii_case(&id))
@@ -2431,7 +2442,7 @@ pub fn view(agent: &Agent) -> StrataReport {
             .map(|f| StrataFamily {
                 id: f.id.into(),
                 title: f.title.into(),
-                speed_projection: f.speed_projection,
+                speed_projection: takes_speed_projection(f.id),
                 pictures: f.pictures,
             })
             .collect(),

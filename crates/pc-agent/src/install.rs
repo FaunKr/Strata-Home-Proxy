@@ -179,8 +179,9 @@ impl Installation {
             .filter_map(|e| {
                 let name = e.file_name().to_string_lossy().into_owned();
                 let id = name.strip_prefix("strata-")?.strip_suffix(".json")?;
-                // `strata-<model>.shared-settings.json` belongs to a model.
-                (!id.is_empty() && !id.contains('.')).then(|| id.to_string())
+                // `strata-<model>.shared-settings.json` belongs to a model;
+                // a model id itself may hold dots (`deepseek-v4.1-flash-…`).
+                (!id.is_empty() && !id.ends_with(".shared-settings")).then(|| id.to_string())
             })
             .collect()
     }
@@ -188,6 +189,27 @@ impl Installation {
     /// Whether a model has a config, in any letter case.
     pub fn has(&self, id: &str) -> bool {
         self.models().iter().any(|m| m.eq_ignore_ascii_case(id))
+    }
+
+    /// Whether `id` can name a model's files: letters, digits, `.`, `_`
+    /// and `-`, never `..`; a path never comes from a request.
+    pub fn plain_id(id: &str) -> bool {
+        !id.is_empty()
+            && !id.contains("..")
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    }
+
+    /// The name of a model's download folder, in the letter case setup gave
+    /// it (the run config's file name is lower case), if there is one.
+    pub fn download_name(&self, id: &str) -> Option<String> {
+        std::fs::read_dir(self.data.join("models"))
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .find(|name| name.eq_ignore_ascii_case(id))
     }
 
     /// A model's config for changing it: fails if it cannot be read or is no

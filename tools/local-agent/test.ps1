@@ -572,7 +572,9 @@ function test_one_run_at_a_time {
         }
     }
     # By its id: runs started in the same second sort by a random suffix.
-    $runC = if ((Get-Content -LiteralPath (Join-Path $tmp 'run-C.out') -Raw) -match '(?m)^local-agent: run (\S+)') { $Matches[1] }
+    $script:out = Get-Content -LiteralPath (Join-Path $tmp 'run-C.out') -Raw
+    $runC = Get-RunId
+    if (-not $runC) { Fail "no run id in: $out" }
     la status $runC
     Assert-Contains $out 'queued'
     Assert-Contains (Get-Content -LiteralPath (Join-Path $tmp 'run-B.out') -Raw) 'waiting for run'

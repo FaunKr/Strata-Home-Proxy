@@ -421,7 +421,11 @@ test_one_run_at_a_time() {
     fi
   done
   # By its id: runs started in the same second sort by a random suffix.
-  la status "$(sed -n 's/^local-agent: run \([^ ]*\).*/\1/p' "$tmp/run-C.out")"
+  out=$(cat "$tmp/run-C.out")
+  local id
+  id=$(run_id)
+  [[ -n $id ]] || fail "no run id in: $out"
+  la status "$id"
   contains "$out" "queued"
   for task in 0 1 2; do wait "${pids[$task]}" || fail "run $task failed"; done
   # The workers ran one after another, in the order the runs started.

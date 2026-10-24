@@ -2167,6 +2167,13 @@ fn parse_numstat(line: &str) -> Option<ChangedFile> {
 
 /// Runs the setup of `install` without questions, with the fixed values
 /// and the key; with `pictures`, setup also sets up the picture reader.
+///
+/// Setup rewrites a model's whole run config. A job that runs it again for
+/// an installed model does what [`set_pictures`] does: it reads the active
+/// model and the config's modification time before setup (a Strata without
+/// its own start script starts the config touched last), calls [`manage`]
+/// after it, gives the time back, and writes the config from before back
+/// when setup fails or a restart does not come up.
 async fn setup(
     job: &JobContext,
     install: &Installation,

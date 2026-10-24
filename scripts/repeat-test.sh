@@ -43,7 +43,9 @@ if [[ -z $all ]]; then
   echo "No test matches: $test $*" >&2
   exit 2
 fi
-mapfile -t names <<<"$all"
+# No mapfile: macOS has Bash 3.2.
+names=()
+while IFS= read -r name; do names+=("$name"); done <<<"$all"
 set -- ${flags[@]+"${flags[@]}"} --exact "${names[@]}"
 failed=0 hung=0
 for i in $(seq "$count"); do

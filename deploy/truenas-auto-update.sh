@@ -177,7 +177,8 @@ restore_data() {
     return 1
   fi
   mkdir -p "$failed"
-  find "$DATA_DIR" -mindepth 1 -maxdepth 1 -exec mv -t "$failed" {} + &&
+  # `mv -t` is GNU only; the test runs this on macOS too.
+  find "$DATA_DIR" -mindepth 1 -maxdepth 1 -exec mv {} "$failed"/ \; &&
     tar -C "$DATA_DIR" --numeric-owner -xzpf "$backup"
 }
 

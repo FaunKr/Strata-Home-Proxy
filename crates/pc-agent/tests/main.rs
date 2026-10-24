@@ -10,6 +10,7 @@ mod load_lines;
 mod managed_values;
 mod model_configs;
 mod presets;
+mod relay;
 mod strata;
 mod strata_models;
 mod strata_output;

@@ -23,6 +23,7 @@ use std::{
 use crate::{
     agent::Agent,
     job::{JobContext, KEPT_LINES, Step},
+    terminal::Terminal,
 };
 
 /// When Strata was last started and stopped; the agent keeps it for this
@@ -144,7 +145,9 @@ impl<'a> StrataProcess<'a> {
             return failed(format!("new Strata key not written: {e}"));
         }
         tracing::info!("Starting Strata");
-        let mut run = match agent.platform().start_strata(program, args) {
+        // Arguments saved before a change of relay mode start on the new host.
+        let args = Terminal::on_host(args, crate::strata::strata_host(&agent.cfg));
+        let mut run = match agent.platform().start_strata(program, &args) {
             Ok(run) => run,
             Err(e) => return failed(e.to_string()),
         };

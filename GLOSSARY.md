@@ -130,8 +130,12 @@ The PC service reports Strata as running, but it does not answer yet.
 _Avoid_: starting, Lädt
 
 **Not reachable**:
-Strata answers the PC service on the PC, but not the proxy: the network between NAS and PC drops it, e.g. the PC's firewall after a Strata update.
+Strata answers the PC service on the PC, but not the proxy: the network between NAS and PC drops it, e.g. the PC's firewall after a Strata update. Never in relay mode.
 _Avoid_: unreachable (in UI text), Offline
+
+**Relay mode**:
+Strata listens only on the PC itself, and the PC service passes the proxy's requests on to it, adding the Strata key. Only for a Strata started from the Strata Terminal; there is no *Not reachable* in it.
+_Avoid_: tunnel, agent relay
 
 **Forced Strata restart**:
 *Force restart Strata* in the web UI: the PC service cancels a running Strata job, kills Strata hard (a hand-started one too) and starts its own Strata again when it has a start script and auto-start is on. Refused in gaming mode and during a PC service update.
@@ -146,7 +150,7 @@ What the proxy keeps of events and power plug readings over time; the web UI sho
 _Avoid_: log, Verlauf
 
 **Strata key**:
-The key Strata asks of every request (`api_key` in the model configs). The PC service makes a new one before every start of Strata it makes, and the proxy fetches it from the PC service whenever its generation changes. Only the proxy and the PC service know it; clients use their own API keys.
+The key Strata asks of every request (`api_key` in the model configs). The PC service makes a new one before every start of Strata it makes, and the proxy fetches it from the PC service whenever its generation changes. Only the proxy and the PC service know it (in relay mode only the PC service); clients use their own API keys.
 _Avoid_: Strata API key, STRATA_API_KEY (an older setting of the proxy), token (that is the shared secret of proxy and PC service)
 
 **Strata output**:

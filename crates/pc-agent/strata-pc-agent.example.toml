@@ -71,3 +71,8 @@ update_stop_wait_secs = 10
 # MAC address reported to the NAS. Usually left empty: the service then
 # reports that of the network card through which the NAS reaches it.
 #mac = "AA-BB-CC-DD-EE-FF"
+
+# Relay mode: the Strata Terminal's Strata listens on this PC only, and the
+# NAS reaches it through this service (/relay). Takes effect with the next
+# start of Strata (e.g. Force restart Strata in the web UI).
+#relay = true

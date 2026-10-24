@@ -1,6 +1,6 @@
 //! `GET /status`, `POST /gaming`, `POST /sleep`, `POST /sleep/force`,
-//! `POST /strata/kill`, `POST /update`, `GET /strata/key` and the body of
-//! every refusal.
+//! `POST /strata/kill`, `POST /update`, `GET /strata/key`, the relay and the
+//! body of every refusal.
 
 use serde::{Deserialize, Serialize};
 
@@ -46,7 +46,28 @@ pub struct PcStatus {
     /// the key per start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strata_key_generation: Option<u64>,
+    /// Relay mode as the running Strata has it; missing from services
+    /// before relay mode, which cannot relay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<Relay>,
 }
+
+/// Relay mode: Strata listens only on the PC itself, and the PC service
+/// passes the proxy's requests on to it under [`RELAY_PATH`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Relay {
+    /// Strata runs for relay mode: the proxy reaches it through the PC
+    /// service only.
+    pub on: bool,
+}
+
+/// Everything under this path goes on to Strata, with the Strata key in
+/// place of the PC service's token.
+pub const RELAY_PATH: &str = "/relay";
+
+/// Header on the relay's `502` when Strata did not answer the PC service:
+/// the answer is the PC service's, not Strata's.
+pub const RELAY_NO_STRATA: &str = "x-relay-no-strata";
 
 /// `GET /strata/key`: the Strata key in Strata's model configs, and the
 /// generation the status reports for it.

@@ -22,13 +22,13 @@ use axum::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
-    routing::{get, post},
+    routing::{any, get, post},
     serve::IncomingStream,
 };
 use serde::Deserialize;
 use strata_pc_protocol::{
-    Answer, ForcedRestart, ForcedSleep, GamingRequest, PcStatus, Refused, StrataJobKind,
-    StrataKey as KeyAnswer,
+    Answer, ForcedRestart, ForcedSleep, GamingRequest, PcStatus, RELAY_NO_STRATA, RELAY_PATH,
+    Refused, Relay, StrataJobKind, StrataKey as KeyAnswer,
 };
 use tokio::sync::broadcast;
 
@@ -84,6 +84,8 @@ pub struct Agent {
     pub cfg: Config,
     platform: Box<dyn Platform>,
     http: reqwest::Client,
+    /// For the relay: no overall timeout, as answers may take long.
+    relay_http: reqwest::Client,
     gaming: AtomicBool,
     watchdog: Mutex<Watchdog>,
     macs: Mutex<HashMap<IpAddr, CachedMac>>,
@@ -127,6 +129,10 @@ impl Agent {
             .timeout(Duration::from_secs(3))
             .build()
             .expect("HTTP client");
+        let relay_http = reqwest::Client::builder()
+            .connect_timeout(STRATA_CONNECT_TIMEOUT)
+            .build()
+            .expect("HTTP client");
         let gaming = gaming_flag(&cfg).exists();
         let managed = Managed::load(&cfg.state_dir());
         if managed.start(&cfg).is_none() {
@@ -143,6 +149,7 @@ impl Agent {
             cfg,
             platform,
             http,
+            relay_http,
             gaming: AtomicBool::new(gaming),
             watchdog: Mutex::new(Watchdog {
                 unhealthy_since: None,
@@ -241,6 +248,7 @@ impl Agent {
             version: Some(crate::version().to_string()),
             hardware: Some(self.platform.hardware()),
             strata_key_generation: Some(self.strata_key.generation()),
+            relay: Some(Relay { on: self.cfg.relay }),
         }
     }
 
@@ -697,6 +705,69 @@ async fn strata_log(State(agent): State<Arc<Agent>>) -> Response {
         .into_response()
 }
 
+/// Headers that belong to one connection, not to the request or answer
+/// passed on.
+const HOP_BY_HOP: [header::HeaderName; 6] = [
+    header::CONNECTION,
+    header::HOST,
+    header::TRANSFER_ENCODING,
+    header::TE,
+    header::UPGRADE,
+    header::PROXY_AUTHORIZATION,
+];
+
+/// Passes a request under `/relay` on to Strata with the Strata key in
+/// place of the token, and Strata's answer back, both streamed. When the
+/// caller leaves, the answer's body is dropped and with it the request to
+/// Strata. A Strata that does not answer gets a `502` marked as the
+/// service's own.
+async fn relay(State(agent): State<Arc<Agent>>, req: Request) -> Response {
+    let (parts, body) = req.into_parts();
+    let path = parts.uri.path().strip_prefix(RELAY_PATH).unwrap_or("/");
+    let query = parts
+        .uri
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
+    let mut headers = parts.headers;
+    headers.remove(header::AUTHORIZATION);
+    for name in &HOP_BY_HOP {
+        headers.remove(name);
+    }
+    let mut upstream = agent
+        .relay_http
+        .request(
+            parts.method,
+            format!("{}{path}{query}", agent.cfg.strata_url),
+        )
+        .headers(headers)
+        .body(reqwest::Body::wrap_stream(body.into_data_stream()));
+    if let Some(key) = agent.strata_key.key(&agent.cfg) {
+        upstream = upstream.bearer_auth(key);
+    }
+    let answer = match upstream.send().await {
+        Ok(answer) => answer,
+        Err(e) => {
+            tracing::debug!("Relay: Strata does not answer: {e}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                [(RELAY_NO_STRATA, "1")],
+                "Strata does not answer the PC service",
+            )
+                .into_response();
+        }
+    };
+    let mut resp = Response::builder().status(answer.status());
+    if let Some(out) = resp.headers_mut() {
+        out.extend(answer.headers().clone());
+        for name in &HOP_BY_HOP {
+            out.remove(name);
+        }
+    }
+    resp.body(axum::body::Body::from_stream(answer.bytes_stream()))
+        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+}
+
 /// Token check, plus the client list; localhost always passes the list.
 async fn guard(State(agent): State<Arc<Agent>>, req: Request, next: Next) -> Response {
     let peer = req
@@ -735,6 +806,7 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .route("/update", post(update))
         .route("/strata-log", get(strata_log))
         .route("/strata/key", get(strata_key))
+        .route(&format!("{RELAY_PATH}/{{*path}}"), any(relay))
         .layer(middleware::from_fn_with_state(agent.clone(), guard))
         .with_state(agent)
 }

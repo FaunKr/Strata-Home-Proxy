@@ -15,7 +15,7 @@ path = "tests/main.rs"
 anyhow = "1.0.104"
 axum = "0.8.9"
 futures-util = "0.3.34"
-reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream"] }
 serde = { version = "1.0.229", features = ["derive"] }
 strata-pc-protocol = { path = "../pc-protocol" }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }

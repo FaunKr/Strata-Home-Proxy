@@ -99,6 +99,10 @@ pub struct AppState {
     /// The PC service last reported a tune. The tuner's engine may answer on
     /// Strata's port meanwhile, so Strata's health says nothing then.
     tuning: AtomicBool,
+    /// The PC service reported Strata running in relay mode: calls to
+    /// Strata go through its relay. Kept while the PC sleeps; the next
+    /// status, which every wake-up asks for, brings it anew.
+    relay: AtomicBool,
     /// Requests sent to Strata up to this moment are given up: Strata has
     /// shown nothing since (`drop_lost_requests`).
     give_up: tokio::sync::watch::Sender<Option<Instant>>,
@@ -159,6 +163,7 @@ impl AppState {
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
             tuning: AtomicBool::new(false),
+            relay: AtomicBool::new(false),
             give_up: tokio::sync::watch::Sender::new(None),
             quiet_since: Mutex::new(None),
             lost_after: Mutex::new(LOST_AFTER),
@@ -207,6 +212,8 @@ impl AppState {
 
     async fn take_over(&self, agent: &AgentClient, status: &PcStatus) {
         self.tuning.store(tuning(status), Ordering::SeqCst);
+        self.relay
+            .store(status.relay.is_some_and(|r| r.on), Ordering::SeqCst);
         if let Some(mac) = status.mac.as_deref().and_then(|m| parse_mac(m).ok())
             && self.settings.set_reported_mac(mac)
         {
@@ -227,10 +234,22 @@ impl AppState {
         self.strata_with(self.strata_key.key().as_deref())
     }
 
-    /// Strata at the current address with `key`; `None` without an address.
+    /// Strata at the current address with `key`, or through the PC
+    /// service's relay in relay mode; `None` without an address.
     pub fn strata_with(&self, key: Option<&str>) -> Option<StrataClient> {
         let cfg = self.cfg();
-        StrataClient::new(&cfg, key, self.probe(&cfg), self.upstream.clone())
+        StrataClient::new(
+            &cfg,
+            key,
+            self.relay(),
+            self.probe(&cfg),
+            self.upstream.clone(),
+        )
+    }
+
+    /// Strata runs in relay mode, as the PC service last reported.
+    pub fn relay(&self) -> bool {
+        self.relay.load(Ordering::SeqCst)
     }
 
     /// Client for the PC service with the current address and token.

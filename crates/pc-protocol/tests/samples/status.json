@@ -21,5 +21,8 @@
       "ram_total_bytes": 34359738368
     }
   },
-  "strata_key_generation": 7
+  "strata_key_generation": 7,
+  "relay": {
+    "on": false
+  }
 }

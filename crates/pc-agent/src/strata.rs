@@ -24,6 +24,7 @@ use crate::{
     agent::Agent,
     catalog::{self, Size},
     command::CommandSpec,
+    config::Config,
     install::{Installation, Kind, Model, SWITCH_FILE},
     job::{JobContext, KEPT_LINES, POLL, Step, unix_now},
     managed::Managed,
@@ -69,9 +70,13 @@ const PRESETS_TIMEOUT: Duration = Duration::from_secs(60);
 const TERMINAL_CHECK_EVERY: Duration = Duration::from_secs(24 * 3600);
 /// How long a benchmark waits for Strata to load its model.
 const READY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-/// Strata's port and network access, as the proxy expects them.
+/// Strata's port, as the proxy expects it.
 const STRATA_PORT: &str = "8080";
-const STRATA_HOST: &str = "0.0.0.0";
+
+/// Where Strata listens: on this PC only in relay mode, else for the NAS too.
+pub(crate) fn strata_host(cfg: &Config) -> &'static str {
+    if cfg.relay { "127.0.0.1" } else { "0.0.0.0" }
+}
 
 /// Why a job was not started: a value outside the catalog (400), or a state
 /// that forbids it now (409).
@@ -678,7 +683,7 @@ fn managed_start(agent: &Agent, install: &Installation, id: &str) -> Managed {
                 strata_start: Some(terminal.program()),
                 strata_args: Terminal::serve_args(
                     &install.config_path(id),
-                    STRATA_HOST,
+                    strata_host(&agent.cfg),
                     STRATA_PORT,
                 ),
                 strata_processes: Some(terminal.processes()),
@@ -2210,7 +2215,7 @@ async fn setup(
             "--vision",
             if pictures { "yes" } else { "no" },
             "--host",
-            STRATA_HOST,
+            strata_host(&agent.cfg),
             "--port",
             STRATA_PORT,
             "--data-dir",

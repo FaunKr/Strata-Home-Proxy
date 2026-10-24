@@ -45,11 +45,14 @@ impl StrataKey {
 }
 
 /// Fetches the key when the status reports another generation than the
-/// one held.
+/// one held. Not in relay mode: the PC service adds the key itself.
 pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatus) {
     let keys = &state.strata_key;
     keys.unreported
         .store(status.strata_key_generation.is_none(), Ordering::SeqCst);
+    if status.relay.is_some_and(|r| r.on) {
+        return;
+    }
     if status.strata_key_generation.is_some() && status.strata_key_generation != keys.generation() {
         fetch(state, agent).await;
     }

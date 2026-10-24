@@ -271,6 +271,13 @@ fn strata_view(probe: &Probe, in_flight: usize) -> StrataView {
         },
         (_, Health::Up { loaded: true }) => StrataView::Ready,
         (_, Health::Up { loaded: false }) => StrataView::Unloaded,
+        _ if probe
+            .pc
+            .as_ref()
+            .is_some_and(|s| s.strata_answers && !s.gaming_mode) =>
+        {
+            StrataView::Unreachable
+        }
         // The process runs but does not answer yet: starting, or restarted by
         // the watchdog.
         _ if probe

@@ -221,6 +221,18 @@ async fn shows_loading_while_strata_starts() {
 }
 
 #[tokio::test]
+async fn shows_a_strata_that_answers_the_pc_but_not_the_nas_as_unreachable() {
+    let s = setup(true, |_| {}).await;
+    s.pc.strata_blocked.store(true, Ordering::SeqCst);
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    live.until("unreachable", |v| v["strata"] == "Unreachable")
+        .await;
+    s.pc.strata_blocked.store(false, Ordering::SeqCst);
+    live.until("ready", |v| v["strata"] == "Ready").await;
+}
+
+#[tokio::test]
 async fn shows_an_unloaded_model() {
     let s = setup(true, |_| {}).await;
     s.pc.unloaded.store(true, Ordering::SeqCst);

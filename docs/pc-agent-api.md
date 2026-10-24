@@ -41,6 +41,12 @@ service started it less than `load_time_secs` ago and has not stopped it
 since. A Strata still loading its model (e.g. after a forced restart) thus
 already counts as running; the Overview shows it as loading.
 
+`strata_answers` is `true` when Strata answered the service's own `/health`
+in this check; missing from an older PC service. With it, and no answer to
+the proxy's `/health`, the network between NAS and PC drops Strata's
+requests (e.g. the PC's firewall): the Overview shows *Not reachable*
+instead of *Loading*.
+
 `strata_job` is `true` while a Strata job is running (see below), and
 `strata_job_kind` names its kind; missing without a job and from an older PC
 service. The proxy reads `tune` there: while a tune runs, Strata is off and

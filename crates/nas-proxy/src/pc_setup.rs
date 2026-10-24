@@ -490,6 +490,18 @@ struct Registered {
     token: String,
     /// How the PC reaches the NAS, for later downloads.
     nas_url: String,
+    /// The port of the proxy's Strata address, which the install command
+    /// opens for the NAS.
+    strata_port: u16,
+}
+
+/// The port the install command opens for Strata: the one in the proxy's
+/// Strata address, or Strata's default.
+fn strata_port(strata_url: Option<&str>) -> u16 {
+    strata_url
+        .and_then(|url| reqwest::Url::parse(url).ok())
+        .and_then(|url| url.port())
+        .unwrap_or(8080)
 }
 
 /// Trades a valid code for a new token and enters the token and the address
@@ -530,6 +542,7 @@ async fn register(
     Json(Registered {
         token,
         nas_url: format!("http://{host}"),
+        strata_port: strata_port(state.cfg().strata_url.as_deref()),
     })
     .into_response()
 }

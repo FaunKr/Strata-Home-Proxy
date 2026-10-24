@@ -509,6 +509,9 @@ pub enum StrataView {
     /// The process runs but does not answer yet: starting, or restarted by
     /// the watchdog.
     Loading,
+    /// Answers the PC service, but not the proxy: the network between them
+    /// drops it, e.g. the PC's firewall.
+    Unreachable,
     /// Answers, but the model is not in memory; loaded with the next request.
     Unloaded,
     Ready,

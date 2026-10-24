@@ -34,6 +34,7 @@ async fn token_is_required() {
         .unwrap();
     assert!(!status.gaming_mode);
     assert!(status.strata_running);
+    assert!(status.strata_answers);
 }
 
 #[tokio::test]
@@ -371,7 +372,9 @@ async fn the_status_shows_a_freshly_started_strata_as_running() {
     let (code, _) = post(&s, "/strata/kill", json!({})).await;
     assert_eq!(code, 200);
     // It does not answer yet, but it runs: the page shows it loading.
-    assert_eq!(status_json(&s).await["strata_running"], true);
+    let status = status_json(&s).await;
+    assert_eq!(status["strata_running"], true);
+    assert_eq!(status["strata_answers"], false);
 }
 
 #[tokio::test]

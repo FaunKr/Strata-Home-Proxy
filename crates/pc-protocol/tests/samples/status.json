@@ -1,6 +1,7 @@
 {
   "gaming_mode": false,
   "strata_running": true,
+  "strata_answers": true,
   "user_idle_secs": 1840,
   "mac": "AA:BB:CC:DD:EE:FF",
   "strata_job": false,

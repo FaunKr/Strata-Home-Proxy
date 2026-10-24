@@ -65,12 +65,12 @@ service. The proxy reads `tune` there: while a tune runs, Strata is off and
 the proxy answers requests with a `503` instead of waking (see `tune`
 below).
 
-`version` is the crate version plus the build's commit (`STRATA_BUILD_ID`
-at build time, otherwise `dev`). The same value is in the .exe as the text
-`strata-pc-agent-version:<version>`; this is how the proxy reads the
-version of the .exe in its image without running it. If it differs or
-`version` is missing (service from before the update button), the *PC* area
-shows "Update available".
+`version` is the crate version, e.g. `0.2.0`; older builds append
+the build's commit (`0.2.0+5e8b9f1`), which the proxy ignores. The same value
+is in the .exe as the text `strata-pc-agent-version:<version>`; this is how
+the proxy reads the version of the .exe in its image without running it. If
+that one is higher or `version` is missing (service from before the update
+button), the *PC* area shows "Update available".
 
 `mac` is the MAC address of the network card the request came through (that
 is, the one that must receive the wake packet), or the value `mac` from the

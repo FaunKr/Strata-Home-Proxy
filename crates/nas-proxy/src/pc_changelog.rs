@@ -1,5 +1,7 @@
 //! The PC service's changelog (`pc-agent/CHANGELOG.md`): what each version
-//! brings, for the PC service card while an update is available. The proxy
+//! brings, for the PC service card while an update is available, and how
+//! versions compare: an update is a higher `x.y.z`, a build suffix from an
+//! older PC service (`0.2.0+abc1234`) does not count. The proxy
 //! carries it built in, so the card shows it while the PC sleeps; the
 //! program the NAS serves comes from the same commit.
 //!
@@ -8,7 +10,10 @@
 //! the file. Versions follow semver under 0.x: the minor number goes up when
 //! the user has to act on the PC, the patch number for features and fixes.
 
-use std::sync::{Arc, LazyLock};
+use std::{
+    fmt,
+    sync::{Arc, LazyLock},
+};
 
 use strata_admin_ui::api::PcServiceChange;
 
@@ -47,9 +52,32 @@ impl Version {
     }
 }
 
-/// Whether `text` is a version the proxy can compare, like `0.2.0+abc1234`.
-pub fn is_version(text: &str) -> bool {
-    Version::parse(text).is_some()
+impl fmt::Display for Version {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}.{}", self.0, self.1, self.2)
+    }
+}
+
+/// `text` as `x.y.z`, without a build suffix; `None` for a version the
+/// proxy cannot compare.
+pub fn without_build(text: &str) -> Option<String> {
+    Version::parse(text).map(|v| v.to_string())
+}
+
+/// Whether `available` is higher than `installed`: an update. A service
+/// without a comparable version counts as the one before the changelog
+/// began.
+pub fn needs_update(installed: Option<&str>, available: &str) -> bool {
+    let installed = installed
+        .and_then(Version::parse)
+        .unwrap_or(BEFORE_CHANGELOG);
+    Version::parse(available).is_some_and(|available| available > installed)
+}
+
+/// Whether `installed` is `available` or higher; `false` without a
+/// comparable `installed`.
+pub fn is_up_to_date(installed: Option<&str>, available: &str) -> bool {
+    installed.and_then(Version::parse).is_some() && !needs_update(installed, available)
 }
 
 #[derive(Debug)]
@@ -63,13 +91,6 @@ struct Section {
 #[derive(Debug)]
 pub struct Changelog {
     sections: Vec<Section>,
-}
-
-/// What the PC service card shows for an update.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Changes {
-    pub listed: Vec<PcServiceChange>,
-    pub only_internal: bool,
 }
 
 impl Changelog {
@@ -122,21 +143,20 @@ impl Changelog {
 
     /// What an update from `installed` to `available` brings: the versions
     /// above `installed` up to `available`, each marked when its minor
-    /// number is above that of the version before it in the changelog. Only internal changes when there
-    /// are none; nothing at all when `available` is older. Call it only while
-    /// an update is available.
-    pub fn changes(&self, installed: Option<&str>, available: Option<&str>) -> Changes {
+    /// number is above that of the version before it in the changelog.
+    /// Nothing when `available` is not higher.
+    pub fn changes(
+        &self,
+        installed: Option<&str>,
+        available: Option<&str>,
+    ) -> Vec<PcServiceChange> {
         let Some(available) = available.and_then(Version::parse) else {
-            return Changes::default();
+            return Vec::new();
         };
         let installed = installed
             .and_then(Version::parse)
             .unwrap_or(BEFORE_CHANGELOG);
-        if available < installed {
-            return Changes::default();
-        }
-        let listed = self
-            .sections
+        self.sections
             .iter()
             .enumerate()
             .filter(|(_, s)| s.version > installed && s.version <= available)
@@ -150,11 +170,7 @@ impl Changelog {
                     lines: s.lines.clone(),
                 }
             })
-            .collect::<Vec<_>>();
-        Changes {
-            only_internal: listed.is_empty(),
-            listed,
-        }
+            .collect()
     }
 }
 
@@ -192,6 +208,33 @@ mod tests {
         for bad in ["dev", "0.2", "0.2.0.1", "0.2.0-rc1", "0.x.0", "", "+abc"] {
             assert_eq!(Version::parse(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn only_a_higher_version_needs_an_update_and_build_suffixes_do_not_count() {
+        assert!(needs_update(Some("0.2.0"), "0.3.0"));
+        assert!(needs_update(Some("0.2.0+abc1234"), "0.2.1"));
+        assert!(!needs_update(Some("0.2.0+abc1234"), "0.2.0"));
+        assert!(!needs_update(Some("0.3.0"), "0.2.0"));
+        assert!(needs_update(None, "0.2.0"));
+        assert!(needs_update(Some("dev"), "0.2.0"));
+        assert!(!needs_update(None, "dev"));
+    }
+
+    #[test]
+    fn a_service_on_the_available_version_or_higher_is_up_to_date() {
+        assert!(is_up_to_date(Some("0.2.0+abc1234"), "0.2.0"));
+        assert!(is_up_to_date(Some("0.3.0"), "0.2.0"));
+        assert!(!is_up_to_date(Some("0.2.0"), "0.2.1"));
+        assert!(!is_up_to_date(Some("dev"), "0.2.0"));
+        assert!(!is_up_to_date(None, "0.2.0"));
+    }
+
+    #[test]
+    fn a_version_without_build_drops_the_suffix() {
+        assert_eq!(without_build("0.2.0+abc1234").as_deref(), Some("0.2.0"));
+        assert_eq!(without_build("0.2.0").as_deref(), Some("0.2.0"));
+        assert_eq!(without_build("dev"), None);
     }
 
     #[test]

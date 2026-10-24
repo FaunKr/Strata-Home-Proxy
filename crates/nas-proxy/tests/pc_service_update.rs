@@ -8,8 +8,8 @@ use std::{sync::atomic::Ordering, time::Duration};
 use common::*;
 use strata_nas_proxy::events::EventKind;
 
-const OLD: &str = "0.1.0+alt1234";
-const NEW: &str = "0.1.0+neu5678";
+const OLD: &str = "0.1.0";
+const NEW: &str = "0.2.0";
 
 /// An awake PC whose service runs `OLD`, with `NEW` in the image.
 async fn outdated(name: &str) -> Setup {
@@ -35,6 +35,38 @@ async fn overview_shows_the_version_and_whether_an_update_is_available() {
         .until("same version", |v| v["pc_service"]["version"] == NEW)
         .await;
     assert_eq!(v["pc_service"]["update_available"], false);
+}
+
+#[tokio::test]
+async fn a_build_suffix_of_an_older_service_is_no_newer_version() {
+    let s = outdated("suffix").await;
+    *s.pc.version.lock().unwrap() = Some(format!("{NEW}+abc1234"));
+    let mut b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live
+        .until("Version", |v| v["pc_service"]["version"] == NEW)
+        .await;
+    assert_eq!(v["pc_service"]["update_available"], false);
+    assert_eq!(v["pc_service"]["available"], NEW);
+    let resp = b.call("pc-service-update", &[]).await;
+    assert_eq!(resp.status(), 400);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("already runs"), "{text}");
+    assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn an_older_version_in_the_image_is_no_update() {
+    let s = outdated("older").await;
+    *s.pc.version.lock().unwrap() = Some("0.3.0".into());
+    let mut b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live
+        .until("Version", |v| v["pc_service"]["version"] == "0.3.0")
+        .await;
+    assert_eq!(v["pc_service"]["update_available"], false);
+    assert_eq!(b.call("pc-service-update", &[]).await.status(), 400);
+    assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -239,18 +271,16 @@ async fn the_last_version_survives_a_restart() {
     live.until("Version", |v| v["pc_service"]["version"] == OLD)
         .await;
     // The saved version follows the reported one.
-    *first.pc.version.lock().unwrap() = Some("0.1.0+mitte".into());
-    live.until("other version", |v| {
-        v["pc_service"]["version"] == "0.1.0+mitte"
-    })
-    .await;
+    *first.pc.version.lock().unwrap() = Some("0.1.5".into());
+    live.until("other version", |v| v["pc_service"]["version"] == "0.1.5")
+        .await;
 
     let b = after_restart(&first, "restart").await;
     let v = Live::open(&b)
         .await
         .until("saved version", |v| !v["pc_service"].is_null())
         .await;
-    assert_eq!(v["pc_service"]["version"], "0.1.0+mitte");
+    assert_eq!(v["pc_service"]["version"], "0.1.5");
     assert_eq!(v["pc_service"]["update_available"], true);
     std::fs::remove_dir_all(&dir).unwrap();
 }

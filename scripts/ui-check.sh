@@ -30,7 +30,7 @@ printf '{"ts":%d,"kind":"pc_seen_asleep"}\n{"ts":%d,"kind":"pc_seen_awake"}\n{"t
   $((now - 3 * 86400)) $((now - 86400)) $((now - 3600)) >"$data/events.jsonl"
 # A newer PC service in the image than scripts/fake-pc.js reports, with a
 # changelog of four versions, so the PC service card lists what it brings.
-printf 'MZ strata-pc-agent-version:0.3.1+ui-check-new\n' >"$data/strata-pc-agent.exe"
+printf 'MZ strata-pc-agent-version:0.3.1\n' >"$data/strata-pc-agent.exe"
 cargo leptos build --project admin-ui >"$data/build.log" 2>&1 || { cat "$data/build.log"; exit 1; }
 
 port="${UI_CHECK_PORT:-18099}"

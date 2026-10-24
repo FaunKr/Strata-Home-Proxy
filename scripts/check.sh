@@ -174,14 +174,21 @@ if (selected strata-pc-agent || selected strata-nas-proxy) && command -v pwsh >/
   # shellcheck disable=SC2016 # PowerShell variables, for pwsh to expand.
   pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("deploy/windows/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
 fi
-# The Docker build's version check, on a sample file: a full commit hash
-# matches the shortened ID in the .exe, a different one does not.
+# The Docker build's version check, on a sample file: the crate version
+# matches, another version or one with a build suffix does not.
 sample="$(mktemp)"
 # shellcheck disable=SC2016 # the backticks are part of the sample.
-printf 'MZ strata-pc-agent-version:called `unwrap()`\nstrata-pc-agent-version:0.1.0+5e8b9f1\n' > "$sample"
-scripts/check-exe-version.sh "$sample" 5e8b9f13827f6f68bb56ea7e3e91c7654e0023b4
-if scripts/check-exe-version.sh "$sample" aaaaaaa3827f6f68bb56ea7e3e91c7654e0023b4 2>/dev/null; then
-  echo "check-exe-version.sh accepts a wrong build ID" >&2
+printf 'MZ strata-pc-agent-version:called `unwrap()`\nstrata-pc-agent-version:0.2.0\n' > "$sample"
+scripts/check-exe-version.sh "$sample" 0.2.0
+for wrong in 0.2.1 0.2; do
+  if scripts/check-exe-version.sh "$sample" "$wrong" 2>/dev/null; then
+    echo "check-exe-version.sh accepts the wrong version $wrong" >&2
+    exit 1
+  fi
+done
+printf 'strata-pc-agent-version:0.2.0+5e8b9f1\n' > "$sample"
+if scripts/check-exe-version.sh "$sample" 0.2.0 2>/dev/null; then
+  echo "check-exe-version.sh accepts a build suffix" >&2
   exit 1
 fi
 # The update script for TrueNAS, against faked docker, midclt and curl.

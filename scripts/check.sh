@@ -142,6 +142,8 @@ for main in crates/*/tests/main.rs; do
 done
 # Which jobs CI runs for a pull request, checked against the workspace.
 scripts/ci-select.test.sh
+# Which images a push to main publishes, from the published revision labels.
+scripts/ci-publish.test.sh
 # The repo is English: no umlauts in tracked files (scripts/language-allowlist).
 scripts/check-language.test.sh
 scripts/check-language.sh

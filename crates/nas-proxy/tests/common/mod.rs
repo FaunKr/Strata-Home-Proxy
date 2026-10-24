@@ -677,9 +677,8 @@ fn start_job(pc: &Pc, body: Value) -> Response {
         return (StatusCode::CONFLICT, Json(Refused::new(reason))).into_response();
     }
     let model = match &request {
-        StrataJobRequest::Install { size, .. } | StrataJobRequest::AddModel { size, .. } => {
-            Some(size.clone())
-        }
+        StrataJobRequest::Install { size, .. } => size.clone(),
+        StrataJobRequest::AddModel { size, .. } => Some(size.clone()),
         StrataJobRequest::Activate { model }
         | StrataJobRequest::Delete { model }
         | StrataJobRequest::SetSpeedProjection { model, .. }

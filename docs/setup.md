@@ -68,14 +68,14 @@ If it does not work: check the BIOS items from step 1 and *Energy Efficient Ethe
 ## 5. Strata
 
 Easy way, once proxy and PC service are running: web UI, area
-**Strata**. The button wakes the PC, installs the Strata Terminal with
-Strata's own `install.ps1` and the engine for the PC, sets it up with the
-recommended model and enters the Strata key in Strata and the proxy.
-The recommendation follows Strata's own setup: from 60 GB RAM `IQ3_XXS`, from 44 GB
-`Q2_0`, from 28 GB `coder-IQ1_M`; context 64K for a 16 GB card. The skill
-`local-agent` needs more context (see its README).
+**Strata**. "Set up Strata" wakes the PC and installs the Strata Terminal with
+Strata's own `install.ps1` and the engine for the PC. The page then offers
+the models of Strata's own list, with Strata's recommendation for this PC
+preselected. "Load model" downloads the first one, starts Strata with it and
+enters the Strata key in Strata and the proxy. The skill `local-agent` needs
+more context than the default (see its README).
 
-- [ ] *Strata* area: "Set up Strata" runs through, the model loads on the RX 6800 XT
+- [ ] *Strata* area: "Set up Strata" runs through, then "Load model" loads the first model on the RX 6800 XT
 - [ ] "Run benchmark" (tab *Version & benchmark*) gives tokens/s: ____
 - [ ] `curl http://<PC-IP>:8080/health` from the NAS returns `200`
 - [ ] Standby test: put the PC to sleep, wake it, then query `/health` once more. If Strata no longer answers afterwards, note it (that is what the watchdog in the PC service is meant for)

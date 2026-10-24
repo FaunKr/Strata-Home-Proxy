@@ -1066,22 +1066,57 @@ fn capitalized(text: &str) -> String {
 
 #[component]
 fn Install(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+    // An older PC service offers its own model list before Strata is there
+    // and installs Strata only with a model.
+    if !info.catalog.is_empty() {
+        return view! {
+            <section class="card">
+                <h2>"Set up Strata"</h2>
+                <p class="muted">
+                    "Strata is not set up on the PC yet. The PC service downloads Strata, sets it up with the model you choose and starts it. It also creates the Strata key and enters it in the proxy."
+                </p>
+                <ModelChoice
+                    info
+                    skip=vec![]
+                    kind=StrataJobKind::Install
+                    button="Set up Strata"
+                    actions
+                    blocked
+                />
+            </section>
+        }
+        .into_any();
+    }
+    let start = move |_| {
+        actions.start.dispatch(StartStrataJob {
+            kind: StrataJobKind::Install,
+            family: None,
+            size: None,
+            context: None,
+            model: None,
+            speed_projection: None,
+            pictures: None,
+            tune_mode: None,
+            tune_use: None,
+            preset: None,
+            options: None,
+            env: None,
+        });
+    };
     view! {
         <section class="card">
             <h2>"Set up Strata"</h2>
             <p class="muted">
-                "Strata is not set up on the PC yet. The PC service downloads Strata, sets it up with the model you choose and starts it. It also creates the Strata key and enters it in the proxy."
+                "Strata is not set up on the PC yet. The PC service downloads the Strata Terminal and the engine for this PC. Then you choose the first model from Strata's own list."
             </p>
-            <ModelChoice
-                info
-                skip=vec![]
-                kind=StrataJobKind::Install
-                button="Set up Strata"
-                actions
-                blocked
-            />
+            <div>
+                <button type="button" disabled=move || blocked.get() on:click=start>
+                    "Set up Strata"
+                </button>
+            </div>
         </section>
     }
+    .into_any()
 }
 
 #[component]
@@ -1112,6 +1147,27 @@ fn Models(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl Int
             </p>
         }
     });
+    // Right after setting up Strata: the first model, which Strata then
+    // starts with. It also creates the Strata key.
+    if info.models.is_empty() {
+        return view! {
+            <section class="card">
+                <h2>"Choose the first model"</h2>
+                <p class="muted">
+                    "Strata is set up. The PC service downloads the model you choose, starts Strata with it and enters the Strata key in the proxy."
+                </p>
+                <ModelChoice
+                    info
+                    skip=vec![]
+                    kind=StrataJobKind::AddModel
+                    button="Load model"
+                    actions
+                    blocked
+                />
+            </section>
+        }
+        .into_any();
+    }
     view! {
         <section class="card">
             <h2>"Installed models"</h2>
@@ -1130,6 +1186,7 @@ fn Models(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl Int
             />
         </section>
     }
+    .into_any()
 }
 
 #[component]

@@ -163,9 +163,9 @@ fn every_job_kind_has_a_request() {
 fn optional_request_fields_stay_out_when_unset() {
     // An older PC service refuses fields it does not know.
     let install = StrataJobRequest::Install {
-        family: "swift".into(),
-        size: "IQ3_XXS".into(),
-        context: 65536,
+        family: Some("swift".into()),
+        size: Some("IQ3_XXS".into()),
+        context: Some(65536),
         api_key: "k".into(),
         experimental_speed_projection: false,
         pictures: false,
@@ -173,6 +173,19 @@ fn optional_request_fields_stay_out_when_unset() {
     assert_eq!(
         serde_json::to_value(&install).unwrap(),
         json!({"kind": "install", "family": "swift", "size": "IQ3_XXS", "context": 65536, "api_key": "k"})
+    );
+    // A newer proxy installs Strata alone; an older service refuses it.
+    let strata_alone = StrataJobRequest::Install {
+        family: None,
+        size: None,
+        context: None,
+        api_key: "k".into(),
+        experimental_speed_projection: false,
+        pictures: false,
+    };
+    assert_eq!(
+        serde_json::to_value(&strata_alone).unwrap(),
+        json!({"kind": "install", "api_key": "k"})
     );
     let add = StrataJobRequest::AddModel {
         family: "coder".into(),

@@ -249,13 +249,72 @@ async fn cancel_ends_the_job() {
     assert!(resp.text().await.unwrap().contains("No job is running"));
 }
 
+/// A PC without Strata as the PC service reports it: Strata's catalog
+/// comes with Strata.
+fn without_strata() -> StrataReport {
+    let mut report = strata_info(false);
+    report.info.catalog = vec![];
+    report.info.contexts = vec![];
+    report.info.recommended = None;
+    report
+}
+
 #[tokio::test]
-async fn the_page_offers_the_setup_with_the_recommendation() {
+async fn the_setup_asks_for_no_model() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(without_strata());
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("Set up Strata"), "{html}");
+    assert!(html.contains("Then you choose the first model"), "{html}");
+    assert!(!html.contains("Install-size"), "{html}");
+    assert!(!html.contains("comes with Strata"), "{html}");
+}
+
+#[tokio::test]
+async fn the_setup_sends_strata_alone() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(without_strata());
+    let mut b = logged_in(&s.url).await;
+    let resp = b.call("strata-job", &[("kind", "install")]).await;
+    assert_eq!(resp.status(), 200);
+    let body = last_body(&s);
+    let mut fields: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort();
+    assert_eq!(fields, ["api_key", "kind"], "{body}");
+    assert_eq!(body["kind"], "install");
+    assert_eq!(body["api_key"].as_str().unwrap().len(), 64);
+}
+
+#[tokio::test]
+async fn after_the_setup_the_page_offers_the_first_model() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.models = vec![];
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("Choose the first model"), "{html}");
+    assert!(html.contains("AddModel-size"), "{html}");
+    assert!(html.contains("(recommended)"), "{html}");
+    assert!(!html.contains("Installed models"), "{html}");
+    assert!(!html.contains("Set up Strata"), "{html}");
+}
+
+#[tokio::test]
+async fn an_older_pc_service_sets_up_strata_with_a_model() {
+    // It offers its own model list before Strata is there.
     let s = setup(true, |_| {}).await;
     *s.pc.strata_info.lock().unwrap() = Some(strata_info(false));
     let b = logged_in(&s.url).await;
     let html = b.page("/admin/strata").await;
     assert!(html.contains("Set up Strata"), "{html}");
+    assert!(html.contains("Install-size"), "{html}");
     assert!(html.contains("(recommended)"), "{html}");
 }
 

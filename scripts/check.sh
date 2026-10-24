@@ -88,15 +88,16 @@ missing=()
 # have ESLint under /opt/node-tools; elsewhere: npm install -g eslint@10.1.0 (the version CI installs).
 eslint=$(command -v eslint || echo /opt/node-tools/node_modules/.bin/eslint)
 [[ -x $eslint ]] || missing+=("ESLint: npm install -g eslint@10.1.0")
-# The time limit of the test run; macOS has it from coreutils as gtimeout.
-timeout=$(command -v timeout || command -v gtimeout || true)
-[[ -n $timeout ]] || missing+=("timeout: brew install coreutils (on Linux it is part of coreutils)")
-# The update script for TrueNAS locks with flock (util-linux on Linux).
-command -v flock >/dev/null || missing+=("flock: brew install flock")
+# The update script for TrueNAS locks with flock.
+command -v flock >/dev/null || missing+=("flock: brew install flock (on Linux it is part of util-linux)")
 # The code benchmark's runner removes folders through shutil.rmtree(dir_fd=…).
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null ||
-  missing+=("Python 3.11 or newer as python3 (now: $(python3 --version 2>&1)): brew install python")
+  missing+=("Python 3.11 or newer as python3 (now: $(python3 --version 2>&1)): brew install python (on Linux your distribution's python3.11 or newer)")
 if [[ $cargo == true ]]; then
+  # The time limit of the test run.
+  # shellcheck source=scripts/timeout.sh
+  source "$(dirname "$0")/timeout.sh"
+  [[ -n $timeout ]] || missing+=("$timeout_hint")
   # The test runner, at least the version .config/nextest.toml pins (CI installs it).
   nextest_version=$(scripts/nextest-version.sh)
   installed=$(cargo nextest --version 2>/dev/null | sed -n '1s/^cargo-nextest \([0-9.]*\).*/\1/p' || true)
@@ -109,6 +110,8 @@ if [[ $cargo == true ]]; then
     missing+=("the wasm32 target for $(command -v rustc): rustup target add wasm32-unknown-unknown; a Rust without rustup (Homebrew's) has none, so put ~/.cargo/bin before it in PATH")
   fi
 fi
+# The linters shellcheck and actionlint, and pwsh with PSScriptAnalyzer, stay warnings below: CI
+# installs them, and on a Mac they are not needed to build and test.
 if ((${#missing[@]})); then
   printf 'Missing for a full run:\n' >&2
   printf '  %s\n' "${missing[@]}" >&2
@@ -144,6 +147,8 @@ scripts/check-language.test.sh
 scripts/check-language.sh
 # No Claude session links in commits or PR bodies; CI checks the PR itself.
 scripts/check-session-links.test.sh
+# Which HEAD the push guard checks, in a worktree too.
+scripts/push-guard.test.sh
 if [[ $cargo == true ]]; then
   cargo clippy "${package_args[@]}" --all-targets -- -D warnings
 fi

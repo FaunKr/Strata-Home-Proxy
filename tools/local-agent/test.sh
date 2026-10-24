@@ -9,7 +9,8 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # Without symlinks: macOS's /var is /private/var, and the worker's cwd is
 # compared with the repo's path.
-tmp=$(cd "$(mktemp -d)" && pwd -P)
+tmp=$(mktemp -d)
+tmp=$(cd "$tmp" && pwd -P)
 proxy_pid=
 cleanup() {
   [[ -n $proxy_pid ]] && kill "$proxy_pid" 2>/dev/null

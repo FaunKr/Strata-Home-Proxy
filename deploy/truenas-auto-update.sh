@@ -181,7 +181,7 @@ restore_data() {
   # lacks. Not `-exec mv {} … \;` either: find ignores that exit code, and a
   # failed move must stop the rollback.
   # shellcheck disable=SC2016 # expanded by the inner sh.
-  find "$DATA_DIR" -mindepth 1 -maxdepth 1 -exec sh -c 'mv "$@" "$0"' "$failed" {} + &&
+  find "$DATA_DIR" -mindepth 1 -maxdepth 1 -exec sh -c 'mv "$@" "$0/"' "$failed" {} + &&
     tar -C "$DATA_DIR" --numeric-owner -xzpf "$backup"
 }
 

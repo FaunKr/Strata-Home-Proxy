@@ -7,9 +7,15 @@
 # Time limit per run of the whole file in seconds: LIMIT (default 60).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# shellcheck source=scripts/timeout.sh
+source scripts/timeout.sh
 if (($# < 3)); then
   echo "Usage: scripts/repeat-test.sh <package> <test file> <count> [filter…]" >&2
   echo "Example: scripts/repeat-test.sh strata-nas-proxy settings_page 100" >&2
+  exit 2
+fi
+if [[ -z $timeout ]]; then
+  echo "$timeout_hint" >&2
   exit 2
 fi
 pkg=$1 test=$2 count=$3
@@ -50,7 +56,7 @@ set -- ${flags[@]+"${flags[@]}"} --exact "${names[@]}"
 failed=0 hung=0
 for i in $(seq "$count"); do
   rc=0
-  out=$(timeout "${LIMIT:-60}" "$bin" "$@" 2>&1) || rc=$?
+  out=$("$timeout" "${LIMIT:-60}" "$bin" "$@" 2>&1) || rc=$?
   if [ "$rc" -eq 124 ]; then
     hung=$((hung + 1))
     done_=$(sed -n 's/^test \(.*\) \.\.\. .*/\1/p' <<<"$out" | sort)

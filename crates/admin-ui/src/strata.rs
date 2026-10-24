@@ -1087,22 +1087,6 @@ fn Install(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
         }
         .into_any();
     }
-    let start = move |_| {
-        actions.start.dispatch(StartStrataJob {
-            kind: StrataJobKind::Install,
-            family: None,
-            size: None,
-            context: None,
-            model: None,
-            speed_projection: None,
-            pictures: None,
-            tune_mode: None,
-            tune_use: None,
-            preset: None,
-            options: None,
-            env: None,
-        });
-    };
     view! {
         <section class="card">
             <h2>"Set up Strata"</h2>
@@ -1110,7 +1094,11 @@ fn Install(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
                 "Strata is not set up on the PC yet. The PC service downloads the Strata Terminal and the engine for this PC. Then you choose the first model from Strata's own list."
             </p>
             <div>
-                <button type="button" disabled=move || blocked.get() on:click=start>
+                <button
+                    type="button"
+                    disabled=move || blocked.get()
+                    on:click=move |_| actions.job(StrataJobKind::Install)
+                >
                     "Set up Strata"
                 </button>
             </div>

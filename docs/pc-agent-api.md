@@ -23,10 +23,11 @@ talks to a newer proxy. Therefore:
   `install` is a random throwaway key, because older services refuse an
   empty one).
 - A required request field may become optional, never the other way. The
-  proxy leaves it out only where the answer shows a PC service that takes
-  that: it sends `install` without a model only when `GET /strata` lists no
-  catalog before Strata is installed. A service from before the catalog
-  read lists its own table there and needs the model.
+  web UI leaves it out only where the answer shows a PC service that takes
+  that: its setup sends `install` without a model only when `GET /strata`
+  lists no catalog before Strata is installed. A service from before the
+  catalog read lists its own table there and needs the model; it refuses
+  `install` without one with a `422`.
 
 The crate's tests read the saved responses plus responses that lack the
 newer fields. A PC service test checks that the samples show every field it

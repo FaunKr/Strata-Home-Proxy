@@ -694,16 +694,15 @@ async fn install(job: &JobContext, choice: Option<Choice>) -> Result<Option<Stri
     }
     let model = match choice {
         Some(Choice::Checked(model)) => model,
-        // The model choice comes from the catalog read here. Strata is
-        // installed also when it can't be read: the page then says why.
-        None => {
+        later => {
             job.step("Reading Strata's model list");
-            let _ = read_catalog(agent).await;
-            return Ok(None);
-        }
-        Some(Choice::Later(wanted)) => {
-            job.step("Reading Strata's model list");
-            let catalog = read_catalog(agent).await.map_err(Step::Failed)?;
+            let catalog = read_catalog(agent).await;
+            // Without a model the choice comes from this catalog. Strata is
+            // installed also when it can't be read: the page then says why.
+            let Some(Choice::Later(wanted)) = later else {
+                return Ok(None);
+            };
+            let catalog = catalog.map_err(Step::Failed)?;
             let model = new_model(&catalog, wanted).map_err(|r| Step::Failed(r.into_text()))?;
             check_model_space(agent, &model).map_err(|r| Step::Failed(r.into_text()))?;
             model

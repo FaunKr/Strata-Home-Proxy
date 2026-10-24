@@ -28,19 +28,16 @@ pub use agent::{Agent, Peer};
 pub use config::Config;
 pub use strata_pc_protocol::PcStatus;
 
-/// Crate version plus build, e.g. `0.1.0+558db97`; see `build.rs`.
-pub const VERSION: &str = env!("STRATA_PC_AGENT_VERSION");
+/// The crate version, e.g. `0.2.0`: the proxy offers an update only for a
+/// higher one, so a new build without a new version is no update.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Only the length: a second copy of the prefix as its own text would sit
 /// in the program next to the marker and could be found first.
 const MARKER_PREFIX_LEN: usize = "strata-pc-agent-version:".len();
 /// The version as plain text in the program, so the NAS reads it from the
 /// .exe it serves without running it (see `nas-proxy/src/pc_setup.rs`).
-static VERSION_MARKER: &str = concat!(
-    "strata-pc-agent-version:",
-    env!("STRATA_PC_AGENT_VERSION"),
-    "\n"
-);
+static VERSION_MARKER: &str = concat!("strata-pc-agent-version:", env!("CARGO_PKG_VERSION"), "\n");
 
 /// The version as `/status` reports it. Read from the marker at run time,
 /// so no linker drops the marker from the program (`#[used]` alone does not

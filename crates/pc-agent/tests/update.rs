@@ -55,7 +55,8 @@ async fn status_reports_the_version() {
     let s = setup("update-version").await;
     let status = get(&s, "/status").await;
     assert_eq!(status["version"], strata_pc_agent::VERSION);
-    assert!(strata_pc_agent::VERSION.starts_with(env!("CARGO_PKG_VERSION")));
+    // Without a build suffix: a new commit alone is no new version.
+    assert_eq!(strata_pc_agent::VERSION, env!("CARGO_PKG_VERSION"));
 }
 
 /// The NAS reads the version from the .exe it serves, without running it:

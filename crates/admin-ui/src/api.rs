@@ -340,7 +340,7 @@ pub struct PcServiceView {
     pub version: Option<String>,
     /// The version of the program in the image; `None` if it carries none.
     pub available: Option<String>,
-    /// The image carries another version than the PC runs.
+    /// The image carries a higher version than the PC runs.
     pub update_available: bool,
     /// An update was accepted and the new version has not reported yet.
     pub updating: bool,
@@ -352,9 +352,6 @@ pub struct PcServiceView {
     /// without an update.
     #[serde(default)]
     pub changes: Vec<PcServiceChange>,
-    /// An update is available, but the changelog lists nothing for it.
-    #[serde(default)]
-    pub only_internal_changes: bool,
 }
 
 /// One version of the PC service's changelog, as the PC service card shows it.

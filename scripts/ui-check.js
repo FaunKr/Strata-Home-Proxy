@@ -14,7 +14,7 @@ const expected = {
   // The catalog from scripts/fake-pc.js: Gyro's memory is RAM + VRAM.
   '/admin/strata': ['needs 62 GB RAM (recommended)', 'needs 28 GB RAM + VRAM', 'needs 35 GB RAM + VRAM (not enough RAM + VRAM)', 'DeepSeek-V4.1-Flash UD-Q8_K_XL · 508.4 GB download · needs 306 GB RAM + VRAM (experimental) (does not fit)', '3.5-bit i-quant, the best quality (matches the full model), the slowest. On this PC: fits.'],
   // The program and changelog from scripts/ui-check.sh.
-  '/admin/pc': ['Needs a step on the PC', 'Show older changes', 'Reports the PC\'s fan speed', 'Update to 0.3.1+ui-check-new'],
+  '/admin/pc': ['Needs a step on the PC', 'Show older changes', 'Reports the PC\'s fan speed', 'Update to 0.3.1'],
   '/admin/pc/history': ['Awake and asleep', 'Last 7 days', 'Last 12 months', 'From', 'Energy', 'Saved', "today's price"],
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
@@ -50,18 +50,21 @@ async function login(page) {
   await page.waitForSelector('#repeat', { state: 'detached' });
 }
 
-// A program that differs only in its build brings only internal changes; the
+// A new build of the version the PC runs is no update; the fake PC still
+// reports a build suffix, as older services do, and the card hides it. The
 // card hides the older versions behind the toggle otherwise.
-async function internalChanges(page, errors, name) {
+async function sameVersion(page, errors, name) {
   await page.goto(base + '/admin/pc', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1500);
   const hidden = !(await page.getByText('Fixes gaming mode staying on').isVisible());
   const program = fs.readFileSync(process.env.PROGRAM);
-  fs.writeFileSync(process.env.PROGRAM, 'MZ strata-pc-agent-version:0.1.0+ui-check-internal\n');
+  fs.writeFileSync(process.env.PROGRAM, 'MZ strata-pc-agent-version:0.1.0\n');
   try {
-    const findings = await check(page, errors, name, '/admin/pc (internal changes)', ['Only internal changes.'], '_admin_pc-internal');
+    const findings = await check(page, errors, name, '/admin/pc (same version)', ['Up to date'], '_admin_pc-same-version');
     if (!hidden) console.log(`FAIL ${name} /admin/pc: 0.2.1 shows outside "Show older changes"`);
-    return findings + (hidden ? 0 : 1);
+    const suffix = (await page.locator('main').innerText()).includes('+ui-check');
+    if (suffix) console.log(`FAIL ${name} /admin/pc: shows the build suffix of the installed version`);
+    return findings + (hidden ? 0 : 1) + (suffix ? 1 : 0);
   } finally {
     fs.writeFileSync(process.env.PROGRAM, program);
   }
@@ -549,7 +552,7 @@ async function codeBench(page, errors) {
     findings += await oldFolder(page, errors, name);
     findings += await tune(page, errors, name);
     findings += await engineOptions(page, errors, name);
-    findings += await internalChanges(page, errors, name);
+    findings += await sameVersion(page, errors, name);
     if (name === 'desk') {
       for (const [state, mode, texts] of summaryStates) {
         const upstream = state.padEnd(40, '0');

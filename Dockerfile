@@ -60,16 +60,14 @@ COPY deploy/windows/install.ps1 ./deploy/windows/
 # The proxy sends the code benchmark's tasks to its runner (include_str!).
 COPY tools/code-bench/tasks ./tools/code-bench/tasks
 RUN cargo leptos build --release --project admin-ui
-# The commit goes into the PC service's version (crates/pc-agent/build.rs);
-# from it the Overview tells whether an update is available.
-ARG STRATA_BUILD_ID=dev
 RUN cargo build --locked --release --target x86_64-pc-windows-gnu -p strata-pc-agent
 # The NAS reads the version from the .exe; without it, the Overview never
 # shows an update. That should show up here, not only on the PC.
 
 COPY scripts/check-exe-version.sh ./scripts/
 RUN scripts/check-exe-version.sh \
-        target/x86_64-pc-windows-gnu/release/strata-pc-agent.exe "$STRATA_BUILD_ID"
+        target/x86_64-pc-windows-gnu/release/strata-pc-agent.exe \
+        "$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/pc-agent/Cargo.toml | head -n1)"
 
 FROM debian:trixie-slim
 COPY --from=build /src/target/release/strata-nas-proxy /usr/local/bin/strata-nas-proxy

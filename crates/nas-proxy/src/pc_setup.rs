@@ -27,7 +27,7 @@ use crate::{
     agent::UpdateAnswer,
     events::EventKind,
     files::write_private,
-    pc_changelog::{Changelog, Changes},
+    pc_changelog::{self, Changelog},
     state::AppState,
 };
 
@@ -165,7 +165,7 @@ impl PcSetup {
         let version = std::fs::read(&path)
             .ok()
             .and_then(|bytes| version_in(&bytes))
-            .filter(|v| crate::pc_changelog::is_version(v));
+            .and_then(|v| pc_changelog::plain(&v));
         *cached = Some((stamp, version.clone()));
         version
     }
@@ -180,7 +180,7 @@ impl PcSetup {
             update.reported = reported;
             self.save(version);
         }
-        let current = version.is_some() && version == available.as_deref();
+        let current = available.is_some_and(|a| pc_changelog::runs_at_least(version, &a));
         if !current {
             return false;
         }
@@ -201,14 +201,14 @@ impl PcSetup {
         }
     }
 
-    /// Whether the service last reported `available`.
+    /// Whether the service last reported `available` or a higher version.
     fn already_runs(&self, available: &str) -> bool {
         self.update
             .lock()
             .unwrap()
             .reported
             .as_ref()
-            .is_some_and(|v| v.as_deref() == Some(available))
+            .is_some_and(|v| pc_changelog::runs_at_least(v.as_deref(), available))
     }
 
     /// Ends an update that took too long; its reason if it did.
@@ -230,21 +230,23 @@ impl PcSetup {
         let timed_out = self.expire(&mut update);
         let changelog = self.changelog();
         let view = update.reported.clone().map(|version| {
-            let update_available = available.is_some() && version != available;
+            let update_available = available
+                .as_deref()
+                .is_some_and(|a| pc_changelog::is_newer(a, version.as_deref()));
             let changes = if update_available {
                 changelog.changes(version.as_deref(), available.as_deref())
             } else {
-                Changes::default()
+                Vec::new()
             };
             PcServiceView {
                 update_available,
-                version,
+                // Without the build suffix of an older service.
+                version: version.map(|v| pc_changelog::plain(&v).unwrap_or(v)),
                 available,
                 updating: update.running_since.is_some(),
                 update_error: update.error.clone(),
                 reported_mac: None,
-                changes: changes.listed,
-                only_internal_changes: changes.only_internal,
+                changes,
             }
         });
         (view, timed_out)
@@ -261,7 +263,7 @@ impl PcSetup {
     }
 
     /// Marks an update as asked for, unless one runs or the service already
-    /// runs `available`.
+    /// runs `available` or a higher version.
     fn begin_update(&self, available: &str) -> Result<(), String> {
         let mut update = self.update.lock().unwrap();
         self.expire(&mut update);
@@ -271,9 +273,11 @@ impl PcSetup {
         if update
             .reported
             .as_ref()
-            .is_some_and(|v| v.as_deref() == Some(available))
+            .is_some_and(|v| pc_changelog::runs_at_least(v.as_deref(), available))
         {
-            return Err("The PC service already runs the version on the NAS.".into());
+            return Err(
+                "The PC service already runs the version on the NAS or a newer one.".into(),
+            );
         }
         update.running_since = Some(Instant::now());
         update.error = None;

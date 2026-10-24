@@ -127,10 +127,7 @@ fn ServiceState(
     );
     let changes = service.update_available.then(|| {
         view! {
-            <WhatsNew
-                changes=service.changes.clone()
-                only_internal=service.only_internal_changes
-            />
+            <WhatsNew changes=service.changes.clone() />
         }
     });
     let button = (service.update_available && !service.updating).then(|| {
@@ -185,10 +182,7 @@ const OPEN_VERSIONS: usize = 2;
 /// What the update brings, from the PC service's changelog: newest first,
 /// the oldest behind *Show older changes*.
 #[component]
-fn WhatsNew(changes: Vec<PcServiceChange>, only_internal: bool) -> impl IntoView {
-    if only_internal {
-        return view! { <p class="muted">"Only internal changes."</p> }.into_any();
-    }
+fn WhatsNew(changes: Vec<PcServiceChange>) -> impl IntoView {
     if changes.is_empty() {
         return ().into_any();
     }

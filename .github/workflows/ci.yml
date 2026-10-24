@@ -196,7 +196,6 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          build-args: STRATA_BUILD_ID=${{ github.event.pull_request.head.sha || github.sha }}
           cache-from: type=gha
       - if: needs.changes.outputs.bench == 'true'
         uses: docker/build-push-action@v6
@@ -245,7 +244,6 @@ jobs:
           # The NAS update script logs it (deploy/truenas-auto-update.sh), and
           # scripts/ci-publish.sh diffs against it.
           labels: org.opencontainers.image.revision=${{ github.sha }}
-          build-args: STRATA_BUILD_ID=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
   publish-bench:

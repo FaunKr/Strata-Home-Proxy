@@ -54,12 +54,15 @@ token or address were reset on the NAS); the rest of the configuration
 stays.
 
 **Updating:** The **PC** area shows the PC service version and
-**Update available** as soon as the NAS image contains a different one (after a
-new image). The proxy keeps the last reported version in `DATA_DIR`, so both
+**Update available** as soon as the NAS image contains a higher version (after a
+new image that bumped it). A new image with the same version is no update, nor
+is an older one; a build suffix that older services report (`0.2.0+5e8b9f1`)
+does not count and is not shown. A change without a version bump reaches the PC
+with the next bump or a new install command. The proxy keeps the last reported version in `DATA_DIR`, so both
 show after a restart too, while the PC sleeps. On an awake PC the button reads
 **Update to …**; on a sleeping one **Wake PC and update to …**: it wakes the
 PC until the service answers, then updates. If the service already runs the
-NAS's version after the wake, nothing is updated. The PC sleeps again after
+NAS's version or a higher one after the wake, nothing is updated. The PC sleeps again after
 the idle timeout.
 The service downloads the .exe from the NAS, stops Strata (a hand-started one
 too), puts the new .exe in the same place (task and shortcut stay valid),
@@ -78,9 +81,7 @@ the command from above once.
 it brings, from the service's changelog (`crates/pc-agent/CHANGELOG.md`, built
 into the proxy): the versions above the installed one up to the one on the
 NAS, newest first, two open and older ones behind *Show older changes*. A
-service that reports 0.1.0 or no version gets every version. An update that
-changes only the build says *Only internal changes*; when the NAS carries an
-older version than the PC runs, nothing is listed. The UI check swaps in
+service that reports 0.1.0 or no version gets every version. The UI check swaps in
 another changelog with `PC_AGENT_CHANGELOG`.
 
 The version follows semver under 0.x. A PR that changes what the service does

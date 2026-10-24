@@ -221,8 +221,12 @@ impl AppState {
                 .record(EventKind::MacLearned, Some(format_mac(mac)));
         }
         if self.pc_setup.note_version(status.version.as_deref()) {
-            self.events
-                .record(EventKind::PcServiceUpdated, status.version.clone());
+            // Without the build suffix an older service reports.
+            let version = status
+                .version
+                .as_deref()
+                .map(|v| crate::pc_changelog::without_build(v).unwrap_or_else(|| v.to_string()));
+            self.events.record(EventKind::PcServiceUpdated, version);
         }
         crate::strata_key::note_status(self, agent, status).await;
         crate::strata::note_status(self, agent, status).await;

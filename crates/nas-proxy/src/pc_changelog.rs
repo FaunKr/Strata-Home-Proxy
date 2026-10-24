@@ -60,24 +60,24 @@ impl fmt::Display for Version {
 
 /// `text` as `x.y.z`, without a build suffix; `None` for a version the
 /// proxy cannot compare.
-pub fn plain(text: &str) -> Option<String> {
+pub fn without_build(text: &str) -> Option<String> {
     Version::parse(text).map(|v| v.to_string())
 }
 
-/// Whether `available` is higher than `installed`. A service without a
-/// comparable version counts as the one before the changelog began.
-pub fn is_newer(available: &str, installed: Option<&str>) -> bool {
+/// Whether `available` is higher than `installed`: an update. A service
+/// without a comparable version counts as the one before the changelog
+/// began.
+pub fn needs_update(installed: Option<&str>, available: &str) -> bool {
     let installed = installed
         .and_then(Version::parse)
         .unwrap_or(BEFORE_CHANGELOG);
     Version::parse(available).is_some_and(|available| available > installed)
 }
 
-/// Whether `installed` is `available` or higher: the service needs no update.
-pub fn runs_at_least(installed: Option<&str>, available: &str) -> bool {
-    installed.is_some_and(|installed| {
-        Version::parse(installed).is_some() && !is_newer(available, Some(installed))
-    })
+/// Whether `installed` is `available` or higher; `false` without a
+/// comparable `installed`.
+pub fn is_up_to_date(installed: Option<&str>, available: &str) -> bool {
+    installed.and_then(Version::parse).is_some() && !needs_update(installed, available)
 }
 
 #[derive(Debug)]
@@ -211,21 +211,30 @@ mod tests {
     }
 
     #[test]
-    fn only_a_higher_version_is_newer_and_build_suffixes_do_not_count() {
-        assert!(is_newer("0.3.0", Some("0.2.0")));
-        assert!(is_newer("0.2.1", Some("0.2.0+abc1234")));
-        assert!(!is_newer("0.2.0", Some("0.2.0+abc1234")));
-        assert!(!is_newer("0.2.0", Some("0.3.0")));
-        assert!(is_newer("0.2.0", None));
-        assert!(is_newer("0.2.0", Some("dev")));
-        assert!(!is_newer("dev", None));
-        assert!(runs_at_least(Some("0.2.0+abc1234"), "0.2.0"));
-        assert!(runs_at_least(Some("0.3.0"), "0.2.0"));
-        assert!(!runs_at_least(Some("0.2.0"), "0.2.1"));
-        assert!(!runs_at_least(Some("dev"), "0.2.0"));
-        assert!(!runs_at_least(None, "0.2.0"));
-        assert_eq!(plain("0.2.0+abc1234").as_deref(), Some("0.2.0"));
-        assert_eq!(plain("dev"), None);
+    fn only_a_higher_version_needs_an_update_and_build_suffixes_do_not_count() {
+        assert!(needs_update(Some("0.2.0"), "0.3.0"));
+        assert!(needs_update(Some("0.2.0+abc1234"), "0.2.1"));
+        assert!(!needs_update(Some("0.2.0+abc1234"), "0.2.0"));
+        assert!(!needs_update(Some("0.3.0"), "0.2.0"));
+        assert!(needs_update(None, "0.2.0"));
+        assert!(needs_update(Some("dev"), "0.2.0"));
+        assert!(!needs_update(None, "dev"));
+    }
+
+    #[test]
+    fn a_service_on_the_available_version_or_higher_is_up_to_date() {
+        assert!(is_up_to_date(Some("0.2.0+abc1234"), "0.2.0"));
+        assert!(is_up_to_date(Some("0.3.0"), "0.2.0"));
+        assert!(!is_up_to_date(Some("0.2.0"), "0.2.1"));
+        assert!(!is_up_to_date(Some("dev"), "0.2.0"));
+        assert!(!is_up_to_date(None, "0.2.0"));
+    }
+
+    #[test]
+    fn a_version_without_build_drops_the_suffix() {
+        assert_eq!(without_build("0.2.0+abc1234").as_deref(), Some("0.2.0"));
+        assert_eq!(without_build("0.2.0").as_deref(), Some("0.2.0"));
+        assert_eq!(without_build("dev"), None);
     }
 
     #[test]

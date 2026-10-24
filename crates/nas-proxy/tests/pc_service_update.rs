@@ -50,7 +50,8 @@ async fn a_build_suffix_of_an_older_service_is_no_newer_version() {
     assert_eq!(v["pc_service"]["available"], NEW);
     let resp = b.call("pc-service-update", &[]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("already runs"));
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("already runs"), "{text}");
     assert_eq!(s.pc.update_requests.load(Ordering::SeqCst), 0);
 }
 

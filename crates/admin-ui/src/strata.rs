@@ -2893,6 +2893,7 @@ fn Benchmarks(
     let older = models.iter().flat_map(|m| &m.runs).any(marked);
     let fastest = models
         .iter()
+        .filter(|m| m.installed)
         .find(|m| latest_speed(m).is_some_and(|r| comparable(r) && r.record.decode_tps.is_some()))
         .map(|m| m.model.clone());
     let table = if models.is_empty() {
@@ -3001,12 +3002,16 @@ fn SpeedModel(
 ) -> impl IntoView {
     let open = RwSignal::new(false);
     let shown = latest_speed(&runs).cloned();
+    // A model whose runs all failed shows the newest failure.
+    let head_run = shown.clone().or_else(|| runs.runs.first().cloned());
     let others: Vec<SpeedRun> = runs
         .runs
         .iter()
-        .filter(|r| shown.as_ref().is_none_or(|s| s.id != r.id))
+        .filter(|r| head_run.as_ref().is_none_or(|h| h.id != r.id))
         .cloned()
         .collect();
+    // The newest run failed after the result the row shows.
+    let failed_since = shown.is_some() && runs.runs.first().is_some_and(|r| r.failed);
     let can_open = !others.is_empty();
     let can_activate = !is_active && shown.is_some() && runs.installed;
     let id = runs.model.clone();
@@ -3047,6 +3052,7 @@ fn SpeedModel(
                 }
             })}
         {(!runs.installed).then(|| view! { <span class="muted small">"Not installed"</span> })}
+        {failed_since.then(|| view! { <span class="error small">"Last run failed"</span> })}
     };
     let activate = can_activate.then(|| {
         view! {
@@ -3060,8 +3066,6 @@ fn SpeedModel(
             </button>
         }
     });
-    // A model whose runs all failed shows the newest failure.
-    let head_run = shown.clone().or_else(|| runs.runs.first().cloned());
     let head = head_run.map(|run| {
         view! { <SpeedCells run terminal head=Some((name, badges.into_any(), activate.into_any())) /> }
     });
@@ -3080,6 +3084,7 @@ fn SpeedModel(
             {rest}
         </tbody>
     }
+    .into_any()
 }
 
 /// A run's row in the speed table and, opened, its settings below it.
@@ -3174,6 +3179,7 @@ fn SpeedCells(
                 })
         }}
     }
+    .into_any()
 }
 
 /// What a run ran with, or that it is not known.

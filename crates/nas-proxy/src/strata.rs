@@ -205,10 +205,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             update: None,
             key_unreported: false,
             relay: relay_view(&status, None),
-            benchmarks: state
-                .strata
-                .benchmarks
-                .page(state.strata.last_info().as_ref()),
+            benchmarks: Vec::new(),
         };
     };
     with_local_times(&mut info);
@@ -613,6 +610,16 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
             format!("{}: interrupted", detail(&job)),
         ),
     };
+    // A run of the same model before the page is opened again would take
+    // this one's place in the PC service's report. Taken before the event,
+    // which tells that the job ended.
+    if matches!(
+        job.kind,
+        StrataJobKind::Benchmark | StrataJobKind::CompareModels
+    ) && let Some((info, _)) = agent.strata().await
+    {
+        strata.benchmarks.take(&info, clock::unix_now());
+    }
     state.events.record(kind, Some(detail));
     state.overview.refresh_now();
 }

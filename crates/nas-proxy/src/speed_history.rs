@@ -24,23 +24,35 @@ struct Kept {
 
 pub struct SpeedHistory {
     kept: Mutex<Kept>,
+    /// The file does not read: nothing is taken or saved.
+    broken: bool,
     dir: Option<PathBuf>,
 }
 
 impl SpeedHistory {
     pub fn new(data_dir: Option<PathBuf>) -> Self {
-        let read = data_dir
-            .as_ref()
-            .and_then(|dir| std::fs::read(dir.join(FILE)).ok())
-            .map(|bytes| Kept {
-                seeded: true,
-                ..serde_json::from_slice::<Kept>(&bytes)
-                    .inspect_err(|e| tracing::warn!("{FILE} not readable: {e}"))
-                    .unwrap_or_default()
-            });
+        let (kept, broken) = match data_dir.as_ref().map(|dir| std::fs::read(dir.join(FILE))) {
+            Some(Ok(bytes)) => match serde_json::from_slice::<Kept>(&bytes) {
+                Ok(kept) => (
+                    Kept {
+                        seeded: true,
+                        ..kept
+                    },
+                    false,
+                ),
+                // Saving over it would lose every run: it stays as it is
+                // until it is repaired, and the proxy keeps no history.
+                Err(e) => {
+                    tracing::error!("{FILE} not readable, no runs are kept until it is: {e}");
+                    (Kept::default(), true)
+                }
+            },
+            _ => (Kept::default(), false),
+        };
         Self {
-            kept: Mutex::new(read.unwrap_or_default()),
-            dir: data_dir,
+            kept: Mutex::new(kept),
+            dir: data_dir.filter(|_| !broken),
+            broken,
         }
     }
 
@@ -48,6 +60,9 @@ impl SpeedHistory {
     /// of the first report ever taken are older than the history and get no
     /// settings.
     pub fn take(&self, info: &StrataInfo, now: u64) {
+        if self.broken {
+            return;
+        }
         let mut kept = self.kept.lock().unwrap();
         let seeded = kept.seeded;
         let mut changed = !seeded;
@@ -58,10 +73,14 @@ impl SpeedHistory {
             info.benchmarks.as_slice()
         };
         for record in records {
-            let settings = seeded.then(|| run_settings(info, &record.model, Some(record)));
             // A failed run keeps the model's last measurement next to its
             // error: the measurement is a run of its own.
             let measured = !record.result.is_empty();
+            let settings = seeded.then(|| run_settings(info, &record.model, Some(record)));
+            // The measurement next to a failure tells what an earlier run
+            // was made with, not the failed one.
+            let failed_settings =
+                seeded.then(|| run_settings(info, &record.model, (!measured).then_some(record)));
             if measured
                 && !kept.runs.iter().any(|r| {
                     !r.failed && r.record.model == record.model && r.record.at == record.at
@@ -77,7 +96,7 @@ impl SpeedHistory {
                         ..record.clone()
                     },
                     failed: false,
-                    settings: settings.clone(),
+                    settings,
                 });
                 changed = true;
             }
@@ -91,7 +110,7 @@ impl SpeedHistory {
                     at_text: String::new(),
                     record: record.clone(),
                     failed: true,
-                    settings,
+                    settings: failed_settings,
                 });
                 changed = true;
             }

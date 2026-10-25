@@ -105,14 +105,17 @@ async fn a_failed_run_is_a_run_of_its_own() {
         error: Some("Strata did not come up".into()),
         ..good
     };
-    *s.pc.strata_info.lock().unwrap() = Some(report_with(vec![failed]));
+    // The failed run had the model's new context, not the measurement's.
+    let mut report = report_with(vec![failed]);
+    report.info.models[0].context = Some(131072);
+    *s.pc.strata_info.lock().unwrap() = Some(report);
     history(&mut b).await;
     let h = history(&mut b).await;
     let runs = h[0]["runs"].as_array().unwrap();
     assert_eq!(runs.len(), 2, "{h}");
     assert_eq!(runs[0]["failed"], true, "{h}");
     assert_eq!(runs[0]["record"]["error"], "Strata did not come up", "{h}");
-    assert!(runs[0]["settings"].is_object(), "{h}");
+    assert_eq!(runs[0]["settings"]["context"], 131072, "{h}");
     assert_eq!(runs[1]["failed"], false, "{h}");
     assert_eq!(runs[1]["record"]["error"], Value::Null, "{h}");
 
@@ -120,6 +123,7 @@ async fn a_failed_run_is_a_run_of_its_own() {
     let html = b.page("/admin/strata/version").await;
     assert!(html.contains("38.5 tok/s"), "{html}");
     assert!(!html.contains("No result"), "{html}");
+    assert!(html.contains("Last run failed"), "{html}");
 }
 
 #[tokio::test]
@@ -134,8 +138,14 @@ async fn a_model_that_only_failed_shows_its_error() {
     assert_eq!(h[0]["runs"].as_array().unwrap().len(), 1, "{h}");
     assert_eq!(h[0]["runs"][0]["at"], 1_760_000_000u64, "{h}");
     let html = b.page("/admin/strata/version").await;
-    assert!(html.contains("No result: out of memory"), "{html}");
+    assert_eq!(
+        html.matches("No result: out of memory").count(),
+        1,
+        "{html}"
+    );
     assert!(!html.contains("Make active"), "{html}");
+    // Nothing earlier to open.
+    assert!(!html.contains("▸"), "{html}");
 }
 
 #[tokio::test]
@@ -153,6 +163,8 @@ async fn runs_of_a_model_no_longer_installed_stay() {
     let html = b.page("/admin/strata/version").await;
     assert!(html.contains("Not installed"), "{html}");
     assert!(!html.contains("Make active"), "{html}");
+    // The fastest is a model one can switch to.
+    assert!(!html.contains("Fastest"), "{html}");
 }
 
 #[tokio::test]
@@ -177,5 +189,55 @@ async fn the_history_is_kept_over_a_restart_and_shown_while_the_pc_sleeps() {
     assert!(html.contains("43 tok/s"), "{html}");
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_benchmark_that_ends_is_taken_before_the_page_is_opened_again() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() =
+        Some(report_with(vec![measured("IQ3_XXS", 1_760_000_000, 38.5)]));
+    let mut b = logged_in(&s.url).await;
+    history(&mut b).await;
+    assert_eq!(
+        b.call("strata-job", &[("kind", "benchmark")])
+            .await
+            .status(),
+        200
+    );
+    *s.pc.strata_info.lock().unwrap() =
+        Some(report_with(vec![measured("IQ3_XXS", 1_760_000_600, 40.0)]));
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    eventually("job done", || {
+        kinds(&s.state).contains(&strata_nas_proxy::events::EventKind::StrataJobDone)
+    })
+    .await;
+    // A second run of the model before anyone looks at the page.
+    *s.pc.strata_info.lock().unwrap() =
+        Some(report_with(vec![measured("IQ3_XXS", 1_760_001_200, 41.0)]));
+    let h = history(&mut b).await;
+    let decodes: Vec<f64> = h[0]["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["record"]["decode_tps"].as_f64().unwrap())
+        .collect();
+    assert_eq!(decodes, [41.0, 40.0, 38.5], "{h}");
+}
+
+#[tokio::test]
+async fn an_unreadable_history_is_left_as_it_is() {
+    let dir = data_dir("speed-history-broken");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("speed-benchmarks.json");
+    std::fs::write(&file, "{ not json").unwrap();
+    let data = dir.clone();
+    let s = setup(true, move |c| c.data_dir = Some(data)).await;
+    *s.pc.strata_info.lock().unwrap() =
+        Some(report_with(vec![measured("IQ3_XXS", 1_760_000_000, 38.5)]));
+    let mut b = logged_in(&s.url).await;
+    let h = history(&mut b).await;
+    assert_eq!(h, serde_json::json!([]));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
     std::fs::remove_dir_all(&dir).unwrap();
 }

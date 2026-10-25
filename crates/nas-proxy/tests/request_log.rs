@@ -244,3 +244,75 @@ async fn the_request_log_never_wakes_the_pc() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
 }
+
+/// Strata's metrics show nothing running: a request in flight is given up
+/// after 300 ms.
+async fn quiet_strata(awake: bool) -> Setup {
+    let s = setup(awake, |_| {}).await;
+    *s.pc.metrics.lock().unwrap() = Some(METRICS_IDLE.into());
+    s.state.set_lost_after(Duration::from_millis(300));
+    s.pc.set_strata_stream(CHAT, tool_call_stream(), Duration::from_secs(30));
+    s
+}
+
+/// Sends a streamed chat request that is given up, and reads its row.
+async fn lost_row(s: &Setup) -> Value {
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("all", |m| m["kind"] == "all").await;
+    let text = post_json(s, CHAT, chat(true)).await.text().await.unwrap();
+    assert!(text.contains("no longer working"), "{text}");
+    next_row(&mut live).await
+}
+
+#[tokio::test]
+async fn a_streamed_request_given_up_is_lost() {
+    let s = quiet_strata(true).await;
+    let row = lost_row(&s).await;
+    assert_eq!(row["outcome"]["kind"], "lost", "{row}");
+    assert_eq!(row["output_tokens"], Value::Null, "{row}");
+}
+
+#[tokio::test]
+async fn a_streamed_request_given_up_after_a_wake_is_lost() {
+    let s = quiet_strata(false).await;
+    let row = lost_row(&s).await;
+    assert_eq!(row["outcome"]["kind"], "lost", "{row}");
+    assert!(row["wait_ms"].as_u64().unwrap() > 0, "{row}");
+}
+
+#[tokio::test]
+async fn a_strata_error_is_logged_with_its_status() {
+    let s = setup(true, |_| {}).await;
+    s.pc.chat_fails.store(true, Ordering::SeqCst);
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("all", |m| m["kind"] == "all").await;
+
+    assert_eq!(post_json(&s, CHAT, chat(false)).await.status(), 500);
+    let row = next_row(&mut live).await;
+    assert_eq!(
+        row["outcome"],
+        json!({"kind": "strata_error", "status": 500}),
+        "{row}"
+    );
+}
+
+#[tokio::test]
+async fn a_request_that_finishes_last_is_kept_over_a_newer_one() {
+    let s = setup(true, |_| {}).await;
+    s.state.requests.set_limit(1);
+    s.pc.set_strata_stream(CHAT, tool_call_stream(), Duration::from_millis(1500));
+    let b = logged_in(&s.url).await;
+    let slow = {
+        let s = s.clone();
+        tokio::spawn(async move { post_json(&s, CHAT, chat(true)).await.text().await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(post_json(&s, CHAT, chat(false)).await.status(), 200);
+    assert!(slow.await.unwrap().unwrap().contains("call_1"));
+
+    let rows = eventually_rows(&b, 1).await;
+    // The streamed one came first and finished last.
+    assert_eq!(rows[0]["answer"], "tool_call", "{rows:?}");
+}

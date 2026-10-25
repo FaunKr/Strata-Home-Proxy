@@ -356,9 +356,10 @@ async fn forward(
     mut rec: Option<Recording>,
 ) -> Response {
     let (req, name) = req.renamed(&st);
-    let mut given_up = Box::pin(guard.given_up(Instant::now()));
+    let now = Instant::now();
+    let mut given_up = Box::pin(guard.given_up(now));
     if let Some(rec) = &mut rec {
-        rec.sent();
+        rec.sent(now);
     }
     let sent = tokio::select! {
         sent = send_upstream(&st, &req) => sent,
@@ -582,9 +583,10 @@ async fn wake_and_pass_on(
         let _ = tx.send(flavor.error_event(kind, message)).await;
         return;
     }
-    let given_up = guard.given_up(Instant::now());
+    let now = Instant::now();
+    let given_up = guard.given_up(now);
     tokio::select! {
-        () = pass_on(&st, &req, flavor, &tx, rec) => {}
+        () = pass_on(&st, &req, flavor, &tx, rec, now) => {}
         () = given_up => {
             let _ = tx.send(flavor.error_event("api_error", LOST)).await;
         }
@@ -611,11 +613,12 @@ async fn pass_on(
     flavor: Flavor,
     tx: &mpsc::Sender<Bytes>,
     mut rec: Option<Recording>,
+    sent: Instant,
 ) {
     let (req, name) = req.clone().renamed(st);
     let req = &req;
     if let Some(rec) = &mut rec {
-        rec.sent();
+        rec.sent(sent);
     }
     let resp = match send_upstream(st, req).await {
         Ok(r) => r,

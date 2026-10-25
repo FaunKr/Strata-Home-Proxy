@@ -671,6 +671,11 @@ impl AppState {
         }
     }
 
+    /// Whether a request sent to Strata at `sent` is given up as lost.
+    pub fn was_given_up(&self, sent: Instant) -> bool {
+        self.give_up.borrow().is_some_and(|cutoff| sent <= cutoff)
+    }
+
     /// Changes `PACKET_AHEAD_AFTER`; for tests.
     pub fn set_packet_ahead_after(&self, after: Duration) {
         *self.packet_ahead_after.lock().unwrap() = after;

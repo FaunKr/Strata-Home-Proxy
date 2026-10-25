@@ -75,7 +75,7 @@ impl RequestLog {
             arrived,
             sent: None,
             status: None,
-            whole: Some(Vec::new()),
+            answer_bytes: Some(Vec::new()),
             done: false,
         })
     }
@@ -93,8 +93,8 @@ impl RequestLog {
                 )
                 .and_then(|_| {
                     db.execute(
-                        "DELETE FROM requests WHERE id NOT IN \
-                         (SELECT id FROM requests ORDER BY id DESC LIMIT ?1)",
+                        "DELETE FROM requests WHERE seq NOT IN \
+                         (SELECT seq FROM requests ORDER BY seq DESC LIMIT ?1)",
                         [limit],
                     )
                 })
@@ -133,8 +133,11 @@ impl RequestLog {
 }
 
 /// The table `create_tables` of the history adds.
+/// `seq` counts rows as they finish, so the trim keeps the rows that
+/// finished last; `id` counts requests as they arrive.
 pub const TABLE: &str = "CREATE TABLE IF NOT EXISTS requests (
-     id INTEGER PRIMARY KEY,
+     seq INTEGER PRIMARY KEY,
+     id INTEGER NOT NULL,
      row TEXT NOT NULL
  );";
 
@@ -169,7 +172,8 @@ fn with_time(row: &mut RequestRow) {
 }
 
 /// One request on its way: the meter and what the proxy itself clocks. A
-/// recording dropped without an end is a client that went away.
+/// recording dropped without an end is a client that went away, or a
+/// request given up as lost.
 pub struct Recording {
     state: Arc<AppState>,
     meter: Meter,
@@ -180,7 +184,7 @@ pub struct Recording {
     sent: Option<Instant>,
     status: Option<u16>,
     /// A whole answer's bytes, until it gets too large to read.
-    whole: Option<Vec<u8>>,
+    answer_bytes: Option<Vec<u8>>,
     done: bool,
 }
 
@@ -188,9 +192,9 @@ pub struct Recording {
 const WHOLE_LIMIT: usize = 8 << 20;
 
 impl Recording {
-    /// The request goes to Strata now.
-    pub fn sent(&mut self) {
-        self.sent = Some(Instant::now());
+    /// The request went to Strata at `at`.
+    pub fn sent(&mut self, at: Instant) {
+        self.sent = Some(at);
     }
 
     /// Strata's answer status.
@@ -230,7 +234,7 @@ impl Recording {
     {
         let mut left = length.filter(|_| !events);
         if left == Some(0) {
-            self.complete();
+            self.answer_complete();
         }
         futures_util::stream::unfold(Some((Box::pin(body), self)), move |held| async move {
             let (mut body, mut rec) = held?;
@@ -240,7 +244,7 @@ impl Recording {
                     if let Some(left) = &mut left {
                         *left = left.saturating_sub(bytes.len() as u64);
                         if *left == 0 {
-                            rec.complete();
+                            rec.answer_complete();
                         }
                     }
                     Some((Ok(bytes), Some((body, rec))))
@@ -250,7 +254,7 @@ impl Recording {
                     Some((Err(e), None))
                 }
                 None => {
-                    rec.complete();
+                    rec.answer_complete();
                     None
                 }
             }
@@ -258,8 +262,8 @@ impl Recording {
     }
 
     /// The answer came in full.
-    fn complete(&mut self) {
-        if let Some(whole) = self.whole.take() {
+    fn answer_complete(&mut self) {
+        if let Some(whole) = self.answer_bytes.take() {
             self.meter.whole(&whole);
         }
         self.end(RequestOutcome::Done);
@@ -272,9 +276,9 @@ impl Recording {
         if events {
             let at = self.sent.map(|s| s.elapsed()).unwrap_or_default();
             self.meter.chunk(bytes, at);
-        } else if let Some(whole) = &mut self.whole {
+        } else if let Some(whole) = &mut self.answer_bytes {
             if whole.len() + bytes.len() > WHOLE_LIMIT {
-                self.whole = None;
+                self.answer_bytes = None;
             } else {
                 whole.extend_from_slice(bytes);
             }
@@ -300,28 +304,25 @@ impl Recording {
             (RequestOutcome::Done, _) => row.outcome,
             (outcome, _) => outcome,
         };
-        if row.outcome == RequestOutcome::CancelledByClient {
-            // Strata sends its counts at the end, which never came.
-            let kept = RequestRow {
-                id: row.id,
-                at: row.at,
-                key: row.key,
-                model: row.model,
-                api: row.api,
-                start: row.start,
-                wait_ms: row.wait_ms,
-                duration_ms: row.duration_ms,
-                outcome: row.outcome,
-                ..RequestRow::default()
-            };
-            row = kept;
+        if matches!(
+            row.outcome,
+            RequestOutcome::CancelledByClient | RequestOutcome::Lost | RequestOutcome::NoAnswer
+        ) {
+            row = row.without_counts();
         }
         self.state.requests.finish(row);
     }
 }
 
 impl Drop for Recording {
+    /// Dropped without an end: the client went away, or the proxy gave the
+    /// request up and dropped its answer.
     fn drop(&mut self) {
-        self.end(RequestOutcome::CancelledByClient);
+        let lost = self.sent.is_some_and(|sent| self.state.was_given_up(sent));
+        self.end(if lost {
+            RequestOutcome::Lost
+        } else {
+            RequestOutcome::CancelledByClient
+        });
     }
 }

@@ -448,6 +448,24 @@ pub struct RequestRow {
 }
 
 impl RequestRow {
+    /// The row of a request whose answer never came to its end: Strata
+    /// sends its counts at the end, so only what the proxy knew before stays.
+    pub fn without_counts(self) -> Self {
+        Self {
+            id: self.id,
+            at: self.at,
+            time: self.time,
+            key: self.key,
+            model: self.model,
+            api: self.api,
+            start: self.start,
+            wait_ms: self.wait_ms,
+            duration_ms: self.duration_ms,
+            outcome: self.outcome,
+            ..Self::default()
+        }
+    }
+
     pub fn prefill_tok_s(&self) -> Option<f64> {
         tok_s(self.prefill_tokens, self.prefill_ms)
     }

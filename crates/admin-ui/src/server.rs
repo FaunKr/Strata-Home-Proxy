@@ -26,9 +26,9 @@ use leptos_axum::{
 
 use crate::{
     api::{
-        ApiKeysView, CodeBenchPage, CreatedKey, ForcedRestart, HistoryView, KeepAwakeChoice,
-        KeyModelName, OutputMessage, Overview, PcSetupCommand, Session, SettingValue, SettingsView,
-        Setup, SleepAnswer, StrataJobForm, StrataPage, history_csv,
+        ApiKeysView, BenchmarkKind, CodeBenchPage, CreatedKey, ForcedRestart, HistoryView,
+        KeepAwakeChoice, KeyModelName, OutputMessage, Overview, PcSetupCommand, Session,
+        SettingValue, SettingsView, Setup, SleepAnswer, StrataJobForm, StrataPage, history_csv,
     },
     app::{App, shell},
 };
@@ -115,6 +115,12 @@ pub trait Backend: Send + Sync + 'static {
     /// it cannot start now.
     fn start_code_bench_all(&self) -> BoxFuture<'static, Result<(), String>>;
     fn cancel_code_bench(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// Deletes one run of `benchmark`; a message if there is no such run.
+    /// Never wakes the PC.
+    fn delete_benchmark_run(&self, benchmark: BenchmarkKind, id: u64) -> Result<(), String>;
+    /// Deletes all runs of `benchmark` for `model`; refused while the PC
+    /// service's last report lists the model. Never wakes the PC.
+    fn delete_benchmark_model(&self, benchmark: BenchmarkKind, model: &str) -> Result<(), String>;
     /// A new one-time code and the command with it, for the PC to reach the
     /// NAS at `host` (as the browser did); a message if that is not usable.
     fn pc_setup_command(&self, host: &str) -> Result<PcSetupCommand, String>;

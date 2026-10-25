@@ -10,14 +10,14 @@ use strata_pc_protocol::{BenchTool, MAX_SWITCHED_CONTEXT, Pictures, StrataFamily
 
 use crate::{
     api::{
-        CancelCodeBench, CancelStrataJob, CodeBenchModelRuns, CodeBenchRun, CodeBenchState,
-        CodeBenchTask, CodeBenchTaskInfo, ForceRestartStrata, ForcedRestart, GenerateUpdateSummary,
-        GetOptimizationPrompt, PcView, PresetState, RelayView, RunSettings, SamplingField,
-        SamplingSource, SamplingSupport, SetRelay, SpeedModelRuns, SpeedRun, StartCodeBench,
-        StartCodeBenchAll, StartStrataJob, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
-        StrataModel, StrataPage, StrataPreset, StrataPresets, StrataSampling, StrataSize,
-        StrataTune, StrataUpdate, TuneMode, TuneSpeed, TuneUse, UpdateSummary, error_text,
-        get_code_bench, get_strata,
+        BenchmarkKind, CancelCodeBench, CancelStrataJob, CodeBenchModelRuns, CodeBenchRun,
+        CodeBenchState, CodeBenchTask, CodeBenchTaskInfo, DeleteBenchmarkModel, DeleteBenchmarkRun,
+        ForceRestartStrata, ForcedRestart, GenerateUpdateSummary, GetOptimizationPrompt, PcView,
+        PresetState, RelayView, RunSettings, SamplingField, SamplingSource, SamplingSupport,
+        SetRelay, SpeedModelRuns, SpeedRun, StartCodeBench, StartCodeBenchAll, StartStrataJob,
+        StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel, StrataPage,
+        StrataPreset, StrataPresets, StrataSampling, StrataSize, StrataTune, StrataUpdate,
+        TuneMode, TuneSpeed, TuneUse, UpdateSummary, error_text, get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
     copy::CopyText,
@@ -41,9 +41,117 @@ struct Actions {
     cancel: ServerAction<CancelStrataJob>,
     summarize: ServerAction<GenerateUpdateSummary>,
     relay: ServerAction<SetRelay>,
+    delete_run: ServerAction<DeleteBenchmarkRun>,
+    delete_model: ServerAction<DeleteBenchmarkModel>,
+    /// The table of the last delete, and whether it was of a model's runs:
+    /// its refusal shows under that table.
+    last_delete: RwSignal<Option<(BenchmarkKind, bool)>>,
 }
 
 impl Actions {
+    /// A button that asks, then deletes the run `id` of `model` from `at`.
+    fn delete_run_button(
+        &self,
+        benchmark: BenchmarkKind,
+        id: u64,
+        model: &str,
+        at: &str,
+    ) -> impl IntoView + use<> {
+        let action = self.delete_run;
+        let last = self.last_delete;
+        let confirm = expect_context::<Confirm>();
+        let title = format!("Delete the run of {model} from {at}?");
+        view! {
+            <button
+                type="button"
+                class="ghost-danger"
+                aria-label=format!("Delete run of {model} from {at}")
+                disabled=move || action.pending().get()
+                on:click=move |_| {
+                    confirm
+                        .ask(
+                            Question {
+                                title: title.clone(),
+                                text: "It is gone from the table. This cannot be undone.".into(),
+                                confirm: "Delete run",
+                                danger: true,
+                            },
+                            move || {
+                                last.set(Some((benchmark, false)));
+                                action.dispatch(DeleteBenchmarkRun { benchmark, id });
+                            },
+                        );
+                }
+            >
+                "Delete"
+            </button>
+        }
+    }
+
+    /// A button that asks, then deletes all runs of `model`, which is no
+    /// longer installed. It sits under the model's name: on a phone the
+    /// actions column has room for one button.
+    fn delete_model_button(
+        &self,
+        benchmark: BenchmarkKind,
+        model: &str,
+        runs: usize,
+    ) -> impl IntoView + use<> {
+        let action = self.delete_model;
+        let last = self.last_delete;
+        let confirm = expect_context::<Confirm>();
+        let model = model.to_string();
+        let title = format!("Delete all runs of {model}?");
+        let text = match runs {
+            1 => "Its 1 run is gone from the table. This cannot be undone.".to_string(),
+            n => format!("Its {n} runs are gone from the table. This cannot be undone."),
+        };
+        view! {
+            <button
+                type="button"
+                class="link small danger"
+                disabled=move || action.pending().get()
+                on:click=move |_| {
+                    let model = model.clone();
+                    confirm
+                        .ask(
+                            Question {
+                                title: title.clone(),
+                                text: text.clone(),
+                                confirm: "Delete all runs",
+                                danger: true,
+                            },
+                            move || {
+                                last.set(Some((benchmark, true)));
+                                action
+                                    .dispatch(DeleteBenchmarkModel {
+                                        benchmark,
+                                        model: model.clone(),
+                                    });
+                            },
+                        );
+                }
+            >
+                "Delete all runs"
+            </button>
+        }
+    }
+
+    /// Why the last delete in the `benchmark` table was refused, if it was.
+    fn delete_error(&self, benchmark: BenchmarkKind) -> impl IntoView + use<> {
+        let (run, model, last) = (self.delete_run, self.delete_model, self.last_delete);
+        move || {
+            let refused = match last.get() {
+                Some((b, false)) if b == benchmark => run.value().get(),
+                Some((b, true)) if b == benchmark => model.value().get(),
+                _ => None,
+            };
+            refused
+                .and_then(Result::err)
+                .map(|e| view! { <p class="error" role="alert">{error_text(&e)}</p> })
+        }
+    }
+
     fn job(&self, kind: StrataJobKind) {
         self.start.dispatch(StartStrataJob {
             kind,
@@ -250,6 +358,9 @@ pub fn StrataArea() -> impl IntoView {
         cancel: ServerAction::new(),
         summarize: ServerAction::new(),
         relay: ServerAction::new(),
+        delete_run: ServerAction::new(),
+        delete_model: ServerAction::new(),
+        last_delete: RwSignal::new(None),
     };
     // The start of the failed job whose card was closed: a new page answer
     // must not bring it back.
@@ -284,6 +395,8 @@ pub fn StrataArea() -> impl IntoView {
                 actions.cancel.version().get(),
                 actions.summarize.version().get(),
                 actions.relay.version().get(),
+                actions.delete_run.version().get(),
+                actions.delete_model.version().get(),
                 job_ended.get(),
                 tick.get(),
             )
@@ -2252,6 +2365,7 @@ fn CodeBenchCard() -> impl IntoView {
     let start = ServerAction::<StartCodeBench>::new();
     let start_all = ServerAction::<StartCodeBenchAll>::new();
     let cancel = ServerAction::<CancelCodeBench>::new();
+    let actions = expect_context::<Area>().actions;
     let tick = RwSignal::new(0u32);
     let page = Resource::new(
         move || {
@@ -2260,6 +2374,8 @@ fn CodeBenchCard() -> impl IntoView {
                 start.version().get(),
                 start_all.version().get(),
                 cancel.version().get(),
+                actions.delete_run.version().get(),
+                actions.delete_model.version().get(),
             )
         },
         |_| get_code_bench(),
@@ -2400,7 +2516,7 @@ fn CodeBenchCard() -> impl IntoView {
                                 .run
                                 .clone()
                                 .map(|r| view! { <CodeBenchCurrent run=r cancel in_all /> });
-                            let results = code_table(p.history.clone(), p.tasks.clone());
+                            let results = code_table(p.history.clone(), p.tasks.clone(), actions);
                             let models = p.models;
                             let tasks = p.tasks.len();
                             // The limits of one model's run, all tasks running out of time.
@@ -2565,7 +2681,11 @@ fn latest_code(model: &CodeBenchModelRuns) -> Option<&CodeBenchRun> {
 
 /// The code benchmark as a table: each model's latest result, best first,
 /// and its other runs once opened.
-fn code_table(history: Vec<CodeBenchModelRuns>, tasks: Vec<CodeBenchTaskInfo>) -> AnyView {
+fn code_table(
+    history: Vec<CodeBenchModelRuns>,
+    tasks: Vec<CodeBenchTaskInfo>,
+    actions: Actions,
+) -> AnyView {
     if history.is_empty() {
         return view! { <p>"No code benchmark has run yet."</p> }.into_any();
     }
@@ -2576,7 +2696,7 @@ fn code_table(history: Vec<CodeBenchModelRuns>, tasks: Vec<CodeBenchTaskInfo>) -
     // Sorted by the proxy: tests passed, then time.
     let rows = history
         .into_iter()
-        .map(|m| view! { <CodeModel runs=m tasks=tasks.clone() /> })
+        .map(|m| view! { <CodeModel runs=m tasks=tasks.clone() actions /> })
         .collect_view();
     view! {
         <div class="table-scroll bench-table">
@@ -2590,12 +2710,14 @@ fn code_table(history: Vec<CodeBenchModelRuns>, tasks: Vec<CodeBenchTaskInfo>) -
                         <th scope="col">"Output tokens"</th>
                         <th scope="col">"tok/s"</th>
                         <th scope="col">"Date"</th>
+                        <th scope="col"><span class="visually-hidden">"Actions"</span></th>
                     </tr>
                 </thead>
                 {rows}
             </table>
         </div>
         <p class="muted small">"Click a model for its earlier runs."</p>
+        {actions.delete_error(BenchmarkKind::Code)}
     }
     .into_any()
 }
@@ -2603,7 +2725,11 @@ fn code_table(history: Vec<CodeBenchModelRuns>, tasks: Vec<CodeBenchTaskInfo>) -
 /// A model in the code table: its row with the latest result, and its
 /// other runs once opened.
 #[component]
-fn CodeModel(runs: CodeBenchModelRuns, tasks: Vec<CodeBenchTaskInfo>) -> impl IntoView {
+fn CodeModel(
+    runs: CodeBenchModelRuns,
+    tasks: Vec<CodeBenchTaskInfo>,
+    actions: Actions,
+) -> impl IntoView {
     let open = RwSignal::new(false);
     let shown = latest_code(&runs).cloned();
     // A model whose runs all failed shows the newest failure.
@@ -2636,20 +2762,23 @@ fn CodeModel(runs: CodeBenchModelRuns, tasks: Vec<CodeBenchTaskInfo>) -> impl In
         }
         .into_any()
     };
+    let delete_all = (!runs.installed)
+        .then(|| actions.delete_model_button(BenchmarkKind::Code, &runs.model, runs.runs.len()));
     let badges = view! {
         {(!runs.installed).then(|| view! { <span class="muted small">"Not installed"</span> })}
         {failed_since.then(|| view! { <span class="error small">"Last run failed"</span> })}
+        {delete_all}
     }
     .into_any();
     let head = head_run.map(|run| {
-        view! { <CodeCells run tasks=tasks.clone() head=Some((name, badges)) /> }
+        view! { <CodeCells run tasks=tasks.clone() actions head=Some((name, badges)) /> }
     });
     let rest = move || {
         open.get().then(|| {
             others
                 .iter()
                 .cloned()
-                .map(|run| view! { <CodeCells run tasks=tasks.clone() head=None /> })
+                .map(|run| view! { <CodeCells run tasks=tasks.clone() actions head=None /> })
                 .collect_view()
         })
     };
@@ -2668,6 +2797,7 @@ fn CodeModel(runs: CodeBenchModelRuns, tasks: Vec<CodeBenchTaskInfo>) -> impl In
 fn CodeCells(
     run: CodeBenchRun,
     tasks: Vec<CodeBenchTaskInfo>,
+    actions: Actions,
     head: Option<(AnyView, AnyView)>,
 ) -> impl IntoView {
     let details_open = RwSignal::new(false);
@@ -2678,6 +2808,7 @@ fn CodeCells(
             ().into_any(),
         )
     });
+    let delete = actions.delete_run_button(BenchmarkKind::Code, run.id, &run.model, &run.at_text);
     // Tests, a column per task, time, output tokens and tok/s.
     let columns = tasks.len() + 4;
     let figures = if run.state != CodeBenchState::Done {
@@ -2752,7 +2883,8 @@ fn CodeCells(
     };
     let settings = run.settings.clone();
     let task_rows = run.tasks.clone();
-    let span = (columns + 2).to_string();
+    // The model, the figures, the date and the actions.
+    let span = (columns + 3).to_string();
     // Type-erased like the speed rows: the release wasm build overflows
     // rustc's query depth otherwise.
     let row = view! {
@@ -2771,6 +2903,7 @@ fn CodeCells(
             </th>
             {figures}
             <td>{run.at_text.clone()}</td>
+            <td>{delete}</td>
         </tr>
     }
     .into_any();
@@ -3106,6 +3239,7 @@ fn Benchmarks(
             <p class="muted small">
                 "Run benchmark measures the active model. Requests wait while it runs. Click a model for its earlier runs."
             </p>
+            {actions.delete_error(BenchmarkKind::Speed)}
             <div class="actions">
                 <button
                     type="button"
@@ -3182,6 +3316,8 @@ fn SpeedModel(
     } else {
         view! { <span class="strong">{runs.model.clone()}</span> }.into_any()
     };
+    let delete_all = (!runs.installed)
+        .then(|| actions.delete_model_button(BenchmarkKind::Speed, &runs.model, runs.runs.len()));
     let badges = view! {
         {is_fastest
             .then(|| {
@@ -3203,6 +3339,7 @@ fn SpeedModel(
             })}
         {(!runs.installed).then(|| view! { <span class="muted small">"Not installed"</span> })}
         {failed_since.then(|| view! { <span class="error small">"Last run failed"</span> })}
+        {delete_all}
     };
     let activate = can_activate.then(|| {
         view! {
@@ -3217,14 +3354,14 @@ fn SpeedModel(
         }
     });
     let head = head_run.map(|run| {
-        view! { <SpeedCells run terminal head=Some((name, badges.into_any(), activate.into_any())) /> }
+        view! { <SpeedCells run terminal actions head=Some((name, badges.into_any(), activate.into_any())) /> }
     });
     let rest = move || {
         open.get().then(|| {
             others
                 .iter()
                 .cloned()
-                .map(|run| view! { <SpeedCells run terminal head=None /> })
+                .map(|run| view! { <SpeedCells run terminal actions head=None /> })
                 .collect_view()
         })
     };
@@ -3243,12 +3380,19 @@ fn SpeedModel(
 fn SpeedCells(
     run: SpeedRun,
     terminal: bool,
+    actions: Actions,
     head: Option<(AnyView, AnyView, AnyView)>,
 ) -> impl IntoView {
+    let delete = actions.delete_run_button(
+        BenchmarkKind::Speed,
+        run.id,
+        &run.record.model,
+        &run.at_text,
+    );
     let settings_open = RwSignal::new(false);
     let is_head = head.is_some();
-    let (name, badges, actions) = match head {
-        Some((name, badges, actions)) => (name, badges, actions),
+    let (name, badges, model_actions) = match head {
+        Some((name, badges, model_actions)) => (name, badges, model_actions),
         None => (
             view! { <span class="muted small">"Earlier run"</span> }.into_any(),
             ().into_any(),
@@ -3311,7 +3455,9 @@ fn SpeedCells(
             </th>
             {figures}
             <td>{run.at_text.clone()}</td>
-            <td>{actions}</td>
+            <td>
+                <div class="bench-actions">{model_actions} {delete}</div>
+            </td>
         </tr>
         {move || {
             settings_open

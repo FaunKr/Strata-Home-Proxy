@@ -503,6 +503,9 @@ dialog.confirm.wide { max-width: 760px; }
 .bench-table th[scope="row"] { font-weight: normal; }
 .bench-table th[scope="row"] button.link { padding: 0; min-height: 24px; }
 .bench-table button.settings-toggle { display: block; }
+/* Stacked: on a phone the column right of the model has room for one button. */
+.bench-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.bench-table button.link.danger { color: var(--bad); padding: 0; min-height: 24px; flex-basis: 100%; text-align: left; justify-content: flex-start; }
 .bench-table tbody.bench-model tr.bench-head > * { border-top: 2px solid var(--line); }
 .bench-table tr.bench-earlier > * { background: var(--surface-2); }
 .bench-table tr.bench-earlier th[scope="row"] { padding-left: 20px; }

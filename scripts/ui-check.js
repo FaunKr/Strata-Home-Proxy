@@ -308,8 +308,8 @@ async function optimizationPrompt(page, errors, name) {
 }
 
 // Opens a model's earlier speed benchmark runs and the settings of one, then
-// a code benchmark run's tasks and a model's earlier code benchmark runs.
-// Returns the number of findings.
+// a code benchmark run's tasks and a model's earlier code benchmark runs,
+// and asks to delete a run and a removed model's runs. Returns the number of findings.
 async function benchHistory(page, errors, name) {
   const wait = { timeout: 15000 };
   errors.length = 0;
@@ -317,7 +317,7 @@ async function benchHistory(page, errors, name) {
   try {
     await page.goto(base + '/admin/strata/version', { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(1500);
-    await page.getByRole('button', { name: /IQ3_XXS/ }).click(wait);
+    await page.getByRole('button', { name: /^▸ IQ3_XXS/ }).click(wait);
     const earlier = page.locator('tr.bench-earlier');
     await earlier.first().waitFor(wait);
     await earlier.first().getByRole('button', { name: 'Settings' }).click(wait);
@@ -330,13 +330,27 @@ async function benchHistory(page, errors, name) {
     const code = page.locator('tr.bench-head').filter({ hasText: '25/33' });
     await code.getByRole('button', { name: 'Details' }).click(wait);
     await page.getByText('Broken: 1 earlier test fails now').waitFor(wait);
-    await page.getByRole('button', { name: /coder-IQ1_M/ }).last().click(wait);
+    await page.getByRole('button', { name: /^▸ coder-IQ1_M/ }).last().click(wait);
     await page.getByText('No result: the model did not load').waitFor(wait);
     if (process.env.SHOTS === '1') {
       await page.screenshot({ path: `${process.env.OUT}/${name}_code-history.jpg`, type: 'jpeg', quality: 60, fullPage: true });
     }
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     if (overflow > 0) throw new Error(`scrolls sideways by ${overflow}px`);
+    // Deleting asks first; cancelled, the runs stay for the steps after.
+    const dialog = page.locator('dialog[open]');
+    await earlier.first().getByRole('button', { name: /^Delete run of IQ3_XXS/ }).click(wait);
+    await dialog.getByText('Delete the run of IQ3_XXS from').waitFor(wait);
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/${name}_delete-run.jpg`, type: 'jpeg', quality: 60 });
+    }
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await dialog.waitFor({ state: 'detached', ...wait });
+    await page.locator('tr.bench-head').filter({ hasText: 'gyro-Gyro-S' })
+      .getByRole('button', { name: 'Delete all runs' }).click(wait);
+    await dialog.getByText('Delete all runs of gyro-Gyro-S?').waitFor(wait);
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await dialog.waitFor({ state: 'detached', ...wait });
   } catch (e) {
     issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
   }

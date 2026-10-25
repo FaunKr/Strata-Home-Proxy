@@ -10,9 +10,10 @@ use futures_util::{FutureExt, future::BoxFuture, stream::BoxStream};
 use strata_admin_ui::{
     api::{self as ui, ForcedRestart},
     api::{
-        ApiKeyInfo, ApiKeysView, CodeBenchPage, CreatedKey, HistoryView, KeepAwakeChoice,
-        KeyModelName, OutputMessage, Overview, PcSetupCommand, Session, SettingEntry,
-        SettingSuggestion, SettingValue, SettingsView, Setup, Source, StrataJobForm, StrataPage,
+        ApiKeyInfo, ApiKeysView, BenchmarkKind, CodeBenchPage, CreatedKey, HistoryView,
+        KeepAwakeChoice, KeyModelName, OutputMessage, Overview, PcSetupCommand, Session,
+        SettingEntry, SettingSuggestion, SettingValue, SettingsView, Setup, Source, StrataJobForm,
+        StrataPage,
     },
     labels::{NO_AGENT, NO_ANSWER, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
@@ -31,6 +32,10 @@ use crate::{
 
 /// Detail of events caused by a button on the overview.
 const BY_UI: &str = "from the web UI";
+
+/// A delete of a run the proxy does not keep, e.g. deleted in another tab.
+const NO_RUN: &str = "This run is gone already. Reload the page.";
+const NO_RUNS: &str = "These runs are gone already. Reload the page.";
 
 struct UiBackend(Arc<AppState>);
 
@@ -365,6 +370,32 @@ impl Backend for UiBackend {
     fn cancel_code_bench(&self) -> BoxFuture<'static, Result<(), String>> {
         let state = Arc::clone(&self.0);
         async move { crate::code_bench::cancel(&state).await }.boxed()
+    }
+
+    fn delete_benchmark_run(&self, benchmark: BenchmarkKind, id: u64) -> Result<(), String> {
+        let deleted = match benchmark {
+            BenchmarkKind::Speed => self.0.strata.benchmarks.delete(id),
+            BenchmarkKind::Code => self.0.code_bench.delete(id),
+        }?;
+        deleted.then_some(()).ok_or_else(|| NO_RUN.to_string())
+    }
+
+    fn delete_benchmark_model(&self, benchmark: BenchmarkKind, model: &str) -> Result<(), String> {
+        let info = self.0.strata.last_info().ok_or_else(|| {
+            String::from(
+                "Which models are installed is not known. Open the Strata page while the PC is awake.",
+            )
+        })?;
+        if info.models.iter().any(|m| m.id == model) {
+            return Err(format!(
+                "{model} is installed. Delete its runs one by one, or remove the model first."
+            ));
+        }
+        let deleted = match benchmark {
+            BenchmarkKind::Speed => self.0.strata.benchmarks.delete_model(model),
+            BenchmarkKind::Code => self.0.code_bench.delete_model(model),
+        }?;
+        deleted.then_some(()).ok_or_else(|| NO_RUNS.to_string())
     }
 
     fn pc_setup_command(&self, host: &str) -> Result<PcSetupCommand, String> {

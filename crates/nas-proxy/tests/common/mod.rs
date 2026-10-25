@@ -168,6 +168,11 @@ pub struct FakePc {
     /// How long the PC service takes before it answers `/status`, also
     /// while the PC sleeps, like a connection that runs into its timeout.
     pub status_delay: Mutex<Duration>,
+    /// Streamed answers by path in place of the default ones, with the pause
+    /// after the first event (`set_strata_stream`).
+    strata_streams: Mutex<std::collections::HashMap<String, (Vec<String>, Duration)>>,
+    /// Whole answers by path in place of the default ones (`set_strata_json`).
+    strata_jsons: Mutex<std::collections::HashMap<String, Value>>,
 }
 
 /// Credential headers as Strata saw them.
@@ -221,6 +226,34 @@ impl FakePc {
     fn reported_generation(&self) -> Option<u64> {
         (!self.no_key_endpoint.load(Ordering::SeqCst))
             .then(|| self.key_generation.load(Ordering::SeqCst))
+    }
+
+    /// Strata streams `events` for a streamed request to `path`, pausing
+    /// `pause` after the first one.
+    pub fn set_strata_stream(&self, path: &str, events: Vec<String>, pause: Duration) {
+        self.strata_streams
+            .lock()
+            .unwrap()
+            .insert(path.into(), (events, pause));
+    }
+
+    /// Strata answers a request to `path` that is not streamed with `answer`.
+    pub fn set_strata_json(&self, path: &str, answer: Value) {
+        self.strata_jsons
+            .lock()
+            .unwrap()
+            .insert(path.into(), answer);
+    }
+
+    /// The answer set for `path`, streamed or not, if one is.
+    fn set_answer(&self, path: &str, streamed: bool) -> Option<Response> {
+        if streamed {
+            let (events, pause) = self.strata_streams.lock().unwrap().get(path)?.clone();
+            Some(sse(events, pause))
+        } else {
+            let answer = self.strata_jsons.lock().unwrap().get(path)?.clone();
+            Some(Json(answer).into_response())
+        }
     }
 
     pub fn update_job(&self, change: impl FnOnce(&mut StrataJob)) {
@@ -418,6 +451,9 @@ pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Val
         .lock()
         .unwrap()
         .push(("/v1/chat/completions".into(), body.clone()));
+    if let Some(answer) = pc.set_answer("/v1/chat/completions", body["stream"] == true) {
+        return answer;
+    }
     if body["stream"].as_bool() == Some(true) {
         return sse(
             vec![

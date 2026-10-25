@@ -397,6 +397,120 @@ pub struct PcServiceChange {
     pub lines: Vec<String>,
 }
 
+/// One message of the request log stream (`/admin/api/requests-stream`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RequestLogMessage {
+    /// The whole log, newest first; the page drops what it has.
+    All { rows: Vec<RequestRow> },
+    /// A new row, or one that takes the place of the row with its id.
+    Row { row: Box<RequestRow> },
+}
+
+/// One request through the proxy that made the model work: numbers and
+/// labels only, never the text of a prompt or an answer.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RequestRow {
+    /// Grows with every request.
+    pub id: u64,
+    /// Unix time in seconds when the request reached the proxy.
+    pub at: u64,
+    /// `at` in the NAS's time zone, filled in when the row is sent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub time: String,
+    /// The name of the API key that sent it.
+    pub key: String,
+    /// The model Strata ran, as Strata named it.
+    pub model: Option<String>,
+    pub api: RequestApi,
+    /// What the request's last message was.
+    pub start: Option<RequestStart>,
+    /// What came back.
+    pub answer: Option<RequestAnswer>,
+    pub prompt_tokens: Option<u64>,
+    /// The part of the prompt Strata held already.
+    pub cached_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    /// The prompt tokens Strata read, and how long it took.
+    pub prefill_tokens: Option<u64>,
+    pub prefill_ms: Option<f64>,
+    /// The tokens Strata generated, and how long it took.
+    pub generation_tokens: Option<u64>,
+    pub generation_ms: Option<f64>,
+    /// From the request going to Strata to its first token; only for a
+    /// streamed answer.
+    pub first_token_ms: Option<u64>,
+    /// From arrival until the request went to Strata.
+    pub wait_ms: u64,
+    /// From arrival to the answer's end.
+    pub duration_ms: u64,
+    pub outcome: RequestOutcome,
+}
+
+impl RequestRow {
+    pub fn prefill_tok_s(&self) -> Option<f64> {
+        tok_s(self.prefill_tokens, self.prefill_ms)
+    }
+
+    pub fn generation_tok_s(&self) -> Option<f64> {
+        tok_s(self.generation_tokens, self.generation_ms)
+    }
+}
+
+fn tok_s(tokens: Option<u64>, ms: Option<f64>) -> Option<f64> {
+    match (tokens, ms) {
+        (Some(tokens), Some(ms)) if tokens > 0 && ms > 0.0 => Some(tokens as f64 * 1000.0 / ms),
+        _ => None,
+    }
+}
+
+/// The client API a request came through.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestApi {
+    #[default]
+    Chat,
+}
+
+/// What started a request: its last message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestStart {
+    /// The user's message.
+    Prompt,
+    /// A tool's result.
+    ToolResult,
+    /// The assistant's own message, to go on from.
+    Continue,
+}
+
+/// What came back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestAnswer {
+    Text,
+    /// The answer calls at least one tool.
+    ToolCall,
+}
+
+/// How a request ended.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RequestOutcome {
+    #[default]
+    Done,
+    /// Stopped at the request's limit of output tokens.
+    CutOff,
+    /// Strata answered with an error status.
+    StrataError { status: u16 },
+    /// Strata did not answer, or its answer broke off.
+    NoAnswer,
+    /// Given up because Strata showed nothing running for too long.
+    Lost,
+    /// The client went away before the answer's end.
+    CancelledByClient,
+}
+
 /// One message of the Strata output stream (`/admin/api/strata-output-stream`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

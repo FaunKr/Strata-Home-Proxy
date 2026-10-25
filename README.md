@@ -207,7 +207,8 @@ start the app.
 At `http://<NAS-IP>:8080/admin/`, so on the same port as the API.
 Calls there do not wake the PC and do not keep it awake. The web UI
 is in English and split into five areas: *Overview*, *PC*, *Strata*
-(tabs *Models*, *Output*, *Version & benchmark*, *Connection*), *Access* and
+(tabs *Models*, *Output*, *Version & benchmark*, *Connection*,
+*Requests*), *Access* and
 *System*; at the top, two badges show the state of PC and Strata live.
 
 - **Overview:** shows live whether the PC is asleep, waking up, awake or in
@@ -269,6 +270,14 @@ is in English and split into five areas: *Overview*, *PC*, *Strata*
   the result; shown are tests, time, steps, tokens and tokens/s per
   task, expandable with code and test output. Details:
   [tools/code-bench/README.md](tools/code-bench/README.md).
+- **Requests** (*Strata → Requests*): the request log, live: each request
+  through the proxy that made the model work, newest first, with the API
+  key's name, the model, the API, its type (what started it and what came
+  back, e.g. *tool result → tool call*), prompt tokens with the cached share,
+  output tokens, prompt reading and generation speed, time to first token,
+  duration, the wait for the PC and the outcome. Only numbers, never the
+  text; the last 1000 requests are kept in `/data/events.db`. On a phone a
+  row opens on tap.
 - **API keys** (*Access* area): Create one key per client. It is shown in full only right after
   creation and stored only as a hash in `/data/api-keys.json`.
   The list shows the beginning, creation and last use; a

@@ -288,9 +288,25 @@ http.createServer((req, res) => {
     }
   }
   else if (req.url.startsWith('/v1/chat/completions')) {
-    req.resume();
+    let body = '';
+    req.on('data', d => { body += d; });
     req.on('end', () => {
-      if (summaryMode === 'hold') held.push(res);
+      // An app's streamed request, for the request log: a tool call with
+      // usage and timings, as Strata's openai_chunks writes them.
+      if (JSON.parse(body || '{}').stream) {
+        const chunk = (delta, finish, extra = {}) => `data: ${JSON.stringify({
+          id: 'chatcmpl-1f0c', object: 'chat.completion.chunk', created: 1761426000, model: 'Qwen3-30B-A3B',
+          choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`;
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.end(chunk({ role: 'assistant', content: '' }, null)
+          + chunk({ tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'read', arguments: '{}' } }] }, null)
+          + chunk({}, 'tool_calls', {
+            usage: { prompt_tokens: 5200, completion_tokens: 41, total_tokens: 5241, prompt_tokens_details: { cached_tokens: 4800 } },
+            timings: { cache_n: 4800, prompt_n: 400, prompt_ms: 250, prompt_per_second: 1600, predicted_n: 41, predicted_ms: 1025, predicted_per_second: 40 },
+          })
+          + 'data: [DONE]\n\n');
+      }
+      else if (summaryMode === 'hold') held.push(res);
       else if (summaryMode === 'fail') res.writeHead(500).end();
       else json({ model: 'Qwen3-30B-A3B', choices: [{ message: { content: summary } }] });
     });

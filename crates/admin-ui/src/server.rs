@@ -27,8 +27,9 @@ use leptos_axum::{
 use crate::{
     api::{
         ApiKeysView, BenchmarkKind, CodeBenchPage, CreatedKey, ForcedRestart, HistoryView,
-        KeepAwakeChoice, KeyModelName, OutputMessage, Overview, PcSetupCommand, Session,
-        SettingValue, SettingsView, Setup, SleepAnswer, StrataJobForm, StrataPage, history_csv,
+        KeepAwakeChoice, KeyModelName, OutputMessage, Overview, PcSetupCommand, RequestLogMessage,
+        Session, SettingValue, SettingsView, Setup, SleepAnswer, StrataJobForm, StrataPage,
+        history_csv,
     },
     app::{App, shell},
 };
@@ -66,6 +67,9 @@ pub trait Backend: Send + Sync + 'static {
     fn overview(&self) -> BoxStream<'static, Overview>;
     /// The Strata-Ausgabe for as long as it is held; never wakes the PC.
     fn strata_output(&self) -> BoxStream<'static, OutputMessage>;
+    /// The request log, all of it first and then each row as it changes;
+    /// never wakes the PC.
+    fn requests(&self) -> BoxStream<'static, RequestLogMessage>;
     /// Starts waking the PC; a message for the user if it cannot be woken.
     fn wake(&self) -> Result<(), String>;
     /// Asks the PC service to sleep: its answer, with the reason of a
@@ -320,6 +324,7 @@ where
     let pkg = PathBuf::from(options.site_root.as_ref()).join(options.site_pkg_dir.as_ref());
     let overview_backend = Arc::clone(&backend);
     let output_backend = Arc::clone(&backend);
+    let requests_backend = Arc::clone(&backend);
     let csv_backend = Arc::clone(&backend);
     let context = move || provide_context(Arc::clone(&backend));
     // Listing the routes renders the app once, which starts the session
@@ -349,6 +354,12 @@ where
             "/admin/api/strata-output-stream",
             get(move |headers: HeaderMap| async move {
                 session_stream(&output_backend, &headers, |b| b.strata_output())
+            }),
+        )
+        .route(
+            "/admin/api/requests-stream",
+            get(move |headers: HeaderMap| async move {
+                session_stream(&requests_backend, &headers, |b| b.requests())
             }),
         )
         .route(

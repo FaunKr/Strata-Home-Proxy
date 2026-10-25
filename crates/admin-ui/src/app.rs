@@ -16,6 +16,7 @@ use crate::{
     labels::{pc_badge, strata_badge},
     overview::{Live, OverviewPage},
     pc_setup::{PcArea, PcSetupTab},
+    requests::RequestsTab,
     settings::SystemPage,
     strata::{ConnectionTab, ModelsTab, StrataArea, VersionTab},
     strata_output::OutputTab,
@@ -85,6 +86,7 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("output") view=OutputTab />
                         <Route path=path!("version") view=VersionTab />
                         <Route path=path!("connection") view=ConnectionTab />
+                        <Route path=path!("requests") view=RequestsTab />
                     </ParentRoute>
                     <Route path=path!("access") view=AccessPage />
                     <Route path=path!("system") view=SystemPage />

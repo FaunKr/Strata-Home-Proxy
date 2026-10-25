@@ -47,6 +47,17 @@ pub fn local_text(ts: u64) -> String {
     }
 }
 
+/// `14:03:27` for today, `17.10. 14:03:27` for other days.
+pub fn local_time_text(ts: u64) -> String {
+    let at = zoned(ts);
+    let today = zoned(unix_now()).date();
+    if at.date() == today {
+        at.strftime("%H:%M:%S").to_string()
+    } else {
+        at.strftime("%d.%m. %H:%M:%S").to_string()
+    }
+}
+
 /// The next 8 o'clock after `now` in its time zone: today if it is still
 /// before 8, else tomorrow.
 pub fn next_morning(now: &Zoned) -> Timestamp {

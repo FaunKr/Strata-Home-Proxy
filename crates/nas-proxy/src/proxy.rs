@@ -15,12 +15,14 @@ use axum::{
 };
 use futures_util::{Stream, StreamExt, stream, stream::BoxStream};
 use serde_json::json;
+use strata_admin_ui::api::RequestOutcome;
 use tokio::sync::mpsc;
 
 use crate::{
     events::EventKind,
     models::{self, SavedList},
     public_name::{self, PublicName},
+    request_log::{Recording, RequestLog},
     state::{ActivityGuard, AppState, Readiness, WakeError},
 };
 
@@ -351,30 +353,53 @@ async fn forward(
     guard: ActivityGuard,
     req: Incoming,
     flavor: Flavor,
+    mut rec: Option<Recording>,
 ) -> Response {
     let (req, name) = req.renamed(&st);
     let mut given_up = Box::pin(guard.given_up(Instant::now()));
+    if let Some(rec) = &mut rec {
+        rec.sent();
+    }
     let sent = tokio::select! {
         sent = send_upstream(&st, &req) => sent,
-        () = &mut given_up => return lost(flavor),
+        () = &mut given_up => {
+            end(rec, RequestOutcome::Lost);
+            return lost(flavor);
+        }
     };
     let resp = match sent {
         Ok(r) => r,
-        Err(e) => return upstream_failed(flavor, &e),
+        Err(e) => {
+            end(rec, RequestOutcome::NoAnswer);
+            return upstream_failed(flavor, &e);
+        }
     };
     let status = resp.status();
+    if let Some(rec) = &mut rec {
+        rec.answered(status.as_u16());
+    }
     let sse = is_event_stream(resp.headers());
     let mut headers = copy_headers(resp.headers(), sse);
     let is_list = models::is_list(&req.method, &req.path_and_query);
     if status == StatusCode::OK && !sse && (is_list || name.is_some() && is_json(&headers)) {
         let read = tokio::select! {
             read = resp.bytes() => read,
-            () = &mut given_up => return lost(flavor),
+            () = &mut given_up => {
+                end(rec, RequestOutcome::Lost);
+                return lost(flavor);
+            }
         };
         let body = match read {
             Ok(body) => body,
-            Err(e) => return upstream_failed(flavor, &e.to_string()),
+            Err(e) => {
+                end(rec, RequestOutcome::NoAnswer);
+                return upstream_failed(flavor, &e.to_string());
+            }
         };
+        if let Some(mut rec) = rec {
+            rec.whole(&body);
+            rec.finish(RequestOutcome::Done);
+        }
         let body = if is_list {
             let content_type = headers
                 .get(header::CONTENT_TYPE)
@@ -398,7 +423,7 @@ async fn forward(
         return out;
     }
     let ping_interval = st.cfg().ping_interval;
-    let body = resp.bytes_stream();
+    let body = metered(rec, resp, sse);
     let body = if sse {
         let body = renamed_stream(name.as_ref(), &req.path_and_query, body);
         let tail = flavor.error_event("api_error", LOST);
@@ -439,6 +464,34 @@ fn strata_refused(st: &AppState) -> &'static str {
     message
 }
 
+/// Ends the request's row, if it has one.
+fn end(rec: Option<Recording>, outcome: RequestOutcome) {
+    if let Some(rec) = rec {
+        rec.finish(outcome);
+    }
+}
+
+/// Leaves the request out of the request log.
+fn discard(rec: Option<Recording>) {
+    if let Some(rec) = rec {
+        rec.discard();
+    }
+}
+
+/// An answer's body, read by the request's row on its way if it has one.
+fn metered(
+    rec: Option<Recording>,
+    resp: reqwest::Response,
+    events: bool,
+) -> BoxStream<'static, reqwest::Result<Bytes>> {
+    let length = resp.content_length();
+    let body = resp.bytes_stream();
+    match rec {
+        Some(rec) => rec.metered(body, events, length).boxed(),
+        None => body.boxed(),
+    }
+}
+
 /// Holds the activity guard until the body stream ends or is dropped. A
 /// request given up as lost ends with `tail` (an error event), or without
 /// one with an error, so the client never takes a cut answer for a whole one.
@@ -477,9 +530,10 @@ fn wake_then_stream(
     req: Incoming,
     flavor: Flavor,
     held: bool,
+    rec: Option<Recording>,
 ) -> Response {
     let (tx, mut rx) = mpsc::channel::<Bytes>(16);
-    tokio::spawn(wake_and_pass_on(st, guard, req, flavor, held, tx));
+    tokio::spawn(wake_and_pass_on(st, guard, req, flavor, held, tx, rec));
     let body = stream::poll_fn(move |cx| rx.poll_recv(cx)).map(Ok::<_, std::convert::Infallible>);
     let mut resp = Response::new(Body::from_stream(body));
     let headers = resp.headers_mut();
@@ -499,6 +553,7 @@ async fn wake_and_pass_on(
     flavor: Flavor,
     held: bool,
     tx: mpsc::Sender<Bytes>,
+    rec: Option<Recording>,
 ) {
     // A client that hangs up ends the pings, not the wake-up.
     let wake = wait_and_wake(&st, held);
@@ -519,6 +574,7 @@ async fn wake_and_pass_on(
         }
     };
     if let Err(err) = woke {
+        discard(rec);
         if err == WakeError::Gaming {
             st.events.record(EventKind::GamingRejected, None);
         }
@@ -528,7 +584,7 @@ async fn wake_and_pass_on(
     }
     let given_up = guard.given_up(Instant::now());
     tokio::select! {
-        () = pass_on(&st, &req, flavor, &tx) => {}
+        () = pass_on(&st, &req, flavor, &tx, rec) => {}
         () = given_up => {
             let _ = tx.send(flavor.error_event("api_error", LOST)).await;
         }
@@ -549,12 +605,22 @@ fn renamed_stream(
 }
 
 /// Sends the request to Strata and passes its event stream on.
-async fn pass_on(st: &AppState, req: &Incoming, flavor: Flavor, tx: &mpsc::Sender<Bytes>) {
+async fn pass_on(
+    st: &AppState,
+    req: &Incoming,
+    flavor: Flavor,
+    tx: &mpsc::Sender<Bytes>,
+    mut rec: Option<Recording>,
+) {
     let (req, name) = req.clone().renamed(st);
     let req = &req;
+    if let Some(rec) = &mut rec {
+        rec.sent();
+    }
     let resp = match send_upstream(st, req).await {
         Ok(r) => r,
         Err(e) => {
+            end(rec, RequestOutcome::NoAnswer);
             tracing::warn!("Forwarding to Strata failed: {e}");
             let _ = tx
                 .send(flavor.error_event("api_error", "Strata did not answer."))
@@ -562,20 +628,26 @@ async fn pass_on(st: &AppState, req: &Incoming, flavor: Flavor, tx: &mpsc::Sende
             return;
         }
     };
+    if let Some(rec) = &mut rec {
+        rec.answered(resp.status().as_u16());
+    }
     if resp.status() == StatusCode::UNAUTHORIZED {
+        end(rec, RequestOutcome::Done);
         let message = strata_refused(st);
         let _ = tx.send(flavor.error_event("api_error", message)).await;
         return;
     }
     if !resp.status().is_success() || !is_event_stream(resp.headers()) {
         // The status line is already sent; pass the error on as an event.
+        end(rec, RequestOutcome::Done);
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         let message = format!("Strata answered with {status}: {text}");
         let _ = tx.send(flavor.error_event("api_error", &message)).await;
         return;
     }
-    let body = renamed_stream(name.as_ref(), &req.path_and_query, resp.bytes_stream());
+    let body = metered(rec, resp, true);
+    let body = renamed_stream(name.as_ref(), &req.path_and_query, body);
     let mut body = Box::pin(with_pings(body, flavor, st.cfg().ping_interval));
     while let Some(chunk) = body.next().await {
         match chunk {
@@ -628,6 +700,7 @@ fn saved_list(list: SavedList, public: Option<String>) -> Response {
 pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
     let (parts, body) = req.into_parts();
     let flavor = Flavor::from_path(parts.uri.path());
+    let arrived = Instant::now();
     let Some((key, checked)) = client_keys(&parts.headers)
         .find_map(|key| st.api_keys.check(key).map(|checked| (key, checked)))
     else {
@@ -667,6 +740,7 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
         }
     };
     let streaming = is_streaming(&body);
+    let rec = RequestLog::begin(&st, &checked.name, arrived, &path_and_query, &body);
     let req = Incoming {
         method: parts.method,
         path_and_query,
@@ -675,19 +749,24 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
         public,
     };
     match st.readiness().await {
-        Readiness::Ready if !held => forward(st, guard, req, flavor).await,
+        Readiness::Ready if !held => forward(st, guard, req, flavor, rec).await,
         Readiness::Gaming => {
+            discard(rec);
             st.events.record(EventKind::GamingRejected, None);
             unavailable(flavor, &WakeError::Gaming)
         }
-        Readiness::Tuning => unavailable(flavor, &WakeError::Tuning),
+        Readiness::Tuning => {
+            discard(rec);
+            unavailable(flavor, &WakeError::Tuning)
+        }
         // Held while ready, or asleep: wait for the run's end or the wake-up.
         Readiness::Ready | Readiness::NeedsWake if streaming => {
-            wake_then_stream(st, guard, req, flavor, held)
+            wake_then_stream(st, guard, req, flavor, held, rec)
         }
         Readiness::Ready | Readiness::NeedsWake => match wait_and_wake(&st, held).await {
-            Ok(()) => forward(st, guard, req, flavor).await,
+            Ok(()) => forward(st, guard, req, flavor, rec).await,
             Err(err) => {
+                discard(rec);
                 if err == WakeError::Gaming {
                     st.events.record(EventKind::GamingRejected, None);
                 }

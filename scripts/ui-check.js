@@ -5,7 +5,7 @@ const { chromium } = require('playwright');
 
 const base = process.env.BASE;
 const areas = ['/admin', '/admin/pc', '/admin/pc/history', '/admin/strata', '/admin/strata/output',
-  '/admin/strata/version', '/admin/strata/connection', '/admin/access', '/admin/system'];
+  '/admin/strata/version', '/admin/strata/connection', '/admin/strata/requests', '/admin/access', '/admin/system'];
 // Texts an area must show, as innerText gives them: with CSS text-transform
 // applied, so e.g. an h3 reads in capitals. The overview's Power row comes from
 // scripts/fake-shelly.js, its Hardware card from scripts/fake-pc.js.
@@ -18,6 +18,8 @@ const expected = {
   '/admin/pc/history': ['Awake and asleep', 'Last 7 days', 'Last 12 months', 'From', 'Energy', 'Saved', "today's price"],
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
+  // The requests sendRequests made through the proxy.
+  '/admin/strata/requests': ['Request log', 'Chat app', 'prompt → tool call', 'Gen. tok/s', '40.0'],
   '/admin/strata/connection': ['Relay through the PC service', 'Off: the proxy reaches Strata directly over the network.', 'Hide model name', 'Public model name'],
   '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', '52.3 tok/s', 'Not installed', 'BENCH.bat, not comparable', 'Compare models', '25/33', 'Time limit', 'Last run failed', 'Run code benchmark', 'Benchmark all models', 'No result: model did not load', 'Remove old Strata folder'],
 };
@@ -68,6 +70,60 @@ async function sameVersion(page, errors, name) {
   } finally {
     fs.writeFileSync(process.env.PROGRAM, program);
   }
+}
+
+// Creates an API key under Access and sends two streamed chat requests with
+// it through the proxy, which scripts/fake-pc.js answers with a tool call,
+// so the request log has rows. Returns the number of findings.
+async function sendRequests(page, errors) {
+  const wait = { timeout: 15000 };
+  errors.length = 0;
+  let issue = null;
+  try {
+    await page.goto(base + '/admin/access', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    await page.fill('#key-name', 'Chat app');
+    await page.getByRole('button', { name: 'Create key' }).click(wait);
+    const key = await page.locator('#new-key').inputValue(wait);
+    for (let i = 0; i < 2; i++) {
+      const resp = await fetch(base + '/v1/chat/completions', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'any', stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+      });
+      if (!(await resp.text()).includes('call_1')) throw new Error(`request ${i + 1} got no tool call`);
+    }
+  } catch (e) {
+    issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
+  }
+  if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+  console.log(`${issue ? 'FAIL' : 'ok  '} desk requests for the request log${issue ? '\n     ' + issue : ''}`);
+  return issue ? 1 : 0;
+}
+
+// On a phone a request's row shows the rest on tap. Returns the number of
+// findings.
+async function requestDetails(page, errors, name) {
+  const wait = { timeout: 15000 };
+  errors.length = 0;
+  let issue = null;
+  try {
+    await page.goto(base + '/admin/strata/requests', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    const first = page.locator('tbody.request').first();
+    const prefill = first.locator('tr.request-more').getByText('1600.0 tok/s');
+    if (await prefill.isVisible()) throw new Error('the prefill speed shows before the tap');
+    await first.locator('tr').first().click(wait);
+    await prefill.waitFor(wait);
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/${name}_requests-open.jpg`, type: 'jpeg', quality: 60, fullPage: true });
+    }
+  } catch (e) {
+    issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
+  }
+  if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+  console.log(`${issue ? 'FAIL' : 'ok  '} ${name} request details on tap${issue ? '\n     ' + issue : ''}`);
+  return issue ? 1 : 0;
 }
 
 // Console errors of the current area, listed when the area fails.
@@ -639,8 +695,10 @@ async function codeBench(page, errors) {
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('console', m => { if (m.type() === 'error') consoleErrors.push(`console: ${m.text().slice(0, 600)}`); });
-    if (name === 'desk') await login(page);
-    else {
+    if (name === 'desk') {
+      await login(page);
+      findings += await sendRequests(page, errors);
+    } else {
       await page.goto(base + '/admin');
       if (await page.locator('#password').count()) {
         await page.fill('#password', password);
@@ -651,6 +709,7 @@ async function codeBench(page, errors) {
     for (const area of areas) {
       findings += await check(page, errors, name, area, expected[area] ?? [], area.replace(/\//g, '_'));
     }
+    if (name === 'phone') findings += await requestDetails(page, errors, name);
     findings += await optimizationPrompt(page, errors, name);
     findings += await oldFolder(page, errors, name);
     findings += await benchHistory(page, errors, name);

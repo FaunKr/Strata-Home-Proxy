@@ -11,9 +11,9 @@ use strata_admin_ui::{
     api::{self as ui, ForcedRestart},
     api::{
         ApiKeyInfo, ApiKeysView, BenchmarkKind, CodeBenchPage, CreatedKey, HistoryView,
-        KeepAwakeChoice, KeyModelName, OutputMessage, Overview, PcSetupCommand, Session,
-        SettingEntry, SettingSuggestion, SettingValue, SettingsView, Setup, Source, StrataJobForm,
-        StrataPage,
+        KeepAwakeChoice, KeyModelName, OutputMessage, Overview, PcSetupCommand, RequestLogMessage,
+        Session, SettingEntry, SettingSuggestion, SettingValue, SettingsView, Setup, Source,
+        StrataJobForm, StrataPage,
     },
     labels::{NO_AGENT, NO_ANSWER, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
@@ -177,6 +177,10 @@ impl Backend for UiBackend {
 
     fn strata_output(&self) -> BoxStream<'static, OutputMessage> {
         crate::strata_output::watch(&self.0)
+    }
+
+    fn requests(&self) -> BoxStream<'static, RequestLogMessage> {
+        crate::request_log::watch(&self.0)
     }
 
     fn wake(&self) -> Result<(), String> {

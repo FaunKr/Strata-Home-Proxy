@@ -6,7 +6,10 @@ use leptos::prelude::*;
 
 #[cfg(feature = "hydrate")]
 use crate::api::RequestLogMessage;
-use crate::api::{RequestAnswer, RequestApi, RequestOutcome, RequestRow, RequestStart};
+use crate::api::{
+    RequestAnswer, RequestApi, RequestOutcome, RequestRefusal, RequestRow, RequestStart,
+    RequestState,
+};
 
 /// Finished rows the tab keeps, like the proxy's `LIMIT`.
 #[cfg(feature = "hydrate")]
@@ -89,7 +92,7 @@ fn RequestTable(rows: RwSignal<Vec<RequestRow>>, open: RwSignal<Vec<u64>>) -> im
                 </thead>
                 <For
                     each=move || rows.get()
-                    key=|row| (row.id, row.duration_ms, row.outcome)
+                    key=|row| (row.id, row.state, row.duration_ms, row.outcome)
                     children=move |row| view! { <RequestLine row open /> }
                 />
             </table>
@@ -118,10 +121,11 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
         ("Thinking", thinking_text(&row)),
         ("Prefill", speed(row.prefill_tok_s())),
         ("First token", millis(row.first_token_ms)),
-        ("Duration", millis(Some(row.duration_ms))),
+        ("Duration", duration(&row)),
         ("Wait", millis(Some(row.wait_ms))),
-        ("Status", outcome_text(row.outcome)),
+        ("Status", status_text(&row)),
     ];
+    let unusual = !is_done(&row);
     view! {
         <tbody class="request" class:open=is_open>
             <tr on:click=toggle>
@@ -129,7 +133,17 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
                 <td>{row.key.clone()}</td>
                 <td class="wide model">{model}</td>
                 <td class="wide">{api_label(row.api)}</td>
-                <td class="type">{type_label(&row)}</td>
+                <td class="type">
+                    {type_label(&row)}
+                    {unusual
+                        .then(|| {
+                            view! {
+                                <span class="sub narrow" class:bad=is_bad(&row)>
+                                    {status_text(&row)}
+                                </span>
+                            }
+                        })}
+                </td>
                 <td class="wide num">
                     {count(row.prompt_tokens)}
                     {row
@@ -142,10 +156,10 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
                 <td class="wide num">{rate(row.prefill_tok_s())}</td>
                 <td class="num">{rate(row.generation_tok_s())}</td>
                 <td class="wide num">{millis(row.first_token_ms)}</td>
-                <td class="wide num">{millis(Some(row.duration_ms))}</td>
+                <td class="wide num">{duration(&row)}</td>
                 <td class="wide num">{millis(Some(row.wait_ms))}</td>
-                <td class="wide" class:bad=row.outcome != RequestOutcome::Done>
-                    {outcome_text(row.outcome)}
+                <td class="wide status" class:bad=is_bad(&row)>
+                    {status_text(&row)}
                 </td>
             </tr>
             <tr class="request-more">
@@ -181,7 +195,12 @@ fn apply(rows: &mut Vec<RequestRow>, message: RequestLogMessage) {
                     rows.insert(at, *row);
                 }
             }
-            rows.truncate(KEPT);
+            // Running rows on top of the finished ones the proxy keeps.
+            let mut finished = 0;
+            rows.retain(|r| {
+                finished += usize::from(r.state == RequestState::Finished);
+                r.state != RequestState::Finished || finished <= KEPT
+            });
         }
     }
 }
@@ -259,6 +278,33 @@ fn millis(ms: Option<u64>) -> String {
     }
 }
 
+/// Finished as asked.
+fn is_done(row: &RequestRow) -> bool {
+    row.state == RequestState::Finished && row.outcome == RequestOutcome::Done
+}
+
+/// Finished without a whole answer.
+fn is_bad(row: &RequestRow) -> bool {
+    row.state == RequestState::Finished && row.outcome != RequestOutcome::Done
+}
+
+/// None until the request is finished.
+fn duration(row: &RequestRow) -> String {
+    match row.state {
+        RequestState::Finished => millis(Some(row.duration_ms)),
+        _ => "–".into(),
+    }
+}
+
+/// The state of a request on its way, else its outcome.
+fn status_text(row: &RequestRow) -> String {
+    match row.state {
+        RequestState::WakingPc => "waking PC".into(),
+        RequestState::Running => "running".into(),
+        RequestState::Finished => outcome_text(row.outcome),
+    }
+}
+
 fn outcome_text(outcome: RequestOutcome) -> String {
     match outcome {
         RequestOutcome::Done => "done".into(),
@@ -267,6 +313,17 @@ fn outcome_text(outcome: RequestOutcome) -> String {
         RequestOutcome::NoAnswer => "no answer from Strata".into(),
         RequestOutcome::Lost => "lost".into(),
         RequestOutcome::CancelledByClient => "cancelled by client".into(),
+        RequestOutcome::Refused { reason } => format!(
+            "refused: {}",
+            match reason {
+                RequestRefusal::Gaming => "gaming mode",
+                RequestRefusal::Tuning => "tune running",
+                RequestRefusal::WakeTimeout => "PC did not wake in time",
+                RequestRefusal::NoMac => "PC cannot be woken",
+                RequestRefusal::NotSetUp => "Strata not set up",
+                RequestRefusal::TooLarge => "request too large",
+            }
+        ),
     }
 }
 
@@ -297,5 +354,30 @@ mod tests {
         assert_eq!(thinking_text(&row(Some(12), true)), "≈ 12");
         assert_eq!(thinking_text(&row(Some(12), false)), "12");
         assert_eq!(thinking_text(&row(None, false)), "–");
+    }
+
+    #[test]
+    fn a_request_on_its_way_shows_its_state_not_an_outcome() {
+        let row = |state, outcome| RequestRow {
+            state,
+            outcome,
+            duration_ms: 1500,
+            ..RequestRow::default()
+        };
+        let waking = row(RequestState::WakingPc, RequestOutcome::Done);
+        assert_eq!(status_text(&waking), "waking PC");
+        assert_eq!(duration(&waking), "–");
+        assert!(!is_done(&waking) && !is_bad(&waking));
+        let running = row(RequestState::Running, RequestOutcome::Done);
+        assert_eq!(status_text(&running), "running");
+        let refused = row(
+            RequestState::Finished,
+            RequestOutcome::Refused {
+                reason: RequestRefusal::Gaming,
+            },
+        );
+        assert_eq!(status_text(&refused), "refused: gaming mode");
+        assert_eq!(duration(&refused), "1.5 s");
+        assert!(is_bad(&refused));
     }
 }

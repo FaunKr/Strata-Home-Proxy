@@ -15,7 +15,7 @@ use axum::{
 };
 use futures_util::{Stream, StreamExt, stream, stream::BoxStream};
 use serde_json::json;
-use strata_admin_ui::api::RequestOutcome;
+use strata_admin_ui::api::{RequestOutcome, RequestRefusal};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -472,10 +472,15 @@ fn end(rec: Option<Recording>, outcome: RequestOutcome) {
     }
 }
 
-/// Leaves the request out of the request log.
-fn discard(rec: Option<Recording>) {
+/// Ends the request's row, if it has one, as answered by the proxy.
+fn refused(rec: Option<Recording>, err: &WakeError) {
     if let Some(rec) = rec {
-        rec.discard();
+        rec.refused(match err {
+            WakeError::Gaming => RequestRefusal::Gaming,
+            WakeError::Tuning => RequestRefusal::Tuning,
+            WakeError::Timeout => RequestRefusal::WakeTimeout,
+            WakeError::NoMac => RequestRefusal::NoMac,
+        });
     }
 }
 
@@ -575,7 +580,7 @@ async fn wake_and_pass_on(
         }
     };
     if let Err(err) = woke {
-        discard(rec);
+        refused(rec, &err);
         if err == WakeError::Gaming {
             st.events.record(EventKind::GamingRejected, None);
         }
@@ -717,13 +722,15 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
             .then(|| cfg.public_model_name.clone())
     };
     let held = st.code_bench.holds(key);
-    if st.strata().is_none() {
-        return not_configured(flavor);
-    }
     let path_and_query = parts
         .uri
         .path_and_query()
         .map_or_else(|| "/".to_string(), |p| p.as_str().to_string());
+    if st.strata().is_none() {
+        let reason = RequestRefusal::NotSetUp;
+        RequestLog::refused(&st, &checked.name, arrived, &path_and_query, reason);
+        return not_configured(flavor);
+    }
     if models::is_list(&parts.method, &path_and_query)
         && let Some(list) = st.models.get()
         && (held || !st.strata_ready().await)
@@ -735,6 +742,8 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
     let body = match axum::body::to_bytes(body, cfg.max_body_bytes).await {
         Ok(b) => b,
         Err(_) => {
+            let reason = RequestRefusal::TooLarge;
+            RequestLog::refused(&st, &checked.name, arrived, &path_and_query, reason);
             return (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 axum::Json(flavor.error_json("invalid_request_error", "Request is too large.")),
@@ -754,28 +763,36 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
     match st.readiness().await {
         Readiness::Ready if !held => forward(st, guard, req, flavor, rec).await,
         Readiness::Gaming => {
-            discard(rec);
+            refused(rec, &WakeError::Gaming);
             st.events.record(EventKind::GamingRejected, None);
             unavailable(flavor, &WakeError::Gaming)
         }
         Readiness::Tuning => {
-            discard(rec);
+            refused(rec, &WakeError::Tuning);
             unavailable(flavor, &WakeError::Tuning)
         }
         // Held while ready, or asleep: wait for the run's end or the wake-up.
         Readiness::Ready | Readiness::NeedsWake if streaming => {
+            if let Some(rec) = &rec {
+                rec.waiting();
+            }
             wake_then_stream(st, guard, req, flavor, held, rec)
         }
-        Readiness::Ready | Readiness::NeedsWake => match wait_and_wake(&st, held).await {
-            Ok(()) => forward(st, guard, req, flavor, rec).await,
-            Err(err) => {
-                discard(rec);
-                if err == WakeError::Gaming {
-                    st.events.record(EventKind::GamingRejected, None);
-                }
-                unavailable(flavor, &err)
+        Readiness::Ready | Readiness::NeedsWake => {
+            if let Some(rec) = &rec {
+                rec.waiting();
             }
-        },
+            match wait_and_wake(&st, held).await {
+                Ok(()) => forward(st, guard, req, flavor, rec).await,
+                Err(err) => {
+                    refused(rec, &err);
+                    if err == WakeError::Gaming {
+                        st.events.record(EventKind::GamingRejected, None);
+                    }
+                    unavailable(flavor, &err)
+                }
+            }
+        }
     }
 }
 

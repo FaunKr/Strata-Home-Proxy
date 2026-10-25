@@ -52,9 +52,13 @@ async fn post_with(s: &Setup, key: &str, body: Value) -> reqwest::Response {
     post_json_to(&s.url, key, CHAT, body).await
 }
 
-/// The next row the stream sends after its first message.
+/// The next finished row the stream sends after its first message.
 async fn next_row(live: &mut Live) -> Value {
-    live.until("row", |m| m["kind"] == "row").await["row"].clone()
+    live.until("finished row", |m| {
+        m["kind"] == "row" && m["row"]["state"] == "finished"
+    })
+    .await["row"]
+        .clone()
 }
 
 /// The rows the stream sends first.
@@ -155,12 +159,13 @@ async fn requests_without_a_valid_key_and_the_model_list_make_no_row() {
     assert_eq!(rows[0]["key"], "Test", "{rows:?}");
 }
 
-/// The rows sent first, once there are `n` of them.
+/// The rows sent first, once there are `n` of them and all finished.
 async fn eventually_rows(b: &Browser, n: usize) -> Vec<Value> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let rows = all_rows(b).await;
-        if rows.len() >= n || tokio::time::Instant::now() > deadline {
+        let finished = rows.iter().all(|r| r["state"] == "finished");
+        if rows.len() >= n && finished || tokio::time::Instant::now() > deadline {
             assert_eq!(rows.len(), n, "{rows:?}");
             return rows;
         }
@@ -464,4 +469,82 @@ async fn an_images_request_makes_a_row_of_its_kind() {
     assert_eq!(row["model"], "Qwen-Image-2.1-Turbo", "{row}");
     assert_eq!(row["answer"], Value::Null, "{row}");
     assert_eq!(row["outcome"]["kind"], "done", "{row}");
+}
+
+#[tokio::test]
+async fn a_request_shows_as_running_until_it_finishes() {
+    let s = setup(true, |_| {}).await;
+    s.pc.set_strata_stream(CHAT, tool_call_stream(), Duration::from_millis(500));
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("all", |m| m["kind"] == "all").await;
+
+    let resp = post_json(&s, CHAT, chat(true)).await;
+    let running = live.until("running row", |m| m["kind"] == "row").await["row"].clone();
+    assert_eq!(running["state"], "running", "{running}");
+    assert_eq!(running["key"], "Test", "{running}");
+    assert_eq!(running["start"], "prompt", "{running}");
+    // A page opened now gets it with the finished rows.
+    let all = all_rows(&b).await;
+    assert_eq!(all[0]["id"], running["id"], "{all:?}");
+    assert_eq!(all[0]["state"], "running", "{all:?}");
+
+    resp.text().await.unwrap();
+    let row = next_row(&mut live).await;
+    assert_eq!(row["id"], running["id"], "{row}");
+    assert_eq!(row["outcome"]["kind"], "done", "{row}");
+}
+
+#[tokio::test]
+async fn a_request_while_the_pc_sleeps_waits_for_the_wake_up() {
+    let s = setup(false, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("all", |m| m["kind"] == "all").await;
+
+    assert_eq!(post_json(&s, CHAT, chat(false)).await.status(), 200);
+    let waking = live.until("waking row", |m| m["kind"] == "row").await["row"].clone();
+    assert_eq!(waking["state"], "waking_pc", "{waking}");
+    let row = next_row(&mut live).await;
+    assert_eq!(row["id"], waking["id"], "{row}");
+    assert_eq!(row["outcome"]["kind"], "done", "{row}");
+    assert!(row["wait_ms"].as_u64().unwrap() > 0, "{row}");
+    assert!(s.pc.wol_packets.load(Ordering::SeqCst) > 0);
+}
+
+#[tokio::test]
+async fn a_request_in_gaming_mode_is_logged_as_refused() {
+    let s = setup(true, |_| {}).await;
+    s.pc.gaming.store(true, Ordering::SeqCst);
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("all", |m| m["kind"] == "all").await;
+
+    assert_eq!(post_json(&s, CHAT, chat(false)).await.status(), 503);
+    let row = next_row(&mut live).await;
+    assert_eq!(
+        row["outcome"],
+        json!({"kind": "refused", "reason": "gaming"}),
+        "{row}"
+    );
+    assert_eq!(row["start"], "prompt", "{row}");
+    assert_eq!(row["output_tokens"], Value::Null, "{row}");
+}
+
+#[tokio::test]
+async fn a_request_over_the_size_limit_is_logged_as_refused() {
+    let s = setup(true, |c| c.max_body_bytes = 64).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("all", |m| m["kind"] == "all").await;
+
+    assert_eq!(post_json(&s, CHAT, chat(false)).await.status(), 413);
+    let row = next_row(&mut live).await;
+    assert_eq!(
+        row["outcome"],
+        json!({"kind": "refused", "reason": "too_large"}),
+        "{row}"
+    );
+    assert_eq!(row["api"], "chat", "{row}");
+    assert_eq!(row["key"], "Test", "{row}");
 }

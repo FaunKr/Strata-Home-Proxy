@@ -450,6 +450,9 @@ pub struct RequestRow {
     pub wait_ms: u64,
     /// From arrival to the answer's end.
     pub duration_ms: u64,
+    /// Where the request is; only a finished one has an outcome.
+    #[serde(default)]
+    pub state: RequestState,
     pub outcome: RequestOutcome,
 }
 
@@ -467,6 +470,7 @@ impl RequestRow {
             start: self.start,
             wait_ms: self.wait_ms,
             duration_ms: self.duration_ms,
+            state: self.state,
             outcome: self.outcome,
             ..Self::default()
         }
@@ -530,6 +534,34 @@ pub enum RequestAnswer {
     ToolCall,
 }
 
+/// Where a request is. Running ones live only in the proxy's memory.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestState {
+    /// Waiting for the PC to wake, or for a run over all models to end.
+    WakingPc,
+    /// Sent to Strata.
+    Running,
+    #[default]
+    Finished,
+}
+
+/// Why the proxy answered a request itself, without Strata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestRefusal {
+    Gaming,
+    Tuning,
+    /// The PC did not wake in time, or a run over all models did not end.
+    WakeTimeout,
+    /// The PC's MAC address is not known, so it cannot be woken.
+    NoMac,
+    /// No Strata address is set.
+    NotSetUp,
+    /// The request's body is over the limit.
+    TooLarge,
+}
+
 /// How a request ended.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -546,6 +578,8 @@ pub enum RequestOutcome {
     Lost,
     /// The client went away before the answer's end.
     CancelledByClient,
+    /// The proxy answered it without Strata.
+    Refused { reason: RequestRefusal },
 }
 
 /// One message of the Strata output stream (`/admin/api/strata-output-stream`).

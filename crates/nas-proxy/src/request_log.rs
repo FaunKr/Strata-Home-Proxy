@@ -1,9 +1,11 @@
 //! The request log: the last requests through the proxy that made the model
 //! work, with numbers and labels only (`request_meter`). Finished rows live
 //! in the history's database (docs/adr/0003), trimmed to the newest
-//! `LIMIT`, so they survive a restart; the web UI follows them live.
+//! `LIMIT`, so they survive a restart; running rows live in memory. The web
+//! UI follows both live.
 
 use std::{
+    collections::BTreeMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -14,7 +16,9 @@ use std::{
 use axum::body::Bytes;
 use futures_util::{Stream, StreamExt, stream::BoxStream};
 use rusqlite::{Connection, params};
-use strata_admin_ui::api::{RequestLogMessage, RequestOutcome, RequestRow};
+use strata_admin_ui::api::{
+    RequestLogMessage, RequestOutcome, RequestRefusal, RequestRow, RequestState,
+};
 use tokio::sync::broadcast;
 
 use crate::{clock, request_meter::Meter, state::AppState};
@@ -26,6 +30,8 @@ pub struct RequestLog {
     db: Arc<Mutex<Connection>>,
     limit: AtomicUsize,
     next_id: AtomicU64,
+    /// Rows not finished yet, by id.
+    running: Mutex<BTreeMap<u64, RequestRow>>,
     changes: broadcast::Sender<RequestRow>,
 }
 
@@ -46,6 +52,7 @@ impl RequestLog {
             db,
             limit: AtomicUsize::new(LIMIT),
             next_id: AtomicU64::new(last.max(0) as u64 + 1),
+            running: Mutex::default(),
             changes: broadcast::channel(256).0,
         }
     }
@@ -80,8 +87,29 @@ impl RequestLog {
         })
     }
 
+    /// Logs a request to `path` the proxy answered itself, before it read
+    /// the body.
+    pub fn refused(
+        state: &Arc<AppState>,
+        key: &str,
+        arrived: Instant,
+        path: &str,
+        reason: RequestRefusal,
+    ) {
+        if let Some(rec) = Self::begin(state, key, arrived, path, b"") {
+            rec.refused(reason);
+        }
+    }
+
+    /// A row that has not finished, new or changed.
+    fn show(&self, row: RequestRow) {
+        self.running.lock().unwrap().insert(row.id, row.clone());
+        let _ = self.changes.send(row);
+    }
+
     /// Written at once, like an event, so a killed proxy loses nothing.
     fn finish(&self, row: RequestRow) {
+        self.running.lock().unwrap().remove(&row.id);
         let limit = self.limit.load(Ordering::SeqCst) as i64;
         let written = serde_json::to_string(&row)
             .map_err(|e| e.to_string())
@@ -141,14 +169,23 @@ pub const TABLE: &str = "CREATE TABLE IF NOT EXISTS requests (
      row TEXT NOT NULL
  );";
 
-/// The log for one page: all of it first, then each row as it changes.
+/// The log for one page: all of it first, running rows on top, then each
+/// row as it changes.
 pub fn watch(state: &Arc<AppState>) -> BoxStream<'static, RequestLogMessage> {
     let state = Arc::clone(state);
     // Subscribed before reading, so no row falls between; one sent twice
     // only takes its own place again.
     let rx = state.requests.changes.subscribe();
     let first = futures_util::stream::once(async move {
-        let mut rows = state.requests.rows().await;
+        let finished = state.requests.rows().await;
+        let running = state.requests.running.lock().unwrap().clone();
+        // A row that finished while the log was read is in both.
+        let mut rows: Vec<RequestRow> = running
+            .into_values()
+            .rev()
+            .filter(|r| !finished.iter().any(|f| f.id == r.id))
+            .collect();
+        rows.extend(finished);
         rows.iter_mut().for_each(with_time);
         RequestLogMessage::All { rows }
     });
@@ -192,9 +229,26 @@ pub struct Recording {
 const WHOLE_LIMIT: usize = 8 << 20;
 
 impl Recording {
+    /// The request waits for the PC to wake, or for a run over all models.
+    pub fn waiting(&self) {
+        self.show(RequestState::WakingPc);
+    }
+
     /// The request went to Strata at `at`.
     pub fn sent(&mut self, at: Instant) {
         self.sent = Some(at);
+        self.show(RequestState::Running);
+    }
+
+    fn show(&self, state: RequestState) {
+        let mut row = self.row();
+        row.state = state;
+        self.state.requests.show(row);
+    }
+
+    /// The proxy answered the request itself.
+    pub fn refused(self, reason: RequestRefusal) {
+        self.finish(RequestOutcome::Refused { reason });
     }
 
     /// Strata's answer status.
@@ -211,11 +265,6 @@ impl Recording {
     /// status).
     pub fn finish(mut self, outcome: RequestOutcome) {
         self.end(outcome);
-    }
-
-    /// Leaves the request out of the log.
-    pub fn discard(mut self) {
-        self.done = true;
     }
 
     /// Passes an answer's body through and reads it on the way: an event
@@ -290,10 +339,7 @@ impl Recording {
             return;
         }
         self.done = true;
-        let mut row = self.meter.row();
-        row.id = self.id;
-        row.at = self.at;
-        row.key = std::mem::take(&mut self.key);
+        let mut row = self.row();
         let sent = self.sent.unwrap_or_else(Instant::now);
         row.wait_ms = sent.saturating_duration_since(self.arrived).as_millis() as u64;
         row.duration_ms = self.arrived.elapsed().as_millis() as u64;
@@ -311,6 +357,16 @@ impl Recording {
             row = row.without_counts();
         }
         self.state.requests.finish(row);
+    }
+
+    /// What the meter knows, with the request's own fields.
+    fn row(&self) -> RequestRow {
+        RequestRow {
+            id: self.id,
+            at: self.at,
+            key: self.key.clone(),
+            ..self.meter.row()
+        }
     }
 }
 

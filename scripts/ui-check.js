@@ -19,7 +19,7 @@ const expected = {
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
   // The requests sendRequests made through the proxy.
-  '/admin/strata/requests': ['Request log', 'Chat app', 'prompt → tool call', 'Gen. tok/s', '40.0'],
+  '/admin/strata/requests': ['Request log', 'Chat app', 'prompt → tool call', 'Gen. tok/s', '40.0', 'embedding', 'Strata error 404'],
   '/admin/strata/connection': ['Relay through the PC service', 'Off: the proxy reaches Strata directly over the network.', 'Hide model name', 'Public model name'],
   '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', '52.3 tok/s', 'Not installed', 'BENCH.bat, not comparable', 'Compare models', '25/33', 'Time limit', 'Last run failed', 'Run code benchmark', 'Benchmark all models', 'No result: model did not load', 'Remove old Strata folder'],
 };
@@ -85,6 +85,13 @@ async function sendRequests(page, errors) {
     await page.fill('#key-name', 'Chat app');
     await page.getByRole('button', { name: 'Create key' }).click(wait);
     const key = await page.locator('#new-key').inputValue(wait);
+    // Strata has no embeddings: a row with Strata's error, below the others.
+    const embedding = await fetch(base + '/v1/embeddings', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'any', input: 'hi' }),
+    });
+    if (embedding.status !== 404) throw new Error(`the embeddings request got ${embedding.status}`);
     for (let i = 0; i < 2; i++) {
       const resp = await fetch(base + '/v1/chat/completions', {
         method: 'POST',

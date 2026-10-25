@@ -4,6 +4,10 @@ What each version brings, newest first. The web UI's PC service card shows
 the versions an update brings; each line is written for the user. Rules:
 `docs/pc-service.md`.
 
+## 0.2.2
+
+- Installs the Python package jsonschema into Strata's Python, so Strata checks JSON answers against the schema a request asks for.
+
 ## 0.2.1
 
 - Relay mode switches on or off in the web UI under Strata → Connection; Strata restarts with it once it has finished its requests.

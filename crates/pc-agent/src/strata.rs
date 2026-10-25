@@ -25,6 +25,7 @@ use crate::{
     agent::Agent,
     catalog::{self, Catalog, Size},
     command::CommandSpec,
+    config::Config,
     install::{Installation, Kind, Model, SWITCH_FILE},
     job::{JobContext, KEPT_LINES, POLL, Step, unix_now},
     managed::Managed,
@@ -793,7 +794,9 @@ async fn install_terminal(job: &JobContext) -> Result<(), Step> {
         }
     }
     job.step("Installing the engine for this PC");
-    ask_terminal_events(job, terminal.install_engine(), terminal::engine_installed).await
+    ask_terminal_events(job, terminal.install_engine(), terminal::engine_installed).await?;
+    crate::jsonschema::ensure_in_job(job).await;
+    Ok(())
 }
 
 /// Runs a Terminal command in the job and reads its answer, which says why
@@ -943,6 +946,7 @@ async fn update(job: &JobContext) -> Result<Option<String>, Step> {
     let updated = job.command(spec, true).await;
     if updated.is_ok() {
         manage(agent).await;
+        crate::jsonschema::ensure_in_job(job).await;
     }
     agent.strata().start_again().await;
     updated?;
@@ -961,6 +965,7 @@ async fn update_terminal(job: &JobContext) -> Result<Option<String>, Step> {
     let updated = ask_terminal_events(job, terminal.update(), terminal::updated).await;
     if updated.is_ok() {
         manage(agent).await;
+        crate::jsonschema::ensure_in_job(job).await;
     }
     agent.strata().start_again().await;
     updated?;
@@ -2185,16 +2190,8 @@ fn catalog_command(agent: &Agent) -> CommandSpec {
         Kind::Terminal => Terminal::of(cfg).catalog(install.dir(), data),
         Kind::Source => {
             let dir = &cfg.strata_dir;
-            // As `START-HERE.bat`: Strata's own Python when the folder has
-            // one, else the one setup made.
-            let bundled = dir.join("python").join("python.exe");
-            let program = if bundled.exists() {
-                bundled
-            } else {
-                dir.join(".venv").join("Scripts").join("python.exe")
-            };
             CommandSpec {
-                program,
+                program: source_python(dir),
                 args: vec![
                     "-c".into(),
                     catalog::SCRIPT.into(),
@@ -2206,6 +2203,26 @@ fn catalog_command(agent: &Agent) -> CommandSpec {
             }
         }
     }
+}
+
+/// The Python of a Strata folder from source, as `START-HERE.bat` takes
+/// it: Strata's own Python when the folder has one, else the one setup made.
+fn source_python(dir: &Path) -> PathBuf {
+    let bundled = dir.join("python").join("python.exe");
+    if bundled.exists() {
+        bundled
+    } else {
+        dir.join(".venv").join("Scripts").join("python.exe")
+    }
+}
+
+/// The Python that runs the Strata on the PC, if it is there.
+pub(crate) fn strata_python(cfg: &Config) -> Option<PathBuf> {
+    let python = match Installation::of(cfg).kind() {
+        Kind::Terminal => Terminal::of(cfg).python(),
+        Kind::Source => source_python(&cfg.strata_dir),
+    };
+    python.is_file().then_some(python)
 }
 
 /// Reads Strata's catalog now and keeps it.

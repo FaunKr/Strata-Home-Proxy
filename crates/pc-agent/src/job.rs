@@ -329,6 +329,16 @@ impl JobContext {
         }
     }
 
+    /// Adds `line` to the job's output.
+    pub(crate) fn line(&self, line: &str) {
+        self.with(|inner| {
+            if let Some(job) = inner.current.as_mut() {
+                keep_line(&mut job.lines, line.to_string());
+            }
+        });
+        self.save();
+    }
+
     /// Shows `lines` as the job's output.
     pub fn show_lines(&self, lines: Vec<String>) {
         self.with(|inner| {

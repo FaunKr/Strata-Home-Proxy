@@ -231,8 +231,8 @@ fn has_result(bench: &code_bench::CodeBench, model: &str) -> bool {
         .any(|r| r.model == model && !r.tasks.is_empty())
 }
 
-/// Whether `model` has only its error row: a failure and no tasks.
-fn error_row_for(bench: &code_bench::CodeBench, model: &str) -> bool {
+/// Whether `model` has only failed runs, the newest without tasks.
+fn only_failed(bench: &code_bench::CodeBench, model: &str) -> bool {
     bench
         .results()
         .iter()
@@ -349,17 +349,25 @@ async fn a_finished_run_is_kept_per_model_and_its_key_revoked() {
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     let v = page(&mut b).await;
     assert!(v["run"].is_null(), "{v}");
-    let result = &v["results"][0];
-    assert_eq!(result["model"], "IQ3_XXS");
+    let model = &v["history"][0];
+    assert_eq!(model["model"], "IQ3_XXS");
+    let result = &model["runs"][0];
     assert_eq!(result["tasks"][1]["passed"], 5);
+    assert_eq!(
+        result["tasks"][0]["files"]["roman.py"],
+        "def to_roman(n): ..."
+    );
     assert!(!result["at_text"].as_str().unwrap().is_empty());
     let html = b.page("/admin/strata/version").await;
     assert!(html.contains("Code benchmark"), "{html}");
-    // The runner's result has three of the four tasks: the fourth is named missing.
-    assert!(html.contains("Total: 3 of 4 tasks · 13/24 tests"), "{html}");
-    assert!(html.contains("Not part of this run."), "{html}");
+    // A column per task; the fourth was not part of the run.
+    assert!(
+        html.contains("Forced sleep and restart (Rust, this repo)</th>"),
+        "{html}"
+    );
+    assert!(html.contains("<td>13/24</td>"), "{html}");
     assert!(html.contains("8/8"), "{html}");
-    assert!(html.contains("def to_roman(n): ..."), "{html}");
+    assert!(html.contains(r#"<span class="muted">–</span>"#), "{html}");
 }
 
 #[tokio::test]
@@ -376,21 +384,20 @@ async fn a_repo_task_shows_its_change_and_the_tests_it_broke() {
     repo["broken"] = json!(["pc_agent::status_reports_gaming"]);
     end["tasks"].as_array_mut().unwrap().push(repo);
     drive_end(&s, &runner, "IQ3_XXS", end).await;
-    let html = b.page("/admin/strata/version").await;
-    assert!(html.contains("Total: 16/32 tests"), "{html}");
-    assert!(html.contains("Change against the checkout"), "{html}");
+    let v = page(&mut b).await;
+    let repo = &v["history"][0]["runs"][0]["tasks"][3];
     assert!(
-        html.contains("diff --git a/crates/pc-agent/src/lib.rs"),
-        "{html}"
+        repo["diff"]
+            .as_str()
+            .unwrap()
+            .contains("diff --git a/crates/pc-agent/src/lib.rs"),
+        "{v}"
     );
-    assert!(html.contains("Broken: 1 earlier test fails now"), "{html}");
-    assert!(html.contains("pc_agent::status_reports_gaming"), "{html}");
-    // No hint about a missing Python file for the Rust task.
-    assert_eq!(
-        html.matches("The agent left no Python file.").count(),
-        0,
-        "{html}"
-    );
+    assert_eq!(repo["broken"][0], "pc_agent::status_reports_gaming", "{v}");
+    // The details open in the browser (scripts/ui-check.js); the row has
+    // the totals.
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("<td>16/32</td>"), "{html}");
 }
 
 #[tokio::test]
@@ -403,7 +410,7 @@ async fn cancelling_reaches_the_runner_and_keeps_no_result() {
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     let v = page(&mut b).await;
     assert_eq!(v["run"]["state"], "cancelled", "{v}");
-    assert_eq!(v["results"], json!([]));
+    assert_eq!(v["history"], json!([]));
 }
 
 #[tokio::test]
@@ -609,42 +616,45 @@ async fn a_run_over_all_models_goes_through_them_and_brings_the_active_one_back(
 }
 
 #[tokio::test]
-async fn a_model_that_does_not_load_gets_its_error_row_and_the_run_goes_on() {
+async fn a_model_that_does_not_load_gets_a_failed_run_and_the_run_goes_on() {
     let ids = ["IQ3_XXS", "coder-IQ1_M", "swift-IQ2_XS"];
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
     drive(&s, &runner, ids[0]).await;
     drive_load_fail(&s, ids[1]).await;
-    // The error row for the model that did not load.
-    eventually_for(Duration::from_secs(10), "error row", || {
-        error_row_for(&s.state.code_bench, ids[1])
+    // The failed run for the model that did not load.
+    eventually_for(Duration::from_secs(10), "failed run", || {
+        only_failed(&s.state.code_bench, ids[1])
     })
     .await;
     drive(&s, &runner, ids[2]).await;
     end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     let v = page(&mut b).await;
-    let row = v["results"]
+    let model = v["history"]
         .as_array()
         .unwrap()
         .iter()
         .find(|r| r["model"] == ids[1])
-        .expect("no row for the model that failed");
+        .expect("no runs for the model that failed");
+    let row = &model["runs"][0];
     assert_eq!(row["state"], "failed", "{row}");
     assert!(
         row["error"].as_str().unwrap().contains("did not load"),
         "{row}"
     );
-    // The error row comes after the results with tests.
+    // The model without a result comes after the results with tests.
     assert_eq!(
-        v["results"].as_array().unwrap().last().unwrap()["model"],
+        v["history"].as_array().unwrap().last().unwrap()["model"],
         ids[1]
     );
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("No result: "), "{html}");
 }
 
 #[tokio::test]
-async fn a_model_that_does_not_load_keeps_its_earlier_result_with_the_error() {
+async fn a_model_that_does_not_load_keeps_its_earlier_result_next_to_the_failed_run() {
     let ids = ["IQ3_XXS", "coder-IQ1_M", "swift-IQ2_XS"];
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
@@ -668,30 +678,25 @@ async fn a_model_that_does_not_load_keeps_its_earlier_result_with_the_error() {
     end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
 
-    // One row for the model: its earlier result, with the failure on it.
+    // The failure is a run of its own; the model's row keeps its result.
     let v = page(&mut b).await;
-    let rows: Vec<&Value> = v["results"]
+    let model = v["history"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|r| r["model"] == ids[1])
-        .collect();
-    assert_eq!(rows.len(), 1, "{v}");
-    assert_eq!(rows[0]["state"], "done", "{v}");
-    assert_eq!(rows[0]["tasks"][0]["passed"], 8, "{v}");
+        .find(|r| r["model"] == ids[1])
+        .unwrap();
+    let runs = model["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2, "{v}");
+    assert_eq!(runs[0]["state"], "failed", "{v}");
     assert!(
-        rows[0]["failed_later"]
-            .as_str()
-            .unwrap()
-            .contains("did not load"),
+        runs[0]["error"].as_str().unwrap().contains("did not load"),
         "{v}"
     );
-    assert!(
-        !rows[0]["failed_at_text"].as_str().unwrap().is_empty(),
-        "{v}"
-    );
+    assert_eq!(runs[1]["state"], "done", "{v}");
+    assert_eq!(runs[1]["tasks"][0]["passed"], 8, "{v}");
     let html = b.page("/admin/strata/version").await;
-    assert!(html.contains("A later run failed ("), "{html}");
+    assert!(html.contains("Last run failed"), "{html}");
 }
 
 #[tokio::test]
@@ -729,8 +734,8 @@ async fn cancelling_a_run_over_all_models_keeps_finished_results_and_stops_the_r
         "a stopped model has a result"
     );
     assert!(
-        !error_row_for(&s.state.code_bench, ids[2]),
-        "a stopped model got a row"
+        !only_failed(&s.state.code_bench, ids[2]),
+        "a stopped model got a failed run"
     );
     let order: Vec<String> =
         s.pc.job_bodies
@@ -815,7 +820,7 @@ async fn results_are_sorted_by_tests_passed_then_the_time() {
     end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     let v = page(&mut b).await;
-    let models: Vec<&str> = v["results"]
+    let models: Vec<&str> = v["history"]
         .as_array()
         .unwrap()
         .iter()
@@ -844,7 +849,7 @@ async fn results_are_sorted_by_tests_passed_then_the_time() {
     end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     let v = page(&mut b).await;
-    let models: Vec<&str> = v["results"]
+    let models: Vec<&str> = v["history"]
         .as_array()
         .unwrap()
         .iter()
@@ -881,7 +886,20 @@ async fn a_run_over_all_models_refuses_a_strata_job_started_by_hand() {
 /// A proxy with a runner and `ids` installed (the second active) that keeps
 /// its state in a DATA_DIR of its own, for restarts.
 async fn with_models_kept(ids: &[&str], name: &str) -> (Setup, Runner, std::path::PathBuf) {
+    with_models_kept_from(ids, name, None).await
+}
+
+/// `with_models_kept`, with `results` as the kept code-bench.json.
+async fn with_models_kept_from(
+    ids: &[&str],
+    name: &str,
+    results: Option<&Value>,
+) -> (Setup, Runner, std::path::PathBuf) {
     let dir = data_dir(name);
+    if let Some(results) = results {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("code-bench.json"), results.to_string()).unwrap();
+    }
     let runner = Runner::default();
     let addr = serve(
         Router::new()
@@ -967,7 +985,7 @@ async fn after_a_restart_mid_run_the_current_run_is_followed_and_the_model_broug
 }
 
 #[tokio::test]
-async fn a_runner_that_stops_answering_gives_the_model_its_error_row_and_the_run_goes_on() {
+async fn a_runner_that_stops_answering_gives_the_model_a_failed_run_and_the_run_goes_on() {
     let ids = ["IQ3_XXS", "coder-IQ1_M", "swift-IQ2_XS"];
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
@@ -982,8 +1000,8 @@ async fn a_runner_that_stops_answering_gives_the_model_its_error_row_and_the_run
     *runner.current.lock().unwrap() = None;
     eventually_for(
         Duration::from_secs(10),
-        "error row for the second model",
-        || error_row_for(&s.state.code_bench, ids[1]),
+        "failed run for the second model",
+        || only_failed(&s.state.code_bench, ids[1]),
     )
     .await;
     drive(&s, &runner, ids[2]).await;
@@ -1227,4 +1245,169 @@ async fn the_runs_key_sees_the_real_model_names_under_the_switch() {
         checked.model_name,
         strata_nas_proxy::api_keys::ModelName::Show
     );
+}
+
+// --- #367 the code benchmark's history ---
+
+/// How many runs `model` keeps.
+fn runs_of(bench: &code_bench::CodeBench, model: &str) -> usize {
+    bench
+        .history(None)
+        .iter()
+        .find(|m| m.model == model)
+        .map_or(0, |m| m.runs.len())
+}
+
+#[tokio::test]
+async fn each_run_is_kept_with_the_settings_it_ran_with() {
+    let (s, runner) = with_runner().await;
+    let with_env = |value: &str| {
+        let mut report = strata_info(true);
+        report.info.models[0].env = Some(std::collections::BTreeMap::from([(
+            "GGML_X".into(),
+            value.into(),
+        )]));
+        report
+    };
+    *s.pc.strata_info.lock().unwrap() = Some(with_env("1"));
+    let mut b = logged_in(&s.url).await;
+    for (n, value) in ["1", "2"].into_iter().enumerate() {
+        *s.pc.strata_info.lock().unwrap() = Some(with_env(value));
+        assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+        let mut end = run("IQ3_XXS", "done");
+        end["ended"] = json!(1_760_000_100u64 + n as u64);
+        *runner.current.lock().unwrap() = Some(end);
+        eventually_for(Duration::from_secs(10), "run kept", || {
+            runs_of(&s.state.code_bench, "IQ3_XXS") == n + 1
+        })
+        .await;
+        eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+    }
+    let v = page(&mut b).await;
+    let runs = v["history"][0]["runs"].as_array().unwrap();
+    assert_eq!(runs[0]["settings"]["env"]["GGML_X"], "2", "{v}");
+    assert_eq!(runs[1]["settings"]["env"]["GGML_X"], "1", "{v}");
+    // The runner calls both runs 1; each kept run has an id of its own.
+    assert_ne!(runs[0]["id"], runs[1]["id"], "{v}");
+    // The model's row shows the newest; the older one waits under it.
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("▸ "), "{html}");
+}
+
+/// `n` finished runs of `model`, as an older proxy kept them, the oldest
+/// first.
+fn older_runs(model: &str, n: u64) -> Vec<Value> {
+    (0..n)
+        .map(|i| {
+            let mut r = run(model, "done");
+            r.as_object_mut().unwrap().remove("id");
+            r["ended"] = json!(1_750_000_000u64 + i);
+            r
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_model_keeps_its_last_twenty_runs() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let kept = json!(older_runs(ids[1], 20));
+    let (s, runner, dir) = with_models_kept_from(&ids, "code-bench-twenty", Some(&kept)).await;
+    let mut b = logged_in(&s.url).await;
+    let v = page(&mut b).await;
+    assert_eq!(v["history"][0]["runs"].as_array().unwrap().len(), 20, "{v}");
+    let oldest = v["history"][0]["runs"][19]["id"].clone();
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    let mut end = run(ids[1], "done");
+    end["ended"] = json!(1_760_000_100u64);
+    *runner.current.lock().unwrap() = Some(end);
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+    let v = page(&mut b).await;
+    let runs = v["history"][0]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 20, "{v}");
+    assert_eq!(runs[0]["ended"], 1_760_000_100u64, "{v}");
+    assert!(runs.iter().all(|r| r["id"] != oldest), "{v}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn results_of_an_older_proxy_become_the_first_history() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let mut result = older_runs(ids[0], 1).remove(0);
+    result["failed_later"] = json!("the model did not load");
+    result["failed_at"] = json!(1_755_000_000u64);
+    let error_row = json!({"model": ids[1], "state": "failed", "error": "out of memory",
+        "started": 1_754_000_000u64, "ended": 1_754_000_000u64, "tasks": [], "at_text": "",
+        "failed_later": null, "failed_at": null, "failed_at_text": ""});
+    let kept = json!([result, error_row]);
+    let (s, _runner, dir) = with_models_kept_from(&ids, "code-bench-older", Some(&kept)).await;
+    let mut b = logged_in(&s.url).await;
+    let v = page(&mut b).await;
+    let first = v["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["model"] == ids[0])
+        .unwrap();
+    let runs = first["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2, "{v}");
+    assert_eq!(runs[0]["state"], "failed", "{v}");
+    assert_eq!(runs[0]["error"], "the model did not load", "{v}");
+    assert_eq!(runs[0]["ended"], 1_755_000_000u64, "{v}");
+    assert_eq!(runs[1]["state"], "done", "{v}");
+    assert!(runs[1].get("failed_later").is_none(), "{v}");
+    for run in runs {
+        assert_eq!(run["settings"], Value::Null, "{v}");
+    }
+    // The file is written anew, without the notes of the older proxy.
+    let file = std::fs::read_to_string(dir.join("code-bench.json")).unwrap();
+    assert!(!file.contains("failed_later"), "{file}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_single_run_that_fails_is_kept_with_its_settings() {
+    let (s, runner) = with_runner().await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    let mut end = run("IQ3_XXS", "failed");
+    end["error"] = json!("opencode crashed");
+    end["tasks"] = json!([]);
+    *runner.current.lock().unwrap() = Some(end);
+    eventually_for(Duration::from_secs(10), "failed run kept", || {
+        runs_of(&s.state.code_bench, "IQ3_XXS") == 1
+    })
+    .await;
+    let v = page(&mut b).await;
+    let run = &v["history"][0]["runs"][0];
+    assert_eq!(run["state"], "failed", "{v}");
+    assert_eq!(run["error"], "opencode crashed", "{v}");
+    assert!(run["settings"].is_object(), "{v}");
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("No result: opencode crashed"), "{html}");
+}
+
+#[tokio::test]
+async fn runs_of_a_model_no_longer_installed_stay() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let mut kept = older_runs(ids[0], 1);
+    kept.extend(older_runs("gone-IQ2_XS", 1));
+    let (s, _runner, dir) =
+        with_models_kept_from(&ids, "code-bench-uninstalled", Some(&json!(kept))).await;
+    let mut b = logged_in(&s.url).await;
+    // The Strata page reads which models are installed.
+    b.page("/admin/strata/version").await;
+    let v = page(&mut b).await;
+    let installed = |model: &str| {
+        v["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["model"] == model)
+            .map(|m| m["installed"].clone())
+    };
+    assert_eq!(installed(ids[0]), Some(json!(true)), "{v}");
+    assert_eq!(installed("gone-IQ2_XS"), Some(json!(false)), "{v}");
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("Not installed"), "{html}");
+    std::fs::remove_dir_all(&dir).unwrap();
 }

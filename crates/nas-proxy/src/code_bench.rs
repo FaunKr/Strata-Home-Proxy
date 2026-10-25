@@ -9,16 +9,17 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use serde_json::json;
 use strata_admin_ui::api::{
-    CodeBenchAll, CodeBenchPage, CodeBenchRun, CodeBenchState, CodeBenchTaskInfo,
+    CodeBenchAll, CodeBenchModelRuns, CodeBenchPage, CodeBenchRun, CodeBenchState,
+    CodeBenchTaskInfo, RunSettings,
 };
-use strata_pc_protocol::{StrataJobRequest, StrataJobState};
+use strata_pc_protocol::{StrataInfo, StrataJobRequest, StrataJobState};
 use tokio::sync::watch;
 
 use crate::{
@@ -26,11 +27,14 @@ use crate::{
     clock,
     events::EventKind,
     files::write_private,
+    speed_history::run_settings,
     state::{ActivityGuard, AppState},
     timeouts,
 };
 
 const RESULTS_FILE: &str = "code-bench.json";
+/// Runs kept per model; the oldest go first.
+const KEPT: usize = 20;
 /// The prefix of the run's key, so a restarted proxy still knows which key
 /// is its own.
 const KEY_FILE: &str = "code-bench-key";
@@ -134,8 +138,10 @@ struct All {
 pub struct CodeBench {
     /// The running run, or the last one that did not finish.
     run: Mutex<Option<CodeBenchRun>>,
-    /// Each model's last finished run, or its error row when it has none.
-    results: Mutex<Vec<CodeBenchRun>>,
+    /// The kept runs, finished and failed, at most `KEPT` per model.
+    kept: Mutex<Vec<CodeBenchRun>>,
+    /// The id the next kept run gets.
+    next_id: AtomicU64,
     /// A start is on its way to the runner.
     starting: AtomicBool,
     /// The prefix of the key the proxy made for the run.
@@ -157,11 +163,12 @@ pub struct CodeBench {
 
 impl CodeBench {
     pub fn new(data_dir: Option<PathBuf>) -> Self {
-        let results = data_dir
+        let results: Vec<CodeBenchRun> = data_dir
             .as_ref()
             .and_then(|dir| std::fs::read(dir.join(RESULTS_FILE)).ok())
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
+        let (results, migrated) = from_older(results);
         let key = data_dir
             .as_ref()
             .and_then(|dir| std::fs::read_to_string(dir.join(KEY_FILE)).ok())
@@ -172,9 +179,11 @@ impl CodeBench {
             .and_then(|dir| std::fs::read_to_string(dir.join(RESTORE_FILE)).ok())
             .map(|id| id.trim().to_string())
             .filter(|id| !id.is_empty());
-        Self {
+        let next_id = results.iter().map(|r| r.id).max().unwrap_or(0) + 1;
+        let bench = Self {
             run: Mutex::new(None),
-            results: Mutex::new(results),
+            kept: Mutex::new(Vec::new()),
+            next_id: AtomicU64::new(next_id),
             starting: AtomicBool::new(false),
             key: Mutex::new(key),
             dir: data_dir,
@@ -183,7 +192,12 @@ impl CodeBench {
             restore: Mutex::new(restore),
             poll: Mutex::new(POLL),
             holding: watch::Sender::new(false),
+        };
+        if migrated {
+            bench.save(&results);
         }
+        *bench.kept.lock().unwrap() = results;
+        bench
     }
 
     /// Whether a request with `raw_key` waits: a run over all models goes and
@@ -237,11 +251,27 @@ impl CodeBench {
         *self.key.lock().unwrap() = prefix;
     }
 
-    /// Keeps a finished run in place of the model's last one.
-    fn keep(&self, run: CodeBenchRun) {
-        let mut results = self.results.lock().unwrap();
-        results.retain(|r| r.model != run.model);
+    /// Keeps a run with what the model ran with; a model's oldest runs go
+    /// beyond `KEPT`.
+    fn keep(&self, mut run: CodeBenchRun, settings: Option<RunSettings>) {
+        run.id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        run.settings = settings;
+        let mut results = self.kept.lock().unwrap();
+        let model = run.model.clone();
         results.push(run);
+        let mut of_model: Vec<(u64, u64)> = results
+            .iter()
+            .filter(|r| r.model == model)
+            .map(|r| (ended_or_started(r), r.id))
+            .collect();
+        if of_model.len() > KEPT {
+            of_model.sort();
+            let dropped: Vec<u64> = of_model[..of_model.len() - KEPT]
+                .iter()
+                .map(|(_, id)| *id)
+                .collect();
+            results.retain(|r| !dropped.contains(&r.id));
+        }
         self.save(&results);
     }
 
@@ -254,40 +284,54 @@ impl CodeBench {
         }
     }
 
-    /// A model that failed to load or whose run failed in a run over all
-    /// models. A result it has stays, the failure noted on it: a load that
-    /// fails once does not undo a run of hours. Without one, it gets its
-    /// error row.
-    fn note_failure(&self, model: &str, error: &str) {
-        let now = clock::unix_now();
-        let mut results = self.results.lock().unwrap();
-        if let Some(kept) = results
-            .iter_mut()
-            .find(|r| r.model == model && !r.tasks.is_empty())
-        {
-            kept.failed_later = Some(error.to_string());
-            kept.failed_at = Some(now);
-        } else {
-            results.retain(|r| r.model != model);
-            results.push(CodeBenchRun {
-                model: model.to_string(),
-                state: CodeBenchState::Failed,
-                error: Some(error.to_string()),
-                started: now,
-                ended: Some(now),
-                tasks: vec![],
-                at_text: String::new(),
-                failed_later: None,
-                failed_at: None,
-                failed_at_text: String::new(),
-            });
-        }
-        self.save(&results);
+    /// A model that failed to load, or whose run failed: a run of its own,
+    /// next to the results it has.
+    fn note_failure(&self, model: &str, error: &str, settings: Option<RunSettings>) {
+        self.keep(failed_run(model, error, clock::unix_now()), settings);
     }
 
-    /// Each model's kept result, as the page shows them unsorted.
+    /// Each model's latest finished run, the newest failure after it noted
+    /// on it; a model that only failed gives its newest failure.
     pub fn results(&self) -> Vec<CodeBenchRun> {
-        self.results.lock().unwrap().clone()
+        self.history(None)
+            .into_iter()
+            .filter_map(|m| {
+                let done = m.runs.iter().position(|r| r.state == CodeBenchState::Done);
+                match done {
+                    Some(i) => {
+                        let mut run = m.runs[i].clone();
+                        if let Some(failed) = m.runs[..i].first() {
+                            run.failed_later = failed.error.clone();
+                            run.failed_at = Some(ended_or_started(failed));
+                        }
+                        Some(run)
+                    }
+                    None => m.runs.first().cloned(),
+                }
+            })
+            .collect()
+    }
+
+    /// Each model's runs, newest first; `info` says which models are
+    /// installed.
+    pub fn history(&self, info: Option<&StrataInfo>) -> Vec<CodeBenchModelRuns> {
+        let results = self.kept.lock().unwrap();
+        let mut models: Vec<CodeBenchModelRuns> = Vec::new();
+        for run in results.iter() {
+            match models.iter_mut().find(|m| m.model == run.model) {
+                Some(m) => m.runs.push(run.clone()),
+                None => models.push(CodeBenchModelRuns {
+                    model: run.model.clone(),
+                    installed: info.is_some_and(|i| i.models.iter().any(|m| m.id == run.model)),
+                    runs: vec![run.clone()],
+                }),
+            }
+        }
+        for m in &mut models {
+            m.runs
+                .sort_by_key(|r| std::cmp::Reverse((ended_or_started(r), r.id)));
+        }
+        models
     }
 
     /// The model active before a run over all models, kept for a restart.
@@ -324,6 +368,68 @@ impl CodeBench {
     }
 }
 
+/// When a run ended, or started if it has no end.
+fn ended_or_started(run: &CodeBenchRun) -> u64 {
+    run.ended.unwrap_or(run.started)
+}
+
+/// A run of `model` that failed with `error` at `at`, without tasks.
+fn failed_run(model: &str, error: &str, at: u64) -> CodeBenchRun {
+    CodeBenchRun {
+        model: model.to_string(),
+        state: CodeBenchState::Failed,
+        error: Some(error.to_string()),
+        started: at,
+        ended: Some(at),
+        tasks: vec![],
+        at_text: String::new(),
+        id: 0,
+        settings: None,
+        failed_later: None,
+        failed_at: None,
+    }
+}
+
+/// Runs as an older proxy kept them, one per model with a later failure
+/// noted on it, as runs of their own with ids; whether any changed.
+fn from_older(runs: Vec<CodeBenchRun>) -> (Vec<CodeBenchRun>, bool) {
+    let mut changed = false;
+    let mut next = runs.iter().map(|r| r.id).max().unwrap_or(0) + 1;
+    let mut out = Vec::new();
+    for mut run in runs {
+        if run.id == 0 {
+            run.id = next;
+            next += 1;
+            changed = true;
+        }
+        if let Some(error) = run.failed_later.take() {
+            let at = run
+                .failed_at
+                .take()
+                .unwrap_or_else(|| ended_or_started(&run));
+            out.push(CodeBenchRun {
+                id: next,
+                ..failed_run(&run.model, &error, at)
+            });
+            next += 1;
+            changed = true;
+        }
+        run.failed_at = None;
+        out.push(run);
+    }
+    (out, changed)
+}
+
+/// What `model` runs with: from the PC service now, which a run keeps
+/// awake, else from its last report.
+async fn settings_now(state: &AppState, model: &str) -> Option<RunSettings> {
+    let info = match state.agent().strata().await {
+        Some((info, _)) => Some(info),
+        None => state.strata.last_info(),
+    };
+    info.map(|info| run_settings(&info, model, None))
+}
+
 pub async fn page(state: &AppState) -> CodeBenchPage {
     let problem = match state.cfg().code_bench_url.clone() {
         None => Some(NO_URL.to_string()),
@@ -332,39 +438,38 @@ pub async fn page(state: &AppState) -> CodeBenchPage {
         Some(url) => health(state, &url).await.err(),
     };
     let with_time = |mut run: CodeBenchRun| {
-        run.at_text = clock::local_text(run.ended.unwrap_or(run.started));
-        run.failed_at_text = run.failed_at.map(clock::local_text).unwrap_or_default();
+        run.at_text = clock::local_text(ended_or_started(&run));
         run
     };
-    // Sorted by hidden tests passed, then by the time the run took; error
-    // rows, which have neither, last.
-    let mut results = state
-        .code_bench
-        .results
-        .lock()
-        .unwrap()
-        .iter()
-        .cloned()
-        .map(with_time)
-        .collect::<Vec<_>>();
-    results.sort_by(|a, b| {
-        let passed = |r: &CodeBenchRun| r.tasks.iter().map(|t| t.passed).sum::<u32>();
-        let secs = |r: &CodeBenchRun| r.tasks.iter().filter_map(|t| t.total_secs).sum::<f64>();
-        a.tasks
-            .is_empty()
-            .cmp(&b.tasks.is_empty())
-            .then(passed(b).cmp(&passed(a)))
-            .then(secs(a).total_cmp(&secs(b)))
+    let info = state.strata.last_info();
+    let mut history = state.code_bench.history(info.as_ref());
+    for m in &mut history {
+        m.runs = m.runs.drain(..).map(with_time).collect();
+    }
+    // By the latest finished run: hidden tests passed, then the time it
+    // took; models with none last.
+    let key = |m: &CodeBenchModelRuns| {
+        m.runs
+            .iter()
+            .find(|r| r.state == CodeBenchState::Done)
+            .map(|r| {
+                let passed: u32 = r.tasks.iter().map(|t| t.passed).sum();
+                let secs: f64 = r.tasks.iter().filter_map(|t| t.total_secs).sum();
+                (std::cmp::Reverse(passed), secs)
+            })
+    };
+    history.sort_by(|a, b| {
+        match (key(a), key(b)) {
+            (Some(a), Some(b)) => a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)),
+            (a, b) => b.is_some().cmp(&a.is_some()),
+        }
+        .then_with(|| a.model.cmp(&b.model))
     });
-    let models = state
-        .strata
-        .last_info()
-        .map(|info| info.models.len())
-        .unwrap_or(0);
+    let models = info.map(|info| info.models.len()).unwrap_or(0);
     CodeBenchPage {
         problem,
         run: state.code_bench.run.lock().unwrap().clone().map(with_time),
-        results,
+        history,
         all: state.code_bench.all_progress(),
         models,
         tasks: task_infos(state),
@@ -578,14 +683,18 @@ async fn run_all(state: &Arc<AppState>, url: &str, key: &str) {
             all.api.task = 0;
         }
         if let Err(e) = activate(state, id).await {
-            state.code_bench.note_failure(id, &e);
+            state
+                .code_bench
+                .note_failure(id, &e, settings_now(state, id).await);
             continue;
         }
         if state.code_bench.cancelled.load(Ordering::SeqCst) {
             break;
         }
         if let Err(e) = run_model(state, url, id, key).await {
-            state.code_bench.note_failure(id, &e);
+            state
+                .code_bench
+                .note_failure(id, &e, settings_now(state, id).await);
             continue;
         }
     }
@@ -838,10 +947,12 @@ async fn follow_run(state: &Arc<AppState>, url: &str, in_all: bool) {
                     run.clone()
                 })
             };
-            if in_all && let Some(run) = lost {
-                state
-                    .code_bench
-                    .note_failure(&run.model, run.error.as_deref().unwrap_or_default());
+            if let Some(run) = lost {
+                state.code_bench.note_failure(
+                    &run.model,
+                    run.error.as_deref().unwrap_or_default(),
+                    settings_now(state, &run.model).await,
+                );
             }
             break;
         };
@@ -860,14 +971,19 @@ async fn follow_run(state: &Arc<AppState>, url: &str, in_all: bool) {
                 *state.code_bench.run.lock().unwrap() = Some(run);
             }
             CodeBenchState::Done => {
-                state.code_bench.keep(run);
+                let settings = settings_now(state, &run.model).await;
+                state.code_bench.keep(run, settings);
                 *state.code_bench.run.lock().unwrap() = None;
                 break;
             }
             CodeBenchState::Cancelled | CodeBenchState::Failed => {
-                if in_all && run.state == CodeBenchState::Failed {
+                if run.state == CodeBenchState::Failed {
                     let why = run.error.clone().unwrap_or_else(|| "the run failed".into());
-                    state.code_bench.note_failure(&run.model, &why);
+                    state.code_bench.note_failure(
+                        &run.model,
+                        &why,
+                        settings_now(state, &run.model).await,
+                    );
                 }
                 *state.code_bench.run.lock().unwrap() = Some(run);
                 break;

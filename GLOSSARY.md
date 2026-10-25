@@ -182,13 +182,13 @@ Picture reading for a model: setup's *Pictures* tick in the web UI's install and
 _Avoid_: vision (except `--vision` and the `vision` section in configs and code), image support, multimodal
 
 **Run settings**:
-What a model ran with when one of its benchmarks ran: context, speed projection, Strata version, the active preset, engine environment, engine options and sampling, taken by the proxy from the PC service's report. The proxy keeps every speed benchmark run it sees with them, also after the PC service reports a newer one; runs from before the proxy kept them say "settings not recorded".
+What a model ran with when one of its benchmarks ran: context, speed projection, Strata version, the active preset, engine environment, engine options and sampling, taken by the proxy from the PC service's report. The proxy keeps every speed benchmark run it sees with them, also after the PC service reports a newer one, and each code benchmark run it keeps; runs from before the proxy kept them say "settings not recorded".
 _Avoid_: run config (that is the model's config file), snapshot
 
 ## Code benchmark
 
 **Code benchmark**:
-The model solving fixed programming tasks with opencode in the code-bench container on the NAS, scored by hidden tests (Strata → Version & benchmark). Not the benchmark, which measures speed.
+The model solving fixed programming tasks with opencode in the code-bench container on the NAS, scored by hidden tests (Strata → Version & benchmark). The proxy keeps each model's last 20 runs, failed ones too, with their run settings. Not the benchmark, which measures speed.
 _Avoid_: coding test, eval
 
 **Repo task**:

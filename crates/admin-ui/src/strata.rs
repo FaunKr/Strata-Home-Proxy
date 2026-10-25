@@ -10,8 +10,8 @@ use strata_pc_protocol::{BenchTool, MAX_SWITCHED_CONTEXT, Pictures, StrataFamily
 
 use crate::{
     api::{
-        CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
-        CodeBenchTaskInfo, ForceRestartStrata, ForcedRestart, GenerateUpdateSummary,
+        CancelCodeBench, CancelStrataJob, CodeBenchModelRuns, CodeBenchRun, CodeBenchState,
+        CodeBenchTask, CodeBenchTaskInfo, ForceRestartStrata, ForcedRestart, GenerateUpdateSummary,
         GetOptimizationPrompt, PcView, PresetState, RelayView, RunSettings, SamplingField,
         SamplingSource, SamplingSupport, SetRelay, SpeedModelRuns, SpeedRun, StartCodeBench,
         StartCodeBenchAll, StartStrataJob, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
@@ -2400,17 +2400,7 @@ fn CodeBenchCard() -> impl IntoView {
                                 .run
                                 .clone()
                                 .map(|r| view! { <CodeBenchCurrent run=r cancel in_all /> });
-                            // Sorted by the proxy: tests passed, then time.
-                            let results = p.results.clone();
-                            let results = if results.is_empty() {
-                                view! { <p>"No code benchmark has run yet."</p> }.into_any()
-                            } else {
-                                results
-                                    .into_iter()
-                                    .map(|r| view! { <CodeBenchResult run=r tasks=p.tasks.clone() /> })
-                                    .collect_view()
-                                    .into_any()
-                            };
+                            let results = code_table(p.history.clone(), p.tasks.clone());
                             let models = p.models;
                             let tasks = p.tasks.len();
                             // The limits of one model's run, all tasks running out of time.
@@ -2568,87 +2558,247 @@ fn CodeBenchCurrent(
     }
 }
 
-/// A model's last finished run: the total, then each task. A run from
-/// before a task was added lacks it: its row shows "–" and the total says so.
-#[component]
-fn CodeBenchResult(run: CodeBenchRun, tasks: Vec<CodeBenchTaskInfo>) -> impl IntoView {
-    let (passed, secs) = run_totals(&run);
-    let total: u32 = run.tasks.iter().map(|t| t.total).sum();
-    let output: u64 = run.tasks.iter().map(|t| t.output_tokens).sum();
-    // The time the model spent, from each task's speed.
-    let model_secs: f64 = run
-        .tasks
+/// The run a model's row in the code table shows: its latest finished one.
+fn latest_code(model: &CodeBenchModelRuns) -> Option<&CodeBenchRun> {
+    model.runs.iter().find(|r| r.state == CodeBenchState::Done)
+}
+
+/// The code benchmark as a table: each model's latest result, best first,
+/// and its other runs once opened.
+fn code_table(history: Vec<CodeBenchModelRuns>, tasks: Vec<CodeBenchTaskInfo>) -> AnyView {
+    if history.is_empty() {
+        return view! { <p>"No code benchmark has run yet."</p> }.into_any();
+    }
+    let heads = tasks
         .iter()
-        .filter_map(|t| Some(t.output_tokens as f64 / t.output_tps.filter(|v| *v > 0.0)?))
-        .sum();
-    let mut summary = vec![
-        format!("{passed}/{total} tests"),
-        duration_text(secs),
-        format!("{output} output tokens"),
-    ];
-    if model_secs > 0.0 {
-        summary.push(tps((output as f64 / model_secs * 10.0).round() / 10.0));
-    }
-    let missing: Vec<CodeBenchTaskInfo> = tasks
-        .into_iter()
-        .filter(|t| !run.tasks.iter().any(|r| r.name == t.name))
-        .collect();
-    if !missing.is_empty() {
-        summary.insert(
-            0,
-            format!(
-                "{} of {} tasks",
-                run.tasks.len(),
-                run.tasks.len() + missing.len()
-            ),
-        );
-    }
-    // An error row has no tasks, so no totals either.
-    let totals = (!run.tasks.is_empty())
-        .then(|| view! { <p>{format!("Total: {}", summary.join(" · "))}</p> });
-    let missing = (!run.tasks.is_empty()).then(|| {
-        missing
-            .into_iter()
-            .map(|t| {
-                view! {
-                    <li>
-                        <div class="grow">
-                            <p class="strong">{t.title}</p>
-                            <p class="muted small">"Not part of this run."</p>
-                        </div>
-                        <span class="badge">"–"</span>
-                    </li>
-                }
-            })
-            .collect_view()
-    });
-    let tasks = run
-        .tasks
-        .into_iter()
-        .map(|t| view! { <CodeBenchTaskRow task=t /> })
+        .map(|t| view! { <th scope="col" class="task-col">{t.title.clone()}</th> })
         .collect_view();
-    let failed = run
-        .error
-        .clone()
-        .map(|e| view! { <p class="error">{format!("{}: {e}", run.model)}</p> });
-    // A later run that failed left this result standing.
-    let failed_later = run.failed_later.clone().map(|e| {
-        view! {
-            <p class="error small">
-                {format!("A later run failed ({}): {e}", run.failed_at_text)}
-            </p>
-        }
-    });
+    // Sorted by the proxy: tests passed, then time.
+    let rows = history
+        .into_iter()
+        .map(|m| view! { <CodeModel runs=m tasks=tasks.clone() /> })
+        .collect_view();
     view! {
-        <div class="bench-run">
-            <h3>{run.model.clone()}</h3>
-            {failed}
-            {failed_later}
-            {totals}
-            <p class="muted small">{run.at_text.clone()}</p>
-            <ul class="list">{tasks}{missing}</ul>
+        <div class="table-scroll bench-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th scope="col">"Model"</th>
+                        <th scope="col">"Tests"</th>
+                        {heads}
+                        <th scope="col">"Time"</th>
+                        <th scope="col">"Output tokens"</th>
+                        <th scope="col">"tok/s"</th>
+                        <th scope="col">"Date"</th>
+                    </tr>
+                </thead>
+                {rows}
+            </table>
         </div>
+        <p class="muted small">"Click a model for its earlier runs."</p>
     }
+    .into_any()
+}
+
+/// A model in the code table: its row with the latest result, and its
+/// other runs once opened.
+#[component]
+fn CodeModel(runs: CodeBenchModelRuns, tasks: Vec<CodeBenchTaskInfo>) -> impl IntoView {
+    let open = RwSignal::new(false);
+    let shown = latest_code(&runs).cloned();
+    // A model whose runs all failed shows the newest failure.
+    let head_run = shown.clone().or_else(|| runs.runs.first().cloned());
+    let others: Vec<CodeBenchRun> = runs
+        .runs
+        .iter()
+        .filter(|r| head_run.as_ref().is_none_or(|h| h.id != r.id))
+        .cloned()
+        .collect();
+    let failed_since = shown.is_some()
+        && runs
+            .runs
+            .first()
+            .is_some_and(|r| r.state != CodeBenchState::Done);
+    let name = if others.is_empty() {
+        view! { <span class="strong">{runs.model.clone()}</span> }.into_any()
+    } else {
+        let model = runs.model.clone();
+        view! {
+            <button
+                type="button"
+                class="link"
+                aria-expanded=move || open.get().to_string()
+                on:click=move |_| open.update(|o| *o = !*o)
+            >
+                {move || if open.get() { "▾ " } else { "▸ " }}
+                {model.clone()}
+            </button>
+        }
+        .into_any()
+    };
+    let badges = view! {
+        {(!runs.installed).then(|| view! { <span class="muted small">"Not installed"</span> })}
+        {failed_since.then(|| view! { <span class="error small">"Last run failed"</span> })}
+    }
+    .into_any();
+    let head = head_run.map(|run| {
+        view! { <CodeCells run tasks=tasks.clone() head=Some((name, badges)) /> }
+    });
+    let rest = move || {
+        open.get().then(|| {
+            others
+                .iter()
+                .cloned()
+                .map(|run| view! { <CodeCells run tasks=tasks.clone() head=None /> })
+                .collect_view()
+        })
+    };
+    view! {
+        <tbody class="bench-model">
+            {head}
+            {rest}
+        </tbody>
+    }
+    .into_any()
+}
+
+/// A run's row in the code table and, opened, its settings and tasks below
+/// it. `head` makes it a model's row: its name and badges.
+#[component]
+fn CodeCells(
+    run: CodeBenchRun,
+    tasks: Vec<CodeBenchTaskInfo>,
+    head: Option<(AnyView, AnyView)>,
+) -> impl IntoView {
+    let details_open = RwSignal::new(false);
+    let is_head = head.is_some();
+    let (name, badges) = head.unwrap_or_else(|| {
+        (
+            view! { <span class="muted small">"Earlier run"</span> }.into_any(),
+            ().into_any(),
+        )
+    });
+    // Tests, a column per task, time, output tokens and tok/s.
+    let columns = tasks.len() + 4;
+    let figures = if run.state != CodeBenchState::Done {
+        let error = run
+            .error
+            .clone()
+            .unwrap_or_else(|| "the run did not finish".into());
+        view! {
+            <td colspan=columns.to_string() class="error small">
+                {format!("No result: {error}")}
+            </td>
+        }
+        .into_any()
+    } else {
+        let (passed, secs) = run_totals(&run);
+        let total: u32 = run.tasks.iter().map(|t| t.total).sum();
+        let output: u64 = run.tasks.iter().map(|t| t.output_tokens).sum();
+        // The time the model spent, from each task's speed.
+        let model_secs: f64 = run
+            .tasks
+            .iter()
+            .filter_map(|t| Some(t.output_tokens as f64 / t.output_tps.filter(|v| *v > 0.0)?))
+            .sum();
+        let speed = if model_secs > 0.0 {
+            tps((output as f64 / model_secs * 10.0).round() / 10.0)
+        } else {
+            "–".into()
+        };
+        let per_task = tasks
+            .iter()
+            .map(|info| {
+                let cell = match run.tasks.iter().find(|t| t.name == info.name) {
+                    None => view! { <span class="muted">"–"</span> }.into_any(),
+                    Some(t) => {
+                        let class = if t.total > 0 && t.passed == t.total {
+                            "badge is-ok"
+                        } else if t.passed > 0 {
+                            "badge is-warn"
+                        } else {
+                            "badge is-bad"
+                        };
+                        let text = if t.timed_out {
+                            "Time limit".to_string()
+                        } else {
+                            format!("{}/{}", t.passed, t.total)
+                        };
+                        view! {
+                            <span class=class>
+                                <span class="dot"></span>
+                                {text}
+                            </span>
+                        }
+                        .into_any()
+                    }
+                };
+                view! { <td>{cell}</td> }
+            })
+            .collect_view();
+        view! {
+            <td>{format!("{passed}/{total}")}</td>
+            {per_task}
+            <td>{duration_text(secs)}</td>
+            <td>{output.to_string()}</td>
+            <td>{speed}</td>
+        }
+        .into_any()
+    };
+    let class = if is_head {
+        "bench-head"
+    } else {
+        "bench-earlier"
+    };
+    let settings = run.settings.clone();
+    let task_rows = run.tasks.clone();
+    let span = (columns + 2).to_string();
+    // Type-erased like the speed rows: the release wasm build overflows
+    // rustc's query depth otherwise.
+    let row = view! {
+        <tr class=class>
+            <th scope="row">
+                {name}
+                <div class="bench-badges">{badges}</div>
+                <button
+                    type="button"
+                    class="link small settings-toggle"
+                    aria-expanded=move || details_open.get().to_string()
+                    on:click=move |_| details_open.update(|o| *o = !*o)
+                >
+                    {move || if details_open.get() { "Hide details" } else { "Details" }}
+                </button>
+            </th>
+            {figures}
+            <td>{run.at_text.clone()}</td>
+        </tr>
+    }
+    .into_any();
+    let details = move || {
+        details_open.get().then(|| {
+            let tasks = task_rows
+                .iter()
+                .cloned()
+                .map(|t| view! { <CodeBenchTaskRow task=t /> })
+                .collect_view();
+            view! {
+                <tr class="bench-settings">
+                    <td colspan=span.clone()>
+                        <div class="bench-settings-text">
+                            {run_settings_view(settings.clone())}
+                            <ul class="list">{tasks}</ul>
+                        </div>
+                    </td>
+                </tr>
+            }
+            .into_any()
+        })
+    };
+    view! {
+        {row}
+        {details}
+    }
+    .into_any()
 }
 
 #[component]

@@ -11,8 +11,8 @@ use strata_admin_ui::{
     api::{self as ui, ForcedRestart},
     api::{
         ApiKeyInfo, ApiKeysView, CodeBenchPage, CreatedKey, HistoryView, KeepAwakeChoice,
-        OutputMessage, Overview, PcSetupCommand, Session, SettingEntry, SettingSuggestion,
-        SettingValue, SettingsView, Setup, Source, StrataJobForm, StrataPage,
+        KeyModelName, OutputMessage, Overview, PcSetupCommand, Session, SettingEntry,
+        SettingSuggestion, SettingValue, SettingsView, Setup, Source, StrataJobForm, StrataPage,
     },
     labels::{NO_AGENT, NO_ANSWER, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
@@ -20,7 +20,7 @@ use strata_admin_ui::{
 
 use crate::{
     agent::SleepAnswer,
-    api_keys::KeyInfo,
+    api_keys::{KeyInfo, ModelName},
     auth::{AuthError, SessionState},
     clock,
     events::EventKind,
@@ -114,6 +114,7 @@ impl Backend for UiBackend {
                 restart: e.field.restart,
                 secret: e.field.secret,
                 optional: e.field.optional,
+                switch: e.field.switch,
                 suggestion: timeouts::suggestion(&self.0, e.field.key).map(|s| SettingSuggestion {
                     secs: s.secs,
                     from: s.from,
@@ -276,8 +277,12 @@ impl Backend for UiBackend {
         }
     }
 
-    fn create_api_key(&self, name: &str) -> Result<CreatedKey, String> {
-        let (key, info) = self.0.api_keys.create(name).map_err(|e| e.to_string())?;
+    fn create_api_key(&self, name: &str, model_name: KeyModelName) -> Result<CreatedKey, String> {
+        let (key, info) = self
+            .0
+            .api_keys
+            .create(name, model_name_from_ui(model_name))
+            .map_err(|e| e.to_string())?;
         self.0
             .events
             .record(EventKind::ApiKeyCreated, Some(info.name.clone()));
@@ -286,6 +291,18 @@ impl Backend for UiBackend {
             key,
             info: key_info(info),
         })
+    }
+
+    fn set_api_key_model_name(
+        &self,
+        name: &str,
+        prefix: &str,
+        model_name: KeyModelName,
+    ) -> Result<(), String> {
+        self.0
+            .api_keys
+            .set_model_name(name, prefix, model_name_from_ui(model_name))
+            .map_err(|e| e.to_string())
     }
 
     fn revoke_api_key(&self, name: &str, prefix: &str) -> Result<(), String> {
@@ -381,5 +398,22 @@ fn key_info(k: KeyInfo) -> ApiKeyInfo {
         last_used: k.last_used,
         created_text: clock::local_text(k.created),
         last_used_text: k.last_used.map(clock::local_text),
+        model_name: model_name_for_ui(k.model_name),
+    }
+}
+
+fn model_name_for_ui(model_name: ModelName) -> KeyModelName {
+    match model_name {
+        ModelName::Global => KeyModelName::Global,
+        ModelName::Hide => KeyModelName::Hide,
+        ModelName::Show => KeyModelName::Show,
+    }
+}
+
+fn model_name_from_ui(model_name: KeyModelName) -> ModelName {
+    match model_name {
+        KeyModelName::Global => ModelName::Global,
+        KeyModelName::Hide => ModelName::Hide,
+        KeyModelName::Show => ModelName::Show,
     }
 }

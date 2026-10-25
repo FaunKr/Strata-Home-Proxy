@@ -121,6 +121,8 @@ async fn each_area_shows_its_own_settings() {
             &[
                 "STRATA_URL",
                 "CODE_BENCH_URL",
+                "HIDE_MODEL",
+                "PUBLIC_MODEL_NAME",
                 "UPDATE_SUMMARY_TIMEOUT_SECS",
                 "CODE_BENCH_TASK_TIMEOUT_SECS",
             ][..],

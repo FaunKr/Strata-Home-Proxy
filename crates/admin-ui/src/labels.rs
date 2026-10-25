@@ -47,6 +47,14 @@ pub fn label(key: &str) -> Label {
             "Code benchmark address",
             "Optional: where the proxy reaches the code-bench container, e.g. http://127.0.0.1:8096. Without it there is no code benchmark.",
         ),
+        "HIDE_MODEL" => (
+            "Hide model name",
+            "Apps see the public model name instead of the model Strata runs, so switching models never breaks them. Each API key under Access can follow this or override it.",
+        ),
+        "PUBLIC_MODEL_NAME" => (
+            "Public model name",
+            "The one model name apps see while the model is hidden, e.g. strata. No spaces.",
+        ),
         "UPDATE_SUMMARY_TIMEOUT_SECS" => (
             "Update summary limit",
             "How long Strata may take to write the summary of an update. Empty uses the suggestion below.",
@@ -159,8 +167,13 @@ pub const PC_WAKE_SLEEP: SectionDef = SectionDef {
 pub const STRATA_CONNECTION: SectionDef = SectionDef {
     id: "strata-connection",
     title: "Connection",
-    help: "Where Strata runs.",
-    keys: &["STRATA_URL", "CODE_BENCH_URL"],
+    help: "Where Strata runs, and how apps see its model.",
+    keys: &[
+        "STRATA_URL",
+        "CODE_BENCH_URL",
+        "HIDE_MODEL",
+        "PUBLIC_MODEL_NAME",
+    ],
     advanced: &[],
 };
 

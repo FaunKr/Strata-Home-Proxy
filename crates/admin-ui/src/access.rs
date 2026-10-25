@@ -4,7 +4,10 @@
 use leptos::{html::Input, prelude::*};
 
 use crate::{
-    api::{ApiKeyInfo, CreateApiKey, CreatedKey, RevokeApiKey, error_text, get_api_keys},
+    api::{
+        ApiKeyInfo, CreateApiKey, CreatedKey, KeyModelName, RevokeApiKey, SetApiKeyModelName,
+        error_text, get_api_keys,
+    },
     app::{PasswordFields, SessionActions, action_error},
     confirm::{Confirm, Question},
     copy::CopyField,
@@ -27,9 +30,17 @@ pub fn AccessPage() -> impl IntoView {
 fn ApiKeys() -> impl IntoView {
     let create = ServerAction::<CreateApiKey>::new();
     let revoke = ServerAction::<RevokeApiKey>::new();
+    let model_name = ServerAction::<SetApiKeyModelName>::new();
     provide_context(revoke);
+    provide_context(model_name);
     let keys = Resource::new(
-        move || (create.version().get(), revoke.version().get()),
+        move || {
+            (
+                create.version().get(),
+                revoke.version().get(),
+                model_name.version().get(),
+            )
+        },
         |_| get_api_keys(),
     );
     // The new key stays visible until the next revoke, so it does not linger
@@ -93,10 +104,17 @@ fn ApiKeys() -> impl IntoView {
                     autocomplete="off"
                     required
                 />
+                <label for="key-model-name" class="visually-hidden">
+                    "Model name"
+                </label>
+                <select id="key-model-name" name="model_name" class="model-name">
+                    <ModelNameOptions selected=KeyModelName::Global />
+                </select>
                 <button type="submit">"Create key"</button>
             </ActionForm>
             {create_error}
             {action_error(revoke.value())}
+            {action_error(model_name.value())}
             <Transition fallback=|| view! { <p>"Loading …"</p> }>
                 {move || Suspend::new(async move {
                     match keys.await {
@@ -129,9 +147,49 @@ fn ApiKeys() -> impl IntoView {
     }
 }
 
+/// What a key's apps see as the model's name.
+const MODEL_NAMES: [(KeyModelName, &str, &str); 3] = [
+    (
+        KeyModelName::Global,
+        "global",
+        "Model name as in Strata → Connection",
+    ),
+    (KeyModelName::Hide, "hide", "Hide model name"),
+    (KeyModelName::Show, "show", "Show model name"),
+];
+
+#[component]
+fn ModelNameOptions(selected: KeyModelName) -> impl IntoView {
+    MODEL_NAMES
+        .iter()
+        .map(|(choice, value, text)| {
+            view! {
+                <option value=*value selected=*choice == selected>
+                    {*text}
+                </option>
+            }
+        })
+        .collect_view()
+}
+
 #[component]
 fn ApiKeyRow(key: ApiKeyInfo) -> impl IntoView {
     let revoke = expect_context::<ServerAction<RevokeApiKey>>();
+    let model_name = expect_context::<ServerAction<SetApiKeyModelName>>();
+    let select_id = format!("model-name-{}", key.prefix);
+    let on_model_name = {
+        let (name, prefix) = (key.name.clone(), key.prefix.clone());
+        move |ev| {
+            let value = event_target_value(&ev);
+            if let Some((choice, ..)) = MODEL_NAMES.iter().find(|(_, v, _)| *v == value) {
+                model_name.dispatch(SetApiKeyModelName {
+                    name: name.clone(),
+                    prefix: prefix.clone(),
+                    model_name: *choice,
+                });
+            }
+        }
+    };
     let confirm = expect_context::<Confirm>();
     let used = key
         .last_used_text
@@ -164,6 +222,17 @@ fn ApiKeyRow(key: ApiKeyInfo) -> impl IntoView {
                     {format!(" · created {} · {used}", key.created_text)}
                 </p>
             </div>
+            <label for=select_id.clone() class="visually-hidden">
+                {format!("Model name for {}", key.name)}
+            </label>
+            <select
+                id=select_id
+                class="model-name"
+                disabled=move || model_name.pending().get()
+                on:change=on_model_name
+            >
+                <ModelNameOptions selected=key.model_name />
+            </select>
             <button
                 type="button"
                 class="ghost-danger"

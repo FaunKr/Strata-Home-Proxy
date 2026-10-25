@@ -93,6 +93,9 @@ pub struct SettingEntry {
     pub restart: bool,
     pub secret: bool,
     pub optional: bool,
+    /// On or off (`true`/`false`), shown as a switch.
+    #[serde(default)]
+    pub switch: bool,
     /// What an empty field uses, for limits the proxy suggests itself.
     pub suggestion: Option<SettingSuggestion>,
 }
@@ -162,6 +165,17 @@ pub async fn reset_setting(key: String) -> Result<(), ServerFnError> {
     backend()?.reset_setting(&key).map_err(bad_request)
 }
 
+/// Whether apps with a key see the public model name or the model Strata runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyModelName {
+    /// As the switch in Strata → Connection says.
+    #[default]
+    Global,
+    Hide,
+    Show,
+}
+
 /// A client's API key, without the secret.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiKeyInfo {
@@ -175,6 +189,7 @@ pub struct ApiKeyInfo {
     /// `created` as the NAS shows times, e.g. `17.10. 14:03`.
     pub created_text: String,
     pub last_used_text: Option<String>,
+    pub model_name: KeyModelName,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,9 +213,14 @@ pub async fn get_api_keys() -> Result<ApiKeysView, ServerFnError> {
 }
 
 #[server(prefix = "/admin/api", endpoint = "create-api-key")]
-pub async fn create_api_key(name: String) -> Result<CreatedKey, ServerFnError> {
+pub async fn create_api_key(
+    name: String,
+    #[server(default)] model_name: KeyModelName,
+) -> Result<CreatedKey, ServerFnError> {
     require_login(false).await?;
-    backend()?.create_api_key(&name).map_err(bad_request)
+    backend()?
+        .create_api_key(&name, model_name)
+        .map_err(bad_request)
 }
 
 #[server(prefix = "/admin/api", endpoint = "revoke-api-key")]
@@ -208,6 +228,18 @@ pub async fn revoke_api_key(name: String, prefix: String) -> Result<(), ServerFn
     require_login(false).await?;
     backend()?
         .revoke_api_key(&name, &prefix)
+        .map_err(bad_request)
+}
+
+#[server(prefix = "/admin/api", endpoint = "set-api-key-model-name")]
+pub async fn set_api_key_model_name(
+    name: String,
+    prefix: String,
+    model_name: KeyModelName,
+) -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?
+        .set_api_key_model_name(&name, &prefix, model_name)
         .map_err(bad_request)
 }
 

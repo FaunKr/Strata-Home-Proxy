@@ -438,7 +438,11 @@ async fn a_runner_without_its_firewall_is_a_problem() {
 #[tokio::test]
 async fn a_key_someone_named_alike_stays_and_the_start_says_why() {
     let (s, runner) = with_runner().await;
-    let (_, theirs) = s.state.api_keys.create("code benchmark").unwrap();
+    let (_, theirs) = s
+        .state
+        .api_keys
+        .create("code benchmark", Default::default())
+        .unwrap();
     let mut b = logged_in(&s.url).await;
     let resp = b.call("code-bench-start", &[]).await;
     assert_eq!(resp.status(), 400);
@@ -471,7 +475,10 @@ async fn two_starts_at_once_make_one_run_with_a_working_key() {
     assert_eq!(*runner.starts.lock().unwrap(), 1);
     let body = runner.started.lock().unwrap().first().cloned().unwrap();
     let key = body["api_key"].as_str().unwrap();
-    assert_eq!(s.state.api_keys.check(key).as_deref(), Some(KEY_NAME));
+    assert_eq!(
+        s.state.api_keys.check(key).map(|k| k.name).as_deref(),
+        Some(KEY_NAME)
+    );
 }
 
 #[tokio::test]
@@ -909,7 +916,11 @@ async fn after_a_restart_mid_run_the_current_run_is_followed_and_the_model_broug
     // The proxy is mid-run for the first model when it restarts: its key and the
     // model active before the run are in DATA_DIR, and the runner is working on
     // the first model's run.
-    let (_, info) = s.state.api_keys.create(KEY_NAME).unwrap();
+    let (_, info) = s
+        .state
+        .api_keys
+        .create(KEY_NAME, Default::default())
+        .unwrap();
     std::fs::write(dir.join("code-bench-key"), info.prefix).unwrap();
     std::fs::write(dir.join("code-bench-restore"), ids[1]).unwrap();
     *runner.current.lock().unwrap() = Some(run(ids[0], "running"));
@@ -1012,7 +1023,11 @@ async fn all_models_run_started(s: &Setup, runner: &Runner, b: &mut Browser) -> 
 async fn other_keys_wait_for_a_run_over_all_models_and_its_own_key_passes() {
     let ids = ["IQ3_XXS", "coder-IQ1_M"];
     let (s, runner) = with_models(&ids).await;
-    let (other, _) = s.state.api_keys.create("laptop").unwrap();
+    let (other, _) = s
+        .state
+        .api_keys
+        .create("laptop", Default::default())
+        .unwrap();
     let mut b = logged_in(&s.url).await;
     let run_key = all_models_run_started(&s, &runner, &mut b).await;
 
@@ -1041,7 +1056,11 @@ async fn other_keys_wait_for_a_run_over_all_models_and_its_own_key_passes() {
 async fn a_held_key_gets_the_saved_list_of_models_at_once() {
     let ids = ["IQ3_XXS", "coder-IQ1_M"];
     let (s, runner) = with_models(&ids).await;
-    let (other, _) = s.state.api_keys.create("laptop").unwrap();
+    let (other, _) = s
+        .state
+        .api_keys
+        .create("laptop", Default::default())
+        .unwrap();
     let list = |key: String| {
         let url = s.url.clone();
         async move {
@@ -1069,7 +1088,11 @@ async fn a_held_key_gets_the_saved_list_of_models_at_once() {
 async fn a_held_request_answers_as_a_wake_timeout_when_its_time_runs_out() {
     let ids = ["IQ3_XXS", "coder-IQ1_M"];
     let (s, runner) = with_models(&ids).await;
-    let (other, _) = s.state.api_keys.create("laptop").unwrap();
+    let (other, _) = s
+        .state
+        .api_keys
+        .create("laptop", Default::default())
+        .unwrap();
     let mut b = logged_in(&s.url).await;
     assert_eq!(
         save_settings(&mut b, &[("WAKE_TIMEOUT_SECS", "1")])
@@ -1096,7 +1119,11 @@ async fn a_held_request_answers_as_a_wake_timeout_when_its_time_runs_out() {
 #[tokio::test]
 async fn a_single_run_holds_no_one() {
     let (s, runner) = with_runner().await;
-    let (other, _) = s.state.api_keys.create("laptop").unwrap();
+    let (other, _) = s
+        .state
+        .api_keys
+        .create("laptop", Default::default())
+        .unwrap();
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
     let resp = tokio::time::timeout(Duration::from_secs(5), chat_with(&s.url, &other))
@@ -1113,7 +1140,7 @@ async fn a_proxy_restarted_during_a_run_over_all_models_holds_no_one() {
     let mut b = logged_in(&s.url).await;
     all_models_run_started(&s, &runner, &mut b).await;
     let fresh = restarted(&s);
-    let (phone, _) = fresh.api_keys.create("phone").unwrap();
+    let (phone, _) = fresh.api_keys.create("phone", Default::default()).unwrap();
     let url = serve_proxy(fresh).await;
     let resp = tokio::time::timeout(Duration::from_secs(5), chat_with(&url, &phone))
         .await
@@ -1165,7 +1192,11 @@ async fn after_a_restart_during_an_activate_the_model_is_brought_back_once_it_en
     let (s, _runner, dir) = with_models_kept(&ids, "code-bench-restart-activate").await;
     // The proxy restarts while the first model loads: no run at the runner,
     // and the PC service takes no second job before this one ends.
-    let (_, info) = s.state.api_keys.create(KEY_NAME).unwrap();
+    let (_, info) = s
+        .state
+        .api_keys
+        .create(KEY_NAME, Default::default())
+        .unwrap();
     std::fs::write(dir.join("code-bench-key"), info.prefix).unwrap();
     std::fs::write(dir.join("code-bench-restore"), ids[1]).unwrap();
     *s.pc.strata_job.lock().unwrap() = Some(job(StrataJobKind::Activate, StrataJobState::Running));
@@ -1181,4 +1212,19 @@ async fn after_a_restart_during_an_activate_the_model_is_brought_back_once_it_en
         last_activate(&s) == ids[1]
     })
     .await;
+}
+
+#[tokio::test]
+async fn the_runs_key_sees_the_real_model_names_under_the_switch() {
+    let (s, runner) = with_runner().await;
+    s.state.settings.set("HIDE_MODEL", "true").unwrap();
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    let body = runner.started.lock().unwrap().first().cloned().unwrap();
+    let key = body["api_key"].as_str().unwrap();
+    let checked = s.state.api_keys.check(key).unwrap();
+    assert_eq!(
+        checked.model_name,
+        strata_nas_proxy::api_keys::ModelName::Show
+    );
 }

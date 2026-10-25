@@ -116,7 +116,7 @@ impl Meter {
                         self.first_token.get_or_insert(at);
                         self.last_token = Some(at);
                     }
-                    self.count(content);
+                    self.add_chars(content);
                 }
             }
         }
@@ -130,16 +130,19 @@ impl Meter {
         let content = match self.api {
             RequestApi::Chat => self.chat(&value, &value["choices"][0]["message"]),
             RequestApi::Messages => self.whole_message(&value),
-            RequestApi::Responses => self.response(&value),
+            RequestApi::Responses => {
+                self.response(&value);
+                Content::default()
+            }
             _ => {
                 self.model_from(&value["model"]);
                 Content::default()
             }
         };
-        self.count(content);
+        self.add_chars(content);
     }
 
-    fn count(&mut self, content: Content) {
+    fn add_chars(&mut self, content: Content) {
         self.thinking_chars += content.thinking;
         self.content_chars += content.thinking + content.other;
     }
@@ -290,14 +293,15 @@ impl Meter {
                 if value["response"].is_object() {
                     self.response(&value["response"]);
                 }
+                // A Responses answer counts no characters: Strata gives the
+                // thinking tokens itself.
                 Content::default()
             }
         }
     }
 
-    /// A Responses answer: whole, or as an event carries it so far. Its
-    /// content counts nothing: Strata gives the thinking tokens itself.
-    fn response(&mut self, response: &Value) -> Content {
+    /// A Responses answer: whole, or as an event carries it so far.
+    fn response(&mut self, response: &Value) {
         self.model_from(&response["model"]);
         let output = response["output"].as_array().into_iter().flatten();
         self.tool_call |= output.into_iter().any(is_call);
@@ -309,20 +313,15 @@ impl Meter {
             self.output_tokens = usage["output_tokens"].as_u64();
             self.thinking_tokens = usage["output_tokens_details"]["reasoning_tokens"].as_u64();
         }
-        Content::default()
     }
 
     /// The row's fields the meter knows, the others left as they are.
     pub fn row(&self) -> RequestRow {
-        let generates = matches!(
-            self.api,
-            RequestApi::Chat | RequestApi::Messages | RequestApi::Responses
-        );
         let answer = match (
             self.tool_call,
             self.output_tokens.is_some() || self.first_token.is_some(),
         ) {
-            _ if !generates => None,
+            _ if !self.api.has_turns() => None,
             (true, _) => Some(RequestAnswer::ToolCall),
             (false, true) => Some(RequestAnswer::Text),
             (false, false) => None,
@@ -357,7 +356,7 @@ impl Meter {
     /// Strata's count on Responses. Elsewhere the thinking text's share of
     /// the answer's characters, times the output tokens: an estimate.
     fn thinking(&self) -> (Option<u64>, bool) {
-        if self.thinking_tokens.is_some() {
+        if self.api == RequestApi::Responses {
             return (self.thinking_tokens, false);
         }
         let output = match self.output_tokens {
@@ -376,19 +375,19 @@ impl Meter {
         let read = self
             .prompt_tokens?
             .saturating_sub(self.cached_tokens.unwrap_or(0));
-        positive(read, self.first_token?)
+        speed_sample(read, self.first_token?)
     }
 
     /// The tokens after the first over the time from the first to the last.
     fn measured_generation(&self) -> Option<(u64, f64)> {
         let first = self.first_token?;
         let span = self.last_token?.checked_sub(first)?;
-        positive(self.output_tokens?.checked_sub(1)?, span)
+        speed_sample(self.output_tokens?.checked_sub(1)?, span)
     }
 }
 
-/// Tokens and milliseconds; none for zero tokens or time.
-fn positive(tokens: u64, time: Duration) -> Option<(u64, f64)> {
+/// Tokens and milliseconds for a speed; none for zero tokens or time.
+fn speed_sample(tokens: u64, time: Duration) -> Option<(u64, f64)> {
     let ms = time.as_secs_f64() * 1000.0;
     (tokens > 0 && ms > 0.0).then_some((tokens, ms))
 }
@@ -964,6 +963,31 @@ mod tests {
         assert_eq!(row.answer, Some(RequestAnswer::ToolCall));
         assert_eq!(row.thinking_tokens, Some(12));
         assert_eq!(row.generation_tok_s(), None);
+    }
+
+    #[test]
+    fn a_responses_answer_without_strata_s_count_gets_no_estimate() {
+        let mut meter = responses_meter();
+        meter.chunk(
+            response_event(
+                r#"{"type": "response.reasoning_text.delta", "sequence_number": 3, "item_id": "rs_1", "output_index": 0, "content_index": 0, "delta": "Read a."}"#,
+            )
+            .as_bytes(),
+            ms(250),
+        );
+        let usage =
+            RESPONSE_USAGE.replace(r#", "output_tokens_details": {"reasoning_tokens": 12}"#, "");
+        let done = response("completed", &usage);
+        meter.chunk(
+            response_event(&format!(
+                r#"{{"type": "response.completed", "sequence_number": 10, "response": {done}}}"#
+            ))
+            .as_bytes(),
+            ms(1260),
+        );
+        let row = meter.row();
+        assert_eq!(row.output_tokens, Some(41));
+        assert_eq!((row.thinking_tokens, row.thinking_estimated), (None, false));
     }
 
     #[test]

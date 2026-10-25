@@ -501,6 +501,14 @@ pub enum RequestApi {
     Images,
 }
 
+impl RequestApi {
+    /// A conversation's turn: started by a message, answered by text or a
+    /// tool call. Completions, embeddings and images are not.
+    pub fn has_turns(self) -> bool {
+        matches!(self, Self::Chat | Self::Messages | Self::Responses)
+    }
+}
+
 /// What started a request: its last message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

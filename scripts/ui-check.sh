@@ -19,6 +19,16 @@ if ! node -e 'require("playwright")' 2>/dev/null; then
   exit 2
 fi
 
+# Under the load of a check or test run the page waits time out, and the
+# failures look like flakes in areas the change does not touch. A script that
+# ran before this one in the same command line has ended and does not count.
+if busy=$(pgrep -f '^([^ ]*/)?bash [^ ]*scripts/(check|repeat-test|side-by-side)\.sh( |$)|^([^ ]*/)?cargo-nextest '); then
+  echo "A check or test run is going on; run ui-check.sh after it:" >&2
+  # shellcheck disable=SC2086 # one pid per word.
+  ps -o pid=,args= -p "$(echo $busy | tr ' ' ,)" >&2
+  exit 2
+fi
+
 data="$(mktemp -d)"
 trap 'rm -rf "$data"' EXIT
 # A finished code benchmark, as the proxy keeps it.

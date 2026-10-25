@@ -595,3 +595,27 @@ input[type="date"] {
 .update-commits ul { list-style: none; margin: 8px 0 0; padding: 0; font-size: 0.9rem; }
 .update-commits li { padding: 4px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .update-changes a { display: inline-block; min-height: 24px; line-height: 24px; }
+
+/* --- Request log --- */
+
+.request-table { overflow-x: auto; }
+.request-table table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.request-table th, .request-table td { text-align: left; padding: 6px 5px; border-top: 1px solid var(--line); white-space: nowrap; }
+.request-table thead th { border-top: 0; color: var(--muted); font-weight: normal; font-size: 0.8rem; }
+.request-table .num { text-align: right; }
+.request-table td { vertical-align: top; }
+.request-table td.model { white-space: normal; overflow-wrap: anywhere; min-width: 90px; max-width: 150px; }
+.request-table .sub { display: block; color: var(--muted); font-size: 0.75rem; }
+.request-table td.bad { color: var(--bad); }
+.request-table tr.request-more { display: none; }
+.request-more dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; margin: 0; }
+.request-more dt { color: var(--muted); }
+.request-more dd { margin: 0; white-space: normal; }
+
+@media (max-width: 760px) {
+  .request-table .wide { display: none; }
+  .request-table td.type { white-space: normal; }
+  .request-table tbody.request > tr:first-child { cursor: pointer; }
+  .request-table tbody.request.open tr.request-more { display: table-row; }
+  .request-table tbody.request.open tr.request-more td { border-top: 0; background: var(--surface-2); }
+}

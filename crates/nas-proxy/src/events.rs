@@ -110,6 +110,11 @@ impl History {
         recent.push_back(event);
     }
 
+    /// The database, which the request log shares.
+    pub fn database(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.db)
+    }
+
     /// Notes that the proxy still runs; the next start records the last note
     /// as `ProxyStopped`.
     pub fn beat(&self) {
@@ -340,7 +345,8 @@ fn create_tables(conn: &Connection) -> rusqlite::Result<()> {
              id INTEGER PRIMARY KEY,
              ts INTEGER NOT NULL
          );",
-    )
+    )?;
+    conn.execute_batch(crate::request_log::TABLE)
 }
 
 /// Moves the events of `events.jsonl` into the database in one transaction,

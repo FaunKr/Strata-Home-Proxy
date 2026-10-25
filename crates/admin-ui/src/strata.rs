@@ -470,6 +470,9 @@ pub fn StrataArea() -> impl IntoView {
             <A href="/admin/strata/connection" attr:class="tab">
                 "Connection"
             </A>
+            <A href="/admin/strata/requests" attr:class="tab">
+                "Requests"
+            </A>
         </nav>
         <StrataState live />
         {action_error(actions.start.value())}

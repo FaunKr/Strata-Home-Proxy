@@ -157,6 +157,10 @@ _Avoid_: log entry, Ereignis
 What the proxy keeps of events and power plug readings over time; the web UI shows it as bars per day, week or month.
 _Avoid_: log, Verlauf
 
+**Request log**:
+The proxy's list of the last 1000 requests through it that made the model work, with key, model, type, tokens, speeds and outcome, never their text; the web UI shows it live in the Strata area (tab *Requests*). Not an event, and not Strata's own request monitor.
+_Avoid_: access log, request history
+
 **Strata key**:
 The key Strata asks of every request (`api_key` in the model configs). The PC service makes a new one before every start of Strata it makes, and the proxy fetches it from the PC service whenever its generation changes. Only the proxy and the PC service know it (in relay mode only the PC service); clients use their own API keys.
 _Avoid_: Strata API key, STRATA_API_KEY (an older setting of the proxy), token (that is the shared secret of proxy and PC service)

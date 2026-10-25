@@ -20,6 +20,8 @@ pub mod pc_setup;
 pub mod plug;
 pub mod proxy;
 pub mod public_name;
+pub mod request_log;
+pub mod request_meter;
 pub mod settings;
 pub mod speed_history;
 pub mod state;

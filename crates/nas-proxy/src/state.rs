@@ -85,6 +85,8 @@ pub struct AppState {
     /// For `/health` and the PC service, rebuilt when `PROBE_TIMEOUT_MS` changes.
     probe: Mutex<(Duration, Client)>,
     pub events: History,
+    /// The last requests that made the model work.
+    pub requests: crate::request_log::RequestLog,
     /// Live state for the overview page.
     pub overview: Monitor,
     /// Strata jobs on the PC.
@@ -169,10 +171,13 @@ impl AppState {
             .and_then(|text| serde_json::from_str::<KeepAwakeFile>(&text).ok())
             .map(|f| SystemTime::UNIX_EPOCH + Duration::from_secs(f.until))
             .filter(|t| *t > SystemTime::now());
+        let events = History::new(cfg.data_dir.clone());
+        let requests = crate::request_log::RequestLog::new(events.database());
         let state = Arc::new(Self {
             auth: Auth::new(cfg.data_dir.clone(), cfg.ui_password.clone()),
             api_keys: ApiKeys::new(cfg.data_dir.clone()),
-            events: History::new(cfg.data_dir.clone()),
+            events,
+            requests,
             upstream,
             overview: Monitor::default(),
             strata: crate::strata::StrataState::new(cfg.data_dir.clone()),
@@ -664,6 +669,11 @@ impl AppState {
         if before.is_none_or(|b| b < since) {
             tracing::warn!("Open requests given up: Strata no longer shows them");
         }
+    }
+
+    /// Whether a request sent to Strata at `sent` is given up as lost.
+    pub fn was_given_up(&self, sent: Instant) -> bool {
+        self.give_up.borrow().is_some_and(|cutoff| sent <= cutoff)
     }
 
     /// Changes `PACKET_AHEAD_AFTER`; for tests.

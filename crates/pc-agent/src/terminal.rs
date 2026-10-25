@@ -125,6 +125,12 @@ impl Terminal {
         (want > have && whole).then_some(folder)
     }
 
+    /// The Python of the Terminal's files that run ([`root`](Self::root)),
+    /// the one `strata serve` runs Strata with.
+    pub fn python(&self) -> PathBuf {
+        self.root().join("python").join("python.exe")
+    }
+
     /// The `strata` command; it hands over to newer files by itself.
     pub fn program(&self) -> PathBuf {
         Self::program_in(&self.current())

@@ -106,7 +106,7 @@ pub struct Agent {
     /// no second standby.
     standby_pending: AtomicBool,
     pub(crate) output: Arc<StrataOutput>,
-    pub jsonschema_limits: crate::jsonschema::Limits,
+    pub jsonschema_limits: crate::jsonschema::LimitsSetting,
     /// A new one comes with every start of Strata.
     pub(crate) strata_key: StrataKey,
     /// The last Strata this service started listens on this PC only;

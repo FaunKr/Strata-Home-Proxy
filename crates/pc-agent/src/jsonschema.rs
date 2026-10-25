@@ -26,25 +26,34 @@ const CHECK: &str = "# jsonschema\nimport jsonschema\n";
 const REQUIREMENT: &str = "jsonschema>=4.23,<5";
 
 /// How long the check and the install may take before they are ended.
+#[derive(Clone, Copy)]
 pub struct Limits {
-    inner: Mutex<(Duration, Duration)>,
+    pub check: Duration,
+    pub install: Duration,
 }
 
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            inner: Mutex::new((Duration::from_secs(60), Duration::from_secs(300))),
+            check: Duration::from_secs(60),
+            install: Duration::from_secs(300),
         }
     }
 }
 
-impl Limits {
+/// The [`Limits`] a service uses, which tests can shorten.
+#[derive(Default)]
+pub struct LimitsSetting {
+    inner: Mutex<Limits>,
+}
+
+impl LimitsSetting {
     /// For tests: limits they can wait out.
-    pub fn set(&self, check: Duration, install: Duration) {
-        *self.inner.lock().unwrap() = (check, install);
+    pub fn set(&self, limits: Limits) {
+        *self.inner.lock().unwrap() = limits;
     }
 
-    fn get(&self) -> (Duration, Duration) {
+    fn get(&self) -> Limits {
         *self.inner.lock().unwrap()
     }
 }
@@ -98,14 +107,14 @@ async fn ensure(
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Option<Result<(), String>> {
     let python = strata_python(&agent.cfg)?;
-    let (check_limit, install_limit) = agent.jsonschema_limits.get();
+    let limits = agent.jsonschema_limits.get();
     let spec = |args: &[&str]| CommandSpec {
         program: python.clone(),
         args: args.iter().map(|a| a.to_string()).collect(),
         dir: python.parent().map(Into::into),
         env: vec![("PYTHONNOUSERSITE".into(), "1".into())],
     };
-    let check = exit_within(agent, &spec(&["-c", CHECK]), check_limit, cancelled).await;
+    let check = exit_within(agent, &spec(&["-c", CHECK]), limits.check, cancelled).await;
     if check.as_ref().is_ok_and(|(code, _)| *code == 0) || cancelled() {
         return None;
     }
@@ -119,7 +128,7 @@ async fn ensure(
         "--no-warn-script-location",
         REQUIREMENT,
     ]);
-    match exit_within(agent, &install, install_limit, cancelled).await {
+    match exit_within(agent, &install, limits.install, cancelled).await {
         Ok((0, _)) => Some(Ok(())),
         Ok((code, last)) => Some(Err(match last {
             Some(last) => format!("pip ended with code {code}: {last}"),
@@ -167,7 +176,7 @@ async fn exit_within(
                 }
                 if tokio::time::Instant::now() >= ended {
                     cancel();
-                    return Err(format!("no end within {} s", limit.as_secs()));
+                    return Err(format!("no end within {limit:?}"));
                 }
             }
         }

@@ -73,6 +73,21 @@ fn pip_answers(s: &Setup, exit: Option<i32>) {
     );
 }
 
+/// pip prints faster than the service looks at the clock, and never ends.
+fn endless_pip(s: &Setup) {
+    s.fake.command(
+        "python -m pip",
+        FakeCommand {
+            lines: (0..100_000)
+                .map(|i| format!("Downloading part {i}"))
+                .collect(),
+            pause: Duration::from_millis(1),
+            hang: true,
+            ..FakeCommand::default()
+        },
+    );
+}
+
 fn pips(s: &Setup) -> Vec<CommandSpec> {
     s.fake
         .runs_of("python")
@@ -114,7 +129,7 @@ async fn an_update_installs_a_missing_jsonschema_before_strata_starts_again() {
     s.fake.command(
         "strata.cmd update",
         FakeCommand {
-            lines: vec![UPDATED.into()],
+            lines: lines(&[UPDATED]),
             ..FakeCommand::default()
         },
     );
@@ -159,7 +174,7 @@ async fn an_update_with_jsonschema_there_shows_nothing_of_it() {
     s.fake.command(
         "strata.cmd update",
         FakeCommand {
-            lines: vec![UPDATED.into()],
+            lines: lines(&[UPDATED]),
             ..FakeCommand::default()
         },
     );
@@ -180,7 +195,7 @@ async fn a_failed_pip_leaves_the_update_done_and_says_why_in_one_line() {
     s.fake.command(
         "strata.cmd update",
         FakeCommand {
-            lines: vec![UPDATED.into()],
+            lines: lines(&[UPDATED]),
             ..FakeCommand::default()
         },
     );
@@ -207,7 +222,7 @@ async fn an_update_that_brings_newer_terminal_files_checks_their_python() {
     s.fake.command(
         "strata.cmd update",
         FakeCommand {
-            lines: vec![UPDATED.into()],
+            lines: lines(&[UPDATED]),
             creates: vec![
                 (folder.join("python").join("python.exe"), String::new()),
                 (folder.join("strata.py"), String::new()),
@@ -343,18 +358,7 @@ async fn a_job_that_starts_during_the_start_check_ends_its_pip() {
     let s = setup("jsonschema-start-ended").await;
     installed(&s);
     missing(&s);
-    // pip keeps printing and does not end on its own.
-    s.fake.command(
-        "python -m pip",
-        FakeCommand {
-            lines: (0..10_000)
-                .map(|i| format!("Downloading part {i}"))
-                .collect(),
-            pause: Duration::from_millis(1),
-            hang: true,
-            ..FakeCommand::default()
-        },
-    );
+    endless_pip(&s);
     let check = tokio::spawn(jsonschema::at_start(s.agent.clone()));
     eventually("pip runs", || !pips(&s).is_empty()).await;
     let running = strata_pc_agent::job::testing::job(&s.agent);
@@ -369,29 +373,19 @@ async fn a_job_that_starts_during_the_start_check_ends_its_pip() {
 async fn a_pip_that_keeps_printing_is_ended_at_the_limit_and_strata_starts_again() {
     let s = setup("jsonschema-limit").await;
     installed(&s);
-    s.agent
-        .jsonschema_limits
-        .set(Duration::from_secs(5), Duration::from_millis(300));
+    s.agent.jsonschema_limits.set(jsonschema::Limits {
+        check: Duration::from_secs(5),
+        install: Duration::from_millis(300),
+    });
     s.fake.command(
         "strata.cmd update",
         FakeCommand {
-            lines: vec![UPDATED.into()],
+            lines: lines(&[UPDATED]),
             ..FakeCommand::default()
         },
     );
     missing(&s);
-    // Prints faster than the service looks at the clock, and never ends.
-    s.fake.command(
-        "python -m pip",
-        FakeCommand {
-            lines: (0..100_000)
-                .map(|i| format!("Downloading part {i}"))
-                .collect(),
-            pause: Duration::from_millis(1),
-            hang: true,
-            ..FakeCommand::default()
-        },
-    );
+    endless_pip(&s);
     let done = job(&s, json!({"kind": "update"})).await;
     assert_eq!(done["state"], "done", "{done}");
     let about: Vec<String> = shown(&done)

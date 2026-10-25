@@ -4,7 +4,7 @@
 
 use crate::common;
 
-use std::{path::PathBuf, sync::atomic::Ordering};
+use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 
 use common::*;
 use serde_json::{Value, json};
@@ -52,7 +52,7 @@ fn missing(s: &Setup) {
     s.fake.command(
         "python jsonschema",
         FakeCommand {
-            lines: vec!["ModuleNotFoundError: No module named 'jsonschema'".into()],
+            lines: lines(&["ModuleNotFoundError: No module named 'jsonschema'"]),
             exit: Some(1),
             ..FakeCommand::default()
         },
@@ -350,7 +350,7 @@ async fn a_job_that_starts_during_the_start_check_ends_its_pip() {
             lines: (0..10_000)
                 .map(|i| format!("Downloading part {i}"))
                 .collect(),
-            pause: std::time::Duration::from_millis(1),
+            pause: Duration::from_millis(1),
             hang: true,
             ..FakeCommand::default()
         },
@@ -358,9 +358,47 @@ async fn a_job_that_starts_during_the_start_check_ends_its_pip() {
     let check = tokio::spawn(jsonschema::at_start(s.agent.clone()));
     eventually("pip runs", || !pips(&s).is_empty()).await;
     let running = strata_pc_agent::job::testing::job(&s.agent);
-    tokio::time::timeout(std::time::Duration::from_secs(5), check)
+    tokio::time::timeout(Duration::from_secs(5), check)
         .await
         .expect("the start check ends once a job runs")
         .unwrap();
     drop(running);
+}
+
+#[tokio::test]
+async fn a_pip_that_keeps_printing_is_ended_at_the_limit_and_strata_starts_again() {
+    let s = setup("jsonschema-limit").await;
+    installed(&s);
+    s.agent
+        .jsonschema_limits
+        .set(Duration::from_secs(5), Duration::from_millis(300));
+    s.fake.command(
+        "strata.cmd update",
+        FakeCommand {
+            lines: vec![UPDATED.into()],
+            ..FakeCommand::default()
+        },
+    );
+    missing(&s);
+    // Prints faster than the service looks at the clock, and never ends.
+    s.fake.command(
+        "python -m pip",
+        FakeCommand {
+            lines: (0..100_000)
+                .map(|i| format!("Downloading part {i}"))
+                .collect(),
+            pause: Duration::from_millis(1),
+            hang: true,
+            ..FakeCommand::default()
+        },
+    );
+    let done = job(&s, json!({"kind": "update"})).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let about: Vec<String> = shown(&done)
+        .into_iter()
+        .filter(|l| l.contains("jsonschema"))
+        .collect();
+    assert_eq!(about.len(), 1, "{done}");
+    assert!(about[0].contains("no end within"), "{done}");
+    assert_eq!(s.fake.starts.load(Ordering::SeqCst), 1, "Strata runs again");
 }

@@ -8,7 +8,10 @@
 //! Install or Update job. A failed install changes nothing else: Strata
 //! keeps its weaker check until the next try.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use crate::{
     agent::Agent,
@@ -21,8 +24,30 @@ use crate::{
 const CHECK: &str = "# jsonschema\nimport jsonschema\n";
 /// The range Strata's own message names (`serve/structured.py`).
 const REQUIREMENT: &str = "jsonschema>=4.23,<5";
-const CHECK_LIMIT: Duration = Duration::from_secs(60);
-const INSTALL_LIMIT: Duration = Duration::from_secs(300);
+
+/// How long the check and the install may take before they are ended.
+pub struct Limits {
+    inner: Mutex<(Duration, Duration)>,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new((Duration::from_secs(60), Duration::from_secs(300))),
+        }
+    }
+}
+
+impl Limits {
+    /// For tests: limits they can wait out.
+    pub fn set(&self, check: Duration, install: Duration) {
+        *self.inner.lock().unwrap() = (check, install);
+    }
+
+    fn get(&self) -> (Duration, Duration) {
+        *self.inner.lock().unwrap()
+    }
+}
 
 pub const INSTALLED: &str =
     "jsonschema installed: Strata checks JSON answers against the requested schema";
@@ -73,13 +98,14 @@ async fn ensure(
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Option<Result<(), String>> {
     let python = strata_python(&agent.cfg)?;
+    let (check_limit, install_limit) = agent.jsonschema_limits.get();
     let spec = |args: &[&str]| CommandSpec {
         program: python.clone(),
         args: args.iter().map(|a| a.to_string()).collect(),
         dir: python.parent().map(Into::into),
         env: vec![("PYTHONNOUSERSITE".into(), "1".into())],
     };
-    let check = exit_within(agent, &spec(&["-c", CHECK]), CHECK_LIMIT, cancelled).await;
+    let check = exit_within(agent, &spec(&["-c", CHECK]), check_limit, cancelled).await;
     if check.as_ref().is_ok_and(|(code, _)| *code == 0) || cancelled() {
         return None;
     }
@@ -93,7 +119,7 @@ async fn ensure(
         "--no-warn-script-location",
         REQUIREMENT,
     ]);
-    match exit_within(agent, &install, INSTALL_LIMIT, cancelled).await {
+    match exit_within(agent, &install, install_limit, cancelled).await {
         Ok((0, _)) => Some(Ok(())),
         Ok((code, last)) => Some(Err(match last {
             Some(last) => format!("pip ended with code {code}: {last}"),

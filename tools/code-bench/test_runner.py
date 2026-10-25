@@ -116,9 +116,11 @@ class RunnerTest(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.load(e)
 
-    def run_tasks(self, tasks, timeout=60):
+    def run_tasks(self, tasks, timeout=60, **extra):
         code, run = self.call(
-            "POST", "/runs", {"model": "IQ3_XXS", "api_key": "shp_k", "tasks": tasks, "timeout_secs": timeout}
+            "POST",
+            "/runs",
+            dict({"model": "IQ3_XXS", "api_key": "shp_k", "tasks": tasks, "timeout_secs": timeout}, **extra),
         )
         self.assertEqual(code, 202, run)
         return self.wait()
@@ -353,7 +355,9 @@ class RunnerTest(unittest.TestCase):
         self.assertIsNone(task["error"])
         self.assertIsNone(self.call("GET", "/runs/current")[1].get("api_key"))
 
-    def test_opencode_gets_the_proxy_the_model_and_no_webfetch(self):
+    def opencode_args(self, **extra):
+        """What the faked opencode got in a run with `extra`: its arguments
+        and its config."""
         seen = {}
         original = runner.score
 
@@ -363,9 +367,13 @@ class RunnerTest(unittest.TestCase):
 
         runner.score = keep
         try:
-            self.run_tasks([TASK])
+            self.run_tasks([TASK], **extra)
         finally:
             runner.score = original
+        return seen
+
+    def test_opencode_gets_the_proxy_the_model_and_no_webfetch(self):
+        seen = self.opencode_args()
         self.assertIn("--pure", seen["args"])
         # A title of its own: otherwise opencode asks the model for one.
         self.assertIn("--title", seen["args"])
@@ -378,6 +386,20 @@ class RunnerTest(unittest.TestCase):
         # No temperature: Strata's model-card sampling applies, not greedy.
         self.assertIs(seen["config"]["provider"]["strata"]["models"]["IQ3_XXS"]["temperature"], False)
         self.assertNotIn("agent", seen["config"])
+
+    def model_entry(self, **extra):
+        """The model's entry in opencode's config in a run with `extra`."""
+        return self.opencode_args(**extra)["config"]["provider"]["strata"]["models"]["IQ3_XXS"]
+
+    def test_opencode_gets_the_models_context_and_a_quarter_of_it_for_output(self):
+        for context, output in [(65536, 16384), (32768, 8192), (262144, 32000)]:
+            with self.subTest(context=context):
+                entry = self.model_entry(context=context)
+                self.assertEqual(entry["limit"], {"context": context, "output": output})
+
+    def test_without_a_context_opencode_gets_no_limit(self):
+        self.assertNotIn("limit", self.model_entry())
+        self.assertNotIn("limit", self.model_entry(context=None))
 
     def test_code_that_does_not_import_scores_nothing(self):
         run = self.run_tasks([TASK])
@@ -458,6 +480,12 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(
             self.call("POST", "/runs", {"model": "a/b", "api_key": "k", "tasks": [TASK]})[0], 400
         )
+        for context in [0, -1, 1.5, "65536", True]:
+            with self.subTest(context=context):
+                body = {"model": "m", "api_key": "k", "tasks": [TASK], "context": context}
+                code, answer = self.call("POST", "/runs", body)
+                self.assertEqual(code, 400)
+                self.assertIn("context", answer["reason"])
 
     def test_each_task_keeps_its_own_time_limit(self):
         os.environ["FAKE_MODE"] = "hang"

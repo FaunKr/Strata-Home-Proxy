@@ -776,8 +776,8 @@ async fn job_end(state: &AppState, agent: &crate::agent::AgentClient) -> Result<
     }
 }
 
-/// Hands the runner the tasks for `model` with the run's key; the run as the
-/// runner took it.
+/// Hands the runner the tasks for `model` with the run's key and the
+/// model's context; the run as the runner took it.
 async fn post_run(
     state: &AppState,
     url: &str,
@@ -808,9 +808,13 @@ async fn post_run(
             task
         })
         .collect();
+    // From the PC service's report, so it is known while the PC sleeps;
+    // without it the runner leaves opencode's limit out.
+    let context = settings_now(state, model).await.and_then(|s| s.context);
     let body = json!({
         "model": model,
         "api_key": key,
+        "context": context,
         "tasks": tasks,
         // The default for a task without its own; older runners know only it.
         "timeout_secs": base,

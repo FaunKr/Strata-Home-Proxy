@@ -70,6 +70,39 @@ and asks it to go to sleep after the idle timeout.
   on first start and not written afterwards; it
   is kept as a backup.
 
+## opencode
+
+opencode does not ask the proxy how large the model's context is: without a
+`limit` it takes it as unknown, never compacts on its own and only compacts
+after Strata refuses a prompt that does not fit. Give it the limit in
+`opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "strata": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Strata",
+      "options": { "baseURL": "http://<NAS-IP>:8080/v1", "apiKey": "<API key from Access>" },
+      "models": {
+        "strata": { "name": "Strata", "limit": { "context": 65536, "output": 16384 } }
+      }
+    }
+  },
+  "model": "strata/strata"
+}
+```
+
+- `limit.context`: the model's context (*Strata → Models*). If the proxy
+  switches models behind one name (*Hide model name*), the smallest context
+  among them.
+- `limit.output`: a quarter of the context, at most 32000. opencode compacts
+  at context minus output and caps output at 32000 anyway. The code benchmark
+  writes the same rule.
+- The model name can be the public model name: Strata serves the model it
+  runs whatever the name.
+
 ## Starting on the NAS
 
 **TrueNAS SCALE:** [deploy/truenas-app.yaml](deploy/truenas-app.yaml) as a custom app via *Install via YAML*. Instructions are at the top of the file.
@@ -247,39 +280,6 @@ is in English and split into five areas: *Overview*, *PC*, *Strata*
 - After 5 failed attempts from the same address, login is blocked for 1 min.
   `/admin/` is reachable wherever the API is reachable; the password is
   the only protection.
-
-## opencode
-
-opencode does not ask the proxy how large the model's context is: without a
-`limit` it takes it as unknown, never compacts on its own and only compacts
-after Strata refuses a prompt that does not fit. Give it the limit in
-`opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "strata": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Strata",
-      "options": { "baseURL": "http://<NAS-IP>:8080/v1", "apiKey": "<API key from Access>" },
-      "models": {
-        "strata": { "name": "Strata", "limit": { "context": 65536, "output": 16384 } }
-      }
-    }
-  },
-  "model": "strata/strata"
-}
-```
-
-- `limit.context`: the model's context (*Strata → Models*). If the proxy
-  switches models behind one name (*Hide model name*), the smallest context
-  among them.
-- `limit.output`: a quarter of the context, at most 32000. opencode compacts
-  at context minus output and caps output at 32000 anyway. The code benchmark
-  writes the same rule.
-- The model name can be the public model name or any other: Strata serves
-  the model it runs.
 
 ## Development
 

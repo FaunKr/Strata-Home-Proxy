@@ -340,14 +340,19 @@ async fn a_run_gets_the_tasks_the_active_model_and_a_key_of_its_own() {
     assert_eq!(b.call("code-bench-start", &[]).await.status(), 400);
 }
 
+/// Gives the simulated PC's models these start contexts, in order.
+fn set_contexts(s: &Setup, contexts: &[Option<u32>]) {
+    let mut info = s.pc.strata_info.lock().unwrap();
+    let models = &mut info.as_mut().expect("the PC reports Strata").info.models;
+    for (m, context) in models.iter_mut().zip(contexts) {
+        m.context = *context;
+    }
+}
+
 #[tokio::test]
 async fn a_run_hands_the_runner_the_active_models_context() {
     let (s, runner) = with_runner().await;
-    if let Some(info) = s.pc.strata_info.lock().unwrap().as_mut() {
-        for m in &mut info.info.models {
-            m.context = Some(65536);
-        }
-    }
+    set_contexts(&s, &[Some(65536)]);
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
     let body = runner.started.lock().unwrap().first().cloned().unwrap();
@@ -368,11 +373,7 @@ async fn a_run_over_all_models_hands_each_model_its_own_context() {
     let ids = ["IQ3_XXS", "coder-IQ1_M", "swift-IQ2_XS"];
     let contexts = [Some(32768), Some(262144), None];
     let (s, runner) = with_models(&ids).await;
-    if let Some(info) = s.pc.strata_info.lock().unwrap().as_mut() {
-        for (m, context) in info.info.models.iter_mut().zip(contexts) {
-            m.context = context;
-        }
-    }
+    set_contexts(&s, &contexts);
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
     for id in ids {

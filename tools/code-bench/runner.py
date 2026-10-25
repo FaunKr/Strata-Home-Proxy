@@ -161,19 +161,19 @@ def problem():
     return PROBLEM or proxy_problem()
 
 
-def limit(context):
+def token_limit(context):
     """opencode's limits for a model with `context` tokens: it compacts at
     context minus output."""
     return {"context": context, "output": min(OUTPUT_LIMIT_MAX, context // 4)}
 
 
-def config(model, api_key, context=None):
+def config(model, api_key, context):
     """opencode's settings for one task: the proxy as its only provider."""
     entry = {"name": model, "temperature": False}
     # Without it opencode takes the context as unknown: it never compacts on
     # its own and only does after Strata refused a prompt that did not fit.
     if context is not None:
-        entry["limit"] = limit(context)
+        entry["limit"] = token_limit(context)
     return {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
@@ -243,7 +243,7 @@ def limit_text(secs):
 
 
 class Run:
-    def __init__(self, run_id, model, api_key, tasks, context=None):
+    def __init__(self, run_id, model, api_key, tasks, context):
         self.lock = threading.Lock()
         self.id = run_id
         self.model = model

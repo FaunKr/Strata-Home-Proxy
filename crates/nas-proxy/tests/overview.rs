@@ -702,7 +702,10 @@ async fn set_up_proxy_shows_no_checklist() {
     let dir = std::env::temp_dir().join(format!("strata-checklist-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let s = setup(false, |c| c.data_dir = Some(dir.clone())).await;
-    s.state.api_keys.create("Laptop").unwrap();
+    s.state
+        .api_keys
+        .create("Laptop", Default::default())
+        .unwrap();
     let b = logged_in(&s.url).await;
     let html = b.page("/admin").await;
     assert!(!html.contains("Finish setup"), "{html}");

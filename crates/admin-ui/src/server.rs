@@ -27,8 +27,8 @@ use leptos_axum::{
 use crate::{
     api::{
         ApiKeysView, CodeBenchPage, CreatedKey, ForcedRestart, HistoryView, KeepAwakeChoice,
-        OutputMessage, Overview, PcSetupCommand, Session, SettingValue, SettingsView, Setup,
-        SleepAnswer, StrataJobForm, StrataPage, history_csv,
+        KeyModelName, OutputMessage, Overview, PcSetupCommand, Session, SettingValue, SettingsView,
+        Setup, SleepAnswer, StrataJobForm, StrataPage, history_csv,
     },
     app::{App, shell},
 };
@@ -81,9 +81,17 @@ pub trait Backend: Send + Sync + 'static {
     fn keep_awake(&self, choice: KeepAwakeChoice) -> Result<(), String>;
     fn api_keys(&self) -> ApiKeysView;
     /// Creates a client key; a message for the user if the name is invalid.
-    fn create_api_key(&self, name: &str) -> Result<CreatedKey, String>;
+    fn create_api_key(&self, name: &str, model_name: KeyModelName) -> Result<CreatedKey, String>;
     /// Removes a client key; a message for the user if there is none.
     fn revoke_api_key(&self, name: &str, prefix: &str) -> Result<(), String>;
+    /// Sets whether apps with a key see the public model name; a message
+    /// for the user if there is no such key.
+    fn set_api_key_model_name(
+        &self,
+        name: &str,
+        prefix: &str,
+        model_name: KeyModelName,
+    ) -> Result<(), String>;
     /// Strata on the PC, without waking it.
     fn strata(&self) -> BoxFuture<'static, StrataPage>;
     /// Starts a Strata job, waking the PC first; the PC service's reason if

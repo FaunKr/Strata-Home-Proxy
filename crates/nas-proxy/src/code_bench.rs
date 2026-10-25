@@ -22,7 +22,7 @@ use strata_pc_protocol::{StrataJobRequest, StrataJobState};
 use tokio::sync::watch;
 
 use crate::{
-    api_keys::KeyError,
+    api_keys::{KeyError, ModelName},
     clock,
     events::EventKind,
     files::write_private,
@@ -455,7 +455,11 @@ pub async fn start(state: &std::sync::Arc<AppState>) -> Result<(), String> {
 
 /// The run's key under Access, its prefix kept so a restart can revoke it.
 fn new_key(state: &AppState) -> Result<String, String> {
-    let (key, info) = state.api_keys.create(KEY_NAME).map_err(|e| match e {
+    let (key, info) = state
+        .api_keys
+        // opencode works on the model it is told to, under its real name.
+        .create(KEY_NAME, ModelName::Show)
+        .map_err(|e| match e {
         KeyError::DuplicateName => format!(
             "A key named \"{KEY_NAME}\" exists under Access. Rename it: the code benchmark makes a key of that name for each run."
         ),

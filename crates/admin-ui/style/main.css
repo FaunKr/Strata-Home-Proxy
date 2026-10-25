@@ -238,6 +238,8 @@ button.full { width: 100%; }
 .actions.inline { margin: 0 0 0 auto; }
 .form-row { display: flex; gap: 8px; margin-top: 12px; }
 .form-row input { flex: 1; min-width: 0; }
+/* What a key's apps see as the model's name, beside the key. */
+select.model-name { width: auto; flex: none; }
 
 .code-row { display: flex; gap: 8px; align-items: stretch; }
 .code {
@@ -573,6 +575,7 @@ input[type="date"] {
   .form-row { flex-wrap: wrap; }
   .form-row input { flex-basis: 100%; }
   .form-row button { flex: 1; }
+  .form-row select.model-name, .list select.model-name { flex: 1 1 100%; width: 100%; }
 }
 
 .update-changes { margin: 8px 0 12px; }

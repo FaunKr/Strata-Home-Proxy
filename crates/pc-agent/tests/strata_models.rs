@@ -12,10 +12,6 @@ use strata_pc_agent::{install::testing::SetupLeaves, managed::Managed, strata};
 const OLD_KEY: &str = "old-key-0123456789";
 const NEW_KEY: &str = "neuer-key-0123456789abcdef";
 
-fn lines(lines: &[&str]) -> Vec<String> {
-    lines.iter().map(|l| l.to_string()).collect()
-}
-
 fn write(path: PathBuf, content: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, content).unwrap();

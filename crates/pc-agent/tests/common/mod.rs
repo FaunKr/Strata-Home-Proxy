@@ -515,6 +515,11 @@ pub async fn setup_with(name: &str, tweak: impl FnOnce(&mut Config)) -> Setup {
     }
 }
 
+/// A fake command's output lines.
+pub fn lines(lines: &[&str]) -> Vec<String> {
+    lines.iter().map(|l| l.to_string()).collect()
+}
+
 pub fn client() -> reqwest::Client {
     reqwest::Client::new()
 }

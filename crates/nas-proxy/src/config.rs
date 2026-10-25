@@ -29,6 +29,11 @@ pub struct Config {
     /// (`CODE_BENCH_URL`), e.g. `http://127.0.0.1:8096`. Without it there is
     /// no code benchmark.
     pub code_bench_url: Option<String>,
+    /// Apps see the public model name instead of the model Strata runs
+    /// (`HIDE_MODEL`), unless their API key says otherwise.
+    pub hide_model: bool,
+    /// The one model name apps of a hiding API key see (`PUBLIC_MODEL_NAME`).
+    pub public_model_name: String,
     /// How long Strata may take for the update summary
     /// (`UPDATE_SUMMARY_TIMEOUT_SECS`); without it the suggestion from
     /// `timeouts` applies.
@@ -93,6 +98,8 @@ pub struct Field {
     pub secret: bool,
     /// Can be left empty.
     pub optional: bool,
+    /// On or off (`true`/`false`); the page shows a switch.
+    pub switch: bool,
 }
 
 const fn field(key: &'static str) -> Field {
@@ -101,6 +108,7 @@ const fn field(key: &'static str) -> Field {
         restart: false,
         secret: false,
         optional: false,
+        switch: false,
     }
 }
 
@@ -123,6 +131,11 @@ pub const FIELDS: &[Field] = &[
     },
     optional("SHELLY_URL"),
     optional("CODE_BENCH_URL"),
+    Field {
+        switch: true,
+        ..field("HIDE_MODEL")
+    },
+    field("PUBLIC_MODEL_NAME"),
     optional("UPDATE_SUMMARY_TIMEOUT_SECS"),
     optional("CODE_BENCH_TASK_TIMEOUT_SECS"),
     field("PLUG_SAMPLE_SECS"),
@@ -160,6 +173,8 @@ impl Default for Config {
             pc_agent_token: None,
             shelly_url: None,
             code_bench_url: None,
+            hide_model: false,
+            public_model_name: "strata".to_string(),
             update_summary_timeout: None,
             code_bench_task_timeout: None,
             plug_sample: Duration::from_secs(60),
@@ -229,6 +244,8 @@ impl Config {
             "PC_AGENT_TOKEN" => self.pc_agent_token = text,
             "SHELLY_URL" => self.shelly_url = text.map(|u| plug_url(&u)).transpose()?,
             "CODE_BENCH_URL" => self.code_bench_url = text.map(|u| url(&u)).transpose()?,
+            "HIDE_MODEL" => self.hide_model = switch(raw)?,
+            "PUBLIC_MODEL_NAME" => self.public_model_name = public_model_name(raw)?,
             "UPDATE_SUMMARY_TIMEOUT_SECS" => {
                 self.update_summary_timeout = text.map(|t| limit(&t)).transpose()?
             }
@@ -267,6 +284,8 @@ impl Config {
             "PC_AGENT_TOKEN" => self.pc_agent_token.clone(),
             "SHELLY_URL" => self.shelly_url.clone(),
             "CODE_BENCH_URL" => self.code_bench_url.clone(),
+            "HIDE_MODEL" => Some(self.hide_model.to_string()),
+            "PUBLIC_MODEL_NAME" => Some(self.public_model_name.clone()),
             "UPDATE_SUMMARY_TIMEOUT_SECS" => self.update_summary_timeout.and_then(secs),
             "CODE_BENCH_TASK_TIMEOUT_SECS" => self.code_bench_task_timeout.and_then(secs),
             "PLUG_SAMPLE_SECS" => secs(self.plug_sample),
@@ -347,6 +366,28 @@ fn decimal(raw: &str, unit: &str) -> Result<f64> {
         bail!("must not be negative");
     }
     Ok(n)
+}
+
+/// `true` or `false`; `on`/`off`, `yes`/`no` and `1`/`0` mean the same.
+fn switch(raw: &str) -> Result<bool> {
+    match raw.to_ascii_lowercase().as_str() {
+        "true" | "on" | "yes" | "1" => Ok(true),
+        "false" | "off" | "no" | "0" => Ok(false),
+        _ => bail!("expects true or false"),
+    }
+}
+
+const MAX_MODEL_NAME_CHARS: usize = 64;
+
+/// A name apps can put into `model`: no spaces, no control characters.
+fn public_model_name(raw: &str) -> Result<String> {
+    if raw.chars().count() > MAX_MODEL_NAME_CHARS {
+        bail!("must be at most {MAX_MODEL_NAME_CHARS} characters");
+    }
+    if raw.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        bail!("must not contain spaces");
+    }
+    Ok(raw.to_string())
 }
 
 fn url(raw: &str) -> Result<String> {

@@ -157,6 +157,13 @@ pub struct FakePc {
     pub no_model: AtomicBool,
     /// The model Strata lists; `Qwen3-30B-A3B` if unset.
     pub listed_model: Mutex<Option<String>>,
+    /// Strata lists an alias of its model and an image model too.
+    pub list_alias_and_image: AtomicBool,
+    /// `/health` names no model.
+    pub health_without_model: AtomicBool,
+    /// Path and body of each request to the chat, messages, responses and
+    /// images endpoints, as Strata got them.
+    pub strata_bodies: Mutex<Vec<(String, Value)>>,
     pub models_requests: AtomicUsize,
     /// How long the PC service takes before it answers `/status`, also
     /// while the PC sleeps, like a connection that runs into its timeout.
@@ -288,11 +295,12 @@ pub async fn health(State(pc): State<Pc>, headers: HeaderMap) -> Response {
     *pc.health_auth.lock().unwrap() = Some(SeenCredentials::of(&headers));
     if pc.strata_up() && !pc.strata_blocked.load(Ordering::SeqCst) {
         let loaded = !pc.unloaded.load(Ordering::SeqCst);
-        Json(
-            json!({"status": "ok", "loaded": loaded, "service": "strata",
-                    "model": "Qwen3-30B-A3B", "max_context": 32768}),
-        )
-        .into_response()
+        let mut answer = json!({"status": "ok", "loaded": loaded, "service": "strata",
+                                "model": "Qwen3-30B-A3B", "max_context": 32768});
+        if pc.health_without_model.load(Ordering::SeqCst) {
+            answer.as_object_mut().unwrap().remove("model");
+        }
+        Json(answer).into_response()
     } else {
         StatusCode::SERVICE_UNAVAILABLE.into_response()
     }
@@ -311,11 +319,27 @@ pub async fn models(State(pc): State<Pc>) -> Response {
         .unwrap()
         .clone()
         .unwrap_or_else(|| "Qwen3-30B-A3B".into());
-    let data = if pc.no_model.load(Ordering::SeqCst) {
+    let mut data = if pc.no_model.load(Ordering::SeqCst) {
         vec![]
     } else {
         vec![json!({"id": id, "object": "model", "status": {"value": "loaded"}})]
     };
+    if pc.list_alias_and_image.load(Ordering::SeqCst) {
+        // As Strata lists them (`serve/server.py`, the `/v1/models` branch).
+        let chat = |id: &str| {
+            json!({"id": id, "object": "model", "status": {"value": "loaded"},
+                   "meta": {"n_ctx": 32768}, "aliases": ["qwen"],
+                   "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}})
+        };
+        let mut alias = chat("qwen");
+        alias["alias_of"] = json!(id);
+        data = vec![
+            chat(&id),
+            alias,
+            json!({"id": "flux-schnell", "object": "model", "status": {"value": "loaded"},
+                   "architecture": {"input_modalities": ["text"], "output_modalities": ["image"]}}),
+        ];
+    }
     Json(json!({"object": "list", "data": data})).into_response()
 }
 
@@ -355,18 +379,24 @@ pub async fn messages(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     pc.api_requests.fetch_add(1, Ordering::SeqCst);
+    pc.strata_bodies
+        .lock()
+        .unwrap()
+        .push(("/v1/messages".into(), body.clone()));
     let pause = Duration::from_millis(body["pause_ms"].as_u64().unwrap_or(0));
     if body["stream"].as_bool() == Some(true) {
         return sse(
             vec![
-                "event: message_start\ndata: {\"type\":\"message_start\"}\n\n".into(),
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"Qwen3-30B-A3B\"}}\n\n".into(),
                 "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"Hallo\"}}\n\n".into(),
                 "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".into(),
             ],
             pause,
         );
     }
-    Json(json!({"type": "message", "content": [{"type": "text", "text": "Hallo"}]})).into_response()
+    Json(json!({"type": "message", "model": "Qwen3-30B-A3B",
+                "content": [{"type": "text", "text": "Hallo"}]}))
+    .into_response()
 }
 
 pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
@@ -384,10 +414,14 @@ pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Val
         return StatusCode::UNAUTHORIZED.into_response();
     }
     pc.api_requests.fetch_add(1, Ordering::SeqCst);
+    pc.strata_bodies
+        .lock()
+        .unwrap()
+        .push(("/v1/chat/completions".into(), body.clone()));
     if body["stream"].as_bool() == Some(true) {
         return sse(
             vec![
-                "data: {\"choices\":[{\"delta\":{\"content\":\"Hallo\"}}]}\n\n".into(),
+                "data: {\"model\":\"Qwen3-30B-A3B\",\"choices\":[{\"delta\":{\"content\":\"Hallo\"}}]}\n\n".into(),
                 "data: [DONE]\n\n".into(),
             ],
             Duration::ZERO,
@@ -397,7 +431,9 @@ pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Val
     let pause = *pc.chat_pause.lock().unwrap();
     tokio::time::sleep(pause).await;
     if pc.chat_fails.load(Ordering::SeqCst) {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        let error = json!({"model": "Qwen3-30B-A3B",
+                           "error": {"message": "Qwen3-30B-A3B failed"}});
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(error)).into_response();
     }
     let content = pc
         .chat_answer
@@ -407,6 +443,39 @@ pub async fn chat(State(pc): State<Pc>, headers: HeaderMap, Json(body): Json<Val
         .unwrap_or_else(|| "Hallo".into());
     Json(json!({"model": "Qwen3-30B-A3B", "choices": [{"message": {"content": content}}]}))
         .into_response()
+}
+
+/// Like Strata's Responses API, streamed only.
+pub async fn responses(State(pc): State<Pc>, Json(body): Json<Value>) -> Response {
+    if !pc.strata_up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    pc.api_requests.fetch_add(1, Ordering::SeqCst);
+    pc.strata_bodies
+        .lock()
+        .unwrap()
+        .push(("/v1/responses".into(), body));
+    sse(
+        vec![
+            "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"model\":\"Qwen3-30B-A3B\"}}\n\n".into(),
+            "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"model\":\"Qwen3-30B-A3B\"}}\n\n".into(),
+        ],
+        Duration::ZERO,
+    )
+}
+
+/// Like Strata's image model: answers with the model it was asked for.
+pub async fn images(State(pc): State<Pc>, Json(body): Json<Value>) -> Response {
+    if !pc.strata_up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    pc.api_requests.fetch_add(1, Ordering::SeqCst);
+    let model = body["model"].clone();
+    pc.strata_bodies
+        .lock()
+        .unwrap()
+        .push(("/v1/images/generations".into(), body));
+    Json(json!({"model": model, "data": [{"b64_json": "aGFsbG8="}]})).into_response()
 }
 
 pub async fn agent_status(State(pc): State<Pc>) -> Response {
@@ -873,6 +942,8 @@ pub async fn serve_strata(pc: Pc) -> SocketAddr {
             .route("/metrics", get(metrics))
             .route("/v1/messages", post(messages))
             .route("/v1/chat/completions", post(chat))
+            .route("/v1/responses", post(responses))
+            .route("/v1/images/generations", post(images))
             .route("/v1/models", get(models))
             .route("/models", get(models))
             .layer(axum::middleware::from_fn_with_state(pc.clone(), pc_only))
@@ -1010,6 +1081,8 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         pc_agent_token: None,
         shelly_url: None,
         code_bench_url: None,
+        hide_model: false,
+        public_model_name: "strata".into(),
         update_summary_timeout: None,
         code_bench_task_timeout: None,
         idle_timeout: Duration::from_secs(3600),
@@ -1035,7 +1108,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     tweak(&mut cfg);
     let state = AppState::new(cfg);
     state.overview.set_poll(Duration::from_millis(100));
-    let (key, _) = state.api_keys.create("Test").unwrap();
+    let (key, _) = state.api_keys.create("Test", Default::default()).unwrap();
     state.spawn_idle_loop();
     state.spawn_plug_loop();
     let proxy = serve(api_router(state.clone())).await;

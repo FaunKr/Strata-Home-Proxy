@@ -137,6 +137,10 @@ _Avoid_: starting, Lädt
 Strata answers the PC service on the PC, but not the proxy: the network between NAS and PC drops it, e.g. the PC's firewall after a Strata update. Never in relay mode.
 _Avoid_: unreachable (in UI text), Offline
 
+**Public model name**:
+The one model name apps of an API key that hides the model see instead of the model Strata runs (`PUBLIC_MODEL_NAME`, default `strata`): in the list of models, in every answer and while the PC sleeps. Switched with *Hide model name* in *Strata → Connection*; each API key follows the switch or overrides it with *Hide* or *Show*. The image model keeps its own name.
+_Avoid_: alias (Strata's aliases are something else), fake model, model mask
+
 **Relay mode**:
 Strata listens only on the PC itself, and the PC service passes the proxy's requests on to it, adding the Strata key. Only for a Strata started from the Strata Terminal; there is no *Not reachable* in it. Switched in the web UI under *Strata → Connection* (*Relay through the PC service*).
 _Avoid_: tunnel, agent relay

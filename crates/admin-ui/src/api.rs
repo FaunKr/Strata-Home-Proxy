@@ -1068,6 +1068,36 @@ pub async fn cancel_code_bench() -> Result<(), ServerFnError> {
     backend()?.cancel_code_bench().await.map_err(bad_request)
 }
 
+/// Which benchmark a run is of: the speed benchmark or the code benchmark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkKind {
+    Speed,
+    Code,
+}
+
+/// Deletes one run of a benchmark; never wakes the PC.
+#[server(prefix = "/admin/api", endpoint = "benchmark-delete-run")]
+pub async fn delete_benchmark_run(benchmark: BenchmarkKind, id: u64) -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?
+        .delete_benchmark_run(benchmark, id)
+        .map_err(bad_request)
+}
+
+/// Deletes all runs of a benchmark for a model no longer installed; never
+/// wakes the PC.
+#[server(prefix = "/admin/api", endpoint = "benchmark-delete-model")]
+pub async fn delete_benchmark_model(
+    benchmark: BenchmarkKind,
+    model: String,
+) -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?
+        .delete_benchmark_model(benchmark, &model)
+        .map_err(bad_request)
+}
+
 /// A job as the page asks for it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StrataJobForm {

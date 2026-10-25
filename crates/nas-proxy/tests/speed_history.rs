@@ -241,3 +241,212 @@ async fn an_unreadable_history_is_left_as_it_is() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// --- #368 deleting runs ---
+
+/// Deletes the run `id` of `benchmark`; the answer's status.
+async fn delete_run(b: &mut Browser, benchmark: &str, id: &Value) -> u16 {
+    let id = id.to_string();
+    b.call(
+        "benchmark-delete-run",
+        &[("benchmark", benchmark), ("id", &id)],
+    )
+    .await
+    .status()
+    .as_u16()
+}
+
+/// Deletes all runs of `model` in `benchmark`; the answer's status.
+async fn delete_model(b: &mut Browser, benchmark: &str, model: &str) -> u16 {
+    b.call(
+        "benchmark-delete-model",
+        &[("benchmark", benchmark), ("model", model)],
+    )
+    .await
+    .status()
+    .as_u16()
+}
+
+fn decodes(h: &Value) -> Vec<f64> {
+    h[0]["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["record"]["decode_tps"].as_f64().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_deleted_run_does_not_come_back_while_the_pc_reports_it() {
+    let dir = data_dir("speed-history-deleted");
+    let data = dir.clone();
+    let s = setup(true, move |c| c.data_dir = Some(data)).await;
+    *s.pc.strata_info.lock().unwrap() =
+        Some(report_with(vec![measured("IQ3_XXS", 1_760_000_000, 38.5)]));
+    let mut b = logged_in(&s.url).await;
+    history(&mut b).await;
+    *s.pc.strata_info.lock().unwrap() =
+        Some(report_with(vec![measured("IQ3_XXS", 1_760_000_600, 43.0)]));
+    let h = history(&mut b).await;
+    assert_eq!(decodes(&h), [43.0, 38.5], "{h}");
+
+    // The PC service still reports the deleted run as the model's last.
+    assert_eq!(
+        delete_run(&mut b, "speed", &h[0]["runs"][0]["id"]).await,
+        200
+    );
+    let h = history(&mut b).await;
+    assert_eq!(decodes(&h), [38.5], "{h}");
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("38.5 tok/s"), "{html}");
+    assert!(!html.contains("43 tok/s"), "{html}");
+
+    let mut b = logged_in_again(&serve_proxy(restarted(&s)).await).await;
+    let h = history(&mut b).await;
+    assert_eq!(decodes(&h), [38.5], "{h}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_deleted_failed_run_does_not_come_back_and_the_measurement_stays() {
+    let dir = data_dir("speed-history-deleted-failure");
+    let data = dir.clone();
+    let s = setup(true, move |c| c.data_dir = Some(data)).await;
+    let good = measured("IQ3_XXS", 1_760_000_000, 38.5);
+    *s.pc.strata_info.lock().unwrap() = Some(report_with(vec![good.clone()]));
+    let mut b = logged_in(&s.url).await;
+    history(&mut b).await;
+    *s.pc.strata_info.lock().unwrap() = Some(report_with(vec![StrataBenchmark {
+        error: Some("Strata did not come up".into()),
+        ..good
+    }]));
+    let h = history(&mut b).await;
+    assert_eq!(h[0]["runs"][0]["failed"], true, "{h}");
+    assert_eq!(
+        delete_run(&mut b, "speed", &h[0]["runs"][0]["id"]).await,
+        200
+    );
+    let h = history(&mut b).await;
+    let runs = h[0]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 1, "{h}");
+    assert_eq!(runs[0]["failed"], false, "{h}");
+
+    let mut b = logged_in_again(&serve_proxy(restarted(&s)).await).await;
+    let after = history(&mut b).await;
+    assert_eq!(after, h);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_report_without_the_model_does_not_bring_a_deleted_run_back() {
+    let s = setup(true, |_| {}).await;
+    let run = measured("IQ3_XXS", 1_760_000_000, 38.5);
+    *s.pc.strata_info.lock().unwrap() = Some(report_with(vec![run.clone()]));
+    let mut b = logged_in(&s.url).await;
+    let h = history(&mut b).await;
+    assert_eq!(
+        delete_run(&mut b, "speed", &h[0]["runs"][0]["id"]).await,
+        200
+    );
+    // A report without runs, e.g. while Strata's benchmark file is
+    // rewritten, then the old record again.
+    *s.pc.strata_info.lock().unwrap() = Some(report_with(vec![]));
+    history(&mut b).await;
+    *s.pc.strata_info.lock().unwrap() = Some(report_with(vec![run]));
+    let h = history(&mut b).await;
+    assert_eq!(h, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn deleting_the_last_run_of_a_model_removes_its_row() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() =
+        Some(report_with(vec![measured("IQ3_XXS", 1_760_000_000, 38.5)]));
+    let mut b = logged_in(&s.url).await;
+    let h = history(&mut b).await;
+    assert_eq!(
+        delete_run(&mut b, "speed", &h[0]["runs"][0]["id"]).await,
+        200
+    );
+    assert_eq!(history(&mut b).await, serde_json::json!([]));
+    let html = b.page("/admin/strata/version").await;
+    assert!(html.contains("No benchmark has run yet."), "{html}");
+    // A run deleted already is refused with a reason.
+    assert_eq!(
+        delete_run(&mut b, "speed", &h[0]["runs"][0]["id"]).await,
+        400
+    );
+}
+
+#[tokio::test]
+async fn all_runs_of_a_model_no_longer_installed_can_be_deleted() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(report_with(vec![
+        measured("IQ3_XXS", 1_760_000_000, 38.5),
+        measured("coder-IQ1_M", 1_760_000_000, 52.0),
+    ]));
+    let mut b = logged_in(&s.url).await;
+    history(&mut b).await;
+    let html = b.page("/admin/strata/version").await;
+    assert_eq!(html.matches("Delete all runs").count(), 1, "{html}");
+
+    assert_eq!(delete_model(&mut b, "speed", "coder-IQ1_M").await, 200);
+    let h = history(&mut b).await;
+    let models: Vec<&str> = h
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["model"].as_str().unwrap())
+        .collect();
+    assert_eq!(models, ["IQ3_XXS"], "{h}");
+}
+
+#[tokio::test]
+async fn deleting_all_runs_of_an_installed_model_is_refused() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() =
+        Some(report_with(vec![measured("IQ3_XXS", 1_760_000_000, 38.5)]));
+    let mut b = logged_in(&s.url).await;
+    history(&mut b).await;
+    let resp = b
+        .call(
+            "benchmark-delete-model",
+            &[("benchmark", "speed"), ("model", "IQ3_XXS")],
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("is installed"), "{text}");
+    assert_eq!(
+        history(&mut b).await[0]["runs"].as_array().unwrap().len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn deleting_works_while_the_pc_sleeps_and_does_not_wake_it() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(report_with(vec![
+        measured("IQ3_XXS", 1_760_000_000, 38.5),
+        measured("coder-IQ1_M", 1_760_000_000, 52.0),
+    ]));
+    let mut b = logged_in(&s.url).await;
+    let h = history(&mut b).await;
+    s.pc.awake.store(false, Ordering::SeqCst);
+    let events_before = own_kinds(&s.state).len();
+    let iq3 = h
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["model"] == "IQ3_XXS")
+        .unwrap();
+    assert_eq!(
+        delete_run(&mut b, "speed", &iq3["runs"][0]["id"]).await,
+        200
+    );
+    assert_eq!(delete_model(&mut b, "speed", "coder-IQ1_M").await, 200);
+    assert_eq!(history(&mut b).await, serde_json::json!([]));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+    assert_eq!(own_kinds(&s.state).len(), events_before);
+}

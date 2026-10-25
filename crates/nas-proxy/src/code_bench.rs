@@ -275,13 +275,42 @@ impl CodeBench {
         self.save(&results);
     }
 
-    fn save(&self, results: &[CodeBenchRun]) {
-        if let Some(dir) = &self.dir {
-            let bytes = serde_json::to_vec_pretty(results).expect("results serialize");
-            if let Err(e) = write_private(dir, RESULTS_FILE, &bytes) {
-                tracing::error!("{RESULTS_FILE} not saved: {e}");
-            }
+    /// Deletes the kept run `id`; whether there was one, or why the delete
+    /// was not saved.
+    pub fn delete(&self, id: u64) -> Result<bool, String> {
+        self.delete_where(|r| r.id == id)
+    }
+
+    /// Deletes every kept run of `model`; whether there was one, or why the
+    /// delete was not saved.
+    pub fn delete_model(&self, model: &str) -> Result<bool, String> {
+        self.delete_where(|r| r.model == model)
+    }
+
+    fn delete_where(&self, gone: impl Fn(&CodeBenchRun) -> bool) -> Result<bool, String> {
+        let mut runs = self.kept.lock().unwrap();
+        let left: Vec<CodeBenchRun> = runs.iter().filter(|r| !gone(r)).cloned().collect();
+        if left.len() == runs.len() {
+            return Ok(false);
         }
+        // Kept only once it is on disk: a run that comes back after a
+        // restart was not deleted.
+        self.write(&left)?;
+        *runs = left;
+        Ok(true)
+    }
+
+    fn save(&self, results: &[CodeBenchRun]) {
+        if let Err(e) = self.write(results) {
+            tracing::error!("{e}");
+        }
+    }
+
+    fn write(&self, results: &[CodeBenchRun]) -> Result<(), String> {
+        let Some(dir) = &self.dir else { return Ok(()) };
+        let bytes = serde_json::to_vec_pretty(results).expect("results serialize");
+        write_private(dir, RESULTS_FILE, &bytes)
+            .map_err(|e| format!("{RESULTS_FILE} not saved: {e}"))
     }
 
     /// A model that failed to load, or whose run failed: a run of its own,

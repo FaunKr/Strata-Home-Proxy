@@ -1411,3 +1411,105 @@ async fn runs_of_a_model_no_longer_installed_stay() {
     assert!(html.contains("Not installed"), "{html}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// --- #368 deleting runs ---
+
+#[tokio::test]
+async fn deleting_a_code_run_shows_the_one_before_and_the_last_removes_the_row() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let kept = json!(older_runs(ids[0], 2));
+    let (s, _runner, dir) = with_models_kept_from(&ids, "code-bench-delete", Some(&kept)).await;
+    let mut b = logged_in(&s.url).await;
+    let v = page(&mut b).await;
+    let runs = v["history"][0]["runs"].as_array().unwrap().clone();
+    assert_eq!(runs.len(), 2, "{v}");
+    for (i, run) in runs.iter().enumerate() {
+        let id = run["id"].to_string();
+        let resp = b
+            .call(
+                "benchmark-delete-run",
+                &[("benchmark", "code"), ("id", &id)],
+            )
+            .await;
+        assert_eq!(resp.status(), 200);
+        let v = page(&mut b).await;
+        if i == 0 {
+            // The run before is the model's latest now.
+            assert_eq!(v["history"][0]["runs"][0]["id"], runs[1]["id"], "{v}");
+        } else {
+            assert_eq!(v["history"], json!([]), "{v}");
+        }
+    }
+    // Gone from the file too.
+    let file = std::fs::read_to_string(dir.join("code-bench.json")).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&file).unwrap(), json!([]));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn all_code_runs_of_a_model_no_longer_installed_can_be_deleted_while_the_pc_sleeps() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let mut kept = older_runs(ids[0], 1);
+    kept.extend(older_runs("gone-IQ2_XS", 2));
+    let (s, _runner, dir) =
+        with_models_kept_from(&ids, "code-bench-delete-all", Some(&json!(kept))).await;
+    let mut b = logged_in(&s.url).await;
+    // The Strata page reads which models are installed; the code card of
+    // that same page may come before it.
+    b.page("/admin/strata/version").await;
+    let html = b.page("/admin/strata/version").await;
+    assert_eq!(html.matches("Delete all runs").count(), 1, "{html}");
+    s.pc.awake.store(false, Ordering::SeqCst);
+    let events_before = own_kinds(&s.state).len();
+
+    let resp = b
+        .call(
+            "benchmark-delete-model",
+            &[("benchmark", "code"), ("model", "gone-IQ2_XS")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let v = page(&mut b).await;
+    let models: Vec<&str> = v["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["model"].as_str().unwrap())
+        .collect();
+    assert_eq!(models, [ids[0]], "{v}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
+    assert_eq!(own_kinds(&s.state).len(), events_before);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Deletes all code benchmark runs of `model`: the answer's status and text.
+async fn delete_all_code_runs(b: &mut Browser, model: &str) -> (u16, String) {
+    let resp = b
+        .call(
+            "benchmark-delete-model",
+            &[("benchmark", "code"), ("model", model)],
+        )
+        .await;
+    (resp.status().as_u16(), resp.text().await.unwrap())
+}
+
+#[tokio::test]
+async fn deleting_all_code_runs_of_an_installed_model_is_refused() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let kept = json!(older_runs(ids[0], 1));
+    let (s, _runner, dir) =
+        with_models_kept_from(&ids, "code-bench-delete-installed", Some(&kept)).await;
+    let mut b = logged_in(&s.url).await;
+    // Before any report the proxy does not know what is installed.
+    let (status, text) = delete_all_code_runs(&mut b, ids[0]).await;
+    assert_eq!(status, 400);
+    assert!(text.contains("not known"), "{text}");
+    b.page("/admin/strata/version").await;
+    let (status, text) = delete_all_code_runs(&mut b, ids[0]).await;
+    assert_eq!(status, 400);
+    assert!(text.contains("is installed"), "{text}");
+    let v = page(&mut b).await;
+    assert_eq!(v["history"][0]["runs"].as_array().unwrap().len(), 1, "{v}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -164,8 +164,14 @@ async fn says_not_run_yet_without_benchmarks() {
     *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
     let mut b = logged_in(&s.url).await;
     let text = prompt(&mut b, "IQ3_XXS").await;
-    assert!(text.contains("- Speed benchmark: not run yet"), "{text}");
-    assert!(text.contains("- Code benchmark: not run yet"), "{text}");
+    assert!(
+        text.contains("### Speed benchmark\n\n- not run yet\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("### Code benchmark\n\n- not run yet\n"),
+        "{text}"
+    );
     // Live data needs no date.
     assert!(!text.contains("was read on"), "{text}");
 }
@@ -194,15 +200,14 @@ async fn carries_both_benchmarks_of_the_model() {
     let mut b = logged_in(&s.url).await;
     let text = prompt(&mut b, "IQ3_XXS").await;
     assert!(
-        text.contains(
-            "- Speed benchmark: 38.5 tokens/s answering, 1210 tokens/s reading a 4K prompt, \
-             at 65536 tokens context, Strata 477ac13, run on "
-        ),
+        text.contains(": 38.5 tokens/s answering, 1210 tokens/s reading a 4K prompt. "),
         "{text}"
     );
     assert!(!text.contains("90.0"), "{text}");
     assert!(
-        text.contains("- Code benchmark: 8 of 10 hidden tests passed over 2 programming tasks"),
+        text.contains(
+            ": 8 of 10 hidden tests passed over 2 programming tasks with opencode. Settings not recorded\n"
+        ),
         "{text}"
     );
 }
@@ -283,15 +288,14 @@ async fn a_failed_last_run_is_no_not_run_yet() {
     let mut b = logged_in(&s.url).await;
     let text = prompt(&mut b, "IQ3_XXS").await;
     assert!(
-        text.contains("- Speed benchmark: the last run on "),
+        text.contains(": failed: Strata did not answer. Settings not recorded\n"),
         "{text}"
     );
-    assert!(text.contains("failed: Strata did not answer"), "{text}");
     assert!(
-        text.contains("- Code benchmark: the last run on "),
+        text.contains(": failed: model did not load. Settings not recorded\n"),
         "{text}"
     );
-    assert!(text.contains("failed: model did not load"), "{text}");
+    assert_eq!(runs_under(&text, "Speed benchmark").len(), 1, "{text}");
 }
 
 #[tokio::test]
@@ -749,4 +753,199 @@ async fn tuned_settings_lose_their_paths_and_a_loss_shows_as_such() {
         text.contains("; the last tune was for other settings"),
         "{text}"
     );
+}
+
+/// The lines of the prompt's list under `heading`.
+fn runs_under(text: &str, heading: &str) -> Vec<String> {
+    text.split(&format!("### {heading}\n\n"))
+        .nth(1)
+        .unwrap_or_else(|| panic!("no {heading} in:\n{text}"))
+        .lines()
+        .take_while(|l| l.starts_with("- "))
+        .map(str::to_string)
+        .collect()
+}
+
+/// `n` finished code benchmark runs of IQ3_XXS, the oldest first, each
+/// with an engine environment of its own.
+fn code_runs(n: u64) -> serde_json::Value {
+    let task = json!({"name": "a", "title": "a", "state": "done", "passed": 1, "total": 5});
+    json!(
+        (0..n)
+            .map(|i| json!({"id": i + 1, "model": "IQ3_XXS", "state": "done",
+            "started": 1_760_000_000u64 + i * 100, "ended": 1_760_000_050u64 + i * 100,
+            "tasks": [task.clone()],
+            "settings": {"context": 65536, "env": {"GGML_X": i.to_string()}}}))
+            .collect::<Vec<_>>()
+    )
+}
+
+#[tokio::test]
+async fn lists_the_last_five_runs_of_each_newest_first_with_their_settings() {
+    let dir = data_dir("prompt-five-runs");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("code-bench.json"), code_runs(6).to_string()).unwrap();
+    let s = setup(true, |c| c.data_dir = Some(dir.clone())).await;
+    let mut b = logged_in(&s.url).await;
+    // Six speed runs, each seen by the proxy; the first predates its history.
+    for i in 0..6u64 {
+        let mut report = strata_info(true);
+        report.info.models[0].env = Some([("GGML_X".to_string(), i.to_string())].into());
+        report.info.models[0].presets = Some(StrataPresets {
+            latest: Some(StrataPreset {
+                id: "p1".into(),
+                name: "coding quick".into(),
+                active: true,
+                state: None,
+                reasons: vec![],
+                gain_pct: None,
+                settings: vec!["n_gpu_layers 40".into()],
+                decode_tps: None,
+                base_tps: None,
+            }),
+            other_context: false,
+        });
+        let mut run = benchmark("IQ3_XXS", "");
+        run.at = 1_760_000_000 + i * 100;
+        run.result = format!("{}.0 Token/s", 30 + i);
+        run.decode_tps = Some((30 + i) as f64);
+        run.context = Some(65536);
+        report.info.benchmarks = vec![run];
+        *s.pc.strata_info.lock().unwrap() = Some(report);
+        b.call("strata", &[]).await;
+    }
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    let speed = runs_under(&text, "Speed benchmark");
+    assert_eq!(speed.len(), 5, "{text}");
+    assert!(speed[0].contains(": 35.0 tokens/s answering. Settings: 65536 tokens context; Strata 477ac13; preset \"coding quick\" (`n_gpu_layers 40`); engine environment `GGML_X=5`"), "{text}");
+    assert!(speed[4].contains("31.0 tokens/s"), "{text}");
+    assert!(!text.contains("30.0 tokens/s"), "{text}");
+
+    let code = runs_under(&text, "Code benchmark");
+    assert_eq!(code.len(), 5, "{text}");
+    assert!(code[0].contains("engine environment `GGML_X=5`"), "{text}");
+    assert!(code[4].contains("engine environment `GGML_X=1`"), "{text}");
+    assert!(!text.contains("`GGML_X=0`"), "{text}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn failed_runs_count_toward_the_five() {
+    let dir = data_dir("prompt-failed-five");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut runs = code_runs(5);
+    runs.as_array_mut()
+        .unwrap()
+        .push(json!({"id": 9, "model": "IQ3_XXS",
+        "state": "failed", "error": "model did not load",
+        "started": 1_760_001_000u64, "ended": 1_760_001_000u64, "tasks": []}));
+    std::fs::write(dir.join("code-bench.json"), runs.to_string()).unwrap();
+    let s = setup(true, |c| c.data_dir = Some(dir.clone())).await;
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    let code = runs_under(&text, "Code benchmark");
+    assert_eq!(code.len(), 5, "{text}");
+    assert!(
+        code[0].contains(": failed: model did not load. Settings not recorded"),
+        "{text}"
+    );
+    assert!(!text.contains("`GGML_X=0`"), "{text}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_deleted_run_is_left_out() {
+    let dir = data_dir("prompt-deleted");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("code-bench.json"), code_runs(2).to_string()).unwrap();
+    let s = setup(true, |c| c.data_dir = Some(dir.clone())).await;
+    let mut report = strata_info(true);
+    let mut run = benchmark("IQ3_XXS", "38.5 Token/s");
+    run.decode_tps = Some(38.5);
+    report.info.benchmarks = vec![run];
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let page: serde_json::Value = b.call("strata", &[]).await.json().await.unwrap();
+    let speed_id = page["benchmarks"][0]["runs"][0]["id"].to_string();
+    let resp = b
+        .call(
+            "benchmark-delete-run",
+            &[("benchmark", "speed"), ("id", &speed_id)],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    // The newest code run, the second.
+    let resp = b
+        .call(
+            "benchmark-delete-run",
+            &[("benchmark", "code"), ("id", "2")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    // The PC service still reports the deleted speed run.
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert_eq!(
+        runs_under(&text, "Speed benchmark"),
+        ["- not run yet"],
+        "{text}"
+    );
+    let code = runs_under(&text, "Code benchmark");
+    assert_eq!(code.len(), 1, "{text}");
+    assert!(code[0].contains("`GGML_X=0`"), "{text}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_run_from_before_the_history_says_what_it_measured_with() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    let mut run = benchmark("IQ3_XXS", "38.5 Token/s");
+    run.decode_tps = Some(38.5);
+    run.context = Some(65536);
+    run.speed_projection = Some(false);
+    run.version = Some("477ac13".into());
+    report.info.benchmarks = vec![run];
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    let speed = runs_under(&text, "Speed benchmark");
+    assert!(
+        speed[0].ends_with(
+            ": 38.5 tokens/s answering. Settings not recorded; 65536 tokens context; \
+             speed projection off; Strata 477ac13"
+        ),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_speed_run_after_a_measurement_is_a_line_of_its_own() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    let mut run = benchmark("IQ3_XXS", "38.5 Token/s");
+    run.decode_tps = Some(38.5);
+    run.context = Some(32768);
+    report.info.benchmarks = vec![run.clone()];
+    *s.pc.strata_info.lock().unwrap() = Some(report.clone());
+    let mut b = logged_in(&s.url).await;
+    b.call("strata", &[]).await;
+    // The PC service keeps the measurement next to the error, here one
+    // with a path and backticks.
+    run.error = Some("could not load C:\\Users\\me\\Strata-data\\x.gguf: `oom`".into());
+    report.info.models[0].context = Some(131072);
+    report.info.benchmarks = vec![run];
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    let speed = runs_under(&text, "Speed benchmark");
+    assert_eq!(speed.len(), 2, "{text}");
+    // The failure ran with the model's settings, not the measurement's.
+    assert!(
+        speed[0]
+            .contains(": failed: could not load x.gguf: 'oom'. Settings: 131072 tokens context"),
+        "{text}"
+    );
+    assert!(speed[1].contains(": 38.5 tokens/s answering. "), "{text}");
+    assert!(!text.contains("Strata-data"), "{text}");
 }

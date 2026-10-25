@@ -319,26 +319,13 @@ impl CodeBench {
         self.keep(failed_run(model, error, clock::unix_now()), settings);
     }
 
-    /// Each model's latest finished run, the newest failure after it noted
-    /// on it; a model that only failed gives its newest failure.
-    pub fn results(&self) -> Vec<CodeBenchRun> {
+    /// The runs `model` keeps, newest first.
+    pub fn runs_of(&self, model: &str) -> Vec<CodeBenchRun> {
         self.history(None)
             .into_iter()
-            .filter_map(|m| {
-                let done = m.runs.iter().position(|r| r.state == CodeBenchState::Done);
-                match done {
-                    Some(i) => {
-                        let mut run = m.runs[i].clone();
-                        if let Some(failed) = m.runs[..i].first() {
-                            run.failed_later = failed.error.clone();
-                            run.failed_at = Some(ended_or_started(failed));
-                        }
-                        Some(run)
-                    }
-                    None => m.runs.first().cloned(),
-                }
-            })
-            .collect()
+            .find(|m| m.model == model)
+            .map(|m| m.runs)
+            .unwrap_or_default()
     }
 
     /// Each model's runs, newest first; `info` says which models are
@@ -398,7 +385,7 @@ impl CodeBench {
 }
 
 /// When a run ended, or started if it has no end.
-fn ended_or_started(run: &CodeBenchRun) -> u64 {
+pub fn ended_or_started(run: &CodeBenchRun) -> u64 {
     run.ended.unwrap_or(run.started)
 }
 

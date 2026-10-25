@@ -11,10 +11,6 @@ use strata_pc_agent::terminal::Terminal;
 
 const KEY: &str = "0123456789abcdef0123456789abcdef";
 
-fn lines(lines: &[&str]) -> Vec<String> {
-    lines.iter().map(|l| l.to_string()).collect()
-}
-
 /// What `strata update --output jsonl` prints last for the engine's
 /// `status` (`strata_cli/update_cmd.py`, `run`, Strata 011c9e6).
 fn engine_answer(status: &str) -> String {

@@ -755,6 +755,10 @@ async fn install(job: &JobContext, choice: Option<Choice>) -> Result<Option<Stri
     // one Strata runs with.
     let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
     setup(job, &strata, &model, &key).await?;
+    if strata.kind() == Kind::Source {
+        // Setup made the folder's Python.
+        crate::jsonschema::ensure_in_job(job).await;
+    }
     serve_first(agent, &strata, &model.size.id).await
 }
 

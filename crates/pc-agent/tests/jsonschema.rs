@@ -337,3 +337,30 @@ async fn at_start_nothing_runs_during_a_job_or_without_strata() {
     assert!(s.fake.runs_of("python jsonschema").is_empty(), "a job runs");
     drop(running);
 }
+
+#[tokio::test]
+async fn a_job_that_starts_during_the_start_check_ends_its_pip() {
+    let s = setup("jsonschema-start-ended").await;
+    installed(&s);
+    missing(&s);
+    // pip keeps printing and does not end on its own.
+    s.fake.command(
+        "python -m pip",
+        FakeCommand {
+            lines: (0..10_000)
+                .map(|i| format!("Downloading part {i}"))
+                .collect(),
+            pause: std::time::Duration::from_millis(1),
+            hang: true,
+            ..FakeCommand::default()
+        },
+    );
+    let check = tokio::spawn(jsonschema::at_start(s.agent.clone()));
+    eventually("pip runs", || !pips(&s).is_empty()).await;
+    let running = strata_pc_agent::job::testing::job(&s.agent);
+    tokio::time::timeout(std::time::Duration::from_secs(5), check)
+        .await
+        .expect("the start check ends once a job runs")
+        .unwrap();
+    drop(running);
+}

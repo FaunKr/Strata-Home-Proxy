@@ -18,7 +18,7 @@ const expected = {
   '/admin/pc/history': ['Awake and asleep', 'Last 7 days', 'Last 12 months', 'From', 'Energy', 'Saved', "today's price"],
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
-  '/admin/strata/connection': ['Relay through the PC service', 'Off: the proxy reaches Strata directly over the network.'],
+  '/admin/strata/connection': ['Relay through the PC service', 'Off: the proxy reaches Strata directly over the network.', 'Hide model name', 'Public model name'],
   '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', 'Decode 52.3 tok/s', 'BENCH.bat, not comparable', 'Compare models', 'Total: 25/33 tests', 'Total: 3 of 4 tasks', 'A later run failed', 'Broken: 1 earlier test fails now', 'Run code benchmark', 'Benchmark all models', 'swift-IQ2_XS: model did not load', 'Remove old Strata folder'],
 };
 // After the areas, scripts/fake-pc.js moves upstream on and holds or refuses
@@ -332,6 +332,57 @@ async function oldFolder(page, errors, name) {
   return issue ? 1 : 0;
 }
 
+// Turns Hide model name on under Strata → Connection and saves it, then
+// creates an API key that shows the model's real name and switches it to
+// Hide in the key list; all of it again as it was at the end.
+// Returns the number of findings.
+async function publicName(page, errors, name) {
+  const wait = { timeout: 15000 };
+  errors.length = 0;
+  let issue = null;
+  try {
+    await page.goto(base + '/admin/strata/connection', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    const section = page.locator('#strata-connection');
+    const toggle = section.getByRole('switch', { name: 'Hide model name' });
+    await toggle.click(wait);
+    if (await toggle.getAttribute('aria-checked') !== 'true') throw new Error('the switch did not turn on');
+    await section.getByRole('button', { name: 'Save' }).click(wait);
+    await section.getByText('Saved', { exact: true }).waitFor(wait);
+    if (process.env.SHOTS === '1') {
+      await section.screenshot({ path: `${process.env.OUT}/${name}_hide-model.jpg`, type: 'jpeg', quality: 60 });
+    }
+    await toggle.click(wait);
+    await section.getByRole('button', { name: 'Save' }).click(wait);
+    await section.getByText('Saved', { exact: true }).waitFor(wait);
+
+    await page.goto(base + '/admin/access', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    const client = `Script ${name}`;
+    await page.fill('#key-name', client);
+    await page.selectOption('#key-model-name', 'show');
+    await page.getByRole('button', { name: 'Create key' }).click(wait);
+    await page.getByText(`New key for “${client}”`).waitFor(wait);
+    const row = page.getByLabel(`Model name for ${client}`);
+    if (await row.inputValue() !== 'show') throw new Error('the new key does not show the real name');
+    await row.selectOption('hide');
+    await page.waitForTimeout(1500);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    if (await page.getByLabel(`Model name for ${client}`).inputValue() !== 'hide') {
+      throw new Error('the key list did not keep Hide');
+    }
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/${name}_key-model-name.jpg`, type: 'jpeg', quality: 60, fullPage: true });
+    }
+  } catch (e) {
+    issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
+  }
+  if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+  console.log(`${issue ? 'FAIL' : 'ok  '} ${name} public model name${issue ? '\n     ' + issue : ''}`);
+  return issue ? 1 : 0;
+}
+
 // Turns relay mode on under Strata → Connection, sees the switch and its
 // end as scripts/fake-pc.js reports them, turns it off again and sees it
 // disabled with its reason in gaming mode.
@@ -553,6 +604,7 @@ async function codeBench(page, errors) {
     findings += await tune(page, errors, name);
     findings += await engineOptions(page, errors, name);
     findings += await sameVersion(page, errors, name);
+    findings += await publicName(page, errors, name);
     if (name === 'desk') {
       for (const [state, mode, texts] of summaryStates) {
         const upstream = state.padEnd(40, '0');

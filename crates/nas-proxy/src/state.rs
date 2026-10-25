@@ -97,6 +97,9 @@ pub struct AppState {
     pub code_bench: crate::code_bench::CodeBench,
     /// Strata's last list of models, answered while Strata is not ready.
     pub models: crate::models::SavedModels,
+    /// The model Strata's latest `/health` named: the real id requests of a
+    /// key that hides the model are sent with.
+    running_model: Mutex<Option<String>>,
     in_flight: AtomicUsize,
     /// The PC service last reported a tune. The tuner's engine may answer on
     /// Strata's port meanwhile, so Strata's health says nothing then.
@@ -175,6 +178,7 @@ impl AppState {
             pc_setup: crate::pc_setup::PcSetup::new(cfg.data_dir.clone()),
             code_bench: crate::code_bench::CodeBench::new(cfg.data_dir.clone()),
             models: crate::models::SavedModels::new(cfg.data_dir.clone()),
+            running_model: Mutex::new(None),
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
             tuning: AtomicBool::new(false),
@@ -393,7 +397,12 @@ impl AppState {
             return Health::Down;
         };
         let health = match strata.health().await {
-            Ok(h) => Health::Up { loaded: h.loaded },
+            Ok(h) => {
+                if h.model.is_some() {
+                    *self.running_model.lock().unwrap() = h.model;
+                }
+                Health::Up { loaded: h.loaded }
+            }
             Err(_) => Health::Down,
         };
         let healthy = matches!(health, Health::Up { .. });
@@ -402,6 +411,11 @@ impl AppState {
         } else {
             Health::Down
         }
+    }
+
+    /// The model Strata's latest `/health` named, if any did.
+    pub fn running_model(&self) -> Option<String> {
+        self.running_model.lock().unwrap().clone()
     }
 
     /// Asks the PC service for its status for the overview, and notes gaming

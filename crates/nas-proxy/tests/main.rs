@@ -22,6 +22,7 @@ mod power;
 mod power_samples;
 mod presets;
 mod proxy;
+mod public_name;
 mod relay;
 mod reported_mac;
 mod settings;

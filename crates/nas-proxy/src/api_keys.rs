@@ -22,6 +22,35 @@ const LAST_USED_WRITE_SECS: u64 = 60;
 const SHOWN_LEN: usize = KEY_PREFIX.len() + 8;
 const MAX_NAME_CHARS: usize = 64;
 
+/// Whether apps with a key see the public model name or the model Strata runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelName {
+    /// As `HIDE_MODEL` says.
+    #[default]
+    Global,
+    Hide,
+    Show,
+}
+
+impl ModelName {
+    /// Whether a request with this key gets the public model name.
+    pub fn hides(self, hide_model: bool) -> bool {
+        match self {
+            Self::Global => hide_model,
+            Self::Hide => true,
+            Self::Show => false,
+        }
+    }
+}
+
+/// A key a request came with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedKey {
+    pub name: String,
+    pub model_name: ModelName,
+}
+
 /// A key as the API keys page shows it, without the secret.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyInfo {
@@ -32,6 +61,7 @@ pub struct KeyInfo {
     pub created: u64,
     /// Unix time in seconds of the last request with this key.
     pub last_used: Option<u64>,
+    pub model_name: ModelName,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -68,6 +98,9 @@ struct Stored {
     created: u64,
     #[serde(default)]
     last_used: Option<u64>,
+    /// Missing in keys from before the setting: they follow `HIDE_MODEL`.
+    #[serde(default)]
+    model_name: ModelName,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -127,7 +160,7 @@ impl ApiKeys {
     }
 
     /// Creates a key; returns it in full, the only time it is ever shown.
-    pub fn create(&self, name: &str) -> Result<(String, KeyInfo), KeyError> {
+    pub fn create(&self, name: &str, model_name: ModelName) -> Result<(String, KeyInfo), KeyError> {
         let name = name.trim();
         if name.is_empty() {
             return Err(KeyError::EmptyName);
@@ -148,6 +181,7 @@ impl ApiKeys {
             hash: hash(&key),
             created: unix_now(),
             last_used: None,
+            model_name,
         };
         let mut next = inner.keys.clone();
         next.push(stored.clone());
@@ -174,11 +208,33 @@ impl ApiKeys {
         Ok(())
     }
 
-    /// All keys, oldest first.
+    /// Sets whether apps with a key see the public model name. Names and
+    /// prefix match as for revoking.
+    pub fn set_model_name(
+        &self,
+        name: &str,
+        prefix: &str,
+        model_name: ModelName,
+    ) -> Result<(), KeyError> {
+        let lower = name.trim().to_lowercase();
+        let _saving = self.saving.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
+        let mut next = inner.keys.clone();
+        let key = next
+            .iter_mut()
+            .find(|k| k.name.to_lowercase() == lower && k.prefix == prefix)
+            .ok_or(KeyError::UnknownKey)?;
+        key.model_name = model_name;
+        self.save(&next)?;
+        inner.keys = next;
+        Ok(())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.inner.lock().unwrap().keys.is_empty()
     }
 
+    /// All keys, oldest first.
     pub fn list(&self) -> Vec<KeyInfo> {
         self.inner
             .lock()
@@ -189,8 +245,8 @@ impl ApiKeys {
             .collect()
     }
 
-    /// The name of the key `raw`, if it is one, and notes its use.
-    pub fn check(&self, raw: &str) -> Option<String> {
+    /// The key `raw`, if it is one, and notes its use.
+    pub fn check(&self, raw: &str) -> Option<CheckedKey> {
         let hash = hash(raw);
         let mut inner = self.inner.lock().unwrap();
         // Compares every hash in constant time, so timing reveals nothing.
@@ -203,7 +259,10 @@ impl ApiKeys {
         let i = found?;
         inner.keys[i].last_used = Some(unix_now());
         inner.last_used_dirty = true;
-        Some(inner.keys[i].name.clone())
+        Some(CheckedKey {
+            name: inner.keys[i].name.clone(),
+            model_name: inner.keys[i].model_name,
+        })
     }
 
     /// Writes pending last uses once the interval has passed. Called by the
@@ -267,6 +326,7 @@ fn to_info(k: &Stored) -> KeyInfo {
         prefix: k.prefix.clone(),
         created: k.created,
         last_used: k.last_used,
+        model_name: k.model_name,
     }
 }
 
@@ -288,7 +348,7 @@ mod tests {
     fn uses_are_written_by_the_flush_not_by_the_request() {
         let dir = dir("keys-flush");
         let keys = ApiKeys::new(Some(dir.clone()));
-        let (key, _) = keys.create("Laptop").unwrap();
+        let (key, _) = keys.create("Laptop", ModelName::Global).unwrap();
         keys.check(&key);
         let used = keys.list()[0].last_used;
         assert!(used.is_some());
@@ -322,7 +382,10 @@ mod tests {
         write_private(&dir, KEYS_FILE, b"{\"keys\": [ broken").unwrap();
         let keys = ApiKeys::new(Some(dir.clone()));
         assert!(keys.list().is_empty());
-        assert!(matches!(keys.create("New"), Err(KeyError::NotSaved(_))));
+        assert!(matches!(
+            keys.create("New", ModelName::Global),
+            Err(KeyError::NotSaved(_))
+        ));
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             "{\"keys\": [ broken"
@@ -333,7 +396,7 @@ mod tests {
     #[test]
     fn revoking_matches_names_like_creating() {
         let keys = ApiKeys::new(None);
-        let (key, info) = keys.create("Laptop").unwrap();
+        let (key, info) = keys.create("Laptop", ModelName::Global).unwrap();
         keys.revoke("  laptop ", &info.prefix).unwrap();
         assert_eq!(keys.check(&key), None);
     }

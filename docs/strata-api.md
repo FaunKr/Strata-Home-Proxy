@@ -70,7 +70,11 @@ Both paths are one branch, with the key (line 6245):
  "meta": {"n_ctx": 32768}, "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}}]}
 ```
 
-Aliases follow as entries of their own, the image model as one more. While no model is loaded and Strata does not unload on idle, `data` is empty. The proxy keeps the last `200` answer that lists a model (from a forwarded request, and its own `GET /v1/models` after each wake-up) in `DATA_DIR` (`models.json`) and answers it while Strata is not ready; an empty list does not replace it.
+Aliases follow as entries of their own (the same fields, with the alias as `id` and `alias_of` naming the model; the model's entry carries `aliases`), the image model as one more, with `output_modalities: ["image"]` (its requests go to `POST /v1/images/generations`). Strata has no `/v1/models/<id>`. While no model is loaded and Strata does not unload on idle, `data` is empty. The proxy keeps the last `200` answer that lists a model (from a forwarded request, and its own `GET /v1/models` after each wake-up) in `DATA_DIR` (`models.json`) and answers it while Strata is not ready; an empty list does not replace it.
+
+## Model names in requests and answers
+
+Strata serves a request with the model it runs whatever `model` it names (`model_for` in `serve/server.py`: "Other names are still served, as before"). It answers with the requested name only when that is one of the run config's `aliases` (#297), else with its real id, the same as `model` in `/health`. The name is in `model` of a chat or messages answer and of each OpenAI chunk, in `message.model` of Anthropic's `message_start` and in `response.model` of the Responses API's events (`serve/responses.py`). The proxy's public model name (README) relies on this: it sends a hiding key's requests with `/health`'s `model` and puts the public name into these fields of the answers.
 
 ## Summary of an update: `POST /v1/chat/completions`
 

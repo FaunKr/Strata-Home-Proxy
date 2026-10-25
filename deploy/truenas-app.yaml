@@ -24,6 +24,9 @@ services:
       TZ: Europe/Berlin
       # The code benchmark in the code-bench service below.
       CODE_BENCH_URL: http://127.0.0.1:8096
+      # Apps see one model name instead of the model Strata runs (also in the web UI).
+      # HIDE_MODEL: "true"
+      # PUBLIC_MODEL_NAME: strata
       IDLE_TIMEOUT_SECS: "900"
       WAKE_TIMEOUT_SECS: "240"
       # Initial password of the web UI (otherwise "admin"); change it at the first login.

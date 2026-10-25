@@ -37,6 +37,14 @@ and asks it to go to sleep after the idle timeout.
   get Strata's last list right away, with `x-strata-proxy-status:
   models_saved`, and do not wake the PC; apps that ask for the list first
   then send their real request. Without a saved list they wait for the PC.
+- **Public model name:** With *Hide model name* on (*Strata → Connection*,
+  `HIDE_MODEL`), apps see one model name (`PUBLIC_MODEL_NAME`, default
+  `strata`) instead of the model Strata runs: the list of models has one
+  chat model under that name, every answer names it (streamed ones too), and
+  a request with any model name reaches the running model. Switching models
+  on the PC then never breaks an app. The image model keeps its name, and
+  Strata's error messages pass unchanged. Each API key follows the switch or
+  overrides it (*Hide* / *Show*, *Access* area).
 - **Streamed requests** get a response right away and a ping event every
   15 s, even while Strata computes silently for a long time (Claude Code aborts
   after 300 s without data). Anthropic: `event: ping`, OpenAI: SSE comment.
@@ -233,6 +241,9 @@ is in English and split into five areas: *Overview*, *PC*, *Strata*
   The list shows the beginning, creation and last use; a
   revoked key stops working immediately. As long as no key exists, every
   client gets `401`.
+  Each key says whether its apps see the model's real name: as set in
+  *Strata → Connection* (the default), *Hide* or *Show*; chosen when
+  creating the key and changeable in the list.
 - After 5 failed attempts from the same address, login is blocked for 1 min.
   `/admin/` is reachable wherever the API is reachable; the password is
   the only protection.

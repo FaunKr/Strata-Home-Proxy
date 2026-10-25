@@ -13,13 +13,14 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use futures_util::{Stream, StreamExt, stream};
+use futures_util::{Stream, StreamExt, stream, stream::BoxStream};
 use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::{
     events::EventKind,
     models::{self, SavedList},
+    public_name::PublicName,
     state::{ActivityGuard, AppState, Readiness, WakeError},
 };
 
@@ -231,6 +232,34 @@ struct Incoming {
     path_and_query: String,
     headers: HeaderMap,
     body: Bytes,
+    /// The public model name, when the client's API key hides the model.
+    public: Option<String>,
+}
+
+impl Incoming {
+    /// How the answer names the model, with the real id Strata's latest
+    /// `/health` named; `None` when the key shows the real names.
+    fn public_name(&self, st: &AppState) -> Option<PublicName> {
+        self.public.clone().map(|public| PublicName {
+            public,
+            real: st.running_model(),
+        })
+    }
+
+    /// The body Strata gets: with the running model's real id in `model`
+    /// when the key hides the model.
+    fn rename(&mut self, name: Option<&PublicName>) {
+        if let Some(name) = name {
+            self.body = name.request(&self.path_and_query, std::mem::take(&mut self.body));
+        }
+    }
+}
+
+fn is_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("application/json"))
 }
 
 /// Sends the request to Strata. If Strata refuses the Strata key, the PC
@@ -322,9 +351,11 @@ fn upstream_failed(flavor: Flavor, e: &str) -> Response {
 async fn forward(
     st: Arc<AppState>,
     guard: ActivityGuard,
-    req: Incoming,
+    mut req: Incoming,
     flavor: Flavor,
 ) -> Response {
+    let name = req.public_name(&st);
+    req.rename(name.as_ref());
     let mut given_up = Box::pin(guard.given_up(Instant::now()));
     let sent = tokio::select! {
         sent = send_upstream(&st, &req) => sent,
@@ -336,8 +367,9 @@ async fn forward(
     };
     let status = resp.status();
     let sse = is_event_stream(resp.headers());
-    let headers = copy_headers(resp.headers(), sse);
-    if status == StatusCode::OK && !sse && models::is_list(&req.method, &req.path_and_query) {
+    let mut headers = copy_headers(resp.headers(), sse);
+    let is_list = models::is_list(&req.method, &req.path_and_query);
+    if status == StatusCode::OK && !sse && (is_list || name.is_some() && is_json(&headers)) {
         let read = tokio::select! {
             read = resp.bytes() => read,
             () = &mut given_up => return lost(flavor),
@@ -346,10 +378,24 @@ async fn forward(
             Ok(body) => body,
             Err(e) => return upstream_failed(flavor, &e.to_string()),
         };
-        let content_type = headers
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok());
-        st.models.offer(content_type, &body);
+        let body = if is_list {
+            let content_type = headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok());
+            st.models.offer(content_type, &body);
+            match (&name, std::str::from_utf8(&body)) {
+                (Some(name), Ok(text)) => Bytes::from(name.list(text)),
+                _ => body,
+            }
+        } else {
+            match &name {
+                Some(name) => name.answer(&req.path_and_query, body),
+                None => body,
+            }
+        };
+        if name.is_some() {
+            headers.remove(header::CONTENT_LENGTH);
+        }
         let mut out = Response::new(Body::from(body));
         *out.headers_mut() = headers;
         return out;
@@ -357,6 +403,7 @@ async fn forward(
     let ping_interval = st.cfg().ping_interval;
     let body = resp.bytes_stream();
     let body = if sse {
+        let body = renamed_stream(name.as_ref(), &req.path_and_query, body);
         let tail = flavor.error_event("api_error", LOST);
         Body::from_stream(keep_guard(
             with_pings(body, flavor, ping_interval),
@@ -491,8 +538,31 @@ async fn wake_and_pass_on(
     }
 }
 
+/// An event stream from Strata with the public model name in its events,
+/// when the key hides the model.
+fn renamed_stream(
+    name: Option<&PublicName>,
+    path: &str,
+    body: impl Stream<Item = reqwest::Result<Bytes>> + Send + 'static,
+) -> BoxStream<'static, reqwest::Result<Bytes>> {
+    match name {
+        Some(name) => name.stream(path, body.boxed()).boxed(),
+        None => body.boxed(),
+    }
+}
+
 /// Sends the request to Strata and passes its event stream on.
 async fn pass_on(st: &AppState, req: &Incoming, flavor: Flavor, tx: &mpsc::Sender<Bytes>) {
+    let name = req.public_name(st);
+    let mut req = Incoming {
+        method: req.method.clone(),
+        path_and_query: req.path_and_query.clone(),
+        headers: req.headers.clone(),
+        body: req.body.clone(),
+        public: req.public.clone(),
+    };
+    req.rename(name.as_ref());
+    let req = &req;
     let resp = match send_upstream(st, req).await {
         Ok(r) => r,
         Err(e) => {
@@ -516,11 +586,8 @@ async fn pass_on(st: &AppState, req: &Incoming, flavor: Flavor, tx: &mpsc::Sende
         let _ = tx.send(flavor.error_event("api_error", &message)).await;
         return;
     }
-    let mut body = Box::pin(with_pings(
-        resp.bytes_stream(),
-        flavor,
-        st.cfg().ping_interval,
-    ));
+    let body = renamed_stream(name.as_ref(), &req.path_and_query, resp.bytes_stream());
+    let mut body = Box::pin(with_pings(body, flavor, st.cfg().ping_interval));
     while let Some(chunk) = body.next().await {
         match chunk {
             Ok(chunk) => {
@@ -546,8 +613,16 @@ async fn wait_and_wake(st: &Arc<AppState>, held: bool) -> Result<(), WakeError> 
     st.ensure_awake().await
 }
 
-/// The saved list of models: no wake-up, no activity, no event.
-fn saved_list(list: SavedList) -> Response {
+/// The saved list of models: no wake-up, no activity, no event. Under the
+/// public model name when the key hides the model.
+fn saved_list(list: SavedList, public: Option<String>) -> Response {
+    let list = match public {
+        Some(public) => SavedList {
+            body: PublicName { public, real: None }.list(&list.body),
+            ..list
+        },
+        None => list,
+    };
     (
         [
             (header::CONTENT_TYPE, list.content_type),
@@ -564,8 +639,17 @@ fn saved_list(list: SavedList) -> Response {
 pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
     let (parts, body) = req.into_parts();
     let flavor = Flavor::from_path(parts.uri.path());
-    let Some(key) = client_keys(&parts.headers).find(|key| st.api_keys.check(key).is_some()) else {
+    let Some((key, checked)) = client_keys(&parts.headers)
+        .find_map(|key| st.api_keys.check(key).map(|checked| (key, checked)))
+    else {
         return unauthorized(flavor);
+    };
+    let public = {
+        let cfg = st.cfg();
+        checked
+            .model_name
+            .hides(cfg.hide_model)
+            .then(|| cfg.public_model_name.clone())
     };
     let held = st.code_bench.holds(key);
     if st.strata().is_none() {
@@ -579,7 +663,7 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
         && let Some(list) = st.models.get()
         && (held || !st.strata_ready().await)
     {
-        return saved_list(list);
+        return saved_list(list, public);
     }
     let cfg = st.cfg();
     let guard = ActivityGuard::new(&st);
@@ -599,6 +683,7 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
         path_and_query,
         headers: parts.headers,
         body,
+        public,
     };
     match st.readiness().await {
         Readiness::Ready if !held => forward(st, guard, req, flavor).await,

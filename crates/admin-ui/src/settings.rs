@@ -408,18 +408,42 @@ fn SettingRow(
                 {restart}
             </div>
             <div>
-                <div class=if unit.is_some() { "input-wrap has-unit" } else { "input-wrap" }>
-                    <input
-                        id=id
-                        type=if entry.secret { "password" } else { "text" }
-                        value=initial
-                        prop:value=move || draft.get()
-                        on:input=move |ev| draft.set(event_target_value(&ev))
-                        placeholder=placeholder
-                        autocomplete="off"
-                    />
-                    {unit.map(|u| view! { <span class="unit">{u}</span> })}
-                </div>
+                {if entry.switch {
+                    let on = move || draft.with(|d| d.trim() == "true");
+                    view! {
+                        <button
+                            id=id
+                            type="button"
+                            class="switch"
+                            role="switch"
+                            aria-checked=move || if on() { "true" } else { "false" }
+                            on:click=move |_| draft.set((!on()).to_string())
+                        >
+                            <span class="knob"></span>
+                        </button>
+                    }
+                        .into_any()
+                } else {
+                    view! {
+                        <div class=if unit.is_some() {
+                            "input-wrap has-unit"
+                        } else {
+                            "input-wrap"
+                        }>
+                            <input
+                                id=id
+                                type=if entry.secret { "password" } else { "text" }
+                                value=initial
+                                prop:value=move || draft.get()
+                                on:input=move |ev| draft.set(event_target_value(&ev))
+                                placeholder=placeholder
+                                autocomplete="off"
+                            />
+                            {unit.map(|u| view! { <span class="unit">{u}</span> })}
+                        </div>
+                    }
+                        .into_any()
+                }}
                 <div class="row-meta">
                     <span class=source_class>{source}</span>
                     {reset_button}

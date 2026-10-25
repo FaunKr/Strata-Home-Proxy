@@ -19,6 +19,7 @@ pub mod pc_changelog;
 pub mod pc_setup;
 pub mod plug;
 pub mod proxy;
+pub mod public_name;
 pub mod settings;
 pub mod state;
 pub mod strata;

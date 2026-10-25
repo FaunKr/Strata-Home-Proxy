@@ -19,7 +19,7 @@ const expected = {
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
   // The requests sendRequests made through the proxy.
-  '/admin/strata/requests': ['Request log', 'Chat app', 'prompt → tool call', 'Gen. tok/s', '40.0', '≈ 32'],
+  '/admin/strata/requests': ['Request log', 'Chat app', 'prompt → tool call', 'Gen. tok/s', '40.0'],
   '/admin/strata/connection': ['Relay through the PC service', 'Off: the proxy reaches Strata directly over the network.', 'Hide model name', 'Public model name'],
   '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', '52.3 tok/s', 'Not installed', 'BENCH.bat, not comparable', 'Compare models', '25/33', 'Time limit', 'Last run failed', 'Run code benchmark', 'Benchmark all models', 'No result: model did not load', 'Remove old Strata folder'],
 };
@@ -115,6 +115,8 @@ async function requestDetails(page, errors, name) {
     if (await prefill.isVisible()) throw new Error('the prefill speed shows before the tap');
     await first.locator('tr').first().click(wait);
     await prefill.waitFor(wait);
+    // The thinking estimate, a column only a wide screen shows.
+    await first.locator('tr.request-more').getByText('≈ 32').waitFor(wait);
     if (process.env.SHOTS === '1') {
       await page.screenshot({ path: `${process.env.OUT}/${name}_requests-open.jpg`, type: 'jpeg', quality: 60, fullPage: true });
     }

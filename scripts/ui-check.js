@@ -115,6 +115,8 @@ async function requestDetails(page, errors, name) {
     if (await prefill.isVisible()) throw new Error('the prefill speed shows before the tap');
     await first.locator('tr').first().click(wait);
     await prefill.waitFor(wait);
+    // The thinking estimate, a column only a wide screen shows.
+    await first.locator('tr.request-more').getByText('≈ 32').waitFor(wait);
     if (process.env.SHOTS === '1') {
       await page.screenshot({ path: `${process.env.OUT}/${name}_requests-open.jpg`, type: 'jpeg', quality: 60, fullPage: true });
     }

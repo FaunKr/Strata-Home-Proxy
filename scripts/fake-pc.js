@@ -291,14 +291,15 @@ http.createServer((req, res) => {
     let body = '';
     req.on('data', d => { body += d; });
     req.on('end', () => {
-      // An app's streamed request, for the request log: a tool call with
-      // usage and timings, as Strata's openai_chunks writes them.
+      // An app's streamed request, for the request log: thinking, a tool
+      // call, usage and timings, as Strata's openai_chunks writes them.
       if (JSON.parse(body || '{}').stream) {
         const chunk = (delta, finish, extra = {}) => `data: ${JSON.stringify({
           id: 'chatcmpl-1f0c', object: 'chat.completion.chunk', created: 1761426000, model: 'Qwen3-30B-A3B',
           choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`;
         res.writeHead(200, { 'content-type': 'text/event-stream' });
         res.end(chunk({ role: 'assistant', content: '' }, null)
+          + chunk({ reasoning_content: 'Read a.' }, null)
           + chunk({ tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'read', arguments: '{}' } }] }, null)
           + chunk({}, 'tool_calls', {
             usage: { prompt_tokens: 5200, completion_tokens: 41, total_tokens: 5241, prompt_tokens_details: { cached_tokens: 4800 } },

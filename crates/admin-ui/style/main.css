@@ -601,7 +601,7 @@ input[type="date"] {
 .request-table { overflow-x: auto; }
 .request-table table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .request-table th, .request-table td { text-align: left; padding: 6px 5px; border-top: 1px solid var(--line); white-space: nowrap; }
-.request-table thead th { border-top: 0; color: var(--muted); font-weight: normal; font-size: 0.8rem; }
+.request-table thead th { border-top: 0; color: var(--muted); font-weight: normal; font-size: 0.8rem; white-space: normal; vertical-align: bottom; }
 .request-table .num { text-align: right; }
 .request-table td { vertical-align: top; }
 .request-table td.model { white-space: normal; overflow-wrap: anywhere; min-width: 90px; max-width: 150px; }

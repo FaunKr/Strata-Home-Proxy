@@ -5,17 +5,19 @@
 
 use std::{fmt::Write, sync::Arc};
 
-use strata_admin_ui::api::{CodeBenchRun, CodeBenchState};
+use strata_admin_ui::api::{CodeBenchRun, CodeBenchState, RunSettings, SpeedRun};
 use strata_pc_protocol::{
     LOAD_LINES, MachineFacts, NeverRule, PresetState, SamplingField, SamplingSource,
-    SamplingSupport, StrataBenchmark, StrataInfo, StrataModel, StrataOptions, StrataPreset,
-    StrataTune, TuneMode, TuneUse, TunerOption, TunerTry,
+    SamplingSupport, StrataInfo, StrataModel, StrataOptions, StrataPreset, StrataTune, TuneMode,
+    TuneUse, TunerOption, TunerTry,
 };
 
 use crate::{clock, state::AppState};
 
 const STRATA_REPO: &str = "https://github.com/Niko1221/Strata";
 const NOT_RUN: &str = "not run yet";
+/// How many of a model's runs of each benchmark the prompt lists.
+const RUNS_LISTED: usize = 5;
 
 /// The prompt for installed `model`, from what the PC service reports now
 /// or reported last; never wakes the PC. `Err` says why there is none.
@@ -31,14 +33,19 @@ pub async fn prompt(state: &Arc<AppState>, model: &str) -> Result<String, String
     } else {
         None
     };
-    build(&info, model, &state.code_bench.results(), read_at)
+    let speed = state.strata.benchmarks.runs_of(model);
+    let code = state.code_bench.runs_of(model);
+    build(&info, model, &speed, &code, read_at)
 }
 
-/// The prompt for installed model `id` from `info`; `read_at` is when it was read, if not just now.
+/// The prompt for installed model `id` from `info` and the model's speed
+/// and code benchmark runs, newest first; `read_at` is when `info` was
+/// read, if not just now.
 pub fn build(
     info: &StrataInfo,
     id: &str,
-    code_bench: &[CodeBenchRun],
+    speed: &[SpeedRun],
+    code: &[CodeBenchRun],
     read_at: Option<u64>,
 ) -> Result<String, String> {
     let model = info
@@ -168,13 +175,15 @@ pub fn build(
             .map_or_else(|| NOT_RUN.into(), tune_text)
     );
 
-    let _ = writeln!(out, "\n## Benchmarks\n");
-    let _ = writeln!(out, "- Speed benchmark: {}", speed_text(info, &model.id));
     let _ = writeln!(
         out,
-        "- Code benchmark: {}",
-        code_bench_text(code_bench, &model.id)
+        "\n## Benchmarks\n\nThe model's last {RUNS_LISTED} runs of each, newest first, each with the \
+         settings it ran with, so you can see which settings gave which result."
     );
+    let _ = writeln!(out, "\n### Speed benchmark\n");
+    runs_lines(out, speed.iter().map(speed_line));
+    let _ = writeln!(out, "\n### Code benchmark\n");
+    runs_lines(out, code.iter().map(code_line));
     answer_lines(out, model);
     Ok(text)
 }
@@ -699,71 +708,151 @@ fn fields_text(fields: &[SamplingField]) -> String {
                 SamplingSource::Config => "config",
                 SamplingSource::ChatSettings => "chat settings",
             };
-            format!("{} {} ({source})", f.name, f.value)
+            format!("{} {} ({source})", plain(&f.name), f.value)
         })
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-/// The model's last speed benchmark, from each model's runs or, from older
-/// services, the single last one.
-fn speed_text(info: &StrataInfo, model: &str) -> String {
-    let Some(b) = info
-        .benchmarks
-        .iter()
-        .chain(info.benchmark.iter())
-        .find(|b| b.model == model)
-    else {
-        return NOT_RUN.into();
-    };
-    bench_text(b)
+/// Up to `RUNS_LISTED` run lines, or that there is none.
+fn runs_lines(out: &mut String, lines: impl Iterator<Item = String>) {
+    let mut any = false;
+    for line in lines.take(RUNS_LISTED) {
+        let _ = writeln!(out, "- {line}");
+        any = true;
+    }
+    if !any {
+        let _ = writeln!(out, "- {NOT_RUN}");
+    }
 }
 
-fn bench_text(b: &StrataBenchmark) -> String {
-    let when = clock::full_text(b.at);
-    if b.result.is_empty() {
-        let why = b.error.as_deref().unwrap_or("no reason given");
-        return format!("the last run on {when} failed: {why}");
-    }
-    let mut text = match b.decode_tps {
-        Some(tps) => format!("{tps:.1} tokens/s answering"),
-        None => b.result.clone(),
+/// A speed benchmark run: when, what it measured or why it failed, and
+/// its settings.
+fn speed_line(run: &SpeedRun) -> String {
+    let record = &run.record;
+    let result = if run.failed {
+        failed_text(record.error.as_deref())
+    } else {
+        let mut text = match record.decode_tps {
+            Some(tps) => format!("{tps:.1} tokens/s answering"),
+            None => plain(&record.result),
+        };
+        if let Some(tps) = record.prompt_tps {
+            let _ = write!(text, ", {tps:.0} tokens/s reading a 4K prompt");
+        }
+        text
     };
-    if let Some(tps) = b.prompt_tps {
-        let _ = write!(text, ", {tps:.0} tokens/s reading a 4K prompt");
-    }
-    if let Some(context) = b.context {
-        let _ = write!(text, ", at {context} tokens context");
-    }
-    if let Some(on) = b.speed_projection {
-        let _ = write!(text, ", speed projection {}", if on { "on" } else { "off" });
-    }
-    if let Some(version) = &b.version {
-        let _ = write!(text, ", Strata {version}");
-    }
-    let _ = write!(text, ", run on {when}");
-    text
+    let settings = match &run.settings {
+        Some(settings) => settings_text(settings),
+        // What the measurement itself says about how it ran.
+        None => {
+            let mut text = "Settings not recorded".to_string();
+            if !run.failed {
+                if let Some(context) = record.context {
+                    let _ = write!(text, "; {context} tokens context");
+                }
+                if let Some(on) = record.speed_projection {
+                    let _ = write!(text, "; speed projection {}", on_off(on));
+                }
+                if let Some(version) = &record.version {
+                    let _ = write!(text, "; Strata {}", plain(version));
+                }
+            }
+            text
+        }
+    };
+    format!("{}: {result}. {settings}", clock::full_text(run.at))
 }
 
-/// The model's last code benchmark run: hidden tests passed, or why it
-/// gave none.
-fn code_bench_text(runs: &[CodeBenchRun], model: &str) -> String {
-    let Some(run) = runs.iter().find(|r| r.model == model) else {
-        return NOT_RUN.into();
+/// A code benchmark run: when, the hidden tests it passed or why it gave
+/// none, and its settings.
+fn code_line(run: &CodeBenchRun) -> String {
+    let result = if run.state == CodeBenchState::Done {
+        let passed: u32 = run.tasks.iter().map(|t| t.passed).sum();
+        let total: u32 = run.tasks.iter().map(|t| t.total).sum();
+        format!(
+            "{passed} of {total} hidden tests passed over {} programming tasks with opencode",
+            run.tasks.len()
+        )
+    } else {
+        failed_text(run.error.as_deref())
     };
-    let when = clock::full_text(run.ended.unwrap_or(run.started));
-    if run.state != CodeBenchState::Done {
-        let why = run.error.as_deref().unwrap_or("no reason given");
-        return format!("the last run on {when} failed: {why}");
+    let settings = run
+        .settings
+        .as_ref()
+        .map_or_else(|| "Settings not recorded".into(), settings_text);
+    let when = clock::full_text(crate::code_bench::ended_or_started(run));
+    format!("{when}: {result}. {settings}")
+}
+
+/// `failed: why`, with the error as plain text.
+fn failed_text(error: Option<&str>) -> String {
+    format!("failed: {}", plain(error.unwrap_or("no reason given")))
+}
+
+/// Text from the PC on one line, with paths cut to file names and no
+/// backticks, so it can sit in a list line without opening code.
+fn plain(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| if is_path(word) { file_name(word) } else { word })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('`', "'")
+}
+
+/// `Settings: 65536 tokens context; speed projection off; …`.
+fn settings_text(s: &RunSettings) -> String {
+    let mut parts = Vec::new();
+    if let Some(context) = s.context {
+        parts.push(format!("{context} tokens context"));
     }
-    let passed: u32 = run.tasks.iter().map(|t| t.passed).sum();
-    let total: u32 = run.tasks.iter().map(|t| t.total).sum();
-    let mut text = format!(
-        "{passed} of {total} hidden tests passed over {} programming tasks with opencode, run on {when}",
-        run.tasks.len()
-    );
-    if let Some(why) = &run.failed_later {
-        let _ = write!(text, "; a later run failed: {why}");
+    if let Some(on) = s.speed_projection {
+        parts.push(format!("speed projection {}", on_off(on)));
     }
-    text
+    if let Some(version) = &s.strata_version {
+        parts.push(format!("Strata {}", plain(version)));
+    }
+    parts.push(match &s.preset {
+        Some(p) if p.settings.is_empty() => format!("preset \"{}\"", plain(&p.name)),
+        Some(p) => format!(
+            "preset \"{}\" ({})",
+            plain(&p.name),
+            settings_code(&p.settings)
+        ),
+        None => "no preset".into(),
+    });
+    if let Some(env) = &s.env {
+        parts.push(if env.is_empty() {
+            "no engine environment".into()
+        } else {
+            let set: Vec<String> = env
+                .iter()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect();
+            format!("engine environment {}", settings_code(&set))
+        });
+    }
+    if let Some(options) = &s.engine_options {
+        parts.push(if options.is_empty() {
+            "no engine options".into()
+        } else {
+            format!("engine options {}", settings_code(options))
+        });
+    }
+    if let Some(sampling) = &s.sampling {
+        parts.push(if sampling.support == SamplingSupport::None {
+            "greedy decoding (this Strata ignores sampling)".into()
+        } else {
+            format!(
+                "sampling with thinking {}, without thinking {}",
+                fields_text(&sampling.thinking),
+                fields_text(&sampling.instruct)
+            )
+        });
+    }
+    format!("Settings: {}", parts.join("; "))
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
 }

@@ -17,6 +17,7 @@ use axum::{
 };
 use common::*;
 use serde_json::{Value, json};
+use strata_admin_ui::api::CodeBenchState;
 use strata_nas_proxy::{code_bench, code_bench::KEY_NAME, state::AppState};
 
 /// The runner as the proxy sees it.
@@ -225,18 +226,13 @@ fn has_key_state(state: &Arc<AppState>) -> bool {
 
 /// Whether `model` keeps a result with tasks.
 fn has_result(bench: &code_bench::CodeBench, model: &str) -> bool {
-    bench
-        .results()
-        .iter()
-        .any(|r| r.model == model && !r.tasks.is_empty())
+    bench.runs_of(model).iter().any(|r| !r.tasks.is_empty())
 }
 
-/// Whether `model` has only failed runs, the newest without tasks.
+/// Whether `model` has only failed runs.
 fn only_failed(bench: &code_bench::CodeBench, model: &str) -> bool {
-    bench
-        .results()
-        .iter()
-        .any(|r| r.model == model && r.tasks.is_empty() && r.error.is_some())
+    let runs = bench.runs_of(model);
+    !runs.is_empty() && runs.iter().all(|r| r.state == CodeBenchState::Failed)
 }
 
 async fn page(b: &mut Browser) -> Value {
@@ -728,9 +724,9 @@ async fn a_model_that_does_not_load_keeps_its_earlier_result_next_to_the_failed_
     eventually_for(Duration::from_secs(10), "failure noted", || {
         s.state
             .code_bench
-            .results()
-            .iter()
-            .any(|r| r.model == ids[1] && r.failed_later.is_some())
+            .runs_of(ids[1])
+            .first()
+            .is_some_and(|r| r.state == CodeBenchState::Failed)
     })
     .await;
     drive(&s, &runner, ids[2]).await;

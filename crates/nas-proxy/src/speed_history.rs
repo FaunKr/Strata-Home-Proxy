@@ -203,6 +203,15 @@ impl SpeedHistory {
         models
     }
 
+    /// The runs of `model`, newest first.
+    pub fn runs_of(&self, model: &str) -> Vec<SpeedRun> {
+        self.page(None)
+            .into_iter()
+            .find(|m| m.model == model)
+            .map(|m| m.runs)
+            .unwrap_or_default()
+    }
+
     /// Deletes the run `id`; whether there was one, or why the delete was
     /// not saved.
     pub fn delete(&self, id: u64) -> Result<bool, String> {

@@ -971,15 +971,29 @@ pub struct CodeBenchRun {
     /// Local time of the end, filled in by the proxy.
     #[serde(default)]
     pub at_text: String,
-    /// A later run of this model that failed (to load, or in the runner),
-    /// noted on the result it left standing: why, and when (Unix seconds).
+    /// Given by the proxy when it keeps the run; the runner's own id is
+    /// not kept.
     #[serde(default)]
+    pub id: u64,
+    /// What the model ran with; `None`: settings not recorded.
+    #[serde(default)]
+    pub settings: Option<RunSettings>,
+    /// From older proxies, which noted a later failed run on the result it
+    /// left standing: why, and when (Unix seconds). Read once into a failed
+    /// run of its own, never written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_later: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_at: Option<u64>,
-    /// Local time of `failed_at`, filled in by the proxy.
-    #[serde(default)]
-    pub failed_at_text: String,
+}
+
+/// A model's code benchmark runs, newest first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodeBenchModelRuns {
+    pub model: String,
+    /// The PC service's last report lists the model.
+    pub installed: bool,
+    pub runs: Vec<CodeBenchRun>,
 }
 
 /// A task of the code benchmark, for the card: what a run holds.
@@ -1012,9 +1026,8 @@ pub struct CodeBenchPage {
     pub problem: Option<String>,
     /// The running run, or the last one if it did not finish.
     pub run: Option<CodeBenchRun>,
-    /// Each model's last finished run. A model that failed without one gets
-    /// its error row; one with a result keeps it, the failure noted on it.
-    pub results: Vec<CodeBenchRun>,
+    /// Each model's kept runs, finished and failed.
+    pub history: Vec<CodeBenchModelRuns>,
     /// A run over all models, or the last one that did not finish.
     pub all: Option<CodeBenchAll>,
     /// How many models are installed, so the card knows a run over all needs

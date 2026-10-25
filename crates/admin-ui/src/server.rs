@@ -272,8 +272,8 @@ async fn history_csv_file(
 
 /// The brand mark from the header as the browser tab's icon.
 const FAVICON: &str = include_str!("../icons/favicon.svg");
-/// The brand mark as a full square for a phone's home screen; rendered once
-/// from `favicon.svg`, so a change to one changes both.
+/// The brand mark as a full square for a phone's home screen: rendered by
+/// hand from `favicon.svg`, so a change to that file renders this one again.
 const TOUCH_ICON: &[u8] = include_bytes!("../icons/apple-touch-icon.png");
 
 /// An icon for the browser, without a login: the login page shows it too.

@@ -21,6 +21,7 @@ async fn the_favicon_is_the_brand_mark_without_a_login() {
     let resp = get(&format!("{}/admin/favicon.svg", s.url)).await;
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.headers()["content-type"], "image/svg+xml");
+    assert_eq!(resp.headers()["cache-control"], "public, max-age=86400");
     let svg = resp.text().await.unwrap();
     assert!(svg.starts_with("<svg"), "{svg}");
     assert!(svg.contains(r##"fill="#6d28d9""##), "{svg}");
@@ -40,6 +41,7 @@ async fn the_home_screen_icon_is_a_180_pixel_png_without_a_login() {
     let resp = get(&format!("{}/admin/apple-touch-icon.png", s.url)).await;
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.headers()["content-type"], "image/png");
+    assert_eq!(resp.headers()["cache-control"], "public, max-age=86400");
     let png = resp.bytes().await.unwrap();
     assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "PNG signature");
     // The first chunk is IHDR: length, type, then width and height.

@@ -270,6 +270,27 @@ async fn history_csv_file(
         .into_response()
 }
 
+/// The brand mark from the header as the browser tab's icon.
+const FAVICON: &str = include_str!("../icons/favicon.svg");
+/// The brand mark as a full square for a phone's home screen: rendered by
+/// hand from `favicon.svg`, so a change to that file renders this one again.
+const TOUCH_ICON: &[u8] = include_bytes!("../icons/apple-touch-icon.png");
+
+/// An icon for the browser, without a login: the login page shows it too.
+fn icon(content_type: &'static str, body: &'static [u8]) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=86400"),
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
 /// A backend stream as server-sent events, only for a logged-in user.
 fn session_stream<T: serde::Serialize + Send + 'static>(
     backend: &SharedBackend,
@@ -350,6 +371,14 @@ where
             get(move |headers: HeaderMap| async move {
                 session_stream(&output_backend, &headers, |b| b.strata_output())
             }),
+        )
+        .route(
+            "/admin/favicon.svg",
+            get(|| async { icon("image/svg+xml", FAVICON.as_bytes()) }),
+        )
+        .route(
+            "/admin/apple-touch-icon.png",
+            get(|| async { icon("image/png", TOUCH_ICON) }),
         )
         .route(
             "/admin/history.csv",

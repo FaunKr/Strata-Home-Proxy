@@ -35,7 +35,7 @@ async fn with_saved_list(name: &str, tweak: impl FnOnce(&mut strata_nas_proxy::C
     let resp = get(&s.url, &s.key, "/v1/models").await;
     assert_eq!(resp.status(), 200);
     assert!(resp.headers().get(STATUS_HEADER).is_none());
-    saved_on_disk(&s, "Qwen3-30B-A3B").await;
+    list_saved_on_disk(&s, "Qwen3-30B-A3B").await;
     s.pc.awake.store(false, Ordering::SeqCst);
     let state = restarted(&s);
     state.spawn_idle_loop();
@@ -44,16 +44,6 @@ async fn with_saved_list(name: &str, tweak: impl FnOnce(&mut strata_nas_proxy::C
         state,
         ..s
     }
-}
-
-/// Waits until the copy in `DATA_DIR` lists `model`; a restarted proxy
-/// reads it from there.
-async fn saved_on_disk(s: &Setup, model: &str) {
-    let file = s.state.cfg().data_dir.clone().unwrap().join("models.json");
-    eventually(&format!("{model} saved"), || {
-        std::fs::read_to_string(&file).is_ok_and(|text| text.contains(model))
-    })
-    .await;
 }
 
 fn listed(body: &str) -> Value {
@@ -133,7 +123,7 @@ async fn an_awake_strata_answers_the_list_itself() {
     assert_eq!(listed(&resp.text().await.unwrap()), "coder-IQ1_M");
 
     // The new list is the copy now.
-    saved_on_disk(&s, "coder-IQ1_M").await;
+    list_saved_on_disk(&s, "coder-IQ1_M").await;
     s.pc.starting.store(true, Ordering::SeqCst);
     let state = restarted(&s);
     let url = serve_proxy(state).await;
@@ -185,7 +175,7 @@ async fn a_wake_up_saves_the_list_without_any_app_asking() {
     let s = setup(false, |c| c.data_dir = Some(dir)).await;
     let resp = post_json(&s, "/v1/chat/completions", json!({})).await;
     assert_eq!(resp.status(), 200);
-    saved_on_disk(&s, "Qwen3-30B-A3B").await;
+    list_saved_on_disk(&s, "Qwen3-30B-A3B").await;
     assert_eq!(s.pc.models_requests.load(Ordering::SeqCst), 1);
 
     s.pc.awake.store(false, Ordering::SeqCst);

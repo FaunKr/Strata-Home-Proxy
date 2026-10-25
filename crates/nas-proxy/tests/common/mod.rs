@@ -1020,6 +1020,18 @@ pub fn data_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
+/// Waits until the saved list of models in `DATA_DIR` holds `text`. The
+/// proxy writes it on the blocking pool after answering, and a proxy
+/// `restarted` reads it from disk: a test that restarts right after a list
+/// came back races the write without this.
+pub async fn list_saved_on_disk(s: &Setup, text: &str) {
+    let file = s.state.cfg().data_dir.clone().unwrap().join("models.json");
+    eventually(&format!("{text} saved"), || {
+        std::fs::read_to_string(&file).is_ok_and(|saved| saved.contains(text))
+    })
+    .await;
+}
+
 /// The proxy of `s` started again with the same config and `DATA_DIR`, in
 /// front of the same simulated PC; `serve_proxy` puts it on the net.
 pub fn restarted(s: &Setup) -> Arc<AppState> {

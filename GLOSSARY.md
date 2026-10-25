@@ -158,7 +158,7 @@ What the proxy keeps of events and power plug readings over time; the web UI sho
 _Avoid_: log, Verlauf
 
 **Request log**:
-The proxy's list of the last 1000 requests through it that made the model work, with key, model, type, tokens, speeds and outcome, never their text; the web UI shows it live in the Strata area (tab *Requests*). Not an event, and not Strata's own request monitor.
+The proxy's list of the last 1000 requests through it that made the model work, or would have and were refused, with key, model, type, tokens, speeds and outcome, never their text; requests on their way show as *waking PC* or *running*; the web UI shows it live in the Strata area (tab *Requests*). Not an event, and not Strata's own request monitor.
 _Avoid_: access log, request history
 
 **Strata key**:

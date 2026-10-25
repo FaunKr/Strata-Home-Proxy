@@ -605,8 +605,11 @@ input[type="date"] {
 .request-table .num { text-align: right; }
 .request-table td { vertical-align: top; }
 .request-table td.model { white-space: normal; overflow-wrap: anywhere; min-width: 90px; max-width: 150px; }
+.request-table td.status { white-space: normal; min-width: 70px; }
 .request-table .sub { display: block; color: var(--muted); font-size: 0.75rem; }
 .request-table td.bad { color: var(--bad); }
+.request-table .sub.bad { color: var(--bad); }
+.request-table .narrow { display: none; }
 .request-table tr.request-more { display: none; }
 .request-more dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; margin: 0; }
 .request-more dt { color: var(--muted); }
@@ -614,6 +617,7 @@ input[type="date"] {
 
 @media (max-width: 760px) {
   .request-table .wide { display: none; }
+  .request-table .sub.narrow { display: block; }
   .request-table td.type { white-space: normal; }
   .request-table tbody.request > tr:first-child { cursor: pointer; }
   .request-table tbody.request.open tr.request-more { display: table-row; }

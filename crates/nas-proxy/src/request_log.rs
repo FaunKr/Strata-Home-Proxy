@@ -1,5 +1,5 @@
 //! The request log: the last requests through the proxy that made the model
-//! work, with numbers and labels only (`request_meter`). Finished rows live
+//! work, or would have and were refused, with numbers and labels only (`request_meter`). Finished rows live
 //! in the history's database (docs/adr/0003), trimmed to the newest
 //! `LIMIT`, so they survive a restart; running rows live in memory. The web
 //! UI follows both live.
@@ -176,32 +176,35 @@ pub fn watch(state: &Arc<AppState>) -> BoxStream<'static, RequestLogMessage> {
     // Subscribed before reading, so no row falls between; one sent twice
     // only takes its own place again.
     let rx = state.requests.changes.subscribe();
-    let first = futures_util::stream::once(async move {
-        let finished = state.requests.rows().await;
-        let running = state.requests.running.lock().unwrap().clone();
-        // A row that finished while the log was read is in both.
-        let mut rows: Vec<RequestRow> = running
-            .into_values()
-            .rev()
-            .filter(|r| !finished.iter().any(|f| f.id == r.id))
-            .collect();
-        rows.extend(finished);
-        rows.iter_mut().for_each(with_time);
-        RequestLogMessage::All { rows }
-    });
-    let changes = futures_util::stream::unfold(rx, |mut rx| async move {
-        loop {
-            match rx.recv().await {
-                Ok(mut row) => {
-                    with_time(&mut row);
-                    return Some((RequestLogMessage::Row { row: Box::new(row) }, rx));
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return None,
+    let first = futures_util::stream::once(whole(Arc::clone(&state)));
+    let changes = futures_util::stream::unfold((rx, state), |(mut rx, state)| async move {
+        let message = match rx.recv().await {
+            Ok(mut row) => {
+                with_time(&mut row);
+                RequestLogMessage::Row { row: Box::new(row) }
             }
-        }
+            // Missed changes may have finished a running row: all again.
+            Err(broadcast::error::RecvError::Lagged(_)) => whole(Arc::clone(&state)).await,
+            Err(broadcast::error::RecvError::Closed) => return None,
+        };
+        Some((message, (rx, state)))
     });
     first.chain(changes).boxed()
+}
+
+/// The whole log: running rows, then the finished ones.
+async fn whole(state: Arc<AppState>) -> RequestLogMessage {
+    let finished = state.requests.rows().await;
+    let running = state.requests.running.lock().unwrap().clone();
+    // A row that finished while the log was read is in both.
+    let mut rows: Vec<RequestRow> = running
+        .into_values()
+        .rev()
+        .filter(|r| !finished.iter().any(|f| f.id == r.id))
+        .collect();
+    rows.extend(finished);
+    rows.iter_mut().for_each(with_time);
+    RequestLogMessage::All { rows }
 }
 
 fn with_time(row: &mut RequestRow) {
@@ -243,6 +246,9 @@ impl Recording {
     fn show(&self, state: RequestState) {
         let mut row = self.row();
         row.state = state;
+        if let Some(sent) = self.sent {
+            row.wait_ms = self.wait(sent);
+        }
         self.state.requests.show(row);
     }
 
@@ -340,8 +346,7 @@ impl Recording {
         }
         self.done = true;
         let mut row = self.row();
-        let sent = self.sent.unwrap_or_else(Instant::now);
-        row.wait_ms = sent.saturating_duration_since(self.arrived).as_millis() as u64;
+        row.wait_ms = self.wait(self.sent.unwrap_or_else(Instant::now));
         row.duration_ms = self.arrived.elapsed().as_millis() as u64;
         row.outcome = match (outcome, self.status) {
             (RequestOutcome::Done, Some(status)) if !(200..300).contains(&status) => {
@@ -357,6 +362,11 @@ impl Recording {
             row = row.without_counts();
         }
         self.state.requests.finish(row);
+    }
+
+    /// From arrival until `sent` to Strata.
+    fn wait(&self, sent: Instant) -> u64 {
+        sent.saturating_duration_since(self.arrived).as_millis() as u64
     }
 
     /// What the meter knows, with the request's own fields.

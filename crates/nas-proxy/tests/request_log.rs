@@ -474,7 +474,7 @@ async fn an_images_request_makes_a_row_of_its_kind() {
 #[tokio::test]
 async fn a_request_shows_as_running_until_it_finishes() {
     let s = setup(true, |_| {}).await;
-    s.pc.set_strata_stream(CHAT, tool_call_stream(), Duration::from_millis(500));
+    s.pc.set_strata_stream(CHAT, tool_call_stream(), Duration::from_secs(3));
     let b = logged_in(&s.url).await;
     let mut live = Live::open_at(&b, STREAM).await;
     live.until("all", |m| m["kind"] == "all").await;
@@ -547,4 +547,43 @@ async fn a_request_over_the_size_limit_is_logged_as_refused() {
     );
     assert_eq!(row["api"], "chat", "{row}");
     assert_eq!(row["key"], "Test", "{row}");
+}
+
+#[tokio::test]
+async fn a_streamed_request_while_the_pc_sleeps_waits_for_the_wake_up() {
+    let s = setup(false, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("all", |m| m["kind"] == "all").await;
+
+    let text = post_json(&s, CHAT, chat(true)).await.text().await.unwrap();
+    assert!(text.contains("Hallo"), "{text}");
+    let waking = live.until("waking row", |m| m["kind"] == "row").await["row"].clone();
+    assert_eq!(waking["state"], "waking_pc", "{waking}");
+    let row = next_row(&mut live).await;
+    assert_eq!(row["id"], waking["id"], "{row}");
+    assert_eq!(row["outcome"]["kind"], "done", "{row}");
+    assert!(row["wait_ms"].as_u64().unwrap() > 0, "{row}");
+}
+
+#[tokio::test]
+async fn a_request_without_strata_set_up_is_logged_as_refused() {
+    let s = setup(true, |c| c.strata_url = None).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("all", |m| m["kind"] == "all").await;
+
+    assert_eq!(
+        post_json(&s, MESSAGES, json!({"model": "x"}))
+            .await
+            .status(),
+        503
+    );
+    let row = next_row(&mut live).await;
+    assert_eq!(
+        row["outcome"],
+        json!({"kind": "refused", "reason": "not_set_up"}),
+        "{row}"
+    );
+    assert_eq!(row["api"], "messages", "{row}");
 }

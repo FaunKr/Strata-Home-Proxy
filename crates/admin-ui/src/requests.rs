@@ -122,7 +122,7 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
         ("Prefill", speed(row.prefill_tok_s())),
         ("First token", millis(row.first_token_ms)),
         ("Duration", duration(&row)),
-        ("Wait", millis(Some(row.wait_ms))),
+        ("Wait", wait(&row)),
         ("Status", status_text(&row)),
     ];
     let unusual = !is_done(&row);
@@ -157,7 +157,7 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
                 <td class="num">{rate(row.generation_tok_s())}</td>
                 <td class="wide num">{millis(row.first_token_ms)}</td>
                 <td class="wide num">{duration(&row)}</td>
-                <td class="wide num">{millis(Some(row.wait_ms))}</td>
+                <td class="wide num">{wait(&row)}</td>
                 <td class="wide status" class:bad=is_bad(&row)>
                     {status_text(&row)}
                 </td>
@@ -296,6 +296,14 @@ fn duration(row: &RequestRow) -> String {
     }
 }
 
+/// None while the request waits for the PC.
+fn wait(row: &RequestRow) -> String {
+    match row.state {
+        RequestState::WakingPc => "–".into(),
+        _ => millis(Some(row.wait_ms)),
+    }
+}
+
 /// The state of a request on its way, else its outcome.
 fn status_text(row: &RequestRow) -> String {
     match row.state {
@@ -367,6 +375,7 @@ mod tests {
         let waking = row(RequestState::WakingPc, RequestOutcome::Done);
         assert_eq!(status_text(&waking), "waking PC");
         assert_eq!(duration(&waking), "–");
+        assert_eq!(wait(&waking), "–");
         assert!(!is_done(&waking) && !is_bad(&waking));
         let running = row(RequestState::Running, RequestOutcome::Done);
         assert_eq!(status_text(&running), "running");

@@ -561,10 +561,11 @@ async fn wake_and_pass_on(
     tx: mpsc::Sender<Bytes>,
     rec: Option<Recording>,
 ) {
-    // A client that hangs up ends the pings, not the wake-up.
+    // A client that hangs up ends the pings and its row, not the wake-up.
     let wake = wait_and_wake(&st, held);
     tokio::pin!(wake);
     if tx.send(flavor.ping()).await.is_err() {
+        drop(rec);
         let _ = wake.await;
         return;
     }
@@ -573,6 +574,7 @@ async fn wake_and_pass_on(
             r = &mut wake => break r,
             _ = tokio::time::sleep(st.cfg().ping_interval) => {
                 if tx.send(flavor.ping()).await.is_err() {
+                    drop(rec);
                     let _ = wake.await;
                     return;
                 }

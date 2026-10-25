@@ -1453,6 +1453,17 @@ pub fn history_csv(view: &HistoryView) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_stored_request_row_without_a_state_is_finished() {
+        // As the request log stored rows before running rows came.
+        let row: RequestRow = serde_json::from_str(
+            r#"{"id":3,"at":1761426000,"key":"Test","model":null,"api":"chat","start":"prompt","answer":"text","prompt_tokens":5,"cached_tokens":0,"output_tokens":2,"prefill_tokens":null,"prefill_ms":null,"generation_tokens":null,"generation_ms":null,"first_token_ms":null,"wait_ms":0,"duration_ms":40,"outcome":{"kind":"done"}}"#,
+        )
+        .unwrap();
+        assert_eq!(row.state, RequestState::Finished);
+        assert_eq!(row.thinking_tokens, None);
+    }
+
     fn bar(
         date: &str,
         awake: f64,

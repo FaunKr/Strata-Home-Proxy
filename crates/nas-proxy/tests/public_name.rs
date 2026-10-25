@@ -207,7 +207,7 @@ async fn a_key_set_to_hide_sees_the_public_name_without_the_switch() {
 }
 
 #[tokio::test]
-async fn the_saved_list_is_masked_while_the_pc_sleeps() {
+async fn the_saved_list_has_the_public_name_while_the_pc_sleeps() {
     let s = setup(true, |c| c.data_dir = Some(data_dir("public-name-asleep"))).await;
     s.pc.list_alias_and_image.store(true, Ordering::SeqCst);
     let list: Value = get(&s, &s.key, "/v1/models").await.json().await.unwrap();
@@ -342,7 +342,7 @@ async fn a_key_is_created_with_its_model_name_setting_and_changed_later() {
 }
 
 #[tokio::test]
-async fn a_key_without_a_choice_follows_the_switch() {
+async fn a_key_created_without_a_choice_follows_the_switch() {
     let s = setup(true, |_| {}).await;
     let mut b = logged_in(&s.url).await;
     let created: Value = b
@@ -352,6 +352,18 @@ async fn a_key_without_a_choice_follows_the_switch() {
         .await
         .unwrap();
     assert_eq!(created["info"]["model_name"], "global");
+    let laptop = created["key"].as_str().unwrap().to_string();
+    let list: Value = get(&s, &laptop, "/v1/models").await.json().await.unwrap();
+    assert_eq!(ids(&list), [REAL]);
+    s.state.settings.set("HIDE_MODEL", "true").unwrap();
+    let list: Value = get(&s, &laptop, "/v1/models").await.json().await.unwrap();
+    assert_eq!(ids(&list), ["strata"]);
+}
+
+#[tokio::test]
+async fn setting_the_model_name_of_an_unknown_key_is_refused() {
+    let s = setup(true, |_| {}).await;
+    let mut b = logged_in(&s.url).await;
     let resp = b
         .call(
             "set-api-key-model-name",
@@ -373,11 +385,10 @@ async fn a_key_file_from_before_the_setting_follows_the_switch() {
     let file = json!({"keys": [{"name": "Old", "prefix": "shp_old",
         "hash": sha256_hex("shp_old"), "created": 1}]});
     std::fs::write(dir.join("api-keys.json"), file.to_string()).unwrap();
-    let s = setup(true, |c| {
-        c.data_dir = Some(dir);
-        c.hide_model = true;
-    })
-    .await;
+    let s = setup(true, |c| c.data_dir = Some(dir)).await;
+    let list: Value = get(&s, "shp_old", "/v1/models").await.json().await.unwrap();
+    assert_eq!(ids(&list), [REAL]);
+    s.state.settings.set("HIDE_MODEL", "true").unwrap();
     let list: Value = get(&s, "shp_old", "/v1/models").await.json().await.unwrap();
     assert_eq!(ids(&list), ["strata"]);
 }

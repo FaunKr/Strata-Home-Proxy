@@ -245,7 +245,7 @@ impl Config {
             "SHELLY_URL" => self.shelly_url = text.map(|u| plug_url(&u)).transpose()?,
             "CODE_BENCH_URL" => self.code_bench_url = text.map(|u| url(&u)).transpose()?,
             "HIDE_MODEL" => self.hide_model = switch(raw)?,
-            "PUBLIC_MODEL_NAME" => self.public_model_name = model_name(raw)?,
+            "PUBLIC_MODEL_NAME" => self.public_model_name = public_model_name(raw)?,
             "UPDATE_SUMMARY_TIMEOUT_SECS" => {
                 self.update_summary_timeout = text.map(|t| limit(&t)).transpose()?
             }
@@ -380,7 +380,7 @@ fn switch(raw: &str) -> Result<bool> {
 const MAX_MODEL_NAME_CHARS: usize = 64;
 
 /// A name apps can put into `model`: no spaces, no control characters.
-fn model_name(raw: &str) -> Result<String> {
+fn public_model_name(raw: &str) -> Result<String> {
     if raw.chars().count() > MAX_MODEL_NAME_CHARS {
         bail!("must be at most {MAX_MODEL_NAME_CHARS} characters");
     }

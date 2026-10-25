@@ -152,7 +152,7 @@ const MODEL_NAMES: [(KeyModelName, &str, &str); 3] = [
     (
         KeyModelName::Global,
         "global",
-        "Model name as set in Strata",
+        "Model name as in Strata → Connection",
     ),
     (KeyModelName::Hide, "hide", "Hide model name"),
     (KeyModelName::Show, "show", "Show model name"),

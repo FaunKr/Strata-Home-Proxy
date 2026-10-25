@@ -94,32 +94,6 @@ impl PublicName {
         }
     }
 
-    /// Strata's list of models as an app of this key sees it: the chat
-    /// model and its aliases become one entry with the public name, the
-    /// first of them with `aliases` and `alias_of` taken out. The image
-    /// model, the only entry whose output is pictures, stays as it is,
-    /// after it. A body that is not such a list passes unchanged.
-    pub fn list(&self, body: &str) -> String {
-        let Ok(Value::Object(mut map)) = serde_json::from_str::<Value>(body) else {
-            return body.to_string();
-        };
-        let Some(Value::Array(data)) = map.get_mut("data") else {
-            return body.to_string();
-        };
-        let (images, chat): (Vec<Value>, Vec<Value>) =
-            std::mem::take(data).into_iter().partition(makes_pictures);
-        let mut out = Vec::with_capacity(images.len() + 1);
-        if let Some(Value::Object(mut first)) = chat.into_iter().next() {
-            first.insert("id".into(), Value::from(self.public.as_str()));
-            first.remove("aliases");
-            first.remove("alias_of");
-            out.push(Value::Object(first));
-        }
-        out.extend(images);
-        *data = out;
-        serde_json::to_string(&map).expect("JSON serializes")
-    }
-
     /// An event stream with the public name in each event's `data`. Bytes
     /// are held back only up to the end of the event they belong to, so
     /// every chunk passed on ends between two events.
@@ -153,6 +127,33 @@ impl PublicName {
         }
         out
     }
+}
+
+/// Strata's list of models as an app of a key that hides the model sees
+/// it. Strata lists its model, the model's aliases and the image model:
+/// every entry whose output is not pictures becomes one entry with the
+/// public name, the first of them with `aliases` and `alias_of` taken out.
+/// The image model stays as it is, after it. A body that is not such a
+/// list passes unchanged.
+pub fn list(public: &str, body: &str) -> String {
+    let Ok(Value::Object(mut map)) = serde_json::from_str::<Value>(body) else {
+        return body.to_string();
+    };
+    let Some(Value::Array(data)) = map.get_mut("data") else {
+        return body.to_string();
+    };
+    let (images, chat): (Vec<Value>, Vec<Value>) =
+        std::mem::take(data).into_iter().partition(makes_pictures);
+    let mut out = Vec::with_capacity(images.len() + 1);
+    if let Some(Value::Object(mut first)) = chat.into_iter().next() {
+        first.insert("id".into(), Value::from(public));
+        first.remove("aliases");
+        first.remove("alias_of");
+        out.push(Value::Object(first));
+    }
+    out.extend(images);
+    *data = out;
+    serde_json::to_string(&map).expect("JSON serializes")
 }
 
 fn makes_pictures(entry: &Value) -> bool {
@@ -330,7 +331,7 @@ mod tests {
              "architecture": {"input_modalities": ["text"], "output_modalities": ["image"]}}
         ]})
         .to_string();
-        let out = hiding(None).list(&body);
+        let out = list("strata", &body);
         assert_eq!(
             json(out.as_bytes()),
             json!({"object": "list", "data": [
@@ -350,7 +351,7 @@ mod tests {
         ]})
         .to_string();
         assert_eq!(
-            json(hiding(None).list(&body).as_bytes()),
+            json(list("strata", &body).as_bytes()),
             json(body.as_bytes())
         );
     }

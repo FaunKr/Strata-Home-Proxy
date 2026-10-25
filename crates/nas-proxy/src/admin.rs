@@ -281,7 +281,7 @@ impl Backend for UiBackend {
         let (key, info) = self
             .0
             .api_keys
-            .create(name, from_ui(model_name))
+            .create(name, model_name_from_ui(model_name))
             .map_err(|e| e.to_string())?;
         self.0
             .events
@@ -301,7 +301,7 @@ impl Backend for UiBackend {
     ) -> Result<(), String> {
         self.0
             .api_keys
-            .set_model_name(name, prefix, from_ui(model_name))
+            .set_model_name(name, prefix, model_name_from_ui(model_name))
             .map_err(|e| e.to_string())
     }
 
@@ -398,15 +398,19 @@ fn key_info(k: KeyInfo) -> ApiKeyInfo {
         last_used: k.last_used,
         created_text: clock::local_text(k.created),
         last_used_text: k.last_used.map(clock::local_text),
-        model_name: match k.model_name {
-            ModelName::Global => KeyModelName::Global,
-            ModelName::Hide => KeyModelName::Hide,
-            ModelName::Show => KeyModelName::Show,
-        },
+        model_name: model_name_for_ui(k.model_name),
     }
 }
 
-fn from_ui(model_name: KeyModelName) -> ModelName {
+fn model_name_for_ui(model_name: ModelName) -> KeyModelName {
+    match model_name {
+        ModelName::Global => KeyModelName::Global,
+        ModelName::Hide => KeyModelName::Hide,
+        ModelName::Show => KeyModelName::Show,
+    }
+}
+
+fn model_name_from_ui(model_name: KeyModelName) -> ModelName {
     match model_name {
         KeyModelName::Global => ModelName::Global,
         KeyModelName::Hide => ModelName::Hide,

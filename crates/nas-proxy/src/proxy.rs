@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use crate::{
     events::EventKind,
     models::{self, SavedList},
-    public_name::PublicName,
+    public_name::{self, PublicName},
     state::{ActivityGuard, AppState, Readiness, WakeError},
 };
 
@@ -227,6 +227,7 @@ fn unavailable(flavor: Flavor, err: &WakeError) -> Response {
     )
 }
 
+#[derive(Clone)]
 struct Incoming {
     method: reqwest::Method,
     path_and_query: String,
@@ -237,21 +238,18 @@ struct Incoming {
 }
 
 impl Incoming {
-    /// How the answer names the model, with the real id Strata's latest
-    /// `/health` named; `None` when the key shows the real names.
-    fn public_name(&self, st: &AppState) -> Option<PublicName> {
-        self.public.clone().map(|public| PublicName {
+    /// The request as Strata gets it, and how its answer names the model:
+    /// when the key hides the model, `model` holds the real id Strata's
+    /// latest `/health` named. `None` when the key shows the real names.
+    fn renamed(mut self, st: &AppState) -> (Self, Option<PublicName>) {
+        let name = self.public.clone().map(|public| PublicName {
             public,
             real: st.running_model(),
-        })
-    }
-
-    /// The body Strata gets: with the running model's real id in `model`
-    /// when the key hides the model.
-    fn rename(&mut self, name: Option<&PublicName>) {
-        if let Some(name) = name {
+        });
+        if let Some(name) = &name {
             self.body = name.request(&self.path_and_query, std::mem::take(&mut self.body));
         }
+        (self, name)
     }
 }
 
@@ -351,11 +349,10 @@ fn upstream_failed(flavor: Flavor, e: &str) -> Response {
 async fn forward(
     st: Arc<AppState>,
     guard: ActivityGuard,
-    mut req: Incoming,
+    req: Incoming,
     flavor: Flavor,
 ) -> Response {
-    let name = req.public_name(&st);
-    req.rename(name.as_ref());
+    let (req, name) = req.renamed(&st);
     let mut given_up = Box::pin(guard.given_up(Instant::now()));
     let sent = tokio::select! {
         sent = send_upstream(&st, &req) => sent,
@@ -384,7 +381,7 @@ async fn forward(
                 .and_then(|v| v.to_str().ok());
             st.models.offer(content_type, &body);
             match (&name, std::str::from_utf8(&body)) {
-                (Some(name), Ok(text)) => Bytes::from(name.list(text)),
+                (Some(name), Ok(text)) => Bytes::from(public_name::list(&name.public, text)),
                 _ => body,
             }
         } else {
@@ -553,15 +550,7 @@ fn renamed_stream(
 
 /// Sends the request to Strata and passes its event stream on.
 async fn pass_on(st: &AppState, req: &Incoming, flavor: Flavor, tx: &mpsc::Sender<Bytes>) {
-    let name = req.public_name(st);
-    let mut req = Incoming {
-        method: req.method.clone(),
-        path_and_query: req.path_and_query.clone(),
-        headers: req.headers.clone(),
-        body: req.body.clone(),
-        public: req.public.clone(),
-    };
-    req.rename(name.as_ref());
+    let (req, name) = req.clone().renamed(st);
     let req = &req;
     let resp = match send_upstream(st, req).await {
         Ok(r) => r,
@@ -618,7 +607,7 @@ async fn wait_and_wake(st: &Arc<AppState>, held: bool) -> Result<(), WakeError> 
 fn saved_list(list: SavedList, public: Option<String>) -> Response {
     let list = match public {
         Some(public) => SavedList {
-            body: PublicName { public, real: None }.list(&list.body),
+            body: public_name::list(&public, &list.body),
             ..list
         },
         None => list,

@@ -97,8 +97,10 @@ pub struct AppState {
     pub code_bench: crate::code_bench::CodeBench,
     /// Strata's last list of models, answered while Strata is not ready.
     pub models: crate::models::SavedModels,
-    /// The model Strata's latest `/health` named: the real id requests of a
-    /// key that hides the model are sent with.
+    /// The model Strata's latest `/health` answer named: the real id
+    /// requests of a key that hides the model are sent with. Strata serves
+    /// any name with the model it runs, so one that is a moment old after a
+    /// model switch still reaches the running model.
     running_model: Mutex<Option<String>>,
     in_flight: AtomicUsize,
     /// The PC service last reported a tune. The tuner's engine may answer on
@@ -398,9 +400,7 @@ impl AppState {
         };
         let health = match strata.health().await {
             Ok(h) => {
-                if h.model.is_some() {
-                    *self.running_model.lock().unwrap() = h.model;
-                }
+                *self.running_model.lock().unwrap() = h.model;
                 Health::Up { loaded: h.loaded }
             }
             Err(_) => Health::Down,

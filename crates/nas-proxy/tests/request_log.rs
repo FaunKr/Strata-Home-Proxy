@@ -316,3 +316,148 @@ async fn a_request_that_finishes_last_is_kept_over_a_newer_one() {
     // The streamed one came first and finished last.
     assert_eq!(rows[0]["answer"], "tool_call", "{rows:?}");
 }
+
+const MESSAGES: &str = "/v1/messages";
+const RESPONSES: &str = "/v1/responses";
+
+/// An event as Strata's `anthropic_events` (`serve/server.py`) or its
+/// Responses `Assembler` (`serve/responses.py`) writes it.
+fn named_event(data: &str) -> String {
+    let value: Value = serde_json::from_str(data).unwrap();
+    format!(
+        "event: {}\ndata: {data}\n\n",
+        value["type"].as_str().unwrap()
+    )
+}
+
+/// A messages answer that thinks, then calls a tool. The first piece ends
+/// with the first token, the rest comes after the pause.
+fn messages_stream() -> Vec<String> {
+    vec![
+        [
+            r#"{"type": "message_start", "message": {"id": "msg_5c1f0e2a9b7d4c3e8f6a1b2c", "type": "message", "role": "assistant", "model": "Qwen3.6-27B", "content": [], "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 5200, "output_tokens": 0}}}"#,
+            r#"{"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}}"#,
+            r#"{"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Read a."}}"#,
+        ]
+        .map(named_event)
+        .concat(),
+        [
+            r#"{"type": "content_block_stop", "index": 0}"#,
+            r#"{"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "call_1", "name": "read", "input": {}}}"#,
+            r#"{"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"path\": \"a\"}"}}"#,
+            r#"{"type": "content_block_stop", "index": 1}"#,
+            r#"{"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, "usage": {"input_tokens": 1, "cache_creation_input_tokens": 399, "cache_read_input_tokens": 4800, "output_tokens": 41}}"#,
+            r#"{"type": "message_stop"}"#,
+        ]
+        .map(named_event)
+        .concat(),
+    ]
+}
+
+/// A Responses answer that thinks, then writes; Strata counts its thinking.
+fn responses_stream() -> Vec<String> {
+    let response = |status: &str, usage: &str| {
+        format!(
+            r#"{{"id": "resp_9f2e4d6c8b0a1e3c5d7f9a2b", "object": "response", "created_at": 1761426000, "status": "{status}", "background": false, "error": null, "incomplete_details": null, "model": "Qwen3.6-27B", "output": [], "usage": {usage}}}"#
+        )
+    };
+    let created = response("in_progress", "null");
+    let done = response(
+        "completed",
+        r#"{"input_tokens": 5200, "input_tokens_details": {"cached_tokens": 4800}, "output_tokens": 41, "output_tokens_details": {"reasoning_tokens": 12}, "total_tokens": 5241}"#,
+    );
+    vec![
+        [
+            format!(r#"{{"type": "response.created", "sequence_number": 0, "response": {created}}}"#),
+            r#"{"type": "response.output_item.added", "sequence_number": 1, "output_index": 0, "item": {"id": "rs_1", "type": "reasoning", "status": "in_progress", "summary": [], "content": [{"type": "reasoning_text", "text": ""}]}}"#.into(),
+            r#"{"type": "response.reasoning_text.delta", "sequence_number": 2, "item_id": "rs_1", "output_index": 0, "content_index": 0, "delta": "Hmm."}"#.into(),
+        ]
+        .map(|e| named_event(&e))
+        .concat(),
+        [
+            r#"{"type": "response.output_item.added", "sequence_number": 4, "output_index": 1, "item": {"id": "msg_1", "type": "message", "status": "in_progress", "role": "assistant", "content": []}}"#.into(),
+            r#"{"type": "response.output_text.delta", "sequence_number": 6, "item_id": "msg_1", "output_index": 1, "content_index": 0, "delta": "Hi", "logprobs": []}"#.into(),
+            format!(r#"{{"type": "response.completed", "sequence_number": 9, "response": {done}}}"#),
+        ]
+        .map(|e| named_event(&e))
+        .concat(),
+    ]
+}
+
+#[tokio::test]
+async fn a_streamed_messages_request_makes_a_row_with_measured_speeds_and_estimated_thinking() {
+    let s = setup(true, |_| {}).await;
+    s.pc.set_strata_stream(MESSAGES, messages_stream(), Duration::from_millis(100));
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("all", |m| m["kind"] == "all").await;
+
+    let body = json!({"model": "any", "stream": true, "max_tokens": 100,
+                      "messages": [{"role": "user", "content": "secret question"}]});
+    let resp = post_json(&s, MESSAGES, body).await;
+    assert_eq!(resp.status(), 200);
+    assert!(resp.text().await.unwrap().contains("call_1"));
+
+    let row = next_row(&mut live).await;
+    assert_eq!(row["api"], "messages", "{row}");
+    assert_eq!(row["model"], "Qwen3.6-27B", "{row}");
+    assert_eq!(row["start"], "prompt", "{row}");
+    assert_eq!(row["answer"], "tool_call", "{row}");
+    assert_eq!(row["prompt_tokens"], 5200, "{row}");
+    assert_eq!(row["cached_tokens"], 4800, "{row}");
+    assert_eq!(row["output_tokens"], 41, "{row}");
+    // 7 of 20 characters were thinking.
+    assert_eq!(row["thinking_tokens"], 14, "{row}");
+    assert_eq!(row["thinking_estimated"], true, "{row}");
+    // Measured by the proxy: Strata sends no timings here.
+    assert_eq!(row["prefill_tokens"], 400, "{row}");
+    assert!(row["prefill_ms"].as_f64().unwrap() > 0.0, "{row}");
+    assert_eq!(row["generation_tokens"], 40, "{row}");
+    assert!(row["generation_ms"].as_f64().unwrap() >= 100.0, "{row}");
+    assert!(row["first_token_ms"].is_u64(), "{row}");
+    assert!(!row.to_string().contains("secret"), "{row}");
+}
+
+#[tokio::test]
+async fn a_streamed_responses_request_makes_a_row_with_strata_s_thinking_count() {
+    let s = setup(true, |_| {}).await;
+    s.pc.set_strata_stream(RESPONSES, responses_stream(), Duration::from_millis(100));
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("all", |m| m["kind"] == "all").await;
+
+    let body = json!({"model": "any", "stream": true, "input": "secret question"});
+    let resp = post_json(&s, RESPONSES, body).await;
+    assert_eq!(resp.status(), 200);
+    resp.text().await.unwrap();
+
+    let row = next_row(&mut live).await;
+    assert_eq!(row["api"], "responses", "{row}");
+    assert_eq!(row["model"], "Qwen3.6-27B", "{row}");
+    assert_eq!(row["start"], "prompt", "{row}");
+    assert_eq!(row["answer"], "text", "{row}");
+    assert_eq!(row["thinking_tokens"], 12, "{row}");
+    assert_eq!(row.get("thinking_estimated"), None, "{row}");
+    assert_eq!(row["prefill_tokens"], 400, "{row}");
+    assert_eq!(row["generation_tokens"], 40, "{row}");
+    assert!(row["generation_ms"].as_f64().unwrap() >= 100.0, "{row}");
+}
+
+#[tokio::test]
+async fn an_images_request_makes_a_row_of_its_kind() {
+    let s = setup(true, |_| {}).await;
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, STREAM).await;
+    live.until("all", |m| m["kind"] == "all").await;
+
+    let body = json!({"model": "Qwen-Image-2.1-Turbo", "prompt": "secret cat"});
+    let resp = post_json(&s, "/v1/images/generations", body).await;
+    assert_eq!(resp.status(), 200);
+    resp.bytes().await.unwrap();
+
+    let row = next_row(&mut live).await;
+    assert_eq!(row["api"], "images", "{row}");
+    assert_eq!(row["model"], "Qwen-Image-2.1-Turbo", "{row}");
+    assert_eq!(row["answer"], Value::Null, "{row}");
+    assert_eq!(row["outcome"]["kind"], "done", "{row}");
+}

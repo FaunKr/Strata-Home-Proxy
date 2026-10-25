@@ -416,6 +416,9 @@ pub async fn messages(
         .lock()
         .unwrap()
         .push(("/v1/messages".into(), body.clone()));
+    if let Some(answer) = pc.set_answer("/v1/messages", body["stream"] == true) {
+        return answer;
+    }
     let pause = Duration::from_millis(body["pause_ms"].as_u64().unwrap_or(0));
     if body["stream"].as_bool() == Some(true) {
         return sse(
@@ -490,7 +493,10 @@ pub async fn responses(State(pc): State<Pc>, Json(body): Json<Value>) -> Respons
     pc.strata_bodies
         .lock()
         .unwrap()
-        .push(("/v1/responses".into(), body));
+        .push(("/v1/responses".into(), body.clone()));
+    if let Some(answer) = pc.set_answer("/v1/responses", body["stream"] == true) {
+        return answer;
+    }
     sse(
         vec![
             "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"model\":\"Qwen3-30B-A3B\"}}\n\n".into(),

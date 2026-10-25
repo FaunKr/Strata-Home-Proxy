@@ -77,6 +77,7 @@ fn RequestTable(rows: RwSignal<Vec<RequestRow>>, open: RwSignal<Vec<u64>>) -> im
                         <th scope="col" class="wide">"API"</th>
                         <th scope="col">"Type"</th>
                         <th scope="col" class="wide num">"Prompt"</th>
+                        <th scope="col" class="wide num">"Thinking"</th>
                         <th scope="col" class="num">"Output"</th>
                         <th scope="col" class="wide num">"Prefill tok/s"</th>
                         <th scope="col" class="num">"Gen. tok/s"</th>
@@ -114,6 +115,7 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
         ("Model", model.clone()),
         ("API", api_label(row.api).to_string()),
         ("Prompt", prompt_text(&row)),
+        ("Thinking", thinking_text(&row)),
         ("Prefill", speed(row.prefill_tok_s())),
         ("First token", millis(row.first_token_ms)),
         ("Duration", millis(Some(row.duration_ms))),
@@ -135,6 +137,7 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
                         .filter(|&c| c > 0)
                         .map(|c| view! { <span class="sub">{format!("{c} cached")}</span> })}
                 </td>
+                <td class="wide num">{thinking_text(&row)}</td>
                 <td class="num">{count(row.output_tokens)}</td>
                 <td class="wide num">{rate(row.prefill_tok_s())}</td>
                 <td class="num">{rate(row.generation_tok_s())}</td>
@@ -146,7 +149,7 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
                 </td>
             </tr>
             <tr class="request-more">
-                <td colspan="13">
+                <td colspan="14">
                     <dl>
                         {details
                             .into_iter()
@@ -186,11 +189,23 @@ fn apply(rows: &mut Vec<RequestRow>, message: RequestLogMessage) {
 fn api_label(api: RequestApi) -> &'static str {
     match api {
         RequestApi::Chat => "chat",
+        RequestApi::Messages => "messages",
+        RequestApi::Responses => "responses",
+        RequestApi::Completions => "completions",
+        RequestApi::Embeddings => "embeddings",
+        RequestApi::Images => "images",
     }
 }
 
-/// "prompt → tool call", or the part that is known.
+/// "prompt → tool call", or the part that is known; the kind of request
+/// for the APIs that have no turns.
 pub fn type_label(row: &RequestRow) -> String {
+    match row.api {
+        RequestApi::Completions => return "completion".into(),
+        RequestApi::Embeddings => return "embedding".into(),
+        RequestApi::Images => return "image".into(),
+        RequestApi::Chat | RequestApi::Messages | RequestApi::Responses => {}
+    }
     let start = row.start.map(|s| match s {
         RequestStart::Prompt => "prompt",
         RequestStart::ToolResult => "tool result",
@@ -211,6 +226,14 @@ fn prompt_text(row: &RequestRow) -> String {
     match (row.prompt_tokens, row.cached_tokens) {
         (Some(p), Some(c)) if c > 0 => format!("{p} ({c} cached)"),
         (p, _) => count(p),
+    }
+}
+
+/// "≈" marks the proxy's estimate.
+fn thinking_text(row: &RequestRow) -> String {
+    match row.thinking_tokens {
+        Some(n) if row.thinking_estimated => format!("≈ {n}"),
+        n => count(n),
     }
 }
 
@@ -244,5 +267,35 @@ fn outcome_text(outcome: RequestOutcome) -> String {
         RequestOutcome::NoAnswer => "no answer from Strata".into(),
         RequestOutcome::Lost => "lost".into(),
         RequestOutcome::CancelledByClient => "cancelled by client".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apis_without_turns_are_named_by_their_kind() {
+        let row = |api| RequestRow {
+            api,
+            start: Some(RequestStart::Prompt),
+            ..RequestRow::default()
+        };
+        assert_eq!(type_label(&row(RequestApi::Images)), "image");
+        assert_eq!(type_label(&row(RequestApi::Embeddings)), "embedding");
+        assert_eq!(type_label(&row(RequestApi::Completions)), "completion");
+        assert_eq!(type_label(&row(RequestApi::Messages)), "prompt");
+    }
+
+    #[test]
+    fn an_estimated_thinking_count_is_marked() {
+        let row = |thinking_tokens, thinking_estimated| RequestRow {
+            thinking_tokens,
+            thinking_estimated,
+            ..RequestRow::default()
+        };
+        assert_eq!(thinking_text(&row(Some(12), true)), "≈ 12");
+        assert_eq!(thinking_text(&row(Some(12), false)), "12");
+        assert_eq!(thinking_text(&row(None, false)), "–");
     }
 }

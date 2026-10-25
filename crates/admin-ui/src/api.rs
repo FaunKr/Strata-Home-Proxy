@@ -430,8 +430,14 @@ pub struct RequestRow {
     pub prompt_tokens: Option<u64>,
     /// The part of the prompt Strata held already.
     pub cached_tokens: Option<u64>,
+    /// The part of the output that was thinking.
+    pub thinking_tokens: Option<u64>,
+    /// `thinking_tokens` is the proxy's estimate, not Strata's count.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub thinking_estimated: bool,
     pub output_tokens: Option<u64>,
-    /// The prompt tokens Strata read, and how long it took.
+    /// The prompt tokens Strata read, and how long it took: from Strata's
+    /// `timings`, or measured by the proxy from the stream.
     pub prefill_tokens: Option<u64>,
     pub prefill_ms: Option<f64>,
     /// The tokens Strata generated, and how long it took.
@@ -488,6 +494,11 @@ fn tok_s(tokens: Option<u64>, ms: Option<f64>) -> Option<f64> {
 pub enum RequestApi {
     #[default]
     Chat,
+    Messages,
+    Responses,
+    Completions,
+    Embeddings,
+    Images,
 }
 
 /// What started a request: its last message.

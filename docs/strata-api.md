@@ -103,6 +103,17 @@ This endpoint returns llama-server names (`llamacpp:*`, `Service.prometheus`, li
 - `llamacpp:predicted_tokens_seconds` counts only finished requests and stays at 0 during a running request.
 - Every fetch resets the time window of these values, also for other readers such as Grafana.
 
+## What the proxy reads from forwarded answers
+
+The request log (`crates/nas-proxy/src/request_meter.rs`) reads every forwarded request to `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/completions`, `/v1/embeddings` and `/v1/images/generations` (also without `/v1`) and its answer as it passes through, before the public model name is put in. It keeps no text and changes no byte. Strata itself has no `/v1/completions` and no `/v1/embeddings`; a request there gets Strata's 404 and is logged as such.
+
+- **Chat** (`openai_chunks` from line 5420, `openai_collect` from line 5490): `model`; tool calls from `delta.tool_calls` / `message.tool_calls` or `finish_reason: "tool_calls"`; cut off at `finish_reason: "length"`; `usage.prompt_tokens`, `usage.completion_tokens`, `usage.prompt_tokens_details.cached_tokens`; the speeds from llama.cpp's `timings` (`prompt_n` over `prompt_ms`, `predicted_n` over `predicted_ms`, `request_timings` from line 5244) on the last chunk or the whole answer. Thinking is `reasoning_content`.
+- **Messages** (`anthropic_events` from line 5552, `anthropic_collect` from line 5622): the model from `message_start`'s `message.model`; a tool call from a `content_block_start` with a `tool_use` block or `stop_reason: "tool_use"`; cut off at `stop_reason: "max_tokens"`. `message_start` counts the whole prompt as `input_tokens`; `message_delta` has the final counts: `input_tokens` is 1, the rest of the prompt is `cache_creation_input_tokens` (read now) and `cache_read_input_tokens` (from the cache). The prompt is the three together, cached is `cache_read_input_tokens`, output is `output_tokens`. Thinking is `thinking_delta`'s `thinking`. No `timings`.
+- **Responses** (`serve/responses.py`, `Assembler` from line 468, `finish` from line 646): `response.model` from the events that carry the response; a tool call from an output item of type `function_call` or `custom_tool_call`; cut off when the response's `status` is `incomplete` (`response.incomplete`). `usage.input_tokens`, `usage.input_tokens_details.cached_tokens`, `usage.output_tokens` and `usage.output_tokens_details.reasoning_tokens`. No `timings`.
+- **Thinking tokens:** Strata counts them only on the Responses API (`reasoning_tokens`). On chat and messages the proxy estimates them from the thinking text's share of the characters the answer carried (thinking, text, tool call arguments), times the output tokens, and marks the number as estimated.
+- **Speeds without `timings`** (messages, Responses): the proxy measures from the stream. The first token is the first event with thinking, text or a tool call (not `message_start`, a role-only chunk, a block's start for thinking or text, or a keep-alive). Prefill is the uncached prompt tokens over the time from sending the request to the first token; generation is the output tokens after the first over the time from the first to the last token. A whole JSON answer, fewer than 2 output tokens or a zero span give none.
+- **Images** (`POST /v1/images/generations`): only `model`.
+
 ## Other endpoints
 
 - **`/slots`:** in the style of llama-server, with the state of each slot.

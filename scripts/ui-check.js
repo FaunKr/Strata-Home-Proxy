@@ -19,7 +19,7 @@ const expected = {
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
   '/admin/strata/connection': ['Relay through the PC service', 'Off: the proxy reaches Strata directly over the network.'],
-  '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', 'Decode 52.3 tok/s', 'BENCH.bat, not comparable', 'Compare models', 'Total: 25/33 tests', 'Total: 3 of 4 tasks', 'A later run failed', 'Broken: 1 earlier test fails now', 'Run code benchmark', 'Benchmark all models', 'swift-IQ2_XS: model did not load', 'Remove old Strata folder'],
+  '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', '52.3 tok/s', 'Not installed', 'BENCH.bat, not comparable', 'Compare models', 'Total: 25/33 tests', 'Total: 3 of 4 tasks', 'A later run failed', 'Broken: 1 earlier test fails now', 'Run code benchmark', 'Benchmark all models', 'swift-IQ2_XS: model did not load', 'Remove old Strata folder'],
 };
 // After the areas, scripts/fake-pc.js moves upstream on and holds or refuses
 // the summary, so the Version tab shows the other two summary states.
@@ -307,6 +307,34 @@ async function optimizationPrompt(page, errors, name) {
   return issue ? 1 : 0;
 }
 
+// Opens a model's earlier speed benchmark runs and the settings of one.
+// Returns the number of findings.
+async function speedHistory(page, errors, name) {
+  const wait = { timeout: 15000 };
+  errors.length = 0;
+  let issue = null;
+  try {
+    await page.goto(base + '/admin/strata/version', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    await page.getByRole('button', { name: /IQ3_XXS/ }).click(wait);
+    const earlier = page.locator('tr.bench-earlier');
+    await earlier.first().waitFor(wait);
+    await earlier.first().getByRole('button', { name: 'Settings' }).click(wait);
+    await page.getByText('Preset: coding quick (n_gpu_layers 40, threads 12)').waitFor(wait);
+    await page.getByText('Engine environment: GGML_CUDA_GRAPHS=1').waitFor(wait);
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/${name}_speed-history.jpg`, type: 'jpeg', quality: 60, fullPage: true });
+    }
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    if (overflow > 0) throw new Error(`scrolls sideways by ${overflow}px`);
+  } catch (e) {
+    issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
+  }
+  if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+  console.log(`${issue ? 'FAIL' : 'ok  '} ${name} speed history${issue ? '\n     ' + issue : ''}`);
+  return issue ? 1 : 0;
+}
+
 // Opens and cancels the question before removing the old Strata folder,
 // which scripts/fake-pc.js offers. Returns the number of findings.
 async function oldFolder(page, errors, name) {
@@ -550,6 +578,7 @@ async function codeBench(page, errors) {
     }
     findings += await optimizationPrompt(page, errors, name);
     findings += await oldFolder(page, errors, name);
+    findings += await speedHistory(page, errors, name);
     findings += await tune(page, errors, name);
     findings += await engineOptions(page, errors, name);
     findings += await sameVersion(page, errors, name);

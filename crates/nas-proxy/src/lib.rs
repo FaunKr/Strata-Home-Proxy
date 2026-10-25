@@ -20,6 +20,7 @@ pub mod pc_setup;
 pub mod plug;
 pub mod proxy;
 pub mod settings;
+pub mod speed_history;
 pub mod state;
 pub mod strata;
 pub mod strata_client;

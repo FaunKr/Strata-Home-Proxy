@@ -1,0 +1,25 @@
+{
+  "next_id": 3,
+  "runs": [
+    {
+      "id": 1,
+      "at": 1760000000,
+      "record": { "model": "IQ3_XXS", "result": "35.1 Token/s", "at": 1760000000, "decode_tps": 35.1, "prompt_tps": 590, "context": 65536, "speed_projection": false, "version": "0.2.1", "tool": "strata_bench" },
+      "failed": false,
+      "settings": {
+        "context": 65536, "speed_projection": false, "strata_version": "0.2.1",
+        "preset": { "name": "coding quick", "settings": ["n_gpu_layers 40", "threads 12"] },
+        "env": { "GGML_CUDA_GRAPHS": "1" },
+        "engine_options": ["--batch-size 512"],
+        "sampling": null
+      }
+    },
+    {
+      "id": 2,
+      "at": 1760003600,
+      "record": { "model": "gyro-Gyro-S", "result": "61.0 Token/s", "at": 1760003600, "decode_tps": 61.0, "prompt_tps": 1020, "context": 32768, "speed_projection": false, "version": "0.2.1", "tool": "strata_bench" },
+      "failed": false,
+      "settings": null
+    }
+  ]
+}

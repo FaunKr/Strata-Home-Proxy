@@ -26,6 +26,7 @@ mod relay;
 mod reported_mac;
 mod settings;
 mod settings_page;
+mod speed_history;
 mod strata_key;
 mod strata_output;
 mod strata_page;

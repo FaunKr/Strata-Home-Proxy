@@ -23,6 +23,9 @@ data="$(mktemp -d)"
 trap 'rm -rf "$data"' EXIT
 # A finished code benchmark, as the proxy keeps it.
 cp scripts/ui-check-code-bench.json "$data/code-bench.json"
+# An earlier speed benchmark of an installed model, and one of a model no
+# longer installed.
+cp scripts/ui-check-speed-benchmarks.json "$data/speed-benchmarks.json"
 # A history from an earlier run, imported at the start, so the history shows
 # bars and energy: asleep for two days, then awake until the proxy stopped.
 now=$(date +%s)

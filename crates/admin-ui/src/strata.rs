@@ -12,12 +12,12 @@ use crate::{
     api::{
         CancelCodeBench, CancelStrataJob, CodeBenchRun, CodeBenchState, CodeBenchTask,
         CodeBenchTaskInfo, ForceRestartStrata, ForcedRestart, GenerateUpdateSummary,
-        GetOptimizationPrompt, PcView, PresetState, RelayView, SamplingField, SamplingSource,
-        SamplingSupport, SetRelay, StartCodeBench, StartCodeBenchAll, StartStrataJob,
-        StrataBenchmark, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
-        StrataPage, StrataPreset, StrataPresets, StrataSampling, StrataSize, StrataTune,
-        StrataUpdate, TuneMode, TuneSpeed, TuneUse, UpdateSummary, error_text, get_code_bench,
-        get_strata,
+        GetOptimizationPrompt, PcView, PresetState, RelayView, RunSettings, SamplingField,
+        SamplingSource, SamplingSupport, SetRelay, SpeedModelRuns, SpeedRun, StartCodeBench,
+        StartCodeBenchAll, StartStrataJob, StrataInfo, StrataJob, StrataJobKind, StrataJobState,
+        StrataModel, StrataPage, StrataPreset, StrataPresets, StrataSampling, StrataSize,
+        StrataTune, StrataUpdate, TuneMode, TuneSpeed, TuneUse, UpdateSummary, error_text,
+        get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
     copy::CopyText,
@@ -562,6 +562,7 @@ pub fn VersionTab() -> impl IntoView {
             let actions = area.actions;
             let update = page.update;
             let asleep = page.stale;
+            let history = page.benchmarks;
             match page.info {
                 None => update
                     .map(|update| {
@@ -574,7 +575,9 @@ pub fn VersionTab() -> impl IntoView {
                     })
                     .into_any(),
                 Some(info) if !info.installed => not_installed().into_any(),
-                Some(info) => view! { <Version info update asleep actions blocked /> }.into_any(),
+                Some(info) => {
+                    view! { <Version info history update asleep actions blocked /> }.into_any()
+                }
             }
         })}
         <CodeBenchCard />
@@ -2099,6 +2102,7 @@ fn ContextSwitch(
 #[component]
 fn Version(
     info: StrataInfo,
+    history: Vec<SpeedModelRuns>,
     update: Option<StrataUpdate>,
     /// The PC sleeps: the update wakes it first.
     asleep: bool,
@@ -2158,7 +2162,7 @@ fn Version(
             </div>
         </section>
         <TerminalSwitch info=info.clone() asleep actions blocked />
-        <Benchmarks info actions blocked />
+        <Benchmarks info history actions blocked />
     }
 }
 
@@ -2738,105 +2742,6 @@ fn CodeBenchTaskRow(task: CodeBenchTask) -> impl IntoView {
     }
 }
 
-/// About how long one benchmark takes, as the PC service says.
-const BENCH_MINUTES: usize = 10;
-
-/// Each model's last benchmark, fastest first, and the buttons that run one
-/// or compare them all.
-#[component]
-fn Benchmarks(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
-    let confirm = expect_context::<Confirm>();
-    let mut rows: Vec<StrataBenchmark> = info.benchmarks.clone();
-    // An older PC service keeps only the last run.
-    if rows.is_empty() {
-        rows.extend(info.benchmark.clone());
-    }
-    rows.sort_by(|a, b| {
-        b.decode_tps
-            .unwrap_or(-1.0)
-            .total_cmp(&a.decode_tps.unwrap_or(-1.0))
-            .then_with(|| a.model.cmp(&b.model))
-    });
-    let active = info.models.iter().find(|m| m.active).map(|m| m.id.clone());
-    let installed: Vec<String> = info.models.iter().map(|m| m.id.clone()).collect();
-    // On the Strata Terminal, results from the old folder's BENCH.bat
-    // measured differently: they are marked and never the fastest.
-    let terminal = info.install == Some(StrataInstall::Terminal);
-    let comparable =
-        move |row: &StrataBenchmark| !terminal || row.tool == Some(BenchTool::StrataBench);
-    let marked = move |row: &StrataBenchmark| row.decode_tps.is_some() && !comparable(row);
-    let older = rows.iter().any(marked);
-    let fastest = rows
-        .iter()
-        .find(|r| comparable(r))
-        .filter(|r| r.decode_tps.is_some())
-        .map(|r| r.model.clone());
-    let list = if rows.is_empty() {
-        view! { <p>"No benchmark has run yet."</p> }.into_any()
-    } else {
-        let items = rows
-            .into_iter()
-            .map(|row| {
-                let is_active = active.as_deref() == Some(row.model.as_str());
-                let is_fastest = fastest.as_deref() == Some(row.model.as_str());
-                let can_activate =
-                    !is_active && row.decode_tps.is_some() && installed.contains(&row.model);
-                let older = marked(&row);
-                view! { <BenchRow row is_active is_fastest can_activate older actions blocked /> }
-            })
-            .collect_view();
-        view! { <ul class="list">{items}</ul> }.into_any()
-    };
-    let runs = info.models.len();
-    let compare = move |_| {
-        let question = Question {
-            title: "Compare all models?".into(),
-            text: format!(
-                "{runs} runs, about {} minutes. Strata switches between the models, and requests wait meanwhile. The active model comes back at the end.",
-                runs * BENCH_MINUTES
-            ),
-            confirm: "Compare models",
-            danger: false,
-        };
-        confirm.ask(question, move || actions.job(StrataJobKind::CompareModels));
-    };
-    view! {
-        <section class="card">
-            <h2>"Benchmark"</h2>
-            {list}
-            {older
-                .then(|| {
-                    view! {
-                        <p class="muted small">
-                            "Results marked BENCH.bat came from the old Strata folder. Strata's standard benchmark measures differently, so they are not comparable; run the benchmark again."
-                        </p>
-                    }
-                })}
-            <p class="muted small">
-                "Run benchmark measures the active model. Requests wait while it runs."
-            </p>
-            <div class="actions">
-                <button
-                    type="button"
-                    class="secondary"
-                    disabled=move || blocked.get()
-                    on:click=move |_| actions.job(StrataJobKind::Benchmark)
-                >
-                    "Run benchmark"
-                </button>
-                <button
-                    type="button"
-                    class="secondary"
-                    disabled=move || blocked.get() || runs < 2
-                    on:click=compare
-                >
-                    "Compare models"
-                </button>
-            </div>
-        </section>
-    }
-}
-
 /// How often the Strata page asks again while the update summary is written.
 #[cfg(feature = "hydrate")]
 const SUMMARY_POLL: std::time::Duration = std::time::Duration::from_secs(3);
@@ -2957,101 +2862,369 @@ fn Changes(update: StrataUpdate, actions: Actions, blocked: Signal<bool>) -> imp
     }
 }
 
+/// About how long one benchmark takes, as the PC service says.
+const BENCH_MINUTES: usize = 10;
+
+/// The speed benchmark as a table: each model's latest result, its earlier
+/// runs under it, and the buttons that run one or compare them all.
+#[component]
+fn Benchmarks(
+    info: StrataInfo,
+    history: Vec<SpeedModelRuns>,
+    actions: Actions,
+    blocked: Signal<bool>,
+) -> impl IntoView {
+    let confirm = expect_context::<Confirm>();
+    let active = info.models.iter().find(|m| m.active).map(|m| m.id.clone());
+    // On the Strata Terminal, results from the old folder's BENCH.bat
+    // measured differently: they are marked and never the fastest.
+    let terminal = info.install == Some(StrataInstall::Terminal);
+    let comparable =
+        move |run: &SpeedRun| !terminal || run.record.tool == Some(BenchTool::StrataBench);
+    let marked = move |run: &SpeedRun| run.record.decode_tps.is_some() && !comparable(run);
+    let decode = |m: &SpeedModelRuns| latest_speed(m).and_then(|r| r.record.decode_tps);
+    let mut models = history;
+    models.sort_by(|a, b| {
+        decode(b)
+            .unwrap_or(-1.0)
+            .total_cmp(&decode(a).unwrap_or(-1.0))
+            .then_with(|| a.model.cmp(&b.model))
+    });
+    let older = models.iter().flat_map(|m| &m.runs).any(marked);
+    let fastest = models
+        .iter()
+        .find(|m| latest_speed(m).is_some_and(|r| comparable(r) && r.record.decode_tps.is_some()))
+        .map(|m| m.model.clone());
+    let table = if models.is_empty() {
+        view! { <p>"No benchmark has run yet."</p> }.into_any()
+    } else {
+        let rows = models
+            .into_iter()
+            .map(|m| {
+                let is_active = active.as_deref() == Some(m.model.as_str());
+                let is_fastest = fastest.as_deref() == Some(m.model.as_str());
+                view! { <SpeedModel runs=m is_active is_fastest terminal actions blocked /> }
+            })
+            .collect_view();
+        view! {
+            <div class="table-scroll bench-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th scope="col">"Model"</th>
+                            <th scope="col">"Decode"</th>
+                            <th scope="col">"Prompt"</th>
+                            <th scope="col">"Context"</th>
+                            <th scope="col">"Speed projection"</th>
+                            <th scope="col">"Strata version"</th>
+                            <th scope="col">"Date"</th>
+                            <th scope="col"><span class="visually-hidden">"Actions"</span></th>
+                        </tr>
+                    </thead>
+                    {rows}
+                </table>
+            </div>
+        }
+        .into_any()
+    };
+    let runs = info.models.len();
+    let compare = move |_| {
+        let question = Question {
+            title: "Compare all models?".into(),
+            text: format!(
+                "{runs} runs, about {} minutes. Strata switches between the models, and requests wait meanwhile. The active model comes back at the end.",
+                runs * BENCH_MINUTES
+            ),
+            confirm: "Compare models",
+            danger: false,
+        };
+        confirm.ask(question, move || actions.job(StrataJobKind::CompareModels));
+    };
+    view! {
+        <section class="card">
+            <h2>"Benchmark"</h2>
+            {table}
+            {older
+                .then(|| {
+                    view! {
+                        <p class="muted small">
+                            "Results marked BENCH.bat came from the old Strata folder. Strata's standard benchmark measures differently, so they are not comparable; run the benchmark again."
+                        </p>
+                    }
+                })}
+            <p class="muted small">
+                "Run benchmark measures the active model. Requests wait while it runs. Click a model for its earlier runs."
+            </p>
+            <div class="actions">
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || blocked.get()
+                    on:click=move |_| actions.job(StrataJobKind::Benchmark)
+                >
+                    "Run benchmark"
+                </button>
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || blocked.get() || runs < 2
+                    on:click=compare
+                >
+                    "Compare models"
+                </button>
+            </div>
+        </section>
+    }
+}
+
+/// The run a model's row shows: its latest successful one.
+fn latest_speed(model: &SpeedModelRuns) -> Option<&SpeedRun> {
+    model.runs.iter().find(|r| !r.failed)
+}
+
 /// `38.5` → `38.5 tok/s`.
 fn tps(v: f64) -> String {
     format!("{v} tok/s")
 }
 
+/// A model in the speed table: its row with the latest result, and its
+/// other runs once opened.
 #[component]
-fn BenchRow(
-    row: StrataBenchmark,
+fn SpeedModel(
+    runs: SpeedModelRuns,
     is_active: bool,
     is_fastest: bool,
-    can_activate: bool,
-    /// Measured with the old folder's BENCH.bat, not comparable.
-    older: bool,
+    /// On the Strata Terminal: BENCH.bat results are marked.
+    terminal: bool,
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
-    // A failed run keeps the model's last measurement, if it had one.
-    let speeds = match (&row.error, row.decode_tps) {
-        (Some(error), None) => {
-            view! { <p class="error small">{format!("No result: {error}")}</p> }.into_any()
+    let open = RwSignal::new(false);
+    let shown = latest_speed(&runs).cloned();
+    let others: Vec<SpeedRun> = runs
+        .runs
+        .iter()
+        .filter(|r| shown.as_ref().is_none_or(|s| s.id != r.id))
+        .cloned()
+        .collect();
+    let can_open = !others.is_empty();
+    let can_activate = !is_active && shown.is_some() && runs.installed;
+    let id = runs.model.clone();
+    let name = if can_open {
+        let model = runs.model.clone();
+        view! {
+            <button
+                type="button"
+                class="link"
+                aria-expanded=move || open.get().to_string()
+                on:click=move |_| open.update(|o| *o = !*o)
+            >
+                {move || if open.get() { "▾ " } else { "▸ " }}
+                {model.clone()}
+            </button>
         }
-        (error, Some(decode)) => {
-            let mut text = format!("Decode {}", tps(decode));
-            text.push_str(&match row.prompt_tps {
-                Some(prompt) => format!(" · Prompt {}", tps(prompt)),
-                None => " · Prompt –".into(),
-            });
-            let failed = error
-                .clone()
-                .map(|e| view! { <p class="error small">{format!("Last run failed: {e}")}</p> });
-            view! {
-                <p>{text}</p>
-                {failed}
-            }
-            .into_any()
+        .into_any()
+    } else {
+        view! { <span class="strong">{runs.model.clone()}</span> }.into_any()
+    };
+    let badges = view! {
+        {is_fastest
+            .then(|| {
+                view! {
+                    <span class="badge is-ok">
+                        <span class="dot"></span>
+                        "Fastest"
+                    </span>
+                }
+            })}
+        {is_active
+            .then(|| {
+                view! {
+                    <span class="badge is-idle">
+                        <span class="dot"></span>
+                        "Active"
+                    </span>
+                }
+            })}
+        {(!runs.installed).then(|| view! { <span class="muted small">"Not installed"</span> })}
+    };
+    let activate = can_activate.then(|| {
+        view! {
+            <button
+                type="button"
+                class="secondary"
+                disabled=move || blocked.get()
+                on:click=move |_| actions.model_job(StrataJobKind::Activate, id.clone())
+            >
+                "Make active"
+            </button>
         }
-        (None, None) => view! { <p>{row.result.clone()}</p> }.into_any(),
+    });
+    // A model whose runs all failed shows the newest failure.
+    let head_run = shown.clone().or_else(|| runs.runs.first().cloned());
+    let head = head_run.map(|run| {
+        view! { <SpeedCells run terminal head=Some((name, badges.into_any(), activate.into_any())) /> }
+    });
+    let rest = move || {
+        open.get().then(|| {
+            others
+                .iter()
+                .cloned()
+                .map(|run| view! { <SpeedCells run terminal head=None /> })
+                .collect_view()
+        })
+    };
+    view! {
+        <tbody class="bench-model">
+            {head}
+            {rest}
+        </tbody>
+    }
+}
+
+/// A run's row in the speed table and, opened, its settings below it.
+/// `head` makes it a model's row: its name, badges and actions.
+#[component]
+fn SpeedCells(
+    run: SpeedRun,
+    terminal: bool,
+    head: Option<(AnyView, AnyView, AnyView)>,
+) -> impl IntoView {
+    let settings_open = RwSignal::new(false);
+    let is_head = head.is_some();
+    let (name, badges, actions) = match head {
+        Some((name, badges, actions)) => (name, badges, actions),
+        None => (
+            view! { <span class="muted small">"Earlier run"</span> }.into_any(),
+            ().into_any(),
+            ().into_any(),
+        ),
+    };
+    let r = &run.record;
+    let older = terminal && r.decode_tps.is_some() && r.tool != Some(BenchTool::StrataBench);
+    let figures = if run.failed {
+        let error = r.error.clone().unwrap_or_else(|| "no reason given".into());
+        view! {
+            <td colspan="5" class="error small">{format!("No result: {error}")}</td>
+        }
+        .into_any()
+    } else {
+        let decode = match r.decode_tps {
+            Some(v) => tps(v),
+            None => r.result.clone(),
+        };
+        view! {
+            <td>{decode}</td>
+            <td>{r.prompt_tps.map_or("–".to_string(), tps)}</td>
+            <td>{r.context.map_or("–".to_string(), |c| format!("{}K", c / 1024))}</td>
+            <td>
+                {match r.speed_projection {
+                    Some(true) => "on",
+                    Some(false) => "off",
+                    None => "–",
+                }}
+            </td>
+            <td>{r.version.clone().unwrap_or_else(|| "–".into())}</td>
+        }
+        .into_any()
+    };
+    let settings = run.settings.clone();
+    let class = if is_head {
+        "bench-head"
+    } else {
+        "bench-earlier"
+    };
+    view! {
+        <tr class=class>
+            <th scope="row">
+                {name}
+                <div class="bench-badges">
+                    {badges}
+                    {older
+                        .then(|| {
+                            view! { <span class="muted small">"BENCH.bat, not comparable"</span> }
+                        })}
+                </div>
+                <button
+                    type="button"
+                    class="link small settings-toggle"
+                    aria-expanded=move || settings_open.get().to_string()
+                    on:click=move |_| settings_open.update(|o| *o = !*o)
+                >
+                    {move || if settings_open.get() { "Hide settings" } else { "Settings" }}
+                </button>
+            </th>
+            {figures}
+            <td>{run.at_text.clone()}</td>
+            <td>{actions}</td>
+        </tr>
+        {move || {
+            settings_open
+                .get()
+                .then(|| {
+                    view! {
+                        <tr class="bench-settings">
+                            <td colspan="8">
+                                <div class="bench-settings-text">
+                                    {run_settings_view(settings.clone())}
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                })
+        }}
+    }
+}
+
+/// What a run ran with, or that it is not known.
+fn run_settings_view(settings: Option<RunSettings>) -> impl IntoView {
+    let Some(s) = settings else {
+        return view! { <p class="muted small">"Settings not recorded."</p> }.into_any();
     };
     let mut with = Vec::new();
-    if let Some(context) = row.context {
-        with.push(format!("{}K context", context / 1024));
-    }
-    match row.speed_projection {
+    with.push(match s.context {
+        Some(c) => format!("{}K context", c / 1024),
+        None => "context not known".into(),
+    });
+    match s.speed_projection {
         Some(true) => with.push("speed projection on".into()),
         Some(false) => with.push("speed projection off".into()),
         None => {}
     }
-    if let Some(version) = &row.version {
-        with.push(format!("Strata {version}"));
+    if let Some(v) = &s.strata_version {
+        with.push(format!("Strata {v}"));
     }
-    if older {
-        with.push("BENCH.bat, not comparable".into());
-    }
-    with.push(row.at_text.clone());
-    let id = row.model.clone();
+    let preset = match &s.preset {
+        Some(p) if p.settings.is_empty() => format!("Preset: {}", p.name),
+        Some(p) => format!("Preset: {} ({})", p.name, p.settings.join(", ")),
+        None => "Preset: none".into(),
+    };
+    let env = match &s.env {
+        Some(env) if env.is_empty() => "Engine environment: none".to_string(),
+        Some(env) => format!(
+            "Engine environment: {}",
+            env.iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        None => "Engine environment: not known".into(),
+    };
+    let options = match &s.engine_options {
+        Some(o) if o.is_empty() => "Engine options: none".to_string(),
+        Some(o) => format!("Engine options: {}", o.join(" ")),
+        None => "Engine options: not known".into(),
+    };
     view! {
-        <li>
-            <div class="grow">
-                <p class="strong">{row.model.clone()}</p>
-                {speeds}
-                <p class="muted small">{with.join(" · ")}</p>
-            </div>
-            {is_fastest
-                .then(|| {
-                    view! {
-                        <span class="badge is-ok">
-                            <span class="dot"></span>
-                            "Fastest"
-                        </span>
-                    }
-                })}
-            {is_active
-                .then(|| {
-                    view! {
-                        <span class="badge is-idle">
-                            <span class="dot"></span>
-                            "Active"
-                        </span>
-                    }
-                })}
-            {can_activate
-                .then(|| {
-                    view! {
-                        <button
-                            type="button"
-                            class="secondary"
-                            disabled=move || blocked.get()
-                            on:click=move |_| actions.model_job(StrataJobKind::Activate, id.clone())
-                        >
-                            "Make active"
-                        </button>
-                    }
-                })}
-        </li>
+        <div class="run-settings small">
+            <p>{with.join(" · ")}</p>
+            <p>{preset}</p>
+            <p>{env}</p>
+            <p>{options}</p>
+            {s.sampling.as_ref().map(sampling_lines)}
+        </div>
     }
+    .into_any()
 }
 
 /// The switch for relay mode: Strata listens on the PC only, and the PC

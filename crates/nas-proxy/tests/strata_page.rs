@@ -420,13 +420,18 @@ async fn shows_each_models_benchmark_fastest_first() {
     let b = logged_in(&s.url).await;
     let html = b.page("/admin/strata/version").await;
     let coder = html.find("coder-IQ1_M").unwrap();
-    let qwen = html.find("Decode 38.5 tok/s").unwrap();
+    let qwen = html.find("38.5 tok/s").unwrap();
     let swift = html.find("No result: Strata did not come up").unwrap();
     assert!(coder < qwen && qwen < swift, "{html}");
-    assert!(html.contains("Decode 52 tok/s · Prompt –"), "{html}");
-    assert!(html.contains("Prompt 612 tok/s"), "{html}");
-    assert!(html.contains("32K context · speed projection on"), "{html}");
-    assert!(html.contains("Strata 477ac13"), "{html}");
+    // One column per figure.
+    assert!(
+        html.contains("<td>52 tok/s</td><td>–</td><td>32K</td><td>on</td>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<td>612 tok/s</td><td>64K</td><td>off</td><td>477ac13</td>"),
+        "{html}"
+    );
     assert!(html.contains("Fastest"), "{html}");
     // The fastest, inactive model can be made active; the failed one not.
     assert_eq!(html.matches("Make active").count(), 1, "{html}");

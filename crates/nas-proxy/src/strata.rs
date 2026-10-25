@@ -28,6 +28,7 @@ use crate::{
     clock,
     events::EventKind,
     files::write_private,
+    speed_history::SpeedHistory,
     state::{AppState, WakeError},
     update_summary::{self, UpdateSummaries},
 };
@@ -52,6 +53,8 @@ pub struct StrataState {
     job_running: AtomicBool,
     /// What an available update brings.
     pub update: UpdateSummaries,
+    /// Every speed benchmark run seen in the reports.
+    pub benchmarks: SpeedHistory,
     dir: Option<PathBuf>,
 }
 
@@ -81,6 +84,7 @@ impl StrataState {
             last: Mutex::new(last),
             job_running: AtomicBool::new(false),
             update: UpdateSummaries::new(data_dir.clone()),
+            benchmarks: SpeedHistory::new(data_dir.clone()),
             dir: data_dir,
         }
     }
@@ -169,10 +173,12 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
                 blocked: Some(NO_AGENT.into()),
                 ..RelayView::default()
             },
+            benchmarks: Vec::new(),
         };
     }
     let Some(status) = state.ask_pc(&agent).await else {
         let (info, as_of) = state.strata.shown_last().unzip();
+        let benchmarks = state.strata.benchmarks.page(info.as_ref());
         return StrataPage {
             problem: Some(ASLEEP.into()),
             gaming: false,
@@ -186,6 +192,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
                 switching: false,
                 blocked: Some(RELAY_ASLEEP.into()),
             },
+            benchmarks,
         };
     };
     let Some((mut info, incoming)) = agent.strata().await else {
@@ -198,10 +205,13 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             update: None,
             key_unreported: false,
             relay: relay_view(&status, None),
+            benchmarks: Vec::new(),
         };
     };
     with_local_times(&mut info);
     state.strata.set_last(info.clone());
+    state.strata.benchmarks.take(&info, clock::unix_now());
+    let benchmarks = state.strata.benchmarks.page(Some(&info));
     let job = status.strata_job
         || info
             .job
@@ -227,6 +237,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
         as_of: None,
         update,
         key_unreported: state.strata_key.unreported(),
+        benchmarks,
     }
 }
 
@@ -599,6 +610,16 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
             format!("{}: interrupted", detail(&job)),
         ),
     };
+    // A run of the same model before the page is opened again would take
+    // this one's place in the PC service's report. Taken before the event,
+    // which tells that the job ended.
+    if matches!(
+        job.kind,
+        StrataJobKind::Benchmark | StrataJobKind::CompareModels
+    ) && let Some((info, _)) = agent.strata().await
+    {
+        strata.benchmarks.take(&info, clock::unix_now());
+    }
     state.events.record(kind, Some(detail));
     state.overview.refresh_now();
 }

@@ -679,6 +679,72 @@ pub struct StrataPage {
     /// Relay mode and its switch.
     #[serde(default)]
     pub relay: RelayView,
+    /// Each model's speed benchmark runs as the proxy keeps them, also
+    /// while the PC sleeps.
+    #[serde(default)]
+    pub benchmarks: Vec<SpeedModelRuns>,
+}
+
+/// What a model ran with when a benchmark of it ran, from the PC service's
+/// report.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RunSettings {
+    #[serde(default)]
+    pub context: Option<u32>,
+    #[serde(default)]
+    pub speed_projection: Option<bool>,
+    #[serde(default)]
+    pub strata_version: Option<String>,
+    /// The active preset; `None` without one.
+    #[serde(default)]
+    pub preset: Option<RunPreset>,
+    /// The engine environment; `None` when the PC service did not say.
+    #[serde(default)]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
+    /// The engine options set by hand (`user_args`); `None` when the PC
+    /// service did not say.
+    #[serde(default)]
+    pub engine_options: Option<Vec<String>>,
+    #[serde(default)]
+    pub sampling: Option<StrataSampling>,
+}
+
+/// The preset a run was made with.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunPreset {
+    pub name: String,
+    /// What it sets, as Strata writes it.
+    pub settings: Vec<String>,
+}
+
+/// One speed benchmark run the proxy keeps.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpeedRun {
+    /// Given by the proxy.
+    pub id: u64,
+    /// When it ran, in Unix seconds; for a failed run after an earlier
+    /// result, when the proxy first saw it.
+    pub at: u64,
+    /// Local time of `at`, filled in by the proxy.
+    #[serde(default)]
+    pub at_text: String,
+    /// The record as the PC service reported it.
+    pub record: StrataBenchmark,
+    /// It gave no result; `record.error` says why.
+    pub failed: bool,
+    /// `None`: settings not recorded, e.g. for runs from before the proxy
+    /// kept them.
+    #[serde(default)]
+    pub settings: Option<RunSettings>,
+}
+
+/// A model's speed benchmark runs, newest first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpeedModelRuns {
+    pub model: String,
+    /// The PC service's last report lists the model.
+    pub installed: bool,
+    pub runs: Vec<SpeedRun>,
 }
 
 /// Relay mode on the *Connection* tab: Strata listens on the PC only, and

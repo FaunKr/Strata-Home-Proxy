@@ -21,6 +21,7 @@ pub mod plug;
 pub mod proxy;
 pub mod public_name;
 pub mod settings;
+pub mod speed_history;
 pub mod state;
 pub mod strata;
 pub mod strata_client;

@@ -493,6 +493,26 @@ dialog.confirm.wide { max-width: 760px; }
 .per-bar table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 8px; }
 .per-bar th, .per-bar td { text-align: right; padding: 4px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
 .per-bar th[scope="row"], .per-bar td:last-child { text-align: left; font-weight: normal; }
+/* Relative: what is hidden for the eye stays inside the scrolling box. */
+.bench-table { overflow-x: auto; position: relative; }
+.bench-table table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.bench-table th, .bench-table td { text-align: left; padding: 8px 6px; border-top: 1px solid var(--line); white-space: nowrap; vertical-align: top; }
+.bench-table thead th { border-top: 0; color: var(--muted); font-weight: normal; font-size: 0.8rem; }
+/* The model stays in view while the figures scroll sideways. */
+.bench-table th[scope="row"], .bench-table thead th:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+.bench-table th[scope="row"] { font-weight: normal; }
+.bench-table th[scope="row"] button.link { padding: 0; min-height: 24px; }
+.bench-table button.settings-toggle { display: block; }
+.bench-table tbody.bench-model tr.bench-head > * { border-top: 2px solid var(--line); }
+.bench-table tr.bench-earlier > * { background: var(--surface-2); }
+.bench-table tr.bench-earlier th[scope="row"] { padding-left: 20px; }
+.bench-table td.error { white-space: normal; min-width: 200px; }
+.bench-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.bench-badges:empty { display: none; }
+/* Stays in view while the figures above scroll sideways. */
+.bench-settings-text { position: sticky; left: 6px; max-width: min(640px, calc(100vw - 96px)); }
+.bench-table tr.bench-settings td { white-space: normal; background: var(--surface-2); border-top: 0; }
+.run-settings p { margin: 2px 0; }
 .bars-axis { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--muted); }
 input[type="date"] {
   font: inherit;

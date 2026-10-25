@@ -181,6 +181,10 @@ _Avoid_: profile, tuning (for the saved result), Voreinstellung
 Picture reading for a model: setup's *Pictures* tick in the web UI's install and add-model form, on by default, which makes setup write a picture reader into the run config. An installed model shows *Pictures: on (CPU)*, *on (GPU)* or *off* and switches it with one setup run; a model without a picture reader reads no pictures.
 _Avoid_: vision (except `--vision` and the `vision` section in configs and code), image support, multimodal
 
+**Run settings**:
+What a model ran with when one of its benchmarks ran: context, speed projection, Strata version, the active preset, engine environment, engine options and sampling, taken by the proxy from the PC service's report. The proxy keeps every speed benchmark run it sees with them, also after the PC service reports a newer one; runs from before the proxy kept them say "settings not recorded".
+_Avoid_: run config (that is the model's config file), snapshot
+
 ## Code benchmark
 
 **Code benchmark**:

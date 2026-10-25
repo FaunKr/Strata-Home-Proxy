@@ -19,6 +19,14 @@ if ! node -e 'require("playwright")' 2>/dev/null; then
   exit 2
 fi
 
+# Under a test run's load the page waits time out, and the failures look like
+# flakes in areas the change does not touch.
+if busy=$(pgrep -lx cargo-nextest); then
+  echo "A test run is going on (check.sh, repeat-test.sh, side-by-side.sh); run ui-check.sh after it:" >&2
+  echo "$busy" >&2
+  exit 2
+fi
+
 data="$(mktemp -d)"
 trap 'rm -rf "$data"' EXIT
 # A finished code benchmark, as the proxy keeps it.

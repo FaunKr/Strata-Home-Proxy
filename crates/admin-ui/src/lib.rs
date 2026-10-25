@@ -1,6 +1,11 @@
 //! Web UI of the NAS proxy, under `/admin/` on the API port. Rendered on the
 //! server and made interactive in the browser (Leptos, hydration).
 
+// Leptos views are deeply nested types. The release wasm build computes their
+// layout and, over the default limit of 128, fails with "queries overflow the
+// depth limit". check.sh and ui-check.sh build debug, where it does not show.
+#![recursion_limit = "256"]
+
 pub mod access;
 pub mod api;
 pub mod app;

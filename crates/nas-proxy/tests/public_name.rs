@@ -212,12 +212,7 @@ async fn the_saved_list_has_the_public_name_while_the_pc_sleeps() {
     s.pc.list_alias_and_image.store(true, Ordering::SeqCst);
     let list: Value = get(&s, &s.key, "/v1/models").await.json().await.unwrap();
     assert_eq!(ids(&list), [REAL, "qwen", "flux-schnell"]);
-    // The copy is written on the blocking pool; a restart reads it from disk.
-    let file = s.state.cfg().data_dir.clone().unwrap().join("models.json");
-    eventually("the list saved", || {
-        std::fs::read_to_string(&file).is_ok_and(|text| text.contains("flux-schnell"))
-    })
-    .await;
+    list_saved_on_disk(&s, "flux-schnell").await;
     s.pc.awake.store(false, Ordering::SeqCst);
     s.pc.starting.store(true, Ordering::SeqCst);
     let state = restarted(&s);

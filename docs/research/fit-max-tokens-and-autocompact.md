@@ -5,6 +5,11 @@ Research note, 2026-10-19. Sources: Strata at commit `477ac13` (the commit
 fetched on 2026-10-19 (changelog up to v2.1.300), and this repo.
 **[Inference]** marks conclusions that no source states directly.
 
+Since Strata commit f31b6efd, `fit_max_tokens` is on by default and
+`"fit_max_tokens": false` brings back the 400 (`docs/strata-api.md`). The
+notes below describe the older default. How opencode sizes the context:
+[opencode-context-window.md](opencode-context-window.md).
+
 Strata links below use `S` = `https://github.com/Niko1221/Strata/blob/477ac13`.
 
 ## 1. What `"fit_max_tokens": true` does

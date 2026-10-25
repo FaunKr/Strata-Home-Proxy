@@ -19,11 +19,13 @@ if ! node -e 'require("playwright")' 2>/dev/null; then
   exit 2
 fi
 
-# Under a test run's load the page waits time out, and the failures look like
-# flakes in areas the change does not touch.
-if busy=$(pgrep -lx cargo-nextest); then
-  echo "A test run is going on (check.sh, repeat-test.sh, side-by-side.sh); run ui-check.sh after it:" >&2
-  echo "$busy" >&2
+# Under the load of a check or test run the page waits time out, and the
+# failures look like flakes in areas the change does not touch. A script that
+# ran before this one in the same command line has ended and does not count.
+if busy=$(pgrep -f '^([^ ]*/)?bash [^ ]*scripts/(check|repeat-test|side-by-side)\.sh( |$)|^([^ ]*/)?cargo-nextest '); then
+  echo "A check or test run is going on; run ui-check.sh after it:" >&2
+  # shellcheck disable=SC2086 # one pid per word.
+  ps -o pid=,args= -p "$(echo $busy | tr ' ' ,)" >&2
   exit 2
 fi
 

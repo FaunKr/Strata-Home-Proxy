@@ -2885,7 +2885,7 @@ fn CodeCells(
     let task_rows = run.tasks.clone();
     // The model, the figures, the date and the actions.
     let span = (columns + 3).to_string();
-    // Type-erased like the speed rows, which keeps rustc's query depth of
+    // Type-erased like SpeedCells, which keeps rustc's query depth of
     // the release wasm build low (lib.rs).
     let row = view! {
         <tr class=class>

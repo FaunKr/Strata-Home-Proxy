@@ -3,7 +3,8 @@
 
 // Leptos views are deeply nested types. The release wasm build computes their
 // layout and, over the default limit of 128, fails with "queries overflow the
-// depth limit". check.sh and ui-check.sh build debug, where it does not show.
+// depth limit". check.sh and ui-check.sh build debug, where it does not show:
+// only the image build (Dockerfile) does.
 #![recursion_limit = "256"]
 
 pub mod access;

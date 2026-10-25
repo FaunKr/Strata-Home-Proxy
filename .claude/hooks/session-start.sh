@@ -7,7 +7,8 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
 
-cd "$CLAUDE_PROJECT_DIR"
+# Run by hand when a session started without it: the repo is two levels up.
+cd "${CLAUDE_PROJECT_DIR:-$(dirname "$0")/../..}"
 
 rustup target add wasm32-unknown-unknown
 # cargo-leptos for scripts/ui-check.sh.

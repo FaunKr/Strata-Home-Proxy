@@ -12,6 +12,13 @@ container, `code-bench`, runs on the NAS next to the proxy:
 - opencode talks through the relay to the proxy's OpenAI endpoint (`PROXY_URL`), with a
   key the proxy creates for the run and revokes afterwards. So the run wakes
   the PC like any client.
+- The proxy sends the model's context with the run (`context`, from the PC
+  service's list of models). The runner writes it into opencode's config as
+  `limit.context`, with `limit.output` a quarter of it, at most 32000, so
+  opencode compacts at context minus output while there is still room.
+  Without a `limit` opencode takes the context as unknown and compacts only
+  after Strata refuses a prompt that does not fit. When the PC service does
+  not report the context (`null`), the config has no `limit`.
 - opencode sends no sampling settings; Strata takes the set from the model card.
   With `temperature: 0` every answer would be greedy, and Qwen models get
   stuck in loops with that.

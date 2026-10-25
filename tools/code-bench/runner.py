@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The code benchmark's runner, in its own container on the NAS.
 
-The proxy sends a run: an API key of its own, the model and the tasks with
-their hidden tests. For each task opencode works in a fresh folder against
+The proxy sends a run: an API key of its own, the model, its context (or
+null) and the tasks with their hidden tests. For each task opencode works in a fresh folder against
 the proxy's OpenAI endpoint; afterwards the hidden tests score what it left.
 The proxy asks for the state until the run has ended.
 
@@ -57,6 +57,8 @@ DEFAULT_TIMEOUT = 30 * 60
 MAX_FILE_BYTES = 64 * 1024
 MAX_OUTPUT_CHARS = 8 * 1024
 MAX_DIFF_BYTES = 128 * 1024
+# The most output opencode asks for per request; it caps a higher limit there.
+OUTPUT_LIMIT_MAX = 32000
 # What the runner puts into a repo task's checkout, and opencode's notes:
 # not part of the change the diff shows.
 NOT_IN_DIFF = ("TASK.md", "NOTES.md", "opencode.json")
@@ -159,8 +161,19 @@ def problem():
     return PROBLEM or proxy_problem()
 
 
-def config(model, api_key):
+def token_limit(context):
+    """opencode's limits for a model with `context` tokens: it compacts at
+    context minus output."""
+    return {"context": context, "output": min(OUTPUT_LIMIT_MAX, context // 4)}
+
+
+def config(model, api_key, context):
     """opencode's settings for one task: the proxy as its only provider."""
+    entry = {"name": model, "temperature": False}
+    # Without it opencode takes the context as unknown: it never compacts on
+    # its own and only does after Strata refused a prompt that did not fit.
+    if context is not None:
+        entry["limit"] = token_limit(context)
     return {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
@@ -171,7 +184,7 @@ def config(model, api_key):
                 # No sampling of opencode's own: Strata then takes the model
                 # card's set. A request's temperature 0 wins over it and is
                 # greedy, which sends Qwen models into loops.
-                "models": {model: {"name": model, "temperature": False}},
+                "models": {model: entry},
             }
         },
         "permission": {"edit": "allow", "bash": "allow", "webfetch": "deny"},
@@ -230,11 +243,12 @@ def limit_text(secs):
 
 
 class Run:
-    def __init__(self, run_id, model, api_key, tasks):
+    def __init__(self, run_id, model, api_key, tasks, context):
         self.lock = threading.Lock()
         self.id = run_id
         self.model = model
         self.api_key = api_key
+        self.context = context
         self.specs = {t["name"]: t for t in tasks}
         self.state = "running"
         self.error = None
@@ -319,7 +333,7 @@ class Run:
                 copy_checkout(spec["repo"], folder)
             for path, text in spec["files"].items():
                 write(folder, path, text)
-            write(folder, "opencode.json", json.dumps(config(self.model, self.api_key)))
+            write(folder, "opencode.json", json.dumps(config(self.model, self.api_key, self.context)))
             give_to_agent(folder)
             env = repo_env(folder) if spec["kind"] == "repo" else {}
             stats, secs, timed_out, error = self.opencode(i, folder, spec["timeout"], env)
@@ -844,6 +858,16 @@ def task_spec(t, timeout):
     return spec
 
 
+def run_context(value):
+    """The model's context from the proxy's run body, checked: a positive
+    whole number, or None when the proxy did not know it."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"bad context {value!r}")
+    return value
+
+
 class Runner:
     def __init__(self):
         self.lock = threading.Lock()
@@ -857,6 +881,7 @@ class Runner:
             # The run's limit is the default for tasks without one of their own.
             timeout = int(body.get("timeout_secs") or DEFAULT_TIMEOUT)
             tasks = [task_spec(t, timeout) for t in body["tasks"]]
+            context = run_context(body.get("context"))
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             return 400, {"reason": f"bad run: {e}"}
         if not tasks or not model or "/" in model:
@@ -867,7 +892,7 @@ class Runner:
         with self.lock:
             if self.run is not None and self.run.view()["state"] == "running":
                 return 409, {"reason": "A code benchmark is running already."}
-            run = Run(self.next_id, model, api_key, tasks)
+            run = Run(self.next_id, model, api_key, tasks, context)
             self.next_id += 1
             self.run = run
         threading.Thread(target=run.work, daemon=True).start()

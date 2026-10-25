@@ -340,6 +340,65 @@ async fn a_run_gets_the_tasks_the_active_model_and_a_key_of_its_own() {
     assert_eq!(b.call("code-bench-start", &[]).await.status(), 400);
 }
 
+/// Gives the simulated PC's models these start contexts, in order.
+fn set_contexts(s: &Setup, contexts: &[Option<u32>]) {
+    let mut info = s.pc.strata_info.lock().unwrap();
+    let models = &mut info.as_mut().expect("the PC reports Strata").info.models;
+    for (m, context) in models.iter_mut().zip(contexts) {
+        m.context = *context;
+    }
+}
+
+#[tokio::test]
+async fn a_run_hands_the_runner_the_active_models_context() {
+    let (s, runner) = with_runner().await;
+    set_contexts(&s, &[Some(65536)]);
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    let body = runner.started.lock().unwrap().first().cloned().unwrap();
+    assert_eq!(body["context"], 65536);
+}
+
+#[tokio::test]
+async fn a_model_without_a_reported_context_sends_null() {
+    let (s, runner) = with_runner().await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    let body = runner.started.lock().unwrap().first().cloned().unwrap();
+    assert!(body["context"].is_null(), "{body}");
+}
+
+#[tokio::test]
+async fn a_run_over_all_models_hands_each_model_its_own_context() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M", "swift-IQ2_XS"];
+    let contexts = [Some(32768), Some(262144), None];
+    let (s, runner) = with_models(&ids).await;
+    set_contexts(&s, &contexts);
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    for id in ids {
+        drive(&s, &runner, id).await;
+    }
+    let sent: Vec<(String, Value)> = runner
+        .started
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|b| {
+            (
+                b["model"].as_str().unwrap().to_string(),
+                b["context"].clone(),
+            )
+        })
+        .collect();
+    let expected: Vec<(String, Value)> = ids
+        .iter()
+        .zip(contexts)
+        .map(|(id, c)| (id.to_string(), json!(c)))
+        .collect();
+    assert_eq!(sent, expected);
+}
+
 #[tokio::test]
 async fn a_finished_run_is_kept_per_model_and_its_key_revoked() {
     let (s, runner) = with_runner().await;

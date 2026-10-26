@@ -47,6 +47,9 @@ Questions already decided: `docs/adr/`.
   timer expires (idle timeout, settling), the timer fires at least 2 s
   after it; the CI runner is slower than the session. Tight timers only
   when the test only waits afterwards.
+- **A time the proxy measures is asserted as there (above 0), not against
+  the pause a fake made.** On the CI runner a fake's first chunk can
+  arrive late, so the measured span comes out shorter than the pause.
 - **A test for a fallback or default value picks inputs for which another
   value would give another result.** Rounding, lower bounds and
   `max`/`min` hide this easily: if the formula gives the same result for many

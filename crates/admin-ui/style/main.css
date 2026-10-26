@@ -653,8 +653,9 @@ input[type="date"] {
 .request-table thead th { border-top: 0; color: var(--muted); font-weight: normal; font-size: 0.8rem; white-space: normal; vertical-align: bottom; }
 .request-table .num { text-align: right; }
 .request-table td { vertical-align: top; }
-.request-table td.model { white-space: normal; overflow-wrap: anywhere; min-width: 90px; max-width: 150px; }
+.request-table td.model { white-space: normal; overflow-wrap: anywhere; min-width: 80px; max-width: 130px; }
 .request-table td.status { white-space: normal; min-width: 70px; }
+.request-table td.type { white-space: normal; min-width: 80px; }
 .request-table .sub { display: block; color: var(--muted); font-size: 0.75rem; }
 .request-table td.bad { color: var(--bad); }
 .request-table .sub.bad { color: var(--bad); }

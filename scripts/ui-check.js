@@ -9,6 +9,8 @@ const areas = ['/admin', '/admin/pc', '/admin/pc/history', '/admin/strata', '/ad
 // Texts an area must show, as innerText gives them: with CSS text-transform
 // applied, so e.g. an h3 reads in capitals. The overview's Power row comes from
 // scripts/fake-shelly.js, its Hardware card from scripts/fake-pc.js.
+// Each text must show at both widths: a column with the class `wide` is
+// hidden on a phone, so a text only it shows belongs in a check of its own.
 const expected = {
   '/admin': ['87 W', 'Awake', '11.8 / 16.0 GB', '0 rpm', '41 % of limit', 'Last 7 days', 'kWh'],
   // The catalog from scripts/fake-pc.js: Gyro's memory is RAM + VRAM.
@@ -184,6 +186,10 @@ async function check(page, errors, name, area, texts, shot) {
     small: [...document.querySelectorAll('main button, main a, nav a')]
       .filter(e => { const b = e.getBoundingClientRect(); return b.width > 0 && b.height < 24; })
       .map(e => e.textContent.trim().slice(0, 20)),
+    // A wide screen shows the request tables whole; inside their scroll box
+    // a cut-off column doesn't make the page scroll.
+    cut: window.innerWidth >= 1200 ? [...document.querySelectorAll('.request-table, .averages')]
+      .filter(e => e.scrollWidth > e.clientWidth).map(e => `${e.className} by ${e.scrollWidth - e.clientWidth}px`) : [],
     signedOut: !!document.querySelector('#password'),
     text: document.body.innerText,
   }));
@@ -194,6 +200,7 @@ async function check(page, errors, name, area, texts, shot) {
   }
   if (r.signedOut) issues.push('shows the sign-in form, so nothing behind it was checked');
   if (r.overflow > 0) issues.push(`scrolls sideways by ${r.overflow}px`);
+  if (r.cut.length) issues.push(`table scrolls sideways: ${r.cut.join(', ')}`);
   if (r.unlabeled.length) issues.push(`no label: ${r.unlabeled.join(', ')}`);
   if (r.small.length) issues.push(`under 24px: ${r.small.join(', ')}`);
   if (de.length) issues.push(`German: ${de.slice(0, 3).join(' / ')}`);

@@ -25,6 +25,7 @@
 - A spec that lands as one PR is implemented in the thread itself: no implementer subagents, worktrees or merger.
 - /to-spec writes the test seams into the spec's Testing Decisions (where the tests drive the feature, and each new fake or setter for tests, named as new) and publishes the spec in the same step: Faun reviews the seams with the published spec.
 - When Strata changed something the PC service reads (setup's output, a file it writes), extend the reader's unit test with the new line copied from Strata's source, not a made-up one, and update `docs/strata-api.md`.
+- When the PC service keeps or starts with a path Strata wrote (a run config's `cwd`, args, the vision program), check whether `strata update` can delete what it names: updates keep only the new and the previous component folder (`docs/strata-api.md`, *Folders updates delete*).
 - When grilling or a spec adds a rule that data the PR itself writes must follow (the first section of the PC service changelog, a migrated file), check that data against the rule before publishing the spec: the rule and the first data can contradict each other.
 - A spec states a comparison rule as the outcome User sees ("no update for a PC on that version or a newer one"), not as an operator ("equals"): the spec review reads it word for word.
 - Before a spec refuses values in a run config field, check what Strata itself writes there (`docs/strata-api.md`, Strata's source): a value Strata put there must still come back unchanged, or saving the field always fails.

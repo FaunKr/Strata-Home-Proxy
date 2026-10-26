@@ -161,7 +161,8 @@ while IFS= read -r mention; do
   name=$(sed -E 's/.*`([^`]+)`.*/\1/' <<<"$mention")
   case $mention in
     *orkflow*) [[ -e .github/workflows/$name ]] || fail "$file names the workflow $name, which does not exist" ;;
-    *) [[ $jobs == *" $name "* ]] || fail "$file names the CI job $name, which does not exist" ;;
+    # A job of the PC service matches too; its kind is written "a job of kind `x`".
+    *) [[ $jobs == *" $name "* ]] || fail "$file names the CI job $name, which does not exist (a PC service job: write 'a job of kind \`$name\`')" ;;
   esac
 done < <(git ls-files -z | xargs -0 grep -oIE '(CI[- ][Jj]ob|[Jj]ob|[Ww]orkflow) `[A-Za-z0-9_.-]+`' 2>/dev/null || true)
 

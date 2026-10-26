@@ -957,17 +957,10 @@ async fn update(job: &JobContext) -> Result<Option<String>, Step> {
         ..Default::default()
     };
     let updated = job.command(spec, true).await;
-    let repaired = match updated {
-        Ok(()) => {
-            manage(agent).await;
-            crate::jsonschema::ensure_in_job(job).await;
-            Some(repair_models(job).await)
-        }
-        Err(_) => None,
-    };
+    let repaired = after_update(job, updated.is_ok()).await;
     agent.strata().start_again().await;
     updated?;
-    let repaired = repaired.transpose()?.unwrap_or_default();
+    let repaired = repaired?;
     agent.updates.found(Some(false), None);
     Ok(repaired.left_text())
 }
@@ -981,20 +974,25 @@ async fn update_terminal(job: &JobContext) -> Result<Option<String>, Step> {
     agent.strata().stop();
     job.step("Updating the engine and the Strata Terminal (download and test start)");
     let updated = ask_terminal_events(job, terminal.update(), terminal::updated).await;
-    let repaired = match updated {
-        Ok(_) => {
-            manage(agent).await;
-            crate::jsonschema::ensure_in_job(job).await;
-            Some(repair_models(job).await)
-        }
-        Err(_) => None,
-    };
+    let repaired = after_update(job, updated.is_ok()).await;
     agent.strata().start_again().await;
     updated?;
-    let repaired = repaired.transpose()?.unwrap_or_default();
+    let repaired = repaired?;
     terminal_version(agent, &terminal).await;
     agent.updates.found(Some(false), None);
     Ok(repaired.left_text())
+}
+
+/// After an update, with Strata still stopped: what the service keeps in
+/// every run config, jsonschema, and [`repair_models`]; nothing after a
+/// failed update.
+async fn after_update(job: &JobContext, updated: bool) -> Result<Repaired, Step> {
+    if !updated {
+        return Ok(Repaired::default());
+    }
+    manage(job.agent()).await;
+    crate::jsonschema::ensure_in_job(job).await;
+    repair_models(job).await
 }
 
 /// What [`repair_models`] did: the models whose run config it changed and
@@ -1038,41 +1036,47 @@ async fn repair_run_configs(job: &JobContext) -> Result<Option<String>, Step> {
 /// Each model whose run config points into a Strata folder an update
 /// deleted is set up again by Strata's setup, with the choices its run
 /// config has; when it is not in Strata's catalog, setup fails or a stale
-/// path is left after it, the stale paths move ([`move_stale`]). One step
+/// path is left after it, the stale paths move ([`move_stale_paths`]). One step
 /// per model. Only a cancel ends it early.
 async fn repair_models(job: &JobContext) -> Result<Repaired, Step> {
     let agent = job.agent();
     let install = Installation::of(&agent.cfg);
-    let found = install.clone();
-    let stale = tokio::task::spawn_blocking(move || found.stale_models())
-        .await
-        .unwrap_or_default();
+    let stale = blocking(&install, "", |install, _| install.stale_models()).await;
     let mut repaired = Repaired::default();
     if stale.is_empty() {
         return Ok(repaired);
     }
     // After an update the catalog is the one of the new Strata files.
     read_catalog_if_new(agent).await;
-    let now = agent.catalog.now(catalog_key(agent).as_deref());
+    let catalog = agent.catalog.now(catalog_key(agent).as_deref());
     let mut roots = HashMap::new();
-    for (id, _) in stale {
+    for id in stale {
         let shown = model_id(agent, &install, &id);
         job.step(&format!(
             "Setting up {shown} again for the updated Strata files"
         ));
-        match now.found(&id) {
+        let set_up = match catalog.found(&id) {
             Some(size) => match setup_again(job, &install, &id, size).await {
-                Ok(()) => tracing::info!("Run config {id}: repaired by setup"),
+                Ok(()) => {
+                    tracing::info!("Run config {id}: repaired by setup");
+                    true
+                }
                 Err(Step::Cancelled) => return Err(Step::Cancelled),
                 Err(Step::Failed(why)) => {
-                    tracing::warn!("Run config {id}: setup failed ({why}); its paths move")
+                    tracing::warn!("Run config {id}: setup failed ({why}); its paths move");
+                    false
                 }
             },
-            None => tracing::warn!("Run config {id}: not in Strata's catalog; its paths move"),
+            None => {
+                tracing::warn!("Run config {id}: not in Strata's catalog; its paths move");
+                false
+            }
+        };
+        let moved = move_stale_paths(agent, &install, &id, &mut roots).await;
+        if set_up || moved.changed {
+            repaired.changed.push(shown.clone());
         }
-        let left = move_stale(agent, &install, &id, &mut roots).await;
-        repaired.changed.push(shown.clone());
-        if left {
+        if moved.left {
             repaired.left.push(shown);
         }
     }
@@ -1108,18 +1112,27 @@ async fn setup_again(
     Ok(())
 }
 
+/// What [`move_stale_paths`] did to one run config.
+#[derive(Default)]
+struct PathsMoved {
+    /// A path moved.
+    changed: bool,
+    /// A stale path is left.
+    left: bool,
+}
+
 /// Moves the stale paths of `id`'s run config, if it has any; Strata names
-/// its engine folder when an engine path is stale, once per backend in
-/// `roots`. True when a stale path is left.
-async fn move_stale(
+/// its engine folder when an engine path is stale, once per backend (its
+/// `--backend`) in `roots`.
+async fn move_stale_paths(
     agent: &Agent,
     install: &Installation,
     id: &str,
     roots: &mut HashMap<Option<String>, Option<PathBuf>>,
-) -> bool {
+) -> PathsMoved {
     let areas = blocking(install, id, |install, id| install.stale(id)).await;
     if areas.is_empty() {
-        return false;
+        return PathsMoved::default();
     }
     let mut engine = None;
     if areas.contains(&crate::stale_paths::Area::Engine) {
@@ -1131,15 +1144,22 @@ async fn move_stale(
         engine = roots[&backend].clone();
     }
     blocking(install, id, move |install, id| {
-        if let Err(e) = install.move_stale_paths(id, engine.as_deref()) {
-            tracing::warn!("Run config {id}: stale paths not moved: {e}");
+        let changed = match install.move_stale_paths(id, engine.as_deref()) {
+            Ok(moved) => !moved.moved.is_empty(),
+            Err(e) => {
+                tracing::warn!("Run config {id}: stale paths not moved: {e}");
+                false
+            }
+        };
+        PathsMoved {
+            changed,
+            left: !install.stale(id).is_empty(),
         }
-        !install.stale(id).is_empty()
     })
     .await
 }
 
-/// `f` with a model's run config off the runtime's threads.
+/// `f` with the Strata folder and a model's id off the runtime's threads.
 async fn blocking<T: Default + Send + 'static>(
     install: &Installation,
     id: &str,
@@ -2111,10 +2131,7 @@ pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output =
 /// `changed`.
 async fn repair_at_start(agent: &Arc<Agent>, changed: &mut Vec<String>) -> bool {
     let install = Installation::of(&agent.cfg);
-    let found = install.clone();
-    let stale = tokio::task::spawn_blocking(move || found.stale_models())
-        .await
-        .unwrap_or_default();
+    let stale = blocking(&install, "", |install, _| install.stale_models()).await;
     if stale.is_empty() {
         return false;
     }
@@ -2126,9 +2143,13 @@ async fn repair_at_start(agent: &Arc<Agent>, changed: &mut Vec<String>) -> bool 
                 why.into_text()
             );
             let mut roots = HashMap::new();
-            for (id, _) in stale {
-                move_stale(agent, &install, &id, &mut roots).await;
-                changed.push(id);
+            for id in stale {
+                if move_stale_paths(agent, &install, &id, &mut roots)
+                    .await
+                    .changed
+                {
+                    changed.push(id);
+                }
             }
             false
         }

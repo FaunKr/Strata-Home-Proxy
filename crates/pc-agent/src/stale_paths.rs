@@ -37,8 +37,8 @@ pub struct Targets<'a> {
 /// What a move did to one run config.
 #[derive(Debug, Default, PartialEq)]
 pub struct Moved {
-    /// Paths moved, by the deleted folder's name and the folder they moved to.
-    pub moved: BTreeMap<(String, PathBuf), usize>,
+    /// Paths moved, by the deleted folder and the folder they moved to.
+    pub moved: BTreeMap<(PathBuf, PathBuf), usize>,
     /// Stale paths that stayed: no folder to move to, or no such file there.
     pub left: Vec<String>,
 }
@@ -75,7 +75,7 @@ pub fn move_stale(value: &mut Value, components: &Path, targets: &Targets) -> Mo
             (Some(target), Some(new)) => {
                 *moved
                     .moved
-                    .entry((path.name.clone(), target.to_path_buf()))
+                    .entry((path.folder.clone(), target.to_path_buf()))
                     .or_default() += 1;
                 *text = format!("{}{}", path.option, new.display());
             }
@@ -89,24 +89,24 @@ pub fn move_stale(value: &mut Value, components: &Path, targets: &Targets) -> Mo
 /// value after a colon, as the speed projection's vector does
 /// (`<file>:1.0`, `--control-vector-scaled`): then the file before it counts.
 fn moved_path(target: &Path, rest: &[String]) -> Option<PathBuf> {
-    let new = rest
-        .iter()
-        .fold(target.to_path_buf(), |p, part| p.join(part));
-    if new.exists() {
-        return Some(new);
-    }
-    let (last, dirs) = rest.split_last()?;
-    let (file, _) = last.rsplit_once(':')?;
+    let Some((last, dirs)) = rest.split_last() else {
+        return target.exists().then(|| target.to_path_buf());
+    };
     let folder = dirs
         .iter()
         .fold(target.to_path_buf(), |p, part| p.join(part));
+    if folder.join(last).exists() {
+        return Some(folder.join(last));
+    }
+    let (file, _) = last.rsplit_once(':')?;
     folder.join(file).is_file().then(|| folder.join(last))
 }
 
 /// A path below `<components>\<area>\<name>\` whose folder `<name>` is gone.
 struct StalePath {
     area: Area,
-    name: String,
+    /// `<components>\<area>\<name>`.
+    folder: PathBuf,
     /// The parts below `<name>`.
     rest: Vec<String>,
     /// `--x=` when the path is an option's value, else empty.
@@ -131,13 +131,13 @@ fn stale_path(text: &str, components: &Path) -> Option<StalePath> {
     let area = [Area::Control, Area::Engine]
         .into_iter()
         .find(|area| same(all[base.len()], area.folder()))?;
-    let name = all[base.len() + 1].to_string();
-    if components.join(area.folder()).join(&name).is_dir() {
+    let folder = components.join(area.folder()).join(all[base.len() + 1]);
+    if folder.is_dir() {
         return None;
     }
     Some(StalePath {
         area,
-        name,
+        folder,
         rest: all[base.len() + 2..]
             .iter()
             .map(|p| p.to_string())
@@ -265,11 +265,12 @@ mod tests {
             config["vision"]["exe"],
             engine.join("strata-vision.exe").display().to_string()
         );
-        assert_eq!(moved.moved[&("0.1.49.1".to_string(), control.clone())], 4);
-        assert_eq!(
-            moved.moved[&("0.1.48-windows-x86_64-hip-rdna2".to_string(), engine)],
-            1
-        );
+        let old_control = components.join("control").join("0.1.49.1");
+        let old_engine = components
+            .join("engine")
+            .join("0.1.48-windows-x86_64-hip-rdna2");
+        assert_eq!(moved.moved[&(old_control, control.clone())], 4);
+        assert_eq!(moved.moved[&(old_engine, engine)], 1);
         assert!(moved.left.is_empty());
         assert!(stale(&config, &components).is_empty());
     }

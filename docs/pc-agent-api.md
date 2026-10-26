@@ -17,7 +17,7 @@ talks to a newer proxy. Therefore:
 - An optional request field is absent as long as it is not set: the
   PC service rejects request fields it does not know. Kinds without fields
   (`update`, `benchmark`, `compare_models`, `switch_to_terminal`,
-  `remove_old_strata_folder`) ignore extra fields.
+  `remove_old_strata_folder`, `repair_run_configs`) ignore extra fields.
 - A request field a newer PC service ignores is still sent with a value an
   older one accepts: older services keep checking it (the `api_key` of
   `install` is a random throwaway key, because older services refuse an

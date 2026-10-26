@@ -445,3 +445,48 @@ async fn before_a_start_the_served_run_config_gets_its_paths_moved_without_setup
     // No engine folder named yet: engine paths stay until a repair asks.
     assert_moved(&pc, "iq3_xxs", false);
 }
+
+#[tokio::test]
+async fn the_repair_job_restarts_the_served_model_when_its_run_config_changed() {
+    let s = setup("repair-job-restart").await;
+    let pc = updated_twice(&s, &["iq3_xxs"]);
+    setup_writes(&s, &pc, "iq3_xxs", None);
+    let (code, answer) = post(&s, "/strata/jobs", json!({"kind": "repair_run_configs"})).await;
+    assert_eq!(code, 202, "{answer}");
+    let done = finished(&s).await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(done["result"], Value::Null, "nothing left: {done}");
+    assert_moved(&pc, "iq3_xxs", true);
+    eventually("Strata restarted", || {
+        s.fake.starts.load(Ordering::SeqCst) == 1
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_strata_update_names_a_model_it_could_not_repair() {
+    let s = setup("repair-update-left").await;
+    let pc = updated_twice(&s, &["mine-q4"]);
+    engine_says(
+        &s,
+        r#"{"schema_version": 1, "ok": false, "engine": null, "usable": false, "notice": "no engine for this PC"}"#,
+        Some(5),
+    );
+    s.fake.command(
+        "strata.cmd update",
+        FakeCommand {
+            lines: lines(&[r#"{"schema_version": 1, "ok": true, "feed": {"source": "f", "sequence": 42, "channel": "stable", "key_id": "k"}, "results": [{"component": "control", "status": "updated", "changed": true}], "exit_code": 0}"#]),
+            ..FakeCommand::default()
+        },
+    );
+    let (code, answer) = post(&s, "/strata/jobs", json!({"kind": "update"})).await;
+    assert_eq!(code, 202, "{answer}");
+    let done = finished(&s).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let result = done["result"].as_str().unwrap_or_default();
+    assert!(
+        result.starts_with("Not repaired after the Strata update") && result.contains("mine-q4"),
+        "{done}"
+    );
+    assert_moved(&pc, "mine-q4", false);
+}

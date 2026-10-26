@@ -359,15 +359,12 @@ impl Installation {
     }
 
     /// The models whose run config has a path into a Strata folder an
-    /// update deleted, each with where those paths lie
-    /// ([`stale_paths`](crate::stale_paths)). Reads files only.
-    pub fn stale_models(&self) -> Vec<(String, Vec<Area>)> {
+    /// update deleted ([`stale_paths`](crate::stale_paths)). Reads files
+    /// only.
+    pub fn stale_models(&self) -> Vec<String> {
         self.models()
             .into_iter()
-            .filter_map(|id| {
-                let areas = self.stale(&id);
-                (!areas.is_empty()).then_some((id, areas))
-            })
+            .filter(|id| !self.stale(id).is_empty())
             .collect()
     }
 
@@ -412,7 +409,8 @@ impl Installation {
         }
         for ((from, to), n) in &moved.moved {
             tracing::info!(
-                "Run config {id}: {n} paths moved from {from} to {}",
+                "Run config {id}: {n} paths moved from {} to {}",
+                from.display(),
                 to.display()
             );
         }

@@ -150,7 +150,7 @@ scripts/check-language.sh
 # No Claude session links in commits or PR bodies; CI checks the PR itself.
 scripts/check-session-links.test.sh
 # CHANGELOG.md has a section for the product version (the workflow Release).
-scripts/release-notes.test.sh
+scripts/changelog-section.test.sh
 # Which HEAD the push guard checks, in a worktree too.
 scripts/push-guard.test.sh
 if [[ $cargo == true ]]; then

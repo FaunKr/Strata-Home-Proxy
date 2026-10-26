@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Tests scripts/release-notes.sh on made-up repos, then on this one.
+# Tests scripts/changelog-section.sh on made-up repos, then on this one.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-notes=$PWD/scripts/release-notes.sh
+notes=$PWD/scripts/changelog-section.sh
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 failures=0
 fail() {
-  echo "release-notes: $1" >&2
+  echo "changelog-section: $1" >&2
   failures=$((failures + 1))
 }
 # A repo at version $1 with the changelog on stdin.

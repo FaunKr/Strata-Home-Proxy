@@ -73,6 +73,8 @@ while IFS= read -r path; do
     # The local-agent runner: check.sh runs its tests and shellcheck. It is no
     # crate, so no crate needs a build for it.
     tools/local-agent | tools/local-agent/*) runners=true ;;
+    # The product changelog: check.sh checks its section for the version.
+    CHANGELOG.md) runners=true ;;
     # The code benchmark: the proxy embeds its tasks (include_str!), check.sh
     # runs the runner's tests; its image holds the runner and the repo task,
     # built from repo.json by prepare_repo_task.py.

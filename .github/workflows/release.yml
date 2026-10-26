@@ -2,7 +2,7 @@ name: Release
 # Publishes the product version, [workspace.package] in Cargo.toml: the
 # proxy's image as :x.y.z, :x.y and :x, then the tag vx.y.z with a GitHub
 # release whose text is that version's section of CHANGELOG.md
-# (scripts/release-notes.sh). Started by hand on main (docs/ci.md, Releases).
+# (scripts/changelog-section.sh). Started by hand on main (docs/ci.md, Releases).
 # :latest keeps following main (ci.yml), so the NAS updates as before.
 on:
   workflow_dispatch:
@@ -22,10 +22,14 @@ jobs:
       - uses: actions/checkout@v4
       - id: version
         run: |
-          version=$(scripts/release-notes.sh --version)
-          scripts/release-notes.sh >"$RUNNER_TEMP/notes.md"
-          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
-            echo "v$version is already released: raise the version in Cargo.toml and add its section to CHANGELOG.md" >&2
+          version=$(scripts/changelog-section.sh --version)
+          scripts/changelog-section.sh >"$RUNNER_TEMP/notes.md"
+          # Exit code 2: no such tag. Anything else, a network error too, stops
+          # before an image tag is overwritten.
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null || status=$?
+          if ((status != 2)); then
+            echo "v$version is already released or the tags could not be read (git ls-remote: $status): raise the version in Cargo.toml and add its section to CHANGELOG.md" >&2
             exit 1
           fi
           {

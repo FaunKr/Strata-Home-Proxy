@@ -42,6 +42,7 @@ Reference values after #151:
 | PR that changes only `tools/local-agent/` or the code-bench runner (not its `tasks/`) | changes, test without Cargo (`cargo=false`, `check.sh --no-cargo`), ci-ok | approx. 1–2 (estimate) |
 | PR that changes a workflow, Cargo.lock or scripts/ | everything except Windows | approx. 5–18 (#309: 5, #308: 15) |
 | Push to `main` | changes, test (check only), publish and publish-bench if their image changed, ci-ok | approx. 1–10 (estimate without a publish) |
+| Workflow *Release*, by hand on `main` | release | approx. 2–8 (estimate: 2 with main's image in the layer cache, a full build otherwise) |
 
 The `ui` job installs Chromium's system packages with Playwright's
 `--with-deps` (fonts, xvfb, libnss3) from the runner's Ubuntu mirror. That
@@ -94,7 +95,7 @@ A release is started by hand, never by a merge:
 1. A PR raises `version` in `[workspace.package]` of `Cargo.toml` and adds
    its `## x.y.z` section at the top of `CHANGELOG.md` (the rules for the
    number are there). `scripts/check.sh` fails when the section is missing,
-   empty or not the newest (`scripts/release-notes.test.sh`).
+   empty or not the newest (`scripts/changelog-section.test.sh`).
 2. After its merge, run the workflow *Release* (`.github/workflows/release.yml`)
    on `main`. It builds the proxy's image from the layer cache and publishes it
    as `:x.y.z`, `:x.y` and `:x`, then creates the tag `vx.y.z` and a GitHub

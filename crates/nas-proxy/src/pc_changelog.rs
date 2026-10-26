@@ -51,7 +51,7 @@ impl Version {
     fn needs_step_after(self, before: Self) -> bool {
         match (before.0, self.0) {
             (0, 0) => self.1 > before.1,
-            (0, _) => false,
+            (0, 1) => false,
             _ => self.0 > before.0,
         }
     }
@@ -212,6 +212,7 @@ mod tests {
         assert!(!Version(1, 0, 0).needs_step_after(Version(0, 2, 2)));
         assert!(!Version(1, 1, 0).needs_step_after(Version(1, 0, 3)));
         assert!(Version(2, 0, 0).needs_step_after(Version(1, 4, 0)));
+        assert!(Version(2, 0, 0).needs_step_after(Version(0, 2, 2)));
     }
 
     #[test]

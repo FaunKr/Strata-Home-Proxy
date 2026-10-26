@@ -3,6 +3,10 @@ resolver = "3"
 members = ["crates/admin-ui", "crates/nas-proxy", "crates/pc-agent", "crates/pc-protocol"]
 
 [workspace.package]
+# The product version: the web UI shows it, a release publishes it
+# (CHANGELOG.md, docs/ci.md). The PC service keeps its own in its Cargo.toml,
+# since it decides PC updates (docs/pc-service.md).
+version = "1.0.0"
 license = "MIT"
 
 # Line tables keep backtraces with file and line; full debug info and the

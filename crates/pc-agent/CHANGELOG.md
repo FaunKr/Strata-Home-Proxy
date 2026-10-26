@@ -4,6 +4,10 @@ What each version brings, newest first. The web UI's PC service card shows
 the versions an update brings; each line is written for the user. Rules:
 `docs/pc-service.md`.
 
+## 1.0.0
+
+- The first stable release, together with Strata Home Proxy 1.0.0. Nothing changes on the PC.
+
 ## 0.2.2
 
 - Installs the Python package jsonschema into Strata's Python, so Strata checks JSON answers against the schema a request asks for.

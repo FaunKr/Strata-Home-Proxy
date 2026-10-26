@@ -1,6 +1,7 @@
 //! The PC service card lists what an update brings, from the changelog:
 //! the versions above the installed one up to the one on the NAS, a step
-//! on the PC where the minor number goes up against the version before it.
+//! on the PC where the minor number goes up against the version before it
+//! (under 0.x; the rule from 1.0.0 on is a unit test in `pc_changelog`).
 
 use crate::common;
 

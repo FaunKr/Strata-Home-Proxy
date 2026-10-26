@@ -80,11 +80,28 @@ not start the whole CI.
   and the next push catches up on what a cancelled or failed one missed. A
   commit whose publish was cancelled gets no `:<commit>` tag, and its run
   on `main` is listed as cancelled although its other jobs passed.
-- The version is the crate version from each `Cargo.toml`. The web UI shows
-  the proxy's under *System* (`crates/nas-proxy/src/admin.rs`). The PC service
-  reports its own without the commit, so a new image offers a PC service
-  update only after a version bump (`docs/pc-service.md`).
-- There are no git tags or GitHub releases.
+- The product version is `version` in `[workspace.package]` of `Cargo.toml`,
+  shared by the proxy, the web UI and the protocol crate. The web UI shows it
+  under *System* (`crates/nas-proxy/src/admin.rs`). The PC service keeps its
+  own version in `crates/pc-agent/Cargo.toml` and reports it without the
+  commit, so a new image offers a PC service update only after a bump of that
+  version (`docs/pc-service.md`).
+
+## Releases
+
+A release is started by hand, never by a merge:
+
+1. A PR raises `version` in `[workspace.package]` of `Cargo.toml` and adds
+   its `## x.y.z` section at the top of `CHANGELOG.md` (the rules for the
+   number are there). `scripts/check.sh` fails when the section is missing,
+   empty or not the newest (`scripts/release-notes.test.sh`).
+2. After its merge, run the workflow *Release* (`.github/workflows/release.yml`)
+   on `main`. It builds the proxy's image from the layer cache and publishes it
+   as `:x.y.z`, `:x.y` and `:x`, then creates the tag `vx.y.z` and a GitHub
+   release with the section's lines. It fails when the tag exists already.
+
+`:latest` and `:<commit>` keep following `main`, so the NAS updates on every
+merge as before. The code benchmark's image has no version tags.
 
 ## Where the minutes go
 

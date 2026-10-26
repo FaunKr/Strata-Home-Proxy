@@ -97,9 +97,9 @@ A release is started by hand, never by a merge:
    number are there). `scripts/check.sh` fails when the section is missing,
    empty or not the newest (`scripts/changelog-section.test.sh`).
 2. After its merge, run the workflow *Release* (`.github/workflows/release.yml`)
-   on `main` once the merge's `publish` job has finished. It tags the image
-   that job pushed as `:<commit>` with `:x.y.z`, `:x.y` and `:x` (it builds
-   the image itself when there is none, e.g. while `publish` still runs), then
+   on `main` once the merge's `publish` job has finished. It adds `:x.y.z`,
+   `:x.y` and `:x` to the image that job pushed as `:<commit>` (it builds the
+   image itself when there is none, e.g. while `publish` still runs), then
    creates the tag `vx.y.z` and a GitHub release with the section's lines. It
    fails when the tag exists already.
 

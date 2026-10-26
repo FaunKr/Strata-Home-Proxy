@@ -332,6 +332,7 @@ pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
         StrataJobKind::Tune => "Tuning",
         StrataJobKind::ApplyPreset => "Applying preset",
         StrataJobKind::UndoPreset => "Undoing preset",
+        StrataJobKind::RepairRunConfigs => "Repairing models after a Strata update",
     }
 }
 

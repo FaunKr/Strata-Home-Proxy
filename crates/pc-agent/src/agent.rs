@@ -115,6 +115,9 @@ pub struct Agent {
     /// What the PC is, read with the first `GET /strata`; with when to read
     /// it again if it lacks a graphics card or the drive.
     machine: Mutex<Option<(MachineFacts, Option<Instant>)>>,
+    /// Strata's engine folder for this PC per backend, as Strata named it
+    /// last: where stale paths move before a start, which asks no program.
+    pub(crate) engine_roots: Mutex<HashMap<Option<String>, std::path::PathBuf>>,
 }
 
 struct Watchdog {
@@ -180,6 +183,7 @@ impl Agent {
             strata_key: StrataKey::new(),
             strata_local: Mutex::new(None),
             machine: Mutex::new(None),
+            engine_roots: Mutex::new(HashMap::new()),
         })
     }
 

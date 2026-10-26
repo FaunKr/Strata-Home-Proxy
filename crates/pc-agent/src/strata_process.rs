@@ -140,6 +140,9 @@ impl<'a> StrataProcess<'a> {
             }
             false
         };
+        // An update Strata ran by itself may have deleted a folder the run
+        // config names.
+        crate::strata::move_stale_before_start(agent, program, args);
         // Every start gets a new key; Strata reads it from the configs.
         if let Err(e) = agent.strata_key.renew(&agent.cfg) {
             return failed(format!("new Strata key not written: {e}"));

@@ -202,6 +202,9 @@ enum Plan {
         id: String,
         change: PresetChange,
     },
+    /// Sets up again the models whose run config points into a deleted
+    /// Strata folder ([`repair_models`]).
+    RepairRunConfigs,
 }
 
 impl Plan {
@@ -229,7 +232,8 @@ impl Plan {
             | Self::SetKey
             | Self::CompareModels { .. }
             | Self::SetRelay { .. }
-            | Self::RemoveOldStrataFolder => None,
+            | Self::RemoveOldStrataFolder
+            | Self::RepairRunConfigs => None,
         }
     }
 }
@@ -569,6 +573,10 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
         StrataJobRequest::PresetOff { model } => {
             preset_plan(agent, &install, &model, PresetChange::Off)
         }
+        StrataJobRequest::RepairRunConfigs => {
+            strata_installed(&install)?;
+            Ok(Plan::RepairRunConfigs)
+        }
     }
 }
 
@@ -708,6 +716,7 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::SetRelay { on } => set_relay(job, on).await,
         Plan::Tune { id, mode, usage } => tune(job, &id, mode, usage).await,
         Plan::Preset { id, change } => change_preset(job, &id, change).await,
+        Plan::RepairRunConfigs => repair_run_configs(job).await,
     }
 }
 
@@ -948,14 +957,19 @@ async fn update(job: &JobContext) -> Result<Option<String>, Step> {
         ..Default::default()
     };
     let updated = job.command(spec, true).await;
-    if updated.is_ok() {
-        manage(agent).await;
-        crate::jsonschema::ensure_in_job(job).await;
-    }
+    let repaired = match updated {
+        Ok(()) => {
+            manage(agent).await;
+            crate::jsonschema::ensure_in_job(job).await;
+            Some(repair_models(job).await)
+        }
+        Err(_) => None,
+    };
     agent.strata().start_again().await;
     updated?;
+    let repaired = repaired.transpose()?.unwrap_or_default();
     agent.updates.found(Some(false), None);
-    Ok(None)
+    Ok(repaired.left_text())
 }
 
 /// `strata update` with Strata stopped: the update refuses while an engine
@@ -967,15 +981,217 @@ async fn update_terminal(job: &JobContext) -> Result<Option<String>, Step> {
     agent.strata().stop();
     job.step("Updating the engine and the Strata Terminal (download and test start)");
     let updated = ask_terminal_events(job, terminal.update(), terminal::updated).await;
-    if updated.is_ok() {
-        manage(agent).await;
-        crate::jsonschema::ensure_in_job(job).await;
-    }
+    let repaired = match updated {
+        Ok(_) => {
+            manage(agent).await;
+            crate::jsonschema::ensure_in_job(job).await;
+            Some(repair_models(job).await)
+        }
+        Err(_) => None,
+    };
     agent.strata().start_again().await;
     updated?;
+    let repaired = repaired.transpose()?.unwrap_or_default();
     terminal_version(agent, &terminal).await;
     agent.updates.found(Some(false), None);
-    Ok(None)
+    Ok(repaired.left_text())
+}
+
+/// What [`repair_models`] did: the models whose run config it changed and
+/// those it could not repair.
+#[derive(Default)]
+struct Repaired {
+    changed: Vec<String>,
+    left: Vec<String>,
+}
+
+impl Repaired {
+    /// A job's result naming the models still not repaired.
+    fn left_text(&self) -> Option<String> {
+        (!self.left.is_empty()).then(|| {
+            format!(
+                "Not repaired after the Strata update, setup and the move both failed: {}",
+                self.left.join(", ")
+            )
+        })
+    }
+}
+
+/// A job of kind `repair_run_configs`: [`repair_models`], then a running Strata
+/// whose active model's run config changed restarts once it is idle.
+async fn repair_run_configs(job: &JobContext) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    let active = active_model(agent);
+    let repaired = repair_models(job).await?;
+    let restart = active.is_some_and(|a| {
+        repaired
+            .changed
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case(&a))
+    });
+    if restart && agent.strata_healthy().await {
+        agent.strata().restart_when_idle(job).await?;
+    }
+    Ok(repaired.left_text())
+}
+
+/// Each model whose run config points into a Strata folder an update
+/// deleted is set up again by Strata's setup, with the choices its run
+/// config has; when it is not in Strata's catalog, setup fails or a stale
+/// path is left after it, the stale paths move ([`move_stale`]). One step
+/// per model. Only a cancel ends it early.
+async fn repair_models(job: &JobContext) -> Result<Repaired, Step> {
+    let agent = job.agent();
+    let install = Installation::of(&agent.cfg);
+    let found = install.clone();
+    let stale = tokio::task::spawn_blocking(move || found.stale_models())
+        .await
+        .unwrap_or_default();
+    let mut repaired = Repaired::default();
+    if stale.is_empty() {
+        return Ok(repaired);
+    }
+    // After an update the catalog is the one of the new Strata files.
+    read_catalog_if_new(agent).await;
+    let now = agent.catalog.now(catalog_key(agent).as_deref());
+    let mut roots = HashMap::new();
+    for (id, _) in stale {
+        let shown = model_id(agent, &install, &id);
+        job.step(&format!(
+            "Setting up {shown} again for the updated Strata files"
+        ));
+        match now.found(&id) {
+            Some(size) => match setup_again(job, &install, &id, size).await {
+                Ok(()) => tracing::info!("Run config {id}: repaired by setup"),
+                Err(Step::Cancelled) => return Err(Step::Cancelled),
+                Err(Step::Failed(why)) => {
+                    tracing::warn!("Run config {id}: setup failed ({why}); its paths move")
+                }
+            },
+            None => tracing::warn!("Run config {id}: not in Strata's catalog; its paths move"),
+        }
+        let left = move_stale(agent, &install, &id, &mut roots).await;
+        repaired.changed.push(shown.clone());
+        if left {
+            repaired.left.push(shown);
+        }
+    }
+    Ok(repaired)
+}
+
+/// Setup for an installed model again, with its context, speed projection,
+/// picture reading and the key Strata runs with, as [`set_pictures`] runs
+/// it: a failed setup gives the run config from before back.
+async fn setup_again(
+    job: &JobContext,
+    install: &Installation,
+    id: &str,
+    size: &Size,
+) -> Result<(), Step> {
+    let agent = job.agent();
+    let before = load_model(agent, id).await?;
+    let touched = install.modified(id);
+    let key = agent.strata_key.key(&agent.cfg).unwrap_or_default();
+    let model = NewModel {
+        size: size.clone(),
+        context: before.context().unwrap_or(catalog::DEFAULT_CONTEXT),
+        speed_projection: before.speed_projection(),
+        pictures: before.pictures(),
+    };
+    if let Err(step) = setup(job, install, &model, &key).await {
+        save_model(agent, before).await?;
+        install.set_modified(id, touched);
+        return Err(step);
+    }
+    manage(agent).await;
+    install.set_modified(id, touched);
+    Ok(())
+}
+
+/// Moves the stale paths of `id`'s run config, if it has any; Strata names
+/// its engine folder when an engine path is stale, once per backend in
+/// `roots`. True when a stale path is left.
+async fn move_stale(
+    agent: &Agent,
+    install: &Installation,
+    id: &str,
+    roots: &mut HashMap<Option<String>, Option<PathBuf>>,
+) -> bool {
+    let areas = blocking(install, id, |install, id| install.stale(id)).await;
+    if areas.is_empty() {
+        return false;
+    }
+    let mut engine = None;
+    if areas.contains(&crate::stale_paths::Area::Engine) {
+        let backend = blocking(install, id, |install, id| install.backend(id)).await;
+        if !roots.contains_key(&backend) {
+            let root = engine_root(agent, backend.as_deref()).await;
+            roots.insert(backend.clone(), root);
+        }
+        engine = roots[&backend].clone();
+    }
+    blocking(install, id, move |install, id| {
+        if let Err(e) = install.move_stale_paths(id, engine.as_deref()) {
+            tracing::warn!("Run config {id}: stale paths not moved: {e}");
+        }
+        !install.stale(id).is_empty()
+    })
+    .await
+}
+
+/// `f` with a model's run config off the runtime's threads.
+async fn blocking<T: Default + Send + 'static>(
+    install: &Installation,
+    id: &str,
+    f: impl FnOnce(&Installation, &str) -> T + Send + 'static,
+) -> T {
+    let (install, id) = (install.clone(), id.to_string());
+    tokio::task::spawn_blocking(move || f(&install, &id))
+        .await
+        .unwrap_or_default()
+}
+
+/// Strata's engine folder for this PC (`strata components engine`), kept
+/// for the moves before a start; `None`, with a warning, when Strata names
+/// none.
+async fn engine_root(agent: &Agent, backend: Option<&str>) -> Option<PathBuf> {
+    let terminal = Terminal::of(&agent.cfg);
+    let root = match output(agent, &terminal.components_engine(backend)).await {
+        Some((_, lines)) => terminal::engine_root(&lines),
+        None => Err("strata components engine did not start".into()),
+    };
+    match root {
+        Ok(root) => {
+            agent
+                .engine_roots
+                .lock()
+                .unwrap()
+                .insert(backend.map(String::from), root.clone());
+            Some(root)
+        }
+        Err(why) => {
+            tracing::warn!("Strata's engine folder unknown, engine paths stay: {why}");
+            None
+        }
+    }
+}
+
+/// Before a start of Strata with `program` and `args`: the stale paths of
+/// the run config it serves move, engine paths to the engine folder Strata
+/// named last. Asks no program; setup runs only in a job.
+pub(crate) fn move_stale_before_start(agent: &Agent, program: &Path, args: &[String]) {
+    let install = Installation::of(&agent.cfg);
+    let Some(id) = install.active_model(program, args) else {
+        return;
+    };
+    if install.stale(&id).is_empty() {
+        return;
+    }
+    let backend = install.backend(&id);
+    let engine = agent.engine_roots.lock().unwrap().get(&backend).cloned();
+    if let Err(e) = install.move_stale_paths(&id, engine.as_deref()) {
+        tracing::warn!("Run config {id}: stale paths not moved: {e}");
+    }
 }
 
 /// Asks `strata --version` and keeps the answer with the build it is for,
@@ -1856,9 +2072,17 @@ fn active_changed(agent: &Agent, changed: &[String]) -> bool {
 pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output = ()> + use<> {
     let after_update = crate::update::take_start_after_update(agent);
     undo_interrupted_switch(agent);
-    let changed = manage(agent).await;
+    let mut changed = manage(agent).await;
+    let repairing = repair_at_start(agent, &mut changed).await;
     let agent = Arc::clone(agent);
     async move {
+        // The repair job restarts Strata itself; one the update stopped
+        // starts after it, with the repaired run configs.
+        if repairing {
+            while agent.jobs.running() {
+                tokio::time::sleep(POLL).await;
+            }
+        }
         if after_update {
             if agent.may_start_strata_itself() {
                 tracing::info!("Strata starts after the update");
@@ -1877,6 +2101,37 @@ pub async fn manage_configs_at_start(agent: &Arc<Agent>) -> impl Future<Output =
         }
         tracing::info!("Config of the active model changed, Strata restarts");
         agent.strata().restart_unless_job_runs().await;
+    }
+}
+
+/// At the service's start: a run config pointing into a deleted Strata
+/// folder starts a job of kind `repair_run_configs`, and true says it
+/// runs. When no job can start (gaming mode, a job running), the stale
+/// paths move instead, and the models whose run config changed join
+/// `changed`.
+async fn repair_at_start(agent: &Arc<Agent>, changed: &mut Vec<String>) -> bool {
+    let install = Installation::of(&agent.cfg);
+    let found = install.clone();
+    let stale = tokio::task::spawn_blocking(move || found.stale_models())
+        .await
+        .unwrap_or_default();
+    if stale.is_empty() {
+        return false;
+    }
+    match start(agent, StrataJobRequest::RepairRunConfigs) {
+        Ok(_) => true,
+        Err(why) => {
+            tracing::warn!(
+                "Run configs point into a deleted Strata folder, but no job can set them up again ({}); their paths move",
+                why.into_text()
+            );
+            let mut roots = HashMap::new();
+            for (id, _) in stale {
+                move_stale(agent, &install, &id, &mut roots).await;
+                changed.push(id);
+            }
+            false
+        }
     }
 }
 
@@ -2775,6 +3030,7 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::ApplyPreset => "Apply preset",
         StrataJobKind::UndoPreset => "Undo preset",
         StrataJobKind::SetRelay => "Switch relay mode",
+        StrataJobKind::RepairRunConfigs => "Repair models after a Strata update",
     }
 }
 

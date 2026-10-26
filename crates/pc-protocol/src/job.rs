@@ -44,10 +44,13 @@ pub enum StrataJobKind {
     /// Turns relay mode on or off, with one restart of Strata once it is
     /// idle.
     SetRelay,
+    /// Sets up again the models whose run config points into a Strata
+    /// folder an update deleted; the PC service starts it by itself.
+    RepairRunConfigs,
 }
 
 impl StrataJobKind {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Install,
         Self::AddModel,
         Self::Activate,
@@ -68,6 +71,7 @@ impl StrataJobKind {
         Self::SetEngineSettings,
         Self::PresetOff,
         Self::SetRelay,
+        Self::RepairRunConfigs,
     ];
 }
 
@@ -249,6 +253,9 @@ pub enum StrataJobRequest {
     SetRelay {
         on: bool,
     },
+    /// Sets up again every model whose run config points into a Strata
+    /// folder that is gone, as the PC service does by itself at its start.
+    RepairRunConfigs,
 }
 
 impl StrataJobRequest {
@@ -274,6 +281,7 @@ impl StrataJobRequest {
             Self::SetEngineSettings { .. } => StrataJobKind::SetEngineSettings,
             Self::PresetOff { .. } => StrataJobKind::PresetOff,
             Self::SetRelay { .. } => StrataJobKind::SetRelay,
+            Self::RepairRunConfigs => StrataJobKind::RepairRunConfigs,
         }
     }
 }

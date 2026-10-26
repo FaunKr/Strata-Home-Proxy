@@ -424,6 +424,9 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
         StrataJobKind::SetRelay => {
             return Err("Relay mode is switched under Strata → Connection.".into());
         }
+        StrataJobKind::RepairRunConfigs => {
+            return Err("The PC service repairs models by itself after a Strata update.".into());
+        }
         StrataJobKind::SetSpeedProjection => StrataJobRequest::SetSpeedProjection {
             model: model()?,
             on: form.speed_projection,

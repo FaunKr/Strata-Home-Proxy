@@ -87,6 +87,11 @@ impl Terminal {
         }
     }
 
+    /// Strata's component folder, with its Control and engine folders.
+    pub fn components(&self) -> &Path {
+        &self.components
+    }
+
     /// The Terminal as the install script left it.
     fn current(&self) -> PathBuf {
         CURRENT
@@ -305,6 +310,17 @@ impl Terminal {
         }
     }
 
+    /// Which engine folder of the component folder Strata starts on this
+    /// PC, for `backend` if given; never downloads. Read the output with
+    /// [`engine_root`].
+    pub fn components_engine(&self, backend: Option<&str>) -> CommandSpec {
+        let mut args = vec!["components", "engine", "--output", "json"];
+        if let Some(backend) = backend {
+            args.extend(["--backend", backend]);
+        }
+        self.command(&args)
+    }
+
     /// The engine for this PC from the signed feed; the Terminal itself
     /// stays as it is. Each line is an [`update_event`] until the last, the
     /// answer: read the output with [`engine_installed`].
@@ -437,6 +453,23 @@ pub fn engine_installed(output: &[String]) -> Result<(), String> {
         .and_then(|r| r.iter().find(|r| r["component"] == "engine"))
         .ok_or("The Strata Terminal's answer names no engine")?;
     part_problem(engine).map_or(Ok(()), Err)
+}
+
+/// The engine folder `strata components engine --output json` names
+/// (`_components_engine` in `strata_cli/cli.py`), or why there is none: a
+/// refusal, or `ok` false with Strata's notice (exit 5).
+pub fn engine_root(output: &[String]) -> Result<PathBuf, String> {
+    let answer =
+        json_answer(output).ok_or("The Strata Terminal gave no answer about its engine folder")?;
+    refused(&answer, "The Strata Terminal named no engine folder")?;
+    if answer["ok"] != true {
+        return Err(text(&answer["notice"])
+            .unwrap_or("The Strata Terminal has no engine for this PC")
+            .to_string());
+    }
+    text(&answer["engine"]["root"])
+        .map(PathBuf::from)
+        .ok_or_else(|| "The Strata Terminal's answer names no engine folder".into())
 }
 
 fn read_version(folder: &Path) -> Option<String> {
@@ -1367,6 +1400,30 @@ mod tests {
             ])),
             Err("there is nothing to undo".into())
         );
+    }
+
+    #[test]
+    fn the_engine_folder_comes_from_strata_components_engine() {
+        // `_components_engine` prints `engine_component.status` with
+        // `schema_version` and `ok` (Strata 4b9e05a).
+        let found = r#"{"schema_version": 1, "ok": true, "components_dir": "C:\\Users\\me\\AppData\\Local\\Strata\\components", "platform": "windows-x86_64", "backend": "hip", "backend_source": "requested", "installed": [], "problems": [], "engine": {"id": "strata-engine", "version": "0.1.50", "platform": "windows-x86_64", "backend": "hip", "entrypoint": "strata.exe", "exe": "C:\\Users\\me\\AppData\\Local\\Strata\\components\\engine\\0.1.50-windows-x86_64-hip-rdna2\\strata.exe", "root": "C:\\Users\\me\\AppData\\Local\\Strata\\components\\engine\\0.1.50-windows-x86_64-hip-rdna2", "min_runtime": null, "archs": ["gfx1030"], "min_driver": {}, "build_id": "b", "variant": "rdna2", "signed": true, "file_count": 40, "bytes": 1}, "usable": true, "notice": null, "acquires": false, "pinned": null, "previous": null, "update_notice": null}"#;
+        assert_eq!(
+            engine_root(&lines(&[found])),
+            Ok(PathBuf::from(
+                r"C:\Users\me\AppData\Local\Strata\components\engine\0.1.50-windows-x86_64-hip-rdna2"
+            ))
+        );
+        let none = r#"{"schema_version": 1, "ok": false, "engine": null, "usable": false, "notice": "no engine for this PC is installed"}"#;
+        assert_eq!(
+            engine_root(&lines(&[none])),
+            Err("no engine for this PC is installed".into())
+        );
+        let refused = r#"{"schema_version": 1, "ok": false, "error": {"code": 2, "message": "unknown backend"}}"#;
+        assert_eq!(
+            engine_root(&lines(&[refused])),
+            Err("unknown backend".into())
+        );
+        assert!(engine_root(&lines(&["Traceback (most recent call last):"])).is_err());
     }
 
     #[test]

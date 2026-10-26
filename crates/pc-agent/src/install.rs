@@ -17,6 +17,7 @@ use strata_pc_protocol::Pictures;
 
 use crate::{
     sampling::{self, SamplingSupport, StrataSampling},
+    stale_paths::{self, Area, Moved, Targets},
     terminal::Terminal,
 };
 
@@ -80,6 +81,9 @@ pub struct Installation {
     code: PathBuf,
     data: PathBuf,
     kind: Kind,
+    /// The Strata Terminal's component folder with its Control and engine
+    /// folders; none for a Strata folder from source.
+    components: Option<PathBuf>,
 }
 
 /// Which layout Strata has.
@@ -119,6 +123,7 @@ impl Installation {
             dir,
             data: data_dir.into(),
             kind: Kind::Source,
+            components: None,
         }
     }
 
@@ -129,6 +134,7 @@ impl Installation {
             code: terminal.root(),
             data: data_dir.into(),
             kind: Kind::Terminal,
+            components: Some(terminal.components().to_path_buf()),
         }
     }
 
@@ -350,6 +356,70 @@ impl Installation {
                 })
             })
             .collect()
+    }
+
+    /// The models whose run config has a path into a Strata folder an
+    /// update deleted, each with where those paths lie
+    /// ([`stale_paths`](crate::stale_paths)). Reads files only.
+    pub fn stale_models(&self) -> Vec<(String, Vec<Area>)> {
+        self.models()
+            .into_iter()
+            .filter_map(|id| {
+                let areas = self.stale(&id);
+                (!areas.is_empty()).then_some((id, areas))
+            })
+            .collect()
+    }
+
+    /// Where the paths of a model's run config into a deleted Strata folder
+    /// lie; empty for none, or a run config that cannot be read.
+    pub fn stale(&self, id: &str) -> Vec<Area> {
+        let Some(components) = &self.components else {
+            return Vec::new();
+        };
+        match read_config(&self.config_path(id)) {
+            Ok(Some((_, fields))) => stale_paths::stale(&Value::Object(fields), components),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The backend a model's run config names (`hip`, `cuda`, …), if any.
+    pub fn backend(&self, id: &str) -> Option<String> {
+        let (_, fields) = read_config(&self.config_path(id)).ok()??;
+        fields.get("backend")?.as_str().map(String::from)
+    }
+
+    /// Moves the stale paths of a model's run config to the Strata files
+    /// that run and to `engine`, Strata's engine folder for this PC if
+    /// known; logs what moved and what stayed. Written only when a path
+    /// moved, with its modification time kept.
+    pub fn move_stale_paths(&self, id: &str, engine: Option<&Path>) -> Result<Moved, String> {
+        let Some(components) = &self.components else {
+            return Ok(Moved::default());
+        };
+        let path = self.config_path(id);
+        let Some((_, fields)) = read_config(&path)? else {
+            return Ok(Moved::default());
+        };
+        let mut config = Value::Object(fields);
+        let targets = Targets {
+            control: &self.code,
+            engine,
+        };
+        let moved = stale_paths::move_stale(&mut config, components, &targets);
+        if let (false, Value::Object(fields)) = (moved.moved.is_empty(), &config) {
+            write_config(&path, fields)?;
+        }
+        for ((from, to), n) in &moved.moved {
+            tracing::info!(
+                "Run config {id}: {n} paths moved from {from} to {}",
+                to.display()
+            );
+        }
+        for left in &moved.left {
+            tracing::warn!("Run config {id}: {left} lies in a deleted Strata folder and stays");
+        }
+        Ok(moved)
     }
 
     /// Which sampling defaults this Strata applies; `None` while unknown.

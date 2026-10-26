@@ -113,5 +113,8 @@
   {
     "kind": "set_relay",
     "on": true
+  },
+  {
+    "kind": "repair_run_configs"
   }
 ]

@@ -12,6 +12,7 @@ mod managed_values;
 mod model_configs;
 mod presets;
 mod relay;
+mod run_config_repair;
 mod strata;
 mod strata_catalog;
 mod strata_models;

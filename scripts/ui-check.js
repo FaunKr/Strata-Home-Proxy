@@ -19,7 +19,8 @@ const expected = {
   // Benchmarks from scripts/fake-pc.js, the code benchmark from
   // scripts/ui-check-code-bench.json.
   // The requests sendRequests made through the proxy.
-  '/admin/strata/requests': ['Request log', 'Chat app', 'prompt → tool call', 'Gen. tok/s', '40.0', 'embedding', 'Strata error 404'],
+  '/admin/strata/requests': ['Request log', 'Chat app', 'prompt → tool call', 'Gen. tok/s', '40.0', 'embedding', 'Strata error 404',
+    'Speeds by model', 'All keys', 'Qwen3-30B-A3B', '1600.0', 'Generation tok/s over time', 'Generation tok/s by prompt tokens'],
   '/admin/strata/connection': ['Relay through the PC service', 'Off: the proxy reaches Strata directly over the network.', 'Hide model name', 'Public model name'],
   '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', '52.3 tok/s', 'Not installed', 'BENCH.bat, not comparable', 'Compare models', '25/33', 'Time limit', 'Last run failed', 'Run code benchmark', 'Benchmark all models', 'No result: model did not load', 'Remove old Strata folder'],
 };
@@ -132,6 +133,35 @@ async function requestDetails(page, errors, name) {
   }
   if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
   console.log(`${issue ? 'FAIL' : 'ok  '} ${name} request details on tap${issue ? '\n     ' + issue : ''}`);
+  return issue ? 1 : 0;
+}
+
+// The speed charts have a dot per chat request, for all keys and for the
+// key that sent them. Returns the number of findings.
+async function requestCharts(page, errors, name) {
+  const wait = { timeout: 15000 };
+  errors.length = 0;
+  let issue = null;
+  try {
+    await page.goto(base + '/admin/strata/requests', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    const dots = page.locator('.chart circle');
+    const count = async () => {
+      const n = await dots.count();
+      if (n !== 4) throw new Error(`the charts have ${n} dots, not 2 each`);
+    };
+    await count();
+    const title = await dots.first().locator('title').textContent();
+    if (!title.startsWith('Qwen3-30B-A3B: 40.0 tok/s')) throw new Error(`a dot says "${title}"`);
+    await page.selectOption('#request-key', 'Chat app', wait);
+    await count();
+    await page.locator('.averages').getByText('2', { exact: true }).waitFor(wait);
+    await page.selectOption('#request-key', '', wait);
+  } catch (e) {
+    issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
+  }
+  if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+  console.log(`${issue ? 'FAIL' : 'ok  '} ${name} request charts and key filter${issue ? '\n     ' + issue : ''}`);
   return issue ? 1 : 0;
 }
 
@@ -718,6 +748,7 @@ async function codeBench(page, errors) {
     for (const area of areas) {
       findings += await check(page, errors, name, area, expected[area] ?? [], area.replace(/\//g, '_'));
     }
+    findings += await requestCharts(page, errors, name);
     if (name === 'phone') findings += await requestDetails(page, errors, name);
     findings += await optimizationPrompt(page, errors, name);
     findings += await oldFolder(page, errors, name);

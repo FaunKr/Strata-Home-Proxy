@@ -277,7 +277,9 @@ is in English and split into five areas: *Overview*, *PC*, *Strata*
   output tokens, prompt reading and generation speed, time to first token,
   duration, the wait for the PC and the outcome. Only numbers, never the
   text; the last 1000 requests are kept in `/data/events.db`. On a phone a
-  row opens on tap.
+  row opens on tap. Above the list, a filter by API key, the average speeds
+  per model (total tokens over total time) and two charts: generation
+  speed over time, and generation speed against prompt size.
 - **API keys** (*Access* area): Create one key per client. It is shown in full only right after
   creation and stored only as a hash in `/data/api-keys.json`.
   The list shows the beginning, creation and last use; a

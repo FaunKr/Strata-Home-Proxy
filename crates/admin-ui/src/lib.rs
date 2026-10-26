@@ -18,6 +18,7 @@ pub mod icons;
 pub mod labels;
 pub mod overview;
 pub mod pc_setup;
+pub mod request_stats;
 pub mod requests;
 #[cfg(feature = "ssr")]
 pub mod server;

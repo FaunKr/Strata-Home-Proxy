@@ -1,6 +1,7 @@
 //! The tab "Requests" of the Strata area: the request log, live from the
-//! proxy, newest first. On a narrow screen each row shows the essentials
-//! and opens on tap.
+//! proxy, newest first, with the averages per model and two speed charts
+//! above it. A key filter picks the rows all of them cover. On a narrow
+//! screen each row shows the essentials and opens on tap.
 
 use leptos::prelude::*;
 
@@ -10,6 +11,7 @@ use crate::api::{
     RequestAnswer, RequestApi, RequestOutcome, RequestRefusal, RequestRow, RequestStart,
     RequestState,
 };
+use crate::request_stats::{ChartPoint, ModelAverages, filtered, keys, request_stats, ticks};
 
 /// Finished rows the tab keeps, like the proxy's `LIMIT`.
 #[cfg(feature = "hydrate")]
@@ -33,7 +35,84 @@ pub fn RequestsTab() -> impl IntoView {
         },
         lost,
     );
+    // The key whose rows the tab shows; all of them for `None`.
+    let key = RwSignal::new(None::<String>);
+    let shown = Memo::new(move |_| {
+        key.with(|k| rows.with(|r| filtered(r, k.as_deref()).cloned().collect::<Vec<_>>()))
+    });
+    let stats = Memo::new(move |_| key.with(|k| rows.with(|r| request_stats(r, k.as_deref()))));
+    let key_names = Memo::new(move |_| rows.with(|r| keys(r)));
     view! {
+        <section class="card">
+            <div class="card-head">
+                <h2>"Speeds by model"</h2>
+                <div class="key-filter">
+                    <label for="request-key">"Key"</label>
+                    <select
+                        id="request-key"
+                        on:change=move |ev| {
+                            let value = event_target_value(&ev);
+                            key.set((!value.is_empty()).then_some(value));
+                        }
+                    >
+                        <option value="" selected=move || key.with(Option::is_none)>
+                            "All keys"
+                        </option>
+                        {move || {
+                            key_names
+                                .get()
+                                .into_iter()
+                                .map(|name| {
+                                    let chosen = name.clone();
+                                    let value = name.clone();
+                                    view! {
+                                        <option
+                                            value=value
+                                            selected=move || {
+                                                key.with(|k| k.as_deref() == Some(chosen.as_str()))
+                                            }
+                                        >
+                                            {name}
+                                        </option>
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        }}
+                    </select>
+                </div>
+            </div>
+            <p class="muted small">
+                "Over the requests in the log below. A speed is the tokens of all requests over their time together."
+            </p>
+            {move || {
+                let stats = stats.get();
+                if !loaded.get() {
+                    view! { <p class="muted">"Loading…"</p> }.into_any()
+                } else if shown.with(Vec::is_empty) {
+                    view! { <p class="muted">"No requests yet."</p> }.into_any()
+                } else if stats.models.is_empty() {
+                    view! { <p class="muted">"No speeds yet."</p> }.into_any()
+                } else {
+                    view! {
+                        <Averages models=stats.models.clone() />
+                        <Legend models=stats.models />
+                        <div class="charts">
+                            <SpeedChart
+                                caption="Generation tok/s over time"
+                                points=stats.over_time
+                                axis=XAxis::Time
+                            />
+                            <SpeedChart
+                                caption="Generation tok/s by prompt tokens"
+                                points=stats.by_prompt
+                                axis=XAxis::Tokens
+                            />
+                        </div>
+                    }
+                        .into_any()
+                }
+            }}
+        </section>
         <section class="card">
             <div class="card-head">
                 <h2>"Request log"</h2>
@@ -57,18 +136,216 @@ pub fn RequestsTab() -> impl IntoView {
             {move || {
                 if !loaded.get() {
                     view! { <p class="muted">"Loading…"</p> }.into_any()
-                } else if rows.with(Vec::is_empty) {
+                } else if shown.with(Vec::is_empty) {
                     view! { <p class="muted">"No requests yet."</p> }.into_any()
                 } else {
-                    view! { <RequestTable rows open /> }.into_any()
+                    view! { <RequestTable rows=shown open /> }.into_any()
                 }
             }}
         </section>
     }
 }
 
+/// The class that gives a swatch or dot its model's colour.
+fn series(colour: usize) -> String {
+    format!("series series-{colour}")
+}
+
 #[component]
-fn RequestTable(rows: RwSignal<Vec<RequestRow>>, open: RwSignal<Vec<u64>>) -> impl IntoView {
+fn Averages(models: Vec<ModelAverages>) -> impl IntoView {
+    view! {
+        <div class="averages">
+            <table>
+                <thead>
+                    <tr>
+                        <th scope="col">"Model"</th>
+                        <th scope="col" class="num">"Requests"</th>
+                        <th scope="col" class="num">"Prefill tok/s"</th>
+                        <th scope="col" class="num">"Gen. tok/s"</th>
+                        <th scope="col" class="num">"First token"</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {models
+                        .into_iter()
+                        .map(|m| {
+                            view! {
+                                <tr>
+                                    <td class="model">
+                                        <span class=format!("swatch {}", series(m.colour))></span>
+                                        {m.model}
+                                    </td>
+                                    <td class="num">{m.requests}</td>
+                                    <td class="num">{rate(m.prefill_tok_s)}</td>
+                                    <td class="num">{rate(m.generation_tok_s)}</td>
+                                    <td class="num">
+                                        {millis(m.first_token_ms.map(|ms| ms.round() as u64))}
+                                    </td>
+                                </tr>
+                            }
+                        })
+                        .collect::<Vec<_>>()}
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+/// Which model each colour in the charts is.
+#[component]
+fn Legend(models: Vec<ModelAverages>) -> impl IntoView {
+    view! {
+        <ul class="legend">
+            {models
+                .into_iter()
+                .map(|m| {
+                    view! {
+                        <li>
+                            <span class=format!("swatch {}", series(m.colour))></span>
+                            {m.model}
+                        </li>
+                    }
+                })
+                .collect::<Vec<_>>()}
+        </ul>
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum XAxis {
+    /// Arrival times, labelled at both ends.
+    Time,
+    /// Prompt tokens from 0, with round ticks.
+    Tokens,
+}
+
+// The chart's drawing area, in the units of its `viewBox`.
+const WIDTH: f64 = 400.0;
+const HEIGHT: f64 = 220.0;
+const LEFT: f64 = 40.0;
+const RIGHT: f64 = 12.0;
+const TOP: f64 = 10.0;
+const BOTTOM: f64 = 26.0;
+
+/// One dot per request: generation tok/s up, `axis` across.
+#[component]
+fn SpeedChart(caption: &'static str, points: Vec<ChartPoint>, axis: XAxis) -> impl IntoView {
+    if points.is_empty() {
+        return view! {
+            <figure class="chart">
+                <figcaption>{caption}</figcaption>
+                <p class="muted">"No speeds yet."</p>
+            </figure>
+        }
+        .into_any();
+    }
+    let y_ticks = ticks(points.iter().map(|p| p.y).fold(0.0, f64::max), 4);
+    let y_top = y_ticks.last().copied().unwrap_or(1.0);
+    let lowest = points.iter().min_by(|a, b| a.x.total_cmp(&b.x)).unwrap();
+    let highest = points.iter().max_by(|a, b| a.x.total_cmp(&b.x)).unwrap();
+    let (x_from, x_to, x_labels) = match axis {
+        XAxis::Time if lowest.x == highest.x => (
+            lowest.x - 1.0,
+            lowest.x + 1.0,
+            vec![(lowest.x, lowest.x_text.clone())],
+        ),
+        XAxis::Time => (
+            lowest.x,
+            highest.x,
+            vec![
+                (lowest.x, lowest.x_text.clone()),
+                (highest.x, highest.x_text.clone()),
+            ],
+        ),
+        XAxis::Tokens => {
+            let t = ticks(highest.x, 4);
+            let top = t.last().copied().unwrap_or(1.0);
+            (
+                0.0,
+                top,
+                t.into_iter().map(|v| (v, tokens_text(v))).collect(),
+            )
+        }
+    };
+    let plot_w = WIDTH - LEFT - RIGHT;
+    let plot_h = HEIGHT - TOP - BOTTOM;
+    let x_at = move |x: f64| LEFT + (x - x_from) / (x_to - x_from) * plot_w;
+    let y_at = move |y: f64| TOP + plot_h - y / y_top * plot_h;
+    let label_count = x_labels.len();
+    view! {
+        <figure class="chart">
+            <figcaption>{caption}</figcaption>
+            <svg viewBox=format!("0 0 {WIDTH} {HEIGHT}") role="img" aria-label=caption>
+                {y_ticks
+                    .iter()
+                    .map(|&v| {
+                        let y = y_at(v);
+                        view! {
+                            <line class="grid" x1=LEFT x2=WIDTH - RIGHT y1=y y2=y />
+                            <text class="tick" x=LEFT - 6.0 y=y + 4.0 text-anchor="end">
+                                {number_text(v)}
+                            </text>
+                        }
+                    })
+                    .collect::<Vec<_>>()}
+                {x_labels
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (v, text))| {
+                        // The time labels sit inside the chart's ends.
+                        let anchor = match axis {
+                            XAxis::Time if label_count > 1 && i == 0 => "start",
+                            XAxis::Time if label_count > 1 => "end",
+                            _ => "middle",
+                        };
+                        view! {
+                            <text class="tick" x=x_at(v) y=HEIGHT - 8.0 text-anchor=anchor>
+                                {text}
+                            </text>
+                        }
+                    })
+                    .collect::<Vec<_>>()}
+                {points
+                    .into_iter()
+                    .map(|p| {
+                        view! {
+                            <circle
+                                class=format!("dot {}", series(p.colour))
+                                cx=x_at(p.x)
+                                cy=y_at(p.y)
+                                r="4"
+                            >
+                                <title>{p.title()}</title>
+                            </circle>
+                        }
+                    })
+                    .collect::<Vec<_>>()}
+            </svg>
+        </figure>
+    }
+    .into_any()
+}
+
+/// A tick on the speed axis: whole numbers where they are round.
+fn number_text(v: f64) -> String {
+    if v.fract() == 0.0 {
+        format!("{v:.0}")
+    } else {
+        format!("{v:.1}")
+    }
+}
+
+/// A tick on the prompt axis: "2.5k" for 2500.
+fn tokens_text(v: f64) -> String {
+    if v >= 1000.0 {
+        format!("{}k", number_text(v / 1000.0))
+    } else {
+        number_text(v)
+    }
+}
+
+#[component]
+fn RequestTable(rows: Memo<Vec<RequestRow>>, open: RwSignal<Vec<u64>>) -> impl IntoView {
     view! {
         <div class="request-table">
             <table>

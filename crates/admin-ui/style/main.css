@@ -20,6 +20,17 @@
   --bad-soft: #fde8e6;
   --on-bad: #ffffff;
   --shadow: 0 1px 2px rgba(27, 23, 38, 0.06), 0 1px 1px rgba(27, 23, 38, 0.04);
+  /* The models in the request charts, in a fixed order; the last one for
+     the models past eight. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #6250d6;
+  --series-8: #e34948;
+  --series-other: #8a8597;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light dark;
 }
@@ -46,6 +57,15 @@
     --bad-soft: #3d1915;
     --on-bad: #2a0d09;
     --shadow: none;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --series-other: #7d778c;
   }
 }
 
@@ -598,9 +618,38 @@ input[type="date"] {
 
 /* --- Request log --- */
 
+.key-filter { display: flex; align-items: center; gap: 8px; }
+.key-filter label { margin: 0; }
+.key-filter select { width: auto; min-width: 10rem; }
+.averages { overflow-x: auto; }
+.averages table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.averages th, .averages td { text-align: left; padding: 6px 5px; border-top: 1px solid var(--line); }
+.averages thead th { border-top: 0; color: var(--muted); font-weight: normal; font-size: 0.8rem; vertical-align: bottom; white-space: normal; }
+.averages .num { text-align: right; }
+.averages td.num { white-space: nowrap; }
+.averages td.model { overflow-wrap: anywhere; min-width: 110px; }
+.averages td.model .swatch { display: inline-block; margin-right: 7px; vertical-align: -1px; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 12px; }
+.chart { margin: 0; min-width: 0; }
+.chart figcaption { font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+.chart svg { display: block; width: 100%; height: auto; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .tick { fill: var(--muted); font-size: 11px; }
+.chart .dot { fill: var(--series); stroke: var(--surface); stroke-width: 1.5; }
+.swatch.series { background: var(--series); }
+.series-0 { --series: var(--series-1); }
+.series-1 { --series: var(--series-2); }
+.series-2 { --series: var(--series-3); }
+.series-3 { --series: var(--series-4); }
+.series-4 { --series: var(--series-5); }
+.series-5 { --series: var(--series-6); }
+.series-6 { --series: var(--series-7); }
+.series-7 { --series: var(--series-8); }
+.series-8 { --series: var(--series-other); }
+
 .request-table { overflow-x: auto; }
 .request-table table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-.request-table th, .request-table td { text-align: left; padding: 6px 5px; border-top: 1px solid var(--line); white-space: nowrap; }
+.request-table th, .request-table td { text-align: left; padding: 6px 3px; border-top: 1px solid var(--line); white-space: nowrap; }
 .request-table thead th { border-top: 0; color: var(--muted); font-weight: normal; font-size: 0.8rem; white-space: normal; vertical-align: bottom; }
 .request-table .num { text-align: right; }
 .request-table td { vertical-align: top; }
@@ -616,6 +665,11 @@ input[type="date"] {
 .request-more dd { margin: 0; white-space: normal; }
 
 @media (max-width: 760px) {
+  .averages table { font-size: 0.8rem; }
+  .averages th, .averages td { padding: 5px 3px; }
+  .averages td.model { min-width: 80px; }
+  /* The chart is drawn smaller here; its labels keep a readable size. */
+  .chart .tick { font-size: 15px; }
   .request-table .wide { display: none; }
   .request-table .sub.narrow { display: block; }
   .request-table td.type { white-space: normal; }

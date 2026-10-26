@@ -4,16 +4,16 @@
 
 use crate::api::{RequestRow, RequestState};
 
-/// The colours the charts have, `--series-1` to `--series-8` in the style
-/// sheet. Models past them share the last, muted one.
-pub const COLOURS: usize = 9;
+/// The colors the charts have: `--series-1` to `--series-8` in the style
+/// sheet, then `--series-other`, which the models past eight share.
+pub const COLORS: usize = 9;
 
 /// The averages of one model, over its finished rows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelAverages {
     pub model: String,
-    /// Its place among the models, which picks its colour.
-    pub colour: usize,
+    /// Its place among the models, which picks its color.
+    pub color: usize,
     pub requests: usize,
     /// Σ tokens ÷ Σ time, over the rows that have both.
     pub prefill_tok_s: Option<f64>,
@@ -28,7 +28,7 @@ pub struct ChartPoint {
     pub id: u64,
     pub x: f64,
     pub y: f64,
-    pub colour: usize,
+    pub color: usize,
     pub model: String,
     /// `x` as the axis and the tooltip say it.
     pub x_text: String,
@@ -75,8 +75,8 @@ pub fn request_stats(rows: &[RequestRow], key: Option<&str>) -> RequestStats {
         prefill_ms: f64,
         generation_tokens: u64,
         generation_ms: f64,
-        first_token_ms: u64,
-        first_tokens: u64,
+        first_token_ms_total: u64,
+        with_first_token: u64,
     }
     let finished: Vec<(&RequestRow, &str)> = filtered(rows, key)
         .filter(|r| r.state == RequestState::Finished)
@@ -86,38 +86,47 @@ pub fn request_stats(rows: &[RequestRow], key: Option<&str>) -> RequestStats {
     for &(row, model) in &finished {
         let s = sums.entry(model).or_default();
         s.requests += 1;
-        if let (Some(tokens), Some(ms)) = (row.prefill_tokens, row.prefill_ms) {
+        // The rows the list shows a speed for, so a row without one
+        // doesn't add tokens without time.
+        if let (Some(_), Some(tokens), Some(ms)) =
+            (row.prefill_tok_s(), row.prefill_tokens, row.prefill_ms)
+        {
             s.prefill_tokens += tokens;
             s.prefill_ms += ms;
         }
-        if let (Some(tokens), Some(ms)) = (row.generation_tokens, row.generation_ms) {
+        if let (Some(_), Some(tokens), Some(ms)) = (
+            row.generation_tok_s(),
+            row.generation_tokens,
+            row.generation_ms,
+        ) {
             s.generation_tokens += tokens;
             s.generation_ms += ms;
         }
         if let Some(ms) = row.first_token_ms {
-            s.first_token_ms += ms;
-            s.first_tokens += 1;
+            s.first_token_ms_total += ms;
+            s.with_first_token += 1;
         }
     }
-    let rate = |tokens: u64, ms: f64| (tokens > 0 && ms > 0.0).then(|| tokens as f64 * 1000.0 / ms);
+    let speed =
+        |tokens: u64, ms: f64| (tokens > 0 && ms > 0.0).then(|| tokens as f64 * 1000.0 / ms);
     let models: Vec<ModelAverages> = sums
         .into_iter()
         .enumerate()
         .map(|(i, (model, s))| ModelAverages {
             model: model.to_string(),
-            colour: i.min(COLOURS - 1),
+            color: i.min(COLORS - 1),
             requests: s.requests,
-            prefill_tok_s: rate(s.prefill_tokens, s.prefill_ms),
-            generation_tok_s: rate(s.generation_tokens, s.generation_ms),
-            first_token_ms: (s.first_tokens > 0)
-                .then(|| s.first_token_ms as f64 / s.first_tokens as f64),
+            prefill_tok_s: speed(s.prefill_tokens, s.prefill_ms),
+            generation_tok_s: speed(s.generation_tokens, s.generation_ms),
+            first_token_ms: (s.with_first_token > 0)
+                .then(|| s.first_token_ms_total as f64 / s.with_first_token as f64),
         })
         .collect();
-    let colour = |model: &str| {
+    let color = |model: &str| {
         models
             .iter()
             .find(|m| m.model == model)
-            .map_or(COLOURS - 1, |m| m.colour)
+            .map_or(COLORS - 1, |m| m.color)
     };
     let mut over_time = Vec::new();
     let mut by_prompt = Vec::new();
@@ -130,7 +139,7 @@ pub fn request_stats(rows: &[RequestRow], key: Option<&str>) -> RequestStats {
             id: row.id,
             x,
             y: speed,
-            colour: colour(model),
+            color: color(model),
             model: model.to_string(),
             x_text,
         };
@@ -208,11 +217,11 @@ mod tests {
         no_prefill.prefill_tokens = None;
         no_prefill.prefill_ms = None;
         no_prefill.first_token_ms = Some(300);
-        let mut whole = row(2, "App", "m");
-        whole.first_token_ms = None;
+        let mut no_timings = row(2, "App", "m");
+        no_timings.first_token_ms = None;
         let mut first = timed(row(1, "App", "m"), (200, 1000.0), (100, 3000.0));
         first.first_token_ms = Some(100);
-        let stats = request_stats(&[no_prefill, whole, first], None);
+        let stats = request_stats(&[no_prefill, no_timings, first], None);
         let m = &stats.models[0];
         assert_eq!(m.requests, 3);
         assert_eq!(m.prefill_tok_s, Some(200.0));
@@ -220,6 +229,18 @@ mod tests {
         assert_eq!(m.first_token_ms, Some(200.0));
         // Only rows with a generation speed are dots.
         assert_eq!(stats.over_time.len(), 2);
+    }
+
+    #[test]
+    fn tokens_without_time_add_nothing() {
+        // Strata's timings can say 0 ms for a single token; the list shows
+        // no speed for such a row, so it isn't in the averages either.
+        let instant = timed(row(2, "App", "m"), (5, 0.0), (1, 0.0));
+        let timed_row = timed(row(1, "App", "m"), (100, 1000.0), (50, 1000.0));
+        let m = &request_stats(&[instant, timed_row], None).models[0];
+        assert_eq!(m.requests, 2);
+        assert_eq!(m.prefill_tok_s, Some(100.0));
+        assert_eq!(m.generation_tok_s, Some(50.0));
     }
 
     #[test]
@@ -240,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn models_are_coloured_by_their_order_in_the_table() {
+    fn models_are_colored_by_their_order_in_the_table() {
         let mut rows: Vec<RequestRow> = ["zeta", "alpha", "mid"]
             .into_iter()
             .enumerate()
@@ -250,12 +271,12 @@ mod tests {
         let stats = request_stats(&rows, None);
         let names: Vec<&str> = stats.models.iter().map(|m| m.model.as_str()).collect();
         assert_eq!(&names[..3], ["alpha", "mid", "n0"]);
-        let colours: Vec<usize> = stats.models.iter().map(|m| m.colour).collect();
-        assert_eq!(colours, [0, 1, 2, 3, 4, 5, 6, 7, 8, 8, 8, 8]);
-        let colour_of = |id| stats.over_time.iter().find(|p| p.id == id).unwrap().colour;
-        assert_eq!(colour_of(1), 0);
-        assert_eq!(colour_of(2), 1);
-        assert_eq!(colour_of(0), 11.min(COLOURS - 1));
+        let colors: Vec<usize> = stats.models.iter().map(|m| m.color).collect();
+        assert_eq!(colors, [0, 1, 2, 3, 4, 5, 6, 7, 8, 8, 8, 8]);
+        let color_of = |id| stats.over_time.iter().find(|p| p.id == id).unwrap().color;
+        assert_eq!(color_of(1), 0);
+        assert_eq!(color_of(2), 1);
+        assert_eq!(color_of(0), 8);
     }
 
     #[test]

@@ -37,11 +37,14 @@ pub fn RequestsTab() -> impl IntoView {
     );
     // The key whose rows the tab shows; all of them for `None`.
     let key = RwSignal::new(None::<String>);
-    let shown = Memo::new(move |_| {
-        key.with(|k| rows.with(|r| filtered(r, k.as_deref()).cloned().collect::<Vec<_>>()))
-    });
-    let stats = Memo::new(move |_| key.with(|k| rows.with(|r| request_stats(r, k.as_deref()))));
     let key_names = Memo::new(move |_| rows.with(|r| keys(r)));
+    // The chosen key while it is in the log; once its last row is gone,
+    // all keys again, as the filter shows.
+    let chosen = Memo::new(move |_| key.get().filter(|k| key_names.with(|n| n.contains(k))));
+    let shown = Memo::new(move |_| {
+        chosen.with(|k| rows.with(|r| filtered(r, k.as_deref()).cloned().collect::<Vec<_>>()))
+    });
+    let stats = Memo::new(move |_| chosen.with(|k| rows.with(|r| request_stats(r, k.as_deref()))));
     view! {
         <section class="card">
             <div class="card-head">
@@ -55,7 +58,7 @@ pub fn RequestsTab() -> impl IntoView {
                             key.set((!value.is_empty()).then_some(value));
                         }
                     >
-                        <option value="" selected=move || key.with(Option::is_none)>
+                        <option value="" selected=move || chosen.with(Option::is_none)>
                             "All keys"
                         </option>
                         {move || {
@@ -63,13 +66,13 @@ pub fn RequestsTab() -> impl IntoView {
                                 .get()
                                 .into_iter()
                                 .map(|name| {
-                                    let chosen = name.clone();
+                                    let option_name = name.clone();
                                     let value = name.clone();
                                     view! {
                                         <option
                                             value=value
                                             selected=move || {
-                                                key.with(|k| k.as_deref() == Some(chosen.as_str()))
+                                                chosen.with(|k| k.as_deref() == Some(option_name.as_str()))
                                             }
                                         >
                                             {name}
@@ -146,9 +149,9 @@ pub fn RequestsTab() -> impl IntoView {
     }
 }
 
-/// The class that gives a swatch or dot its model's colour.
-fn series(colour: usize) -> String {
-    format!("series series-{colour}")
+/// The class that gives a swatch or dot its model's color.
+fn series(color: usize) -> String {
+    format!("series series-{color}")
 }
 
 #[component]
@@ -172,7 +175,7 @@ fn Averages(models: Vec<ModelAverages>) -> impl IntoView {
                             view! {
                                 <tr>
                                     <td class="model">
-                                        <span class=format!("swatch {}", series(m.colour))></span>
+                                        <span class=format!("swatch {}", series(m.color))></span>
                                         {m.model}
                                     </td>
                                     <td class="num">{m.requests}</td>
@@ -191,7 +194,7 @@ fn Averages(models: Vec<ModelAverages>) -> impl IntoView {
     }
 }
 
-/// Which model each colour in the charts is.
+/// Which model each color in the charts is.
 #[component]
 fn Legend(models: Vec<ModelAverages>) -> impl IntoView {
     view! {
@@ -201,7 +204,7 @@ fn Legend(models: Vec<ModelAverages>) -> impl IntoView {
                 .map(|m| {
                     view! {
                         <li>
-                            <span class=format!("swatch {}", series(m.colour))></span>
+                            <span class=format!("swatch {}", series(m.color))></span>
                             {m.model}
                         </li>
                     }
@@ -310,7 +313,7 @@ fn SpeedChart(caption: &'static str, points: Vec<ChartPoint>, axis: XAxis) -> im
                     .map(|p| {
                         view! {
                             <circle
-                                class=format!("dot {}", series(p.colour))
+                                class=format!("dot {}", series(p.color))
                                 cx=x_at(p.x)
                                 cy=y_at(p.y)
                                 r="4"

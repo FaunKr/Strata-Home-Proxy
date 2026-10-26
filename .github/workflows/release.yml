@@ -43,9 +43,26 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # The same build as publish in ci.yml; it only reads the layer cache, so
-      # it costs about a minute when main's image is already published.
-      - uses: docker/build-push-action@v6
+      # The image main's publish made for this commit (ci.yml), when there is
+      # one: the release gets the very image the NAS runs, in seconds. A
+      # commit whose publish was skipped, cancelled or is still running has
+      # none; then the release builds it (about 7 minutes, v1.0.0).
+      - id: published
+        env:
+          IMAGE: ghcr.io/faunkr/strata-home-proxy
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:$GITHUB_SHA" >/dev/null 2>&1; then
+            docker buildx imagetools create \
+              -t "$IMAGE:$VERSION" -t "$IMAGE:${VERSION%.*}" -t "$IMAGE:${VERSION%%.*}" \
+              "$IMAGE:$GITHUB_SHA"
+            echo "retagged=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "No $IMAGE:$GITHUB_SHA, building it" >&2
+            echo "retagged=false" >>"$GITHUB_OUTPUT"
+          fi
+      - if: steps.published.outputs.retagged == 'false'
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64

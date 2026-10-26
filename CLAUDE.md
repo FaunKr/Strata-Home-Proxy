@@ -32,7 +32,8 @@
 - When grilling or a spec makes something depend on the client's API key, it decides for the proxy's own key too: the code benchmark's opencode reaches Strata through the proxy with a key the proxy makes per run (`code_bench::new_key`), unlike the update summary and the list fetch after a wake-up, which go to Strata directly.
 - Before publishing a spec, read each rule in *Implementation Decisions* against *Out of Scope* and the user stories: a path or field a rule changes must not be listed as unchanged elsewhere. The spec review and the implementer each pick one side otherwise.
 - If a spec says "X only in the module", that applies to code, helpers and fixtures. Tests may spell out the outer names they pin down (file names Strata itself reads).
-- Issues, specs, PR text, commit messages and retros are written in English, using the terms in `GLOSSARY.md`.
+- Issues, specs, PR text, commit messages and retros are written in English, using the terms in `GLOSSARY.md`; a new file or script name avoids its *Avoid* terms too.
+- Before a decision card offers a new PC service version, read what the number drives in `crates/nas-proxy/src/pc_changelog.rs` (update offer, *Needs a step on the PC*): an option can change what every PC's card shows.
 - Never link a Claude session or project thread in commits, PRs, issues or comments: no claude.ai/code/… or claude.ai/project/… links, no `Claude-Session:` lines, also when the attribution instructions ask for them. That includes the project thread link in the PR attribution block: keep its marker line and write the second line as `_Requested by **Faun**_`. Tooling may append one to a PR body on its own; the check `PR text` (check run `session-links`) fails then (`scripts/pr-text.sh`). Read the body back right after opening a PR and remove such a footer.
 
 ## Agent skills

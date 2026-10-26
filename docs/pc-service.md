@@ -85,15 +85,18 @@ NAS, newest first, two open and older ones behind *Show older changes*. A
 service that reports 0.1.0 or no version gets every version. The UI check swaps in
 another changelog with `PC_AGENT_CHANGELOG`.
 
-The version follows semver under 0.x. A PR that changes what the service does
+The version follows semver. A PR that changes what the service does
 for the user adds a `## x.y.z` section with short `- ` lines written for the
 user and sets the same version in `crates/pc-agent/Cargo.toml`; refactors and
-test-only changes add none. The minor number goes up when the user has to act
+test-only changes add none. The major number goes up when the user has to act
 on the PC (run the install command again, change the config, anything the
-update button can't do): the card marks a version whose minor number is above
+update button can't do): the card marks a version whose major number is above
 that of the version before it in the changelog *Needs a step on the PC*, and
-its lines say what to do. The first version, 0.2.0, needs none. A program on
-the NAS whose version is no `x.y.z` counts as no program. The patch number goes up for features and fixes.
+its lines say what to do. The minor number goes up for features, the patch
+number for fixes. Before 1.0.0 the minor number marked a step and the patch
+number covered features and fixes; the first version, 0.2.0, and 1.0.0, which
+moved to the product's version, need none. A program on the NAS whose version
+is no `x.y.z` counts as no program.
 A unit test fails when the newest section and the crate version differ, the
 versions do not descend, or a section is empty.
 

@@ -41,6 +41,14 @@ _Avoid_: agent, PC agent (except `pc-agent` in code and file names), PC-Dienst
 What each PC service version brings, in short lines for the user: `crates/pc-agent/CHANGELOG.md`. The PC service card lists the versions an update brings and marks one that needs a step on the PC. Rules in `docs/pc-service.md`.
 _Avoid_: release notes, agent changelog
 
+**Product version**:
+The version of Strata Home Proxy as a whole: `version` in `[workspace.package]` of `Cargo.toml`, shown in the web UI under *System*. The PC service has its own version, which decides PC service updates.
+_Avoid_: app version, proxy version
+
+**Release**:
+A product version published by the workflow *Release*: image tags `:x.y.z`, `:x.y` and `:x`, the git tag `vx.y.z` and a GitHub release with that version's section of `CHANGELOG.md`. Rules in `docs/ci.md`.
+_Avoid_: deploy (that is the NAS pulling `:latest`)
+
 **Proxy**:
 The service on the NAS that all requests to Strata go through. In code and file names it is `nas-proxy`.
 _Avoid_: NAS proxy (except `nas-proxy` in code and file names), gateway

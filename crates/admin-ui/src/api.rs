@@ -391,8 +391,9 @@ pub struct PcServiceView {
 pub struct PcServiceChange {
     /// E.g. `0.3.0`.
     pub version: String,
-    /// It bumped the minor number: the update button alone is not enough,
-    /// its lines say what to do on the PC.
+    /// It needs a step on the PC (a raised minor number under 0.x, a raised
+    /// major one from 1.0.0 on): the update button alone is not enough, its
+    /// lines say what to do there.
     pub needs_step: bool,
     pub lines: Vec<String>,
 }

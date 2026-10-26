@@ -48,6 +48,7 @@ expect "test=false packages= cargo=false image=true bench=false ui=true publish=
 expect "test=false packages= cargo=false image=true bench=false ui=false publish=true publish-bench=false" .dockerignore
 expect "test=false packages= cargo=false image=false bench=false ui=false publish=false publish-bench=false" deploy/docker-compose.yml
 expect "test=true packages= cargo=false image=false bench=false ui=false publish=false publish-bench=false" tools/local-agent/local-agent
+expect "test=true packages= cargo=false image=false bench=false ui=false publish=false publish-bench=false" CHANGELOG.md
 expect "test=true packages= cargo=false image=false bench=true ui=false publish=false publish-bench=true" tools/code-bench/runner.py
 expect "test=true packages= cargo=false image=false bench=true ui=false publish=false publish-bench=true" tools/code-bench/Dockerfile
 expect "test=true packages= cargo=false image=false bench=false ui=false publish=false publish-bench=false" tools/code-bench/test_runner.py

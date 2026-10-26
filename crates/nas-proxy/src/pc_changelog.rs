@@ -7,8 +7,9 @@
 //!
 //! The file has one `## x.y.z` heading per version, newest first, with
 //! `- ` lines under it; text before the first heading is for people reading
-//! the file. Versions follow semver under 0.x: the minor number goes up when
-//! the user has to act on the PC, the patch number for features and fixes.
+//! the file. A step on the PC (something the user has to do there) raises the
+//! minor number under 0.x and the major number from 1.0.0 on; the move from
+//! 0.x to 1.0.0 needs none.
 
 use std::{
     fmt,
@@ -48,7 +49,11 @@ impl Version {
 
     /// Whether going from `before` to this version needs a step on the PC.
     fn needs_step_after(self, before: Self) -> bool {
-        (self.0, self.1) > (before.0, before.1)
+        match (before.0, self.0) {
+            (0, 0) => self.1 > before.1,
+            (0, 1) => false,
+            _ => self.0 > before.0,
+        }
     }
 }
 
@@ -142,8 +147,8 @@ impl Changelog {
     }
 
     /// What an update from `installed` to `available` brings: the versions
-    /// above `installed` up to `available`, each marked when its minor
-    /// number is above that of the version before it in the changelog.
+    /// above `installed` up to `available`, each marked when it needs a
+    /// step after the version before it in the changelog.
     /// Nothing when `available` is not higher.
     pub fn changes(
         &self,
@@ -198,6 +203,16 @@ mod tests {
             crate_version(),
             "bump pc-agent's version together with a new section in its CHANGELOG.md"
         );
+    }
+
+    #[test]
+    fn a_step_raises_the_minor_number_under_0_x_and_the_major_one_from_1_0_0() {
+        assert!(Version(0, 3, 0).needs_step_after(Version(0, 2, 2)));
+        assert!(!Version(0, 2, 2).needs_step_after(Version(0, 2, 1)));
+        assert!(!Version(1, 0, 0).needs_step_after(Version(0, 2, 2)));
+        assert!(!Version(1, 1, 0).needs_step_after(Version(1, 0, 3)));
+        assert!(Version(2, 0, 0).needs_step_after(Version(1, 4, 0)));
+        assert!(Version(2, 0, 0).needs_step_after(Version(0, 2, 2)));
     }
 
     #[test]

@@ -1,0 +1,62 @@
+name: Release
+# Publishes the product version, [workspace.package] in Cargo.toml: the
+# proxy's image as :x.y.z, :x.y and :x, then the tag vx.y.z with a GitHub
+# release whose text is that version's section of CHANGELOG.md
+# (scripts/changelog-section.sh). Started by hand on main (docs/ci.md, Releases).
+# :latest keeps following main (ci.yml), so the NAS updates as before.
+on:
+  workflow_dispatch:
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # The tag and the GitHub release.
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: |
+          version=$(scripts/changelog-section.sh --version)
+          scripts/changelog-section.sh >"$RUNNER_TEMP/notes.md"
+          # Exit code 2: no such tag. Anything else, a network error too, stops
+          # before an image tag is overwritten.
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null || status=$?
+          if ((status != 2)); then
+            echo "v$version is already released or the tags could not be read (git ls-remote: $status): raise the version in Cargo.toml and add its section to CHANGELOG.md" >&2
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "minor=${version%.*}"
+            echo "major=${version%%.*}"
+          } >>"$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The same build as publish in ci.yml; it only reads the layer cache, so
+      # it costs about a minute when main's image is already published.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/faunkr/strata-home-proxy:${{ steps.version.outputs.version }}
+            ghcr.io/faunkr/strata-home-proxy:${{ steps.version.outputs.minor }}
+            ghcr.io/faunkr/strata-home-proxy:${{ steps.version.outputs.major }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"

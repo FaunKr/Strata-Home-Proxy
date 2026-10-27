@@ -770,6 +770,32 @@ async fn only_listed_variables_may_be_suggested() {
     assert!(!section.contains("suggest none"), "{section}");
 }
 
+#[tokio::test]
+async fn a_pc_service_without_switches_or_documented_variables_gives_the_tuner_s_list() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.options = Some(StrataOptions {
+        version: "0.2.2".into(),
+        tries: vec![TunerTry {
+            label: "Pin memory only when needed".into(),
+            answer: "exact".into(),
+            env: [("STRATA_PIN_BY_NEED".to_string(), Some("1".to_string()))].into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert!(
+        text.contains(
+            "### Engine environment variables\n\nThe variables Strata's tuner knows; suggest no others."
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("From Strata's documentation"), "{text}");
+}
+
 fn preset(active: bool, state: Option<PresetState>, reasons: &[&str]) -> StrataPreset {
     StrataPreset {
         id: "3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6".into(),

@@ -34,7 +34,7 @@ _Avoid_: env vars (except `env` in code, the run config and the web UI's label *
 The dialog of an installed model with its Engine options and its Engine environment, saved together with one restart.
 
 **Speed switch**:
-One of Strata's own engine environment switches with a label and a sentence in plain words (`strata_control/speed_switches.py`), such as *Faster long prompts* (`STRATA_KVA=1`); Strata's app shows them in *Expert settings*, the optimization prompt those that apply to the model.
+One of Strata's own engine environment switches with a label and a sentence in plain words (`strata_control/speed_switches.py`), such as *Faster long prompts* (`STRATA_KVA=1`); Strata's app shows them in *Expert settings*, and the optimization prompt lists those that apply to the model.
 
 **PC service**:
 The small program on the PC that reports state, gaming mode and user activity to the proxy and triggers standby on request. In code and file names it is `pc-agent`.

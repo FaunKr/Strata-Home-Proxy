@@ -510,7 +510,7 @@ read is still without it. An engine replaced under the same `exe` (a
 - `documented`: engine environment variables Strata documents but lists in
   no table, those that apply to this PC: `name`, `value` (`null` when the
   value is left to the AI), `text`, `changes_answers` (at rounding level),
-  `needs_args` (only for a model whose engine options hold one of them; all
+  `needs_args` (only for a model whose `started_args` hold one of them; all
   when empty) and `not_with_args`. The three for RX 6000 cards come only when
   Strata's hardware detection finds one. Empty from an older PC service.
 

@@ -63,7 +63,7 @@ try:
 except Exception as e:
     out["hardware_error"] = str(e)
 try:
-    from strata_control import speed_switches as w
+    from strata_control import speed_switches
     configs = {}
     for f in Path(os.environ["STRATA_INSTALL_DIR"]).glob("strata-*.json"):
         name = f.name[len("strata-"):-len(".json")]
@@ -81,7 +81,7 @@ try:
     except Exception:
         pass
     out["switches"] = [{"label": sw.label, "effect": sw.effect, "default": sw.default, "env": dict(sw.env),
-        "models": sorted(m for m, c in configs.items() if w.applies(sw, c, gpus, backend))} for sw in w.SWITCHES]
+        "models": sorted(m for m, c in configs.items() if speed_switches.applies(sw, c, gpus, backend))} for sw in speed_switches.SWITCHES]
 except Exception as e:
     out["switches_error"] = str(e)
 if len(sys.argv) > 1:
@@ -922,7 +922,7 @@ const DOCUMENTED: [Documented; 5] = [
     Documented {
         name: "STRATA_CACHE_MESSAGE_BOUNDARY",
         value: Some("1"),
-        text: "Saves a checkpoint at the previous turn, so an agent that resends a history of \
+        text: "Saves a checkpoint at the previous turn, so a coding tool that resends a history of \
                8K tokens or more with a changed last message does not read it again. Validated \
                by Strata only on NVIDIA; adds a little time to a fresh request.",
         changes_answers: false,

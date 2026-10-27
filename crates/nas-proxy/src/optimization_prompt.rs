@@ -410,12 +410,7 @@ fn env_variables(out: &mut String, options: Option<&StrataOptions>, model: &Stra
                 .collect()
         })
         .unwrap_or_default();
-    let args = model
-        .started_args
-        .as_ref()
-        .or(model.user_args.as_ref())
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+    let args = model.started_args.as_deref().unwrap_or_default();
     let documented: Vec<&DocumentedVariable> = options
         .map(|o| o.documented.iter().filter(|d| applies(d, args)).collect())
         .unwrap_or_default();

@@ -62,11 +62,11 @@ pub struct DocumentedVariable {
     pub text: String,
     /// Whether it changes answers (at rounding level).
     pub changes_answers: bool,
-    /// Only for a model whose engine options hold one of these; all when
-    /// empty.
+    /// Only for a model whose started args (`user_args` over `args`) hold
+    /// one of these; all when empty.
     #[serde(default)]
     pub needs_args: Vec<String>,
-    /// Not for a model whose engine options hold one of these.
+    /// Not for a model whose started args hold one of these.
     #[serde(default)]
     pub not_with_args: Vec<String>,
 }

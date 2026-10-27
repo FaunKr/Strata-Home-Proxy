@@ -24,7 +24,7 @@ const expected = {
   '/admin/strata/requests': ['Request log', 'Chat app', 'prompt → tool call', 'Gen. tok/s', '40.0', 'embedding', 'Strata error 404',
     'Speeds by model', 'All keys', 'Qwen3-30B-A3B', '1600.0', 'Generation tok/s over time', 'Generation tok/s by prompt tokens'],
   '/admin/strata/connection': ['Relay through the PC service', 'Off: the proxy reaches Strata directly over the network.', 'Hide model name', 'Public model name'],
-  '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', '52.3 tok/s', 'Not installed', 'BENCH.bat, not comparable', 'Compare models', '25/33', 'Time limit', 'Last run failed', 'Run code benchmark', 'Benchmark all models', 'No result: model did not load', 'Remove old Strata folder'],
+  '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', '52.3 tok/s', 'Not installed', 'BENCH.bat, not comparable', 'Compare models', '24/33', 'Time limit', 'Last run failed', 'Run code benchmark', 'Benchmark all models', 'No result: model did not load', 'Remove old Strata folder'],
 };
 // After the areas, scripts/fake-pc.js moves upstream on and holds or refuses
 // the summary, so the Version tab shows the other two summary states.
@@ -429,9 +429,12 @@ async function benchHistory(page, errors, name) {
       await page.screenshot({ path: `${process.env.OUT}/${name}_speed-history.jpg`, type: 'jpeg', quality: 60, fullPage: true });
     }
     // The code table: a model's details show its tasks.
-    const code = page.locator('tr.bench-head').filter({ hasText: '25/33' });
+    const code = page.locator('tr.bench-head').filter({ hasText: '24/33' });
     await code.getByRole('button', { name: 'Details' }).click(wait);
     await page.getByText('Broken: 1 earlier test fails now').waitFor(wait);
+    // The repo task's score takes the broken test off.
+    const repoTask = page.locator('li').filter({ hasText: '6/9 added tests pass, −1 broken' });
+    await repoTask.getByText('5/9', { exact: true }).waitFor(wait);
     await page.getByRole('button', { name: /^▸ coder-IQ1_M/ }).last().click(wait);
     await page.getByText('No result: the model did not load').waitFor(wait);
     if (process.env.SHOTS === '1') {

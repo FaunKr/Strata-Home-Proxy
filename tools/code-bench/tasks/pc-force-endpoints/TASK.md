@@ -80,9 +80,14 @@ cargo test --offline -p strata-pc-agent -p strata-pc-protocol
 
 There is no network; all crates are vendored. The tests that score this task
 are the real ones of the feature and replace the test files named above, so
-keep the existing tests passing and the names above exact.
+keep the names above exact.
+
+All tests must pass at the end: the ones that were in the repo before you
+started as well as the ones you add. Run the whole command above, not only
+your new tests, and fix every earlier test you broke.
 
 ## Done
 
 Both endpoints work as described, `/status` reports a loading Strata as
-running, the protocol types and samples exist, and the command above passes.
+running, the protocol types and samples exist, and the command above passes
+with no failing test, old or new.

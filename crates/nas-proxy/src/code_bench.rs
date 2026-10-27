@@ -462,16 +462,15 @@ pub async fn page(state: &AppState) -> CodeBenchPage {
     for m in &mut history {
         m.runs = m.runs.drain(..).map(with_time).collect();
     }
-    // By the latest finished run: hidden tests passed, then the time it
-    // took; models with none last.
+    // By the latest finished run: its score, then the time it took;
+    // models with none last.
     let key = |m: &CodeBenchModelRuns| {
         m.runs
             .iter()
             .find(|r| r.state == CodeBenchState::Done)
             .map(|r| {
-                let passed: u32 = r.tasks.iter().map(|t| t.passed).sum();
                 let secs: f64 = r.tasks.iter().filter_map(|t| t.total_secs).sum();
-                (std::cmp::Reverse(passed), secs)
+                (std::cmp::Reverse(r.score()), secs)
             })
     };
     history.sort_by(|a, b| {

@@ -764,14 +764,19 @@ fn speed_line(run: &SpeedRun) -> String {
     format!("{}: {result}. {settings}", clock::full_text(run.at))
 }
 
-/// A code benchmark run: when, the hidden tests it passed or why it gave
-/// none, and its settings.
+/// A code benchmark run: when, its score with the earlier tests it broke
+/// or why it gave none, and its settings.
 fn code_line(run: &CodeBenchRun) -> String {
     let result = if run.state == CodeBenchState::Done {
-        let passed: u32 = run.tasks.iter().map(|t| t.passed).sum();
+        let score = run.score();
         let total: u32 = run.tasks.iter().map(|t| t.total).sum();
+        let broken = match run.tasks.iter().map(|t| t.broken.len()).sum::<usize>() {
+            0 => String::new(),
+            1 => ", 1 earlier test broken".into(),
+            n => format!(", {n} earlier tests broken"),
+        };
         format!(
-            "{passed} of {total} hidden tests passed over {} programming tasks with opencode",
+            "{score} of {total} hidden tests passed over {} programming tasks with opencode{broken}",
             run.tasks.len()
         )
     } else {

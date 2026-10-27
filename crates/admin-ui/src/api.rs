@@ -1138,6 +1138,15 @@ pub struct CodeBenchTask {
     pub broken: Vec<String>,
 }
 
+impl CodeBenchTask {
+    /// What the task counts for, out of `total`: hidden tests passed, one
+    /// off for each earlier test it broke, never below 0.
+    pub fn score(&self) -> u32 {
+        self.passed
+            .saturating_sub(u32::try_from(self.broken.len()).unwrap_or(u32::MAX))
+    }
+}
+
 fn files_kind() -> String {
     "files".into()
 }
@@ -1171,6 +1180,13 @@ pub struct CodeBenchRun {
     pub failed_later: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_at: Option<u64>,
+}
+
+impl CodeBenchRun {
+    /// The tasks' scores together.
+    pub fn score(&self) -> u32 {
+        self.tasks.iter().map(CodeBenchTask::score).sum()
+    }
 }
 
 /// A model's code benchmark runs, newest first.

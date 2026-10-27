@@ -128,6 +128,12 @@ fn done_run(model: &str, passed: [u32; 3], secs: [f64; 3]) -> Value {
            "started": 1_760_000_000u64, "ended": 1_760_000_100u64, "tasks": tasks})
 }
 
+/// `run` with `names` as the earlier tests task `task` broke.
+fn with_broken(mut run: Value, task: usize, names: &[&str]) -> Value {
+    run["tasks"][task]["broken"] = json!(names);
+    run
+}
+
 /// The last Activate the PC service was asked for.
 fn last_activate(s: &Setup) -> String {
     s.pc.job_bodies
@@ -450,9 +456,9 @@ async fn a_repo_task_shows_its_change_and_the_tests_it_broke() {
     );
     assert_eq!(repo["broken"][0], "pc_agent::status_reports_gaming", "{v}");
     // The details open in the browser (scripts/ui-check.js); the row has
-    // the totals.
+    // the totals, the broken test taken off.
     let html = b.page("/admin/strata/version").await;
-    assert!(html.contains("<td>16/32</td>"), "{html}");
+    assert!(html.contains("<td>15/32</td>"), "{html}");
 }
 
 #[tokio::test]
@@ -899,6 +905,40 @@ async fn results_are_sorted_by_tests_passed_then_the_time() {
         &runner,
         ids[1],
         done_run(ids[1], [3, 3, 0], [60.0, 60.0, 60.0]),
+    )
+    .await;
+    end_activate(&s, ids[1]).await;
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+    let v = page(&mut b).await;
+    let models: Vec<&str> = v["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["model"].as_str().unwrap())
+        .collect();
+    assert_eq!(models, vec![ids[1], ids[0]]);
+}
+
+#[tokio::test]
+async fn broken_earlier_tests_lower_a_models_place() {
+    // Each broken earlier test takes one off: 12 - 5 is less than 8.
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    let broken = ["a", "b", "c", "d", "e"];
+    drive_model(
+        &s,
+        &runner,
+        ids[0],
+        with_broken(done_run(ids[0], [6, 6, 0], [30.0, 30.0, 30.0]), 0, &broken),
+    )
+    .await;
+    drive_model(
+        &s,
+        &runner,
+        ids[1],
+        done_run(ids[1], [4, 4, 0], [100.0, 100.0, 100.0]),
     )
     .await;
     end_activate(&s, ids[1]).await;

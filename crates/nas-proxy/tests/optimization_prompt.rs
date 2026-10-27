@@ -213,6 +213,34 @@ async fn carries_both_benchmarks_of_the_model() {
 }
 
 #[tokio::test]
+async fn takes_broken_earlier_tests_off_the_code_benchmark() {
+    let dir = data_dir("prompt-broken");
+    std::fs::create_dir_all(&dir).unwrap();
+    let task = |name: &str, passed: u32, broken: &[&str]| {
+        json!({"name": name, "title": name, "state": "done", "passed": passed, "total": 5,
+               "kind": "repo", "broken": broken})
+    };
+    // Saved as an older proxy did; the last task broke more than it passed.
+    let runs = json!([
+        {"model": "IQ3_XXS", "state": "done", "started": 1_760_000_000u64,
+         "ended": 1_760_000_600u64,
+         "tasks": [task("a", 5, &["x", "y"]), task("b", 1, &["z"]), task("c", 1, &["u", "v"])]}
+    ]);
+    std::fs::write(dir.join("code-bench.json"), runs.to_string()).unwrap();
+    let s = setup(true, |c| c.data_dir = Some(dir.clone())).await;
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    assert!(
+        text.contains(
+            ": 3 of 15 hidden tests passed over 3 programming tasks with opencode, \
+             5 earlier tests broken. Settings not recorded\n"
+        ),
+        "{text}"
+    );
+}
+
+#[tokio::test]
 async fn leaves_out_paths_keys_and_the_git_remote() {
     let s = setup(true, |_| {}).await;
     s.pc.set_strata_key("0123456789abcdef0123456789abcdef");

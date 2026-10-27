@@ -2579,10 +2579,10 @@ fn hours_text(minutes: u64) -> String {
     }
 }
 
-/// Hidden tests passed and seconds in total.
+/// The tasks' scores and seconds in total.
 fn run_totals(run: &CodeBenchRun) -> (u32, f64) {
     (
-        run.tasks.iter().map(|t| t.passed).sum(),
+        run.tasks.iter().map(|t| t.score()).sum(),
         run.tasks.iter().filter_map(|t| t.total_secs).sum(),
     )
 }
@@ -2846,17 +2846,11 @@ fn CodeCells(
                 let cell = match run.tasks.iter().find(|t| t.name == info.name) {
                     None => view! { <span class="muted">"–"</span> }.into_any(),
                     Some(t) => {
-                        let class = if t.total > 0 && t.passed == t.total {
-                            "badge is-ok"
-                        } else if t.passed > 0 {
-                            "badge is-warn"
-                        } else {
-                            "badge is-bad"
-                        };
+                        let class = score_class(t);
                         let text = if t.timed_out {
                             "Time limit".to_string()
                         } else {
-                            format!("{}/{}", t.passed, t.total)
+                            format!("{}/{}", t.score(), t.total)
                         };
                         view! {
                             <span class=class>
@@ -2937,9 +2931,28 @@ fn CodeCells(
     .into_any()
 }
 
+/// The badge of a task: all of its tests count, some or none.
+fn score_class(task: &CodeBenchTask) -> &'static str {
+    if task.total > 0 && task.score() == task.total {
+        "badge is-ok"
+    } else if task.score() > 0 {
+        "badge is-warn"
+    } else {
+        "badge is-bad"
+    }
+}
+
 #[component]
 fn CodeBenchTaskRow(task: CodeBenchTask) -> impl IntoView {
-    let mut figures = vec![format!("{}/{} tests", task.passed, task.total)];
+    let tests = match (task.kind.as_str(), task.broken.len()) {
+        ("repo", 0) => format!("{}/{} added tests pass", task.passed, task.total),
+        ("repo", n) => format!(
+            "{}/{} added tests pass, −{n} broken",
+            task.passed, task.total
+        ),
+        _ => format!("{}/{} tests", task.passed, task.total),
+    };
+    let mut figures = vec![tests];
     if let Some(secs) = task.total_secs {
         figures.push(duration_text(secs));
     }
@@ -2951,17 +2964,11 @@ fn CodeBenchTaskRow(task: CodeBenchTask) -> impl IntoView {
     if let Some(v) = task.output_tps {
         figures.push(tps(v));
     }
-    let class = if task.total > 0 && task.passed == task.total {
-        "badge is-ok"
-    } else if task.passed > 0 {
-        "badge is-warn"
-    } else {
-        "badge is-bad"
-    };
+    let class = score_class(&task);
     let badge = if task.timed_out {
         "Time limit".to_string()
     } else {
-        format!("{}/{}", task.passed, task.total)
+        format!("{}/{}", task.score(), task.total)
     };
     let files = task
         .files

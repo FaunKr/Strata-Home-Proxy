@@ -433,7 +433,8 @@ async function benchHistory(page, errors, name) {
     await code.getByRole('button', { name: 'Details' }).click(wait);
     await page.getByText('Broken: 1 earlier test fails now').waitFor(wait);
     // The repo task's score takes the broken test off.
-    await page.getByText('6/9 added tests pass, −1 broken').waitFor(wait);
+    const repoTask = page.locator('li').filter({ hasText: '6/9 added tests pass, −1 broken' });
+    await repoTask.getByText('5/9', { exact: true }).waitFor(wait);
     await page.getByRole('button', { name: /^▸ coder-IQ1_M/ }).last().click(wait);
     await page.getByText('No result: the model did not load').waitFor(wait);
     if (process.env.SHOTS === '1') {

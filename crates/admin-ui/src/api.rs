@@ -1182,6 +1182,13 @@ pub struct CodeBenchRun {
     pub failed_at: Option<u64>,
 }
 
+impl CodeBenchRun {
+    /// The tasks' scores together.
+    pub fn score(&self) -> u32 {
+        self.tasks.iter().map(CodeBenchTask::score).sum()
+    }
+}
+
 /// A model's code benchmark runs, newest first.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CodeBenchModelRuns {

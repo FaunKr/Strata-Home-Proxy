@@ -917,7 +917,12 @@ async fn results_are_sorted_by_tests_passed_then_the_time() {
         .map(|r| r["model"].as_str().unwrap())
         .collect();
     assert_eq!(models, vec![ids[1], ids[0]]);
+}
+
+#[tokio::test]
+async fn broken_earlier_tests_lower_a_models_place() {
     // Each broken earlier test takes one off: 12 - 5 is less than 8.
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);

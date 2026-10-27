@@ -768,7 +768,7 @@ fn speed_line(run: &SpeedRun) -> String {
 /// or why it gave none, and its settings.
 fn code_line(run: &CodeBenchRun) -> String {
     let result = if run.state == CodeBenchState::Done {
-        let score: u32 = run.tasks.iter().map(|t| t.score()).sum();
+        let score = run.score();
         let total: u32 = run.tasks.iter().map(|t| t.total).sum();
         let broken = match run.tasks.iter().map(|t| t.broken.len()).sum::<usize>() {
             0 => String::new(),

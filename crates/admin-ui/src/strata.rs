@@ -2582,7 +2582,7 @@ fn hours_text(minutes: u64) -> String {
 /// The tasks' scores and seconds in total.
 fn run_totals(run: &CodeBenchRun) -> (u32, f64) {
     (
-        run.tasks.iter().map(|t| t.score()).sum(),
+        run.score(),
         run.tasks.iter().filter_map(|t| t.total_secs).sum(),
     )
 }
@@ -2847,11 +2847,7 @@ fn CodeCells(
                     None => view! { <span class="muted">"–"</span> }.into_any(),
                     Some(t) => {
                         let class = score_class(t);
-                        let text = if t.timed_out {
-                            "Time limit".to_string()
-                        } else {
-                            format!("{}/{}", t.score(), t.total)
-                        };
+                        let text = score_text(t);
                         view! {
                             <span class=class>
                                 <span class="dot"></span>
@@ -2931,6 +2927,15 @@ fn CodeCells(
     .into_any()
 }
 
+/// The badge text of a task: its score, or that it hit the time limit.
+fn score_text(task: &CodeBenchTask) -> String {
+    if task.timed_out {
+        "Time limit".to_string()
+    } else {
+        format!("{}/{}", task.score(), task.total)
+    }
+}
+
 /// The badge of a task: all of its tests count, some or none.
 fn score_class(task: &CodeBenchTask) -> &'static str {
     if task.total > 0 && task.score() == task.total {
@@ -2965,11 +2970,7 @@ fn CodeBenchTaskRow(task: CodeBenchTask) -> impl IntoView {
         figures.push(tps(v));
     }
     let class = score_class(&task);
-    let badge = if task.timed_out {
-        "Time limit".to_string()
-    } else {
-        format!("{}/{}", task.score(), task.total)
-    };
+    let badge = score_text(&task);
     let files = task
         .files
         .iter()

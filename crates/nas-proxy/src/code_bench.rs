@@ -469,9 +469,8 @@ pub async fn page(state: &AppState) -> CodeBenchPage {
             .iter()
             .find(|r| r.state == CodeBenchState::Done)
             .map(|r| {
-                let score: u32 = r.tasks.iter().map(|t| t.score()).sum();
                 let secs: f64 = r.tasks.iter().filter_map(|t| t.total_secs).sum();
-                (std::cmp::Reverse(score), secs)
+                (std::cmp::Reverse(r.score()), secs)
             })
     };
     history.sort_by(|a, b| {

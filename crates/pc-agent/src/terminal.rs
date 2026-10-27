@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use strata_pc_protocol::{
-    NeverRule, PresetState, StrataOptions, StrataPreset, StrataPresets, StrataTune, TuneMode,
-    TuneSpeed, TuneUse, TunerOption, TunerTry,
+    DocumentedVariable, NeverRule, PresetState, SpeedSwitch, StrataOptions, StrataPreset,
+    StrataPresets, StrataTune, TuneMode, TuneSpeed, TuneUse, TunerOption, TunerTry,
 };
 
 use crate::command::CommandSpec;
@@ -25,14 +25,17 @@ const CURRENT: [&str; 2] = ["terminal", "current"];
 const INSTALL: &str = "install";
 /// The `strata` command in the Terminal's own files.
 const PROGRAM: [&str; 2] = ["bin", "strata.cmd"];
-/// Prints the tuner's option table (`strata_control/tune_knobs.py`) and,
-/// for the run config named as its argument, what its engine prints for
-/// `--help`, run the way Strata's own tuner runs it
-/// (`strata_control/tuning.py`). The Terminal has no command for either.
+/// Prints the tuner's option table (`strata_control/tune_knobs.py`), the
+/// speed switches (`strata_control/speed_switches.py`) with the run configs
+/// in `STRATA_INSTALL_DIR` each applies to, whether Strata's hardware
+/// detection finds an RX 6000 card (setup's `is_rdna2`) and, for the run
+/// config named as its argument, what its engine prints for `--help`, run
+/// the way Strata's own tuner runs it (`strata_control/tuning.py`). The
+/// Terminal has no command for any of them. Each part fails on its own.
 /// Its first line names it for the tests' fake commands, which otherwise
 /// answer it as setup.
 const OPTIONS_SCRIPT: &str = r#"# options
-import json, subprocess, sys
+import importlib.util, json, os, subprocess, sys
 from pathlib import Path
 def plain(v):
     if isinstance(v, (tuple, list, set, frozenset)):
@@ -49,6 +52,38 @@ try:
                   "env": plain(a.env), "families": plain(a.families)} for a in k.ARMS]}
 except Exception as e:
     out["tuner_error"] = str(e)
+gpus = []
+try:
+    spec = importlib.util.spec_from_file_location("strata_mcp_options", Path.cwd() / "tools" / "strata_mcp.py")
+    mcp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mcp)
+    s = mcp.Strata(os.environ["STRATA_INSTALL_DIR"], Path.cwd())
+    gpus = list(s.hardware().get("gpus") or [])
+    out["rdna2"] = any(s.setup_module().is_rdna2(g) for g in gpus)
+except Exception as e:
+    out["hardware_error"] = str(e)
+try:
+    from strata_control import speed_switches as w
+    configs = {}
+    for f in Path(os.environ["STRATA_INSTALL_DIR"]).glob("strata-*.json"):
+        name = f.name[len("strata-"):-len(".json")]
+        if name and not name.endswith(".shared-settings"):
+            try:
+                configs[name] = json.loads(f.read_text(encoding="utf-8-sig"))
+            except Exception:
+                pass
+    backend = None
+    try:
+        from strata_control import engine_component
+        rep = engine_component.status()
+        if rep.get("usable"):
+            backend = (rep.get("engine") or {}).get("backend")
+    except Exception:
+        pass
+    out["switches"] = [{"label": sw.label, "effect": sw.effect, "default": sw.default, "env": dict(sw.env),
+        "models": sorted(m for m, c in configs.items() if w.applies(sw, c, gpus, backend))} for sw in w.SWITCHES]
+except Exception as e:
+    out["switches_error"] = str(e)
 if len(sys.argv) > 1:
     try:
         from strata_control import engine_component, tuning
@@ -801,7 +836,118 @@ pub fn read_options(output: &[String], version: &str) -> Option<StrataOptions> {
         never: never_rules(&tuner["never"]),
         tries: tuner_tries(&tuner["arms"]),
         engine_help,
+        switches: speed_switches(&answer["switches"]),
+        documented: documented(answer["rdna2"].as_bool() == Some(true)),
     })
+}
+
+fn speed_switches(switches: &Value) -> Vec<SpeedSwitch> {
+    list(switches)
+        .iter()
+        .filter_map(|switch| {
+            Some(SpeedSwitch {
+                label: text(&switch["label"])?.to_string(),
+                effect: text(&switch["effect"]).unwrap_or_default().to_string(),
+                default_on: text(&switch["default"]) != Some("off"),
+                env: switch["env"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(name, set)| Some((name.clone(), value(set)?)))
+                    .collect(),
+                models: values(&switch["models"]),
+            })
+        })
+        .collect()
+}
+
+/// One engine environment variable Strata documents but lists in no table
+/// (`docs/AMD_HIP.md` *RDNA2 (gfx1030)*, `docs/DETAILS.md`,
+/// `docs/MESSAGE_BOUNDARY_CACHE.md`), as of Strata 0.2.7.
+struct Documented {
+    name: &'static str,
+    value: Option<&'static str>,
+    text: &'static str,
+    changes_answers: bool,
+    rdna2_only: bool,
+    needs_args: &'static [&'static str],
+    not_with_args: &'static [&'static str],
+}
+
+const DOCUMENTED: [Documented; 5] = [
+    Documented {
+        name: "STRATA_HIP_PROMPT_F16",
+        value: Some("1"),
+        text: "The prompt's 16-bit matrix products run FP16 in and out, which rocBLAS is tuned for \
+               on RX 6000 cards: long prompts read about 2x faster (2x RX 6900 XT: 439-466 to \
+               744-926 tok/s), decode unchanged. Values above 65504 overflow FP16.",
+        changes_answers: true,
+        rdna2_only: true,
+        needs_args: &[],
+        not_with_args: &[],
+    },
+    Documented {
+        name: "STRATA_RDNA2_SGEMM",
+        value: Some("1"),
+        text: "Both inputs of the prompt's 16-bit matrix products are widened to FP32 and run as \
+               SGEMM, with no FP16 limit (RX 6800 on Windows, 12K-token prompts: 312 to 452 \
+               tok/s, decode unchanged). Slower than `STRATA_HIP_PROMPT_F16`; with both set the \
+               FP16 route runs first.",
+        changes_answers: true,
+        rdna2_only: true,
+        needs_args: &[],
+        not_with_args: &[],
+    },
+    Documented {
+        name: "STRATA_HC_PERSIST",
+        value: Some("1"),
+        text: "The verifier's hyper-connection read runs as one persistent kernel: 2.8 to 6.6% \
+               less time per decode window (2x RX 6900 XT). Measured on Linux only.",
+        changes_answers: true,
+        rdna2_only: true,
+        needs_args: &[],
+        not_with_args: &[],
+    },
+    Documented {
+        name: "STRATA_RESIDENT_HEADROOM_GIB",
+        value: None,
+        text: "The GiB of available RAM the resident copy of the experts leaves free (default \
+               4). Lower it a little when the load lines say some experts are not kept in RAM; \
+               raise it if the PC swaps.",
+        changes_answers: false,
+        rdna2_only: false,
+        needs_args: &["--resident-experts", "--resident-budget-gib"],
+        not_with_args: &[],
+    },
+    Documented {
+        name: "STRATA_CACHE_MESSAGE_BOUNDARY",
+        value: Some("1"),
+        text: "Saves a checkpoint at the previous turn, so an agent that resends a history of \
+               8K tokens or more with a changed last message does not read it again. Validated \
+               by Strata only on NVIDIA; adds a little time to a fresh request.",
+        changes_answers: false,
+        rdna2_only: false,
+        needs_args: &[],
+        not_with_args: &["--layer-split"],
+    },
+];
+
+/// The documented variables for this PC: those for RX 6000 cards only when
+/// Strata's hardware detection found one.
+fn documented(rdna2: bool) -> Vec<DocumentedVariable> {
+    let strings = |args: &[&str]| args.iter().map(|a| a.to_string()).collect();
+    DOCUMENTED
+        .iter()
+        .filter(|d| rdna2 || !d.rdna2_only)
+        .map(|d| DocumentedVariable {
+            name: d.name.into(),
+            value: d.value.map(String::from),
+            text: d.text.into(),
+            changes_answers: d.changes_answers,
+            needs_args: strings(d.needs_args),
+            not_with_args: strings(d.not_with_args),
+        })
+        .collect()
 }
 
 fn tuner_options(tuner: &Value) -> Vec<TunerOption> {
@@ -1124,6 +1270,89 @@ mod tests {
             read_options(&lines(&["Traceback (most recent call last):"]), "0.2.2"),
             None
         );
+    }
+
+    /// The options script's output with Strata 0.2.7's speed switches
+    /// (`strata_control/speed_switches.py`) on a PC with an RX 6000 card.
+    const OPTIONS_027: &str = include_str!("../fixtures/strata-options-0.2.7.json");
+
+    #[test]
+    fn speed_switches_are_read_with_the_models_they_apply_to() {
+        let options = read_options(&lines(&[OPTIONS_027.trim_end()]), "0.2.7").unwrap();
+        assert_eq!(options.switches.len(), 5);
+        let long = &options.switches[0];
+        assert_eq!(long.label, "Faster long prompts");
+        assert!(long.effect.starts_with("Reads very long prompts faster"));
+        assert!(!long.default_on);
+        assert_eq!(long.env, [("STRATA_KVA".into(), "1".into())].into());
+        assert_eq!(long.models, ["IQ3_XXS"]);
+        let nvidia = &options.switches[1];
+        assert!(nvidia.default_on);
+        assert!(nvidia.models.is_empty());
+        assert_eq!(options.switches[3].env.len(), 7);
+        assert_eq!(
+            options.tuner,
+            read_options(&lines(&[OPTIONS.trim_end()]), "0.2.7")
+                .unwrap()
+                .tuner
+        );
+    }
+
+    #[test]
+    fn an_rx_6000_card_gets_its_documented_variables() {
+        let options = read_options(&lines(&[OPTIONS_027.trim_end()]), "0.2.7").unwrap();
+        let names: Vec<&str> = options.documented.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "STRATA_HIP_PROMPT_F16",
+                "STRATA_RDNA2_SGEMM",
+                "STRATA_HC_PERSIST",
+                "STRATA_RESIDENT_HEADROOM_GIB",
+                "STRATA_CACHE_MESSAGE_BOUNDARY"
+            ]
+        );
+        let f16 = &options.documented[0];
+        assert_eq!(f16.value.as_deref(), Some("1"));
+        assert!(f16.changes_answers);
+        assert!(f16.text.contains("2x faster"), "{}", f16.text);
+        let headroom = &options.documented[3];
+        assert_eq!(headroom.value, None);
+        assert!(!headroom.changes_answers);
+        assert_eq!(
+            headroom.needs_args,
+            ["--resident-experts", "--resident-budget-gib"]
+        );
+        assert_eq!(options.documented[4].not_with_args, ["--layer-split"]);
+    }
+
+    #[test]
+    fn without_an_rx_6000_card_its_variables_are_left_out() {
+        let other = OPTIONS_027.replace(r#""rdna2": true"#, r#""rdna2": false"#);
+        let undetected = OPTIONS_027.replace(
+            r#""rdna2": true"#,
+            r#""hardware_error": "No module named 'wmi'""#,
+        );
+        assert_ne!(other, OPTIONS_027);
+        assert_ne!(undetected, OPTIONS_027);
+        for out in [other, undetected] {
+            let options = read_options(&lines(&[out.trim_end()]), "0.2.7").unwrap();
+            let names: Vec<&str> = options.documented.iter().map(|d| d.name.as_str()).collect();
+            assert_eq!(
+                names,
+                [
+                    "STRATA_RESIDENT_HEADROOM_GIB",
+                    "STRATA_CACHE_MESSAGE_BOUNDARY"
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn a_strata_without_speed_switches_keeps_the_rest() {
+        let options = read_options(&lines(&[OPTIONS.trim_end()]), "0.2.2").unwrap();
+        assert!(options.switches.is_empty());
+        assert!(!options.tuner.is_empty() && options.engine_help.is_some());
     }
 
     #[test]

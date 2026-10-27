@@ -317,6 +317,55 @@ async fn strata_s_options_are_read_once_per_terminal_version() {
     assert_eq!(s.fake.runs_of("python options").len(), 2);
 }
 
+/// The options script's output with Strata 0.2.7's speed switches on a
+/// PC with an RX 6000 card (see the unit tests in `terminal.rs`).
+const OPTIONS_027: &str = include_str!("../fixtures/strata-options-0.2.7.json");
+
+#[tokio::test]
+async fn the_page_reports_speed_switches_and_documented_variables() {
+    let s = setup("terminal-switches").await;
+    installed(&s);
+    s.fake.command(
+        "python options",
+        FakeCommand {
+            lines: vec![OPTIONS_027.trim_end().to_string()],
+            ..Default::default()
+        },
+    );
+    let view = options_read(&s, "0.2.2").await;
+    let options = &view["options"];
+    assert_eq!(options["switches"][0]["label"], "Faster long prompts");
+    assert_eq!(options["switches"][0]["env"], json!({"STRATA_KVA": "1"}));
+    assert_eq!(options["switches"][0]["models"], json!(["IQ3_XXS"]));
+    assert_eq!(options["documented"][0]["name"], "STRATA_HIP_PROMPT_F16");
+    assert_eq!(options["documented"].as_array().unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn a_newly_installed_model_gets_the_options_read_again() {
+    let s = setup("terminal-new-model").await;
+    let leaves = installed(&s);
+    s.fake.command(
+        "python options",
+        FakeCommand {
+            lines: vec![OPTIONS_027.trim_end().to_string()],
+            ..Default::default()
+        },
+    );
+    options_read(&s, "0.2.2").await;
+    assert_eq!(s.fake.runs_of("python options").len(), 1);
+
+    leaves.config("swift-iq2_xs", config_json("c.gguf"));
+    for _ in 0..200 {
+        get(&s, "/strata").await;
+        if s.fake.runs_of("python options").len() == 2 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("the options were not read again after a new model");
+}
+
 #[tokio::test]
 async fn a_strata_folder_from_source_has_no_options() {
     let s = setup("source-options").await;

@@ -8,9 +8,10 @@ use std::{sync::atomic::Ordering, time::Duration};
 use common::*;
 use serde_json::json;
 use strata_pc_protocol::{
-    CpuFacts, GpuFacts, Incoming, LoadLines, MachineFacts, NeverRule, PresetState, RamStick,
-    SamplingField, SamplingSource, SamplingSupport, StrataOptions, StrataPreset, StrataPresets,
-    StrataSampling, StrataTune, TuneMode, TuneUse, TunerOption, TunerTry, WindowsFacts,
+    CpuFacts, DocumentedVariable, GpuFacts, Incoming, LoadLines, MachineFacts, NeverRule,
+    PresetState, RamStick, SamplingField, SamplingSource, SamplingSupport, SpeedSwitch,
+    StrataOptions, StrataPreset, StrataPresets, StrataSampling, StrataTune, TuneMode, TuneUse,
+    TunerOption, TunerTry, WindowsFacts,
 };
 
 async fn prompt(b: &mut Browser, model: &str) -> String {
@@ -602,6 +603,7 @@ async fn carries_strata_s_options_when_the_pc_service_read_them() {
             },
         ],
         engine_help: Some("strata generate --pack DIR [options]\n  --kv-grow  grow".into()),
+        ..Default::default()
     });
     *s.pc.strata_info.lock().unwrap() = Some(report);
     let text = prompt(&mut b, "IQ3_XXS").await;
@@ -619,6 +621,153 @@ async fn carries_strata_s_options_when_the_pc_service_read_them() {
     ] {
         assert!(text.contains(part), "{part} missing:\n{text}");
     }
+}
+
+/// The section *Engine environment variables* of IQ3_XXS's prompt, with
+/// these speed switches and documented variables, started with `args`.
+async fn env_section(
+    switches: Vec<SpeedSwitch>,
+    documented: Vec<DocumentedVariable>,
+    args: &[&str],
+) -> String {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.models[0].started_args = Some(args.iter().map(|a| a.to_string()).collect());
+    report.info.options = Some(StrataOptions {
+        version: "0.2.7".into(),
+        switches,
+        documented,
+        ..Default::default()
+    });
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    let text = prompt(&mut b, "IQ3_XXS").await;
+    let start = text
+        .find("### Engine environment variables")
+        .unwrap_or_else(|| panic!("no section:\n{text}"));
+    let end = text[start..]
+        .find("\n## ")
+        .map_or(text.len(), |e| start + e);
+    text[start..end].to_string()
+}
+
+fn long_prompts(models: &[&str]) -> SpeedSwitch {
+    SpeedSwitch {
+        label: "Faster long prompts".into(),
+        effect: "Reads very long prompts faster by approximating part of the work.".into(),
+        default_on: false,
+        env: [("STRATA_KVA".to_string(), "1".to_string())].into(),
+        models: models.iter().map(|m| m.to_string()).collect(),
+    }
+}
+
+fn documented(name: &str, needs: &[&str], not_with: &[&str]) -> DocumentedVariable {
+    let strings = |args: &[&str]| args.iter().map(|a| a.to_string()).collect();
+    DocumentedVariable {
+        name: name.into(),
+        value: Some("1".into()),
+        text: format!("What {name} does."),
+        changes_answers: false,
+        needs_args: strings(needs),
+        not_with_args: strings(not_with),
+    }
+}
+
+#[tokio::test]
+async fn a_speed_switch_for_the_model_is_listed_in_strata_s_words() {
+    let section = env_section(vec![long_prompts(&["iq3_xxs"])], vec![], &[]).await;
+    assert!(
+        section.contains(
+            "- `STRATA_KVA=1` (off by default): Faster long prompts. Reads very long prompts \
+             faster by approximating part of the work."
+        ),
+        "{section}"
+    );
+}
+
+#[tokio::test]
+async fn a_speed_switch_for_another_model_is_left_out() {
+    let section = env_section(vec![long_prompts(&["coder-IQ1_M"])], vec![], &[]).await;
+    assert!(!section.contains("STRATA_KVA"), "{section}");
+}
+
+#[tokio::test]
+async fn documented_variables_come_under_their_own_heading_with_their_answers() {
+    let f16 = DocumentedVariable {
+        text: "Long prompts read about 2x faster.".into(),
+        changes_answers: true,
+        ..documented("STRATA_HIP_PROMPT_F16", &[], &[])
+    };
+    let headroom = DocumentedVariable {
+        value: None,
+        ..documented("STRATA_RESIDENT_HEADROOM_GIB", &[], &[])
+    };
+    let section = env_section(vec![], vec![f16, headroom], &[]).await;
+    let (_, own) = section
+        .split_once("#### From Strata's documentation, not tried by its tuner\n")
+        .unwrap_or_else(|| panic!("no heading:\n{section}"));
+    for part in [
+        "- `STRATA_HIP_PROMPT_F16=1`: Long prompts read about 2x faster. Changes answers at rounding level.",
+        "- `STRATA_RESIDENT_HEADROOM_GIB=<value>`: What STRATA_RESIDENT_HEADROOM_GIB does. Does not change answers.",
+    ] {
+        assert!(own.contains(part), "{part} missing:\n{section}");
+    }
+}
+
+#[tokio::test]
+async fn the_headroom_counts_only_for_a_model_in_resident_mode() {
+    let headroom = || {
+        vec![documented(
+            "STRATA_RESIDENT_HEADROOM_GIB",
+            &["--resident-experts", "--resident-budget-gib"],
+            &[],
+        )]
+    };
+    let without = env_section(vec![], headroom(), &["--max-context", "65536"]).await;
+    assert!(
+        !without.contains("STRATA_RESIDENT_HEADROOM_GIB"),
+        "{without}"
+    );
+    let resident = env_section(vec![], headroom(), &["--resident-experts"]).await;
+    assert!(
+        resident.contains("STRATA_RESIDENT_HEADROOM_GIB"),
+        "{resident}"
+    );
+    let budget = env_section(vec![], headroom(), &["--resident-budget-gib", "40"]).await;
+    assert!(budget.contains("STRATA_RESIDENT_HEADROOM_GIB"), "{budget}");
+}
+
+#[tokio::test]
+async fn the_message_boundary_is_left_out_for_a_layer_split() {
+    let boundary = || {
+        vec![documented(
+            "STRATA_CACHE_MESSAGE_BOUNDARY",
+            &[],
+            &["--layer-split"],
+        )]
+    };
+    let split = env_section(vec![], boundary(), &["--layer-split", "24"]).await;
+    assert!(!split.contains("STRATA_CACHE_MESSAGE_BOUNDARY"), "{split}");
+    let one_card = env_section(vec![], boundary(), &["--max-context", "65536"]).await;
+    assert!(
+        one_card.contains("STRATA_CACHE_MESSAGE_BOUNDARY"),
+        "{one_card}"
+    );
+}
+
+#[tokio::test]
+async fn only_listed_variables_may_be_suggested() {
+    let section = env_section(
+        vec![long_prompts(&["IQ3_XXS"])],
+        vec![documented("STRATA_HC_PERSIST", &[], &[])],
+        &[],
+    )
+    .await;
+    assert!(
+        section.contains("Suggest only variables listed in this section."),
+        "{section}"
+    );
+    assert!(!section.contains("suggest none"), "{section}");
 }
 
 fn preset(active: bool, state: Option<PresetState>, reasons: &[&str]) -> StrataPreset {

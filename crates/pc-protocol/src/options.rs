@@ -25,6 +25,50 @@ pub struct StrataOptions {
     /// that runs.
     #[serde(default)]
     pub engine_help: Option<String>,
+    /// Strata's speed switches (`strata_control/speed_switches.py`);
+    /// empty before Strata 0.2.7, or from older services.
+    #[serde(default)]
+    pub switches: Vec<SpeedSwitch>,
+    /// Engine environment variables Strata documents but lists in no
+    /// table, those that apply to this PC; empty from older services.
+    #[serde(default)]
+    pub documented: Vec<DocumentedVariable>,
+}
+
+/// One of Strata's speed switches, as its app and Terminal offer it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpeedSwitch {
+    /// Strata's words for it, e.g. `Faster long prompts`.
+    pub label: String,
+    /// Strata's sentence on what it does and what the other state does.
+    pub effect: String,
+    /// Whether the feature is on while its variables are absent.
+    pub default_on: bool,
+    /// The variables that take it out of its default state.
+    pub env: BTreeMap<String, String>,
+    /// The installed models it applies to on this PC, by id.
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+/// An engine environment variable from Strata's documentation.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DocumentedVariable {
+    pub name: String,
+    /// The value to set; `None` when the value is for the AI to choose.
+    #[serde(default)]
+    pub value: Option<String>,
+    /// What it does and what it costs, from Strata's documentation.
+    pub text: String,
+    /// Whether it changes answers (at rounding level).
+    pub changes_answers: bool,
+    /// Only for a model whose engine options hold one of these; all when
+    /// empty.
+    #[serde(default)]
+    pub needs_args: Vec<String>,
+    /// Not for a model whose engine options hold one of these.
+    #[serde(default)]
+    pub not_with_args: Vec<String>,
 }
 
 /// One engine option in the tuner's table (`strata_control/tune_knobs.py`).

@@ -477,7 +477,8 @@ service leaves out `machine`.
 tune, for the optimization prompt. The PC service reads it in the background
 when `/strata` is asked for, outside jobs and gaming mode, with the Terminal's
 own Python (see [strata-api.md](strata-api.md)), and again only when the
-Terminal's build or the engine the run config names (`exe`) changes. A read
+Terminal's build, the engine the run config names (`exe`) or the set of
+installed models changes. A read
 that failed, took longer than a minute or lacks the tuner's table or (with a
 model) the engine's help is tried again after 10 minutes. An answer during the
 read is still without it. An engine replaced under the same `exe` (a
@@ -500,6 +501,18 @@ read is still without it. An engine replaced under the same `exe` (a
 - `engine_help`: what the engine of the active model's run config (else the
   first model's) prints for `--help`; `null` without a model or when it does
   not run.
+- `switches`: Strata's speed switches (`strata_control/speed_switches.py`,
+  Strata 0.2.7 and later): `label` and `effect` in Strata's words,
+  `default_on`, `env` (name to value: what takes the switch out of its
+  default) and `models`, the ids of the installed models Strata says it
+  applies to on this PC. Empty for an older Strata and from an older PC
+  service.
+- `documented`: engine environment variables Strata documents but lists in
+  no table, those that apply to this PC: `name`, `value` (`null` when the
+  value is left to the AI), `text`, `changes_answers` (at rounding level),
+  `needs_args` (only for a model whose engine options hold one of them; all
+  when empty) and `not_with_args`. The three for RX 6000 cards come only when
+  Strata's hardware detection finds one. Empty from an older PC service.
 
 Missing without a Terminal (a Strata folder from source), before the first
 read and from an older PC service.

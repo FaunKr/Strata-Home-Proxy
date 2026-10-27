@@ -2256,12 +2256,14 @@ impl OptionsRead {
     }
 }
 
-/// What the options are read for: the Terminal's build and the engine
-/// the run config starts, as it names it.
+/// What the options are read for: the Terminal's build, the engine the
+/// run config starts, as it names it, and the installed models, which
+/// Strata's speed switches each apply to or not.
 #[derive(Clone, PartialEq, Eq)]
 struct OptionsKey {
     version: String,
     engine: Option<String>,
+    models: Vec<String>,
 }
 
 impl OptionsCheck {
@@ -2733,9 +2735,11 @@ fn options_wanted(agent: &Agent) -> Option<(OptionsKey, CommandSpec)> {
     }
     let terminal = Terminal::of(&agent.cfg);
     let version = terminal.build()?;
+    let mut models = install.models();
+    models.sort_unstable();
     let model = active_model(agent)
         .filter(|id| install.has(id))
-        .or_else(|| install.models().into_iter().next());
+        .or_else(|| models.first().cloned());
     let engine = model.as_deref().and_then(|id| {
         let model = install.read_model(id);
         let exe = model.fields().get("exe")?.as_str()?.to_string();
@@ -2745,6 +2749,7 @@ fn options_wanted(agent: &Agent) -> Option<(OptionsKey, CommandSpec)> {
     let key = OptionsKey {
         version,
         engine: engine.map(|(_, exe)| exe),
+        models,
     };
     Some((key, spec))
 }

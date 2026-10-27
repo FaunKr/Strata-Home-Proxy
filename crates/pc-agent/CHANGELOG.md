@@ -4,6 +4,10 @@ What each version brings, newest first. The web UI's PC service card shows
 the versions an update brings; each line is written for the user. Rules:
 `docs/pc-service.md`.
 
+## 1.1.0
+
+- Tells the web UI Strata's speed switches and the documented engine environment variables that suit this PC, so the optimization prompt can suggest them.
+
 ## 1.0.1
 
 - Models start again after a Strata update deleted an older Strata folder their settings pointed into: the PC service sets them up again by itself.

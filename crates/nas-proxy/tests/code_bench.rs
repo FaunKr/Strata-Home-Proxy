@@ -18,7 +18,7 @@ use axum::{
 use common::*;
 use serde_json::{Value, json};
 use strata_admin_ui::api::CodeBenchState;
-use strata_nas_proxy::{code_bench, code_bench::KEY_NAME, state::AppState};
+use strata_nas_proxy::{code_bench, code_bench::KEY_NAME, events::EventKind, state::AppState};
 
 /// The runner as the proxy sees it.
 #[derive(Clone, Default)]
@@ -99,7 +99,7 @@ async fn with_runner() -> (Setup, Runner) {
 }
 
 /// A run over all models needs at least two installed models: the PC reports
-/// `ids`, the first active.
+/// `ids`, the second active.
 async fn with_models(ids: &[&str]) -> (Setup, Runner) {
     let (s, runner) = with_runner().await;
     let mut info = strata_info(true);
@@ -157,8 +157,8 @@ fn last_run(runner: &Runner) -> String {
         .to_string()
 }
 
-/// Drives one model of a run over all models: wait for its Activate, end the
-/// job, wait for its run, then end that run.
+/// Drives one model of a run over all models: ends its Activate job if it gets
+/// one, waits for its run, then ends that run.
 async fn drive(s: &Setup, runner: &Runner, model: &str) {
     drive_model(s, runner, model, run(model, "done")).await;
 }
@@ -175,10 +175,19 @@ async fn drive_end(s: &Setup, runner: &Runner, model: &str, end_run: Value) {
     .await;
 }
 
-/// Activates `model` through the simulated PC, ends its job, waits for its run
-/// to start, then ends that run.
+/// Drives `model`'s run through the simulated PC: ends its Activate job if it
+/// gets one (the model active already gets none), waits for its run to start,
+/// then ends that run.
 async fn drive_model(s: &Setup, runner: &Runner, model: &str, end_run: Value) {
-    end_activate(s, model).await;
+    eventually_for(
+        Duration::from_secs(10),
+        &format!("Activate {model} or its run"),
+        || activate_running(s, model) || last_run(runner) == model,
+    )
+    .await;
+    if activate_running(s, model) {
+        end_activate(s, model).await;
+    }
     eventually_for(
         Duration::from_secs(10),
         &format!("run for {model} started"),
@@ -198,6 +207,15 @@ async fn drive_load_fail(s: &Setup, model: &str) {
     });
 }
 
+/// Whether the job that activates `model` runs on the simulated PC.
+fn activate_running(s: &Setup, model: &str) -> bool {
+    s.pc.strata_job
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|j| j.state == StrataJobState::Running && j.model.as_deref() == Some(model))
+}
+
 /// Waits until the job that activates `model` runs on the simulated PC. The
 /// request alone is not enough: bringing a model back after its failed load
 /// asks for the same model again.
@@ -205,11 +223,7 @@ async fn wait_for_activate(s: &Setup, model: &str) {
     eventually_for(
         Duration::from_secs(10),
         &format!("Activate {model}"),
-        || {
-            s.pc.strata_job.lock().unwrap().as_ref().is_some_and(|j| {
-                j.state == StrataJobState::Running && j.model.as_deref() == Some(model)
-            })
-        },
+        || activate_running(s, model),
     )
     .await;
 }
@@ -378,7 +392,8 @@ async fn a_run_over_all_models_hands_each_model_its_own_context() {
     set_contexts(&s, &contexts);
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
-    for id in ids {
+    // The model active at the start first, then the others in list order.
+    for id in [ids[1], ids[0], ids[2]] {
         drive(&s, &runner, id).await;
     }
     let sent: Vec<(String, Value)> = runner
@@ -393,11 +408,11 @@ async fn a_run_over_all_models_hands_each_model_its_own_context() {
             )
         })
         .collect();
-    let expected: Vec<(String, Value)> = ids
-        .iter()
-        .zip(contexts)
-        .map(|(id, c)| (id.to_string(), json!(c)))
-        .collect();
+    let expected: Vec<(String, Value)> = vec![
+        (ids[1].to_string(), json!(contexts[1])),
+        (ids[0].to_string(), json!(contexts[0])),
+        (ids[2].to_string(), json!(contexts[2])),
+    ];
     assert_eq!(sent, expected);
 }
 
@@ -652,13 +667,14 @@ async fn a_run_over_all_models_goes_through_them_and_brings_the_active_one_back(
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
-    for id in ids {
+    // The model active at the start runs first and needs no Activate.
+    for id in [ids[1], ids[0], ids[2]] {
         drive(&s, &runner, id).await;
     }
-    // The model active before the run (the second) is activated again.
+    // The model active before the run is activated again at the end.
     end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
-    // The models in order, then the one active before the run.
+    // Each model that needed a load, then the one active before the run.
     let order: Vec<String> =
         s.pc.job_bodies
             .lock()
@@ -666,7 +682,7 @@ async fn a_run_over_all_models_goes_through_them_and_brings_the_active_one_back(
             .iter()
             .map(|b| b["model"].as_str().unwrap().to_string())
             .collect();
-    assert_eq!(order, vec![ids[0], ids[1], ids[2], ids[1]]);
+    assert_eq!(order, vec![ids[0], ids[2], ids[1]]);
     for id in ids {
         assert!(has_result(&s.state.code_bench, id), "no result for {id}");
     }
@@ -677,16 +693,169 @@ async fn a_run_over_all_models_goes_through_them_and_brings_the_active_one_back(
 }
 
 #[tokio::test]
+async fn the_model_active_at_the_start_runs_first() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M", "swift-IQ2_XS"];
+    let (s, runner) = with_models(&ids).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    for id in [ids[1], ids[0], ids[2]] {
+        drive(&s, &runner, id).await;
+    }
+    end_activate(&s, ids[1]).await;
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+    let ran: Vec<String> = runner
+        .started
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|b| b["model"].as_str().unwrap().to_string())
+        .collect();
+    // The model active at the start, then the others in list order.
+    assert_eq!(ran, vec![ids[1], ids[0], ids[2]]);
+}
+
+#[tokio::test]
+async fn the_active_model_runs_without_an_activate_job() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    eventually_for(Duration::from_secs(10), "run for the active model", || {
+        last_run(&runner) == ids[1]
+    })
+    .await;
+    let jobs = s.pc.job_bodies.lock().unwrap().clone();
+    assert!(jobs.is_empty(), "the active model got a job: {jobs:?}");
+    drive_end(&s, &runner, ids[1], run(ids[1], "done")).await;
+    assert!(
+        has_result(&s.state.code_bench, ids[1]),
+        "no result for the active model"
+    );
+    // The model that needs a load gets its Activate.
+    drive(&s, &runner, ids[0]).await;
+    end_activate(&s, ids[1]).await;
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+}
+
+#[tokio::test]
+async fn a_skipped_activate_writes_no_event() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    eventually_for(Duration::from_secs(10), "run for the active model", || {
+        last_run(&runner) == ids[1]
+    })
+    .await;
+    let started: Vec<String> = s
+        .state
+        .events
+        .recent()
+        .into_iter()
+        .filter(|e| e.kind == EventKind::StrataJobStarted)
+        .filter_map(|e| e.detail)
+        .collect();
+    assert!(
+        !started.iter().any(|d| d.contains(ids[1])),
+        "a skipped Activate is an event: {started:?}"
+    );
+    drive_end(&s, &runner, ids[1], run(ids[1], "done")).await;
+    drive(&s, &runner, ids[0]).await;
+    end_activate(&s, ids[1]).await;
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+}
+
+#[tokio::test]
+async fn a_cancel_during_the_first_model_brings_back_nothing() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    eventually_for(Duration::from_secs(10), "run for the active model", || {
+        last_run(&runner) == ids[1]
+    })
+    .await;
+    assert_eq!(b.call("code-bench-cancel", &[]).await.status(), 200);
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+    let jobs = s.pc.job_bodies.lock().unwrap().clone();
+    assert!(jobs.is_empty(), "a job reached the PC: {jobs:?}");
+}
+
+#[tokio::test]
+async fn bringing_back_a_model_that_is_active_already_starts_no_job() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    // The active model runs first; the other one does not load, so the active
+    // model stays the active one until the end.
+    drive(&s, &runner, ids[1]).await;
+    drive_load_fail(&s, ids[0]).await;
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+    let jobs: Vec<String> =
+        s.pc.job_bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|b| b["model"].as_str().unwrap().to_string())
+            .collect();
+    assert_eq!(jobs, vec![ids[0]]);
+    let failed: Vec<String> = s
+        .state
+        .events
+        .recent()
+        .into_iter()
+        .filter(|e| e.kind == EventKind::StrataJobFailed)
+        .filter_map(|e| e.detail)
+        .collect();
+    assert!(
+        !failed.iter().any(|d| d.contains(ids[1])),
+        "bringing back an active model failed: {failed:?}"
+    );
+}
+
+#[tokio::test]
+async fn without_a_strata_report_the_run_activates_as_before() {
+    let ids = ["IQ3_XXS", "coder-IQ1_M"];
+    let (s, runner) = with_models(&ids).await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
+    drive(&s, &runner, ids[1]).await;
+    // The PC service answers its status, its Strata report not.
+    *s.pc.strata_info.lock().unwrap() = None;
+    wait_for_activate(&s, ids[0]).await;
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    eventually_for(Duration::from_secs(10), "run for the next model", || {
+        last_run(&runner) == ids[0]
+    })
+    .await;
+    drive_end(&s, &runner, ids[0], run(ids[0], "done")).await;
+    // The model active before the run comes back as a job too.
+    end_activate(&s, ids[1]).await;
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+    let jobs: Vec<String> =
+        s.pc.job_bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|b| b["model"].as_str().unwrap().to_string())
+            .collect();
+    assert_eq!(jobs, vec![ids[0], ids[1]]);
+}
+
+#[tokio::test]
 async fn a_model_that_does_not_load_gets_a_failed_run_and_the_run_goes_on() {
     let ids = ["IQ3_XXS", "coder-IQ1_M", "swift-IQ2_XS"];
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
-    drive(&s, &runner, ids[0]).await;
-    drive_load_fail(&s, ids[1]).await;
+    // The model active at the start runs without a load; the next one does not
+    // load.
+    drive(&s, &runner, ids[1]).await;
+    drive_load_fail(&s, ids[0]).await;
     // The failed run for the model that did not load.
     eventually_for(Duration::from_secs(10), "failed run", || {
-        only_failed(&s.state.code_bench, ids[1])
+        only_failed(&s.state.code_bench, ids[0])
     })
     .await;
     drive(&s, &runner, ids[2]).await;
@@ -697,7 +866,7 @@ async fn a_model_that_does_not_load_gets_a_failed_run_and_the_run_goes_on() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|r| r["model"] == ids[1])
+        .find(|r| r["model"] == ids[0])
         .expect("no runs for the model that failed");
     let row = &model["runs"][0];
     assert_eq!(row["state"], "failed", "{row}");
@@ -708,7 +877,7 @@ async fn a_model_that_does_not_load_gets_a_failed_run_and_the_run_goes_on() {
     // The model without a result comes after the results with tests.
     assert_eq!(
         v["history"].as_array().unwrap().last().unwrap()["model"],
-        ids[1]
+        ids[0]
     );
     let html = b.page("/admin/strata/version").await;
     assert!(html.contains("No result: "), "{html}");
@@ -719,18 +888,21 @@ async fn a_model_that_does_not_load_keeps_its_earlier_result_next_to_the_failed_
     let ids = ["IQ3_XXS", "coder-IQ1_M", "swift-IQ2_XS"];
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
-    // A single run of the active model first.
+    // An earlier run of the first model, which then fails to load in the run
+    // over all models. The second model is the active one when that run starts.
+    s.pc.set_active_model(ids[0]);
     assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
-    drive_end(&s, &runner, ids[1], run(ids[1], "done")).await;
+    drive_end(&s, &runner, ids[0], run(ids[0], "done")).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+    s.pc.set_active_model(ids[1]);
 
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
-    drive(&s, &runner, ids[0]).await;
-    drive_load_fail(&s, ids[1]).await;
+    drive(&s, &runner, ids[1]).await;
+    drive_load_fail(&s, ids[0]).await;
     eventually_for(Duration::from_secs(10), "failure noted", || {
         s.state
             .code_bench
-            .runs_of(ids[1])
+            .runs_of(ids[0])
             .first()
             .is_some_and(|r| r.state == CodeBenchState::Failed)
     })
@@ -745,7 +917,7 @@ async fn a_model_that_does_not_load_keeps_its_earlier_result_next_to_the_failed_
         .as_array()
         .unwrap()
         .iter()
-        .find(|r| r["model"] == ids[1])
+        .find(|r| r["model"] == ids[0])
         .unwrap();
     let runs = model["runs"].as_array().unwrap();
     assert_eq!(runs.len(), 2, "{v}");
@@ -766,11 +938,12 @@ async fn cancelling_a_run_over_all_models_keeps_finished_results_and_stops_the_r
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
-    drive(&s, &runner, ids[0]).await;
+    // The model active at the start runs first, without a load.
+    drive(&s, &runner, ids[1]).await;
     // The second model is running when it is cancelled.
-    end_activate(&s, ids[1]).await;
-    eventually_for(Duration::from_secs(10), "run for the second model", || {
-        last_run(&runner) == ids[1]
+    end_activate(&s, ids[0]).await;
+    eventually_for(Duration::from_secs(10), "run for the next model", || {
+        last_run(&runner) == ids[0]
     })
     .await;
     assert_eq!(b.call("code-bench-cancel", &[]).await.status(), 200);
@@ -780,14 +953,14 @@ async fn cancelling_a_run_over_all_models_keeps_finished_results_and_stops_the_r
     eventually_for(
         Duration::from_secs(10),
         "the active model asked for again",
-        || s.pc.job_bodies.lock().unwrap().len() == 3 && last_activate(&s) == ids[1],
+        || s.pc.job_bodies.lock().unwrap().len() == 2 && last_activate(&s) == ids[1],
     )
     .await;
     s.pc.update_job(|j| j.state = StrataJobState::Done);
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
     // Only the finished model keeps a result; the third model never runs.
     assert!(
-        has_result(&s.state.code_bench, ids[0]),
+        has_result(&s.state.code_bench, ids[1]),
         "the finished result is gone"
     );
     assert!(
@@ -805,14 +978,15 @@ async fn cancelling_a_run_over_all_models_keeps_finished_results_and_stops_the_r
             .iter()
             .map(|b| b["model"].as_str().unwrap().to_string())
             .collect();
-    assert_eq!(order, vec![ids[0], ids[1], ids[1]]);
+    assert_eq!(order, vec![ids[0], ids[1]]);
 
-    // The next run over all models starts from the first model again.
+    // The next run over all models starts with the model active now, which
+    // needs no load.
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
     eventually_for(
         Duration::from_secs(10),
         "the next run's first model",
-        || s.pc.job_bodies.lock().unwrap().len() == 4 && last_activate(&s) == ids[0],
+        || last_run(&runner) == ids[1],
     )
     .await;
 }
@@ -863,19 +1037,20 @@ async fn results_are_sorted_by_tests_passed_then_the_time() {
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
-    // The first model passes fewer tests, so it comes last.
-    drive_model(
-        &s,
-        &runner,
-        ids[0],
-        done_run(ids[0], [4, 5, 0], [100.0, 100.0, 100.0]),
-    )
-    .await;
+    // The model active at the start runs first; the other one passes fewer
+    // tests, so it comes last.
     drive_model(
         &s,
         &runner,
         ids[1],
         done_run(ids[1], [6, 6, 0], [40.0, 30.0, 30.0]),
+    )
+    .await;
+    drive_model(
+        &s,
+        &runner,
+        ids[0],
+        done_run(ids[0], [4, 5, 0], [100.0, 100.0, 100.0]),
     )
     .await;
     end_activate(&s, ids[1]).await;
@@ -896,15 +1071,15 @@ async fn results_are_sorted_by_tests_passed_then_the_time() {
     drive_model(
         &s,
         &runner,
-        ids[0],
-        done_run(ids[0], [3, 3, 0], [300.0, 100.0, 100.0]),
+        ids[1],
+        done_run(ids[1], [3, 3, 0], [60.0, 60.0, 60.0]),
     )
     .await;
     drive_model(
         &s,
         &runner,
-        ids[1],
-        done_run(ids[1], [3, 3, 0], [60.0, 60.0, 60.0]),
+        ids[0],
+        done_run(ids[0], [3, 3, 0], [300.0, 100.0, 100.0]),
     )
     .await;
     end_activate(&s, ids[1]).await;
@@ -930,15 +1105,15 @@ async fn broken_earlier_tests_lower_a_models_place() {
     drive_model(
         &s,
         &runner,
-        ids[0],
-        with_broken(done_run(ids[0], [6, 6, 0], [30.0, 30.0, 30.0]), 0, &broken),
+        ids[1],
+        done_run(ids[1], [4, 4, 0], [100.0, 100.0, 100.0]),
     )
     .await;
     drive_model(
         &s,
         &runner,
-        ids[1],
-        done_run(ids[1], [4, 4, 0], [100.0, 100.0, 100.0]),
+        ids[0],
+        with_broken(done_run(ids[0], [6, 6, 0], [30.0, 30.0, 30.0]), 0, &broken),
     )
     .await;
     end_activate(&s, ids[1]).await;
@@ -959,7 +1134,9 @@ async fn a_run_over_all_models_refuses_a_strata_job_started_by_hand() {
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
-    // While the first model is being activated, a job started by hand is refused.
+    // The model active at the start runs first; the next one is being
+    // activated when a job started by hand is refused.
+    drive(&s, &runner, ids[1]).await;
     wait_for_activate(&s, ids[0]).await;
     let resp = b.call("strata-job", &[("kind", "benchmark")]).await;
     assert_eq!(resp.status(), 400);
@@ -971,7 +1148,7 @@ async fn a_run_over_all_models_refuses_a_strata_job_started_by_hand() {
     );
     // Ending the run's job keeps the run going.
     s.pc.update_job(|j| j.state = StrataJobState::Done);
-    eventually_for(Duration::from_secs(10), "run for the first model", || {
+    eventually_for(Duration::from_secs(10), "run for the next model", || {
         last_run(&runner) == ids[0]
     })
     .await;
@@ -1037,6 +1214,8 @@ async fn after_a_restart_mid_run_the_current_run_is_followed_and_the_model_broug
     std::fs::write(dir.join("code-bench-key"), info.prefix).unwrap();
     std::fs::write(dir.join("code-bench-restore"), ids[1]).unwrap();
     *runner.current.lock().unwrap() = Some(run(ids[0], "running"));
+    // The run had loaded the first model before the restart.
+    s.pc.set_active_model(ids[0]);
 
     // The proxy starts again with the same DATA_DIR: it follows the run that is
     // still going, keeps its result, brings the model active before the run
@@ -1085,18 +1264,19 @@ async fn a_runner_that_stops_answering_gives_the_model_a_failed_run_and_the_run_
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
-    drive(&s, &runner, ids[0]).await;
-    end_activate(&s, ids[1]).await;
-    eventually_for(Duration::from_secs(10), "run for the second model", || {
-        last_run(&runner) == ids[1]
+    // The model active at the start runs first, without a load.
+    drive(&s, &runner, ids[1]).await;
+    end_activate(&s, ids[0]).await;
+    eventually_for(Duration::from_secs(10), "run for the next model", || {
+        last_run(&runner) == ids[0]
     })
     .await;
     // The runner forgets the run: the proxy stops asking after a few misses.
     *runner.current.lock().unwrap() = None;
     eventually_for(
         Duration::from_secs(10),
-        "failed run for the second model",
-        || only_failed(&s.state.code_bench, ids[1]),
+        "failed run for the next model",
+        || only_failed(&s.state.code_bench, ids[0]),
     )
     .await;
     drive(&s, &runner, ids[2]).await;
@@ -1117,13 +1297,9 @@ async fn chat_with(url: &str, key: &str) -> reqwest::Response {
 
 /// Starts a run over all models and drives it until the first model's run
 /// started; the run's key.
-async fn all_models_run_started(s: &Setup, runner: &Runner, b: &mut Browser) -> String {
+async fn all_models_run_started(runner: &Runner, b: &mut Browser) -> String {
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
-    eventually_for(Duration::from_secs(10), "first Activate", || {
-        !s.pc.job_bodies.lock().unwrap().is_empty()
-    })
-    .await;
-    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    // The model active at the start runs first, without an Activate job.
     eventually_for(Duration::from_secs(10), "first run", || {
         !runner.started.lock().unwrap().is_empty()
     })
@@ -1142,7 +1318,7 @@ async fn other_keys_wait_for_a_run_over_all_models_and_its_own_key_passes() {
         .create("laptop", Default::default())
         .unwrap();
     let mut b = logged_in(&s.url).await;
-    let run_key = all_models_run_started(&s, &runner, &mut b).await;
+    let run_key = all_models_run_started(&runner, &mut b).await;
 
     // The run's own key passes at once.
     assert_eq!(chat_with(&s.url, &run_key).await.status(), 200);
@@ -1152,8 +1328,8 @@ async fn other_keys_wait_for_a_run_over_all_models_and_its_own_key_passes() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(!waiting.is_finished(), "another key's request went through");
 
-    drive_end(&s, &runner, ids[0], run(ids[0], "done")).await;
-    drive(&s, &runner, ids[1]).await;
+    drive_end(&s, &runner, ids[1], run(ids[1], "done")).await;
+    drive(&s, &runner, ids[0]).await;
     // Still held while the active model is brought back.
     wait_for_activate(&s, ids[1]).await;
     assert!(!waiting.is_finished(), "released before the run ended");
@@ -1188,7 +1364,7 @@ async fn a_held_key_gets_the_saved_list_of_models_at_once() {
     // Saved while nothing holds the key.
     assert_eq!(list(other.clone()).await.status(), 200);
     let mut b = logged_in(&s.url).await;
-    all_models_run_started(&s, &runner, &mut b).await;
+    all_models_run_started(&runner, &mut b).await;
 
     let resp = tokio::time::timeout(Duration::from_secs(1), list(other))
         .await
@@ -1213,7 +1389,7 @@ async fn a_held_request_answers_as_a_wake_timeout_when_its_time_runs_out() {
             .status(),
         200
     );
-    all_models_run_started(&s, &runner, &mut b).await;
+    all_models_run_started(&runner, &mut b).await;
     let started = std::time::Instant::now();
     let resp = chat_with(&s.url, &other).await;
     assert!(started.elapsed() >= Duration::from_secs(1));
@@ -1251,7 +1427,7 @@ async fn a_proxy_restarted_during_a_run_over_all_models_holds_no_one() {
     let ids = ["IQ3_XXS", "coder-IQ1_M"];
     let (s, runner) = with_models(&ids).await;
     let mut b = logged_in(&s.url).await;
-    all_models_run_started(&s, &runner, &mut b).await;
+    all_models_run_started(&runner, &mut b).await;
     let fresh = restarted(&s);
     let (phone, _) = fresh.api_keys.create("phone", Default::default()).unwrap();
     let url = serve_proxy(fresh).await;
@@ -1272,8 +1448,8 @@ async fn the_pc_counts_as_busy_for_a_whole_run_over_all_models() {
         s.state.in_flight() > 0
     })
     .await;
-    drive(&s, &runner, ids[0]).await;
     drive(&s, &runner, ids[1]).await;
+    drive(&s, &runner, ids[0]).await;
     assert!(s.state.in_flight() > 0, "not busy before the model is back");
     end_activate(&s, ids[1]).await;
     eventually_for(Duration::from_secs(10), "idle after the run", || {
@@ -1312,7 +1488,11 @@ async fn after_a_restart_during_an_activate_the_model_is_brought_back_once_it_en
         .unwrap();
     std::fs::write(dir.join("code-bench-key"), info.prefix).unwrap();
     std::fs::write(dir.join("code-bench-restore"), ids[1]).unwrap();
-    *s.pc.strata_job.lock().unwrap() = Some(job(StrataJobKind::Activate, StrataJobState::Running));
+    // The job that runs is the first model's load; the second one was active
+    // before the run.
+    let mut running = job(StrataJobKind::Activate, StrataJobState::Running);
+    running.model = Some(ids[0].into());
+    *s.pc.strata_job.lock().unwrap() = Some(running);
     let restarted = restarted(&s);
     code_bench::resume(&restarted);
     tokio::time::sleep(Duration::from_millis(500)).await;

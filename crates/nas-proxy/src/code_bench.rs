@@ -589,9 +589,10 @@ fn new_key(state: &AppState) -> Result<String, String> {
     Ok(key)
 }
 
-/// Starts a run over all installed models: each is activated and solves the
-/// tasks once; the model active before the run comes back at the end. One key
-/// serves the whole run and is revoked then.
+/// Starts a run over all installed models: each is activated unless the PC
+/// service reports it as active already, and solves the tasks once; the model
+/// active before the run goes first and comes back at the end. One key serves
+/// the whole run and is revoked then.
 pub async fn start_all(state: &Arc<AppState>) -> Result<(), String> {
     let url = state.cfg().code_bench_url.clone().ok_or(NO_URL)?;
     if state.code_bench.all.lock().unwrap().is_some()
@@ -624,7 +625,7 @@ pub async fn start_all(state: &Arc<AppState>) -> Result<(), String> {
             "Which models are installed is not known. Open the Strata page while the PC is awake.",
         )
     })?;
-    let ids: Vec<String> = info.models.iter().map(|m| m.id.clone()).collect();
+    let mut ids: Vec<String> = info.models.iter().map(|m| m.id.clone()).collect();
     if ids.len() < 2 {
         return Err(FEWER.into());
     }
@@ -638,6 +639,12 @@ pub async fn start_all(state: &Arc<AppState>) -> Result<(), String> {
                 "Which model is active is not known. Open the Strata page while the PC is awake.",
             )
         })?;
+    // The model active now runs first, so it needs no Activate; the others
+    // follow in the order the page lists them.
+    if let Some(first) = ids.iter().position(|id| *id == restore) {
+        let first = ids.remove(first);
+        ids.insert(0, first);
+    }
     revoke_key(state);
     let key = new_key(state)?;
     state.code_bench.set_restore(&restore);
@@ -672,9 +679,10 @@ impl Drop for Holding<'_> {
     }
 }
 
-/// Goes through the models in order, then brings back the one active before the
-/// run. A model that fails to load or whose run fails gets its error row and
-/// the run goes on; a Cancel stops it after the model that runs now.
+/// Goes through the models in the order the run keeps, the one active at the
+/// start first, then brings back the one active before the run. A model that
+/// fails to load or whose run fails gets its error row and the run goes on; a
+/// Cancel stops it after the model that runs now.
 async fn run_all(state: &Arc<AppState>, url: &str, key: &str) {
     // A person started it: the PC stays awake to its end, also while the
     // tests run or a model loads and no request goes through.
@@ -732,8 +740,9 @@ async fn bring_back(state: &Arc<AppState>, model: &str) {
 }
 
 /// Activates one model through the PC service, waking the PC first, and waits
-/// for the job. Strata's status poll notes the job's end under Events and
-/// clears its guard, as for a job started by hand.
+/// for the job. A model the PC service already reports as active gets no job:
+/// it would refuse it. Strata's status poll notes the job's end under Events
+/// and clears its guard, as for a job started by hand.
 async fn activate(state: &Arc<AppState>, model: &str) -> Result<(), String> {
     let agent = state.agent();
     if !agent.configured() {
@@ -751,6 +760,11 @@ async fn activate(state: &Arc<AppState>, model: &str) -> Result<(), String> {
     {
         let _ = job_end(state, &agent).await;
     }
+    // A model that is active already needs no load. Without an answer from the
+    // PC service, or without a model it marks as active, the job goes out.
+    if active_now(&agent, model).await {
+        return Ok(());
+    }
     let request = StrataJobRequest::Activate {
         model: model.to_string(),
     };
@@ -761,6 +775,14 @@ async fn activate(state: &Arc<AppState>, model: &str) -> Result<(), String> {
         Some(format!("Activate {model}")),
     );
     job_end(state, &agent).await
+}
+
+/// Whether the PC service's Strata report marks `model` as the active one.
+async fn active_now(agent: &crate::agent::AgentClient, model: &str) -> bool {
+    agent
+        .strata()
+        .await
+        .is_some_and(|(info, _)| info.models.iter().any(|m| m.active && m.id == model))
 }
 
 /// Waits for the PC service's Strata job to end; whether it succeeded.

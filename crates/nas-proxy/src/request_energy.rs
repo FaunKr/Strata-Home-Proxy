@@ -1,8 +1,9 @@
 //! Request energy: the power plug read every `REQUEST_PLUG_SAMPLE_MS` while
 //! requests run, each reading split evenly among the requests running then,
 //! and each model's energy per 1000 tokens from one row per day and model in
-//! the history's database (docs/adr/0003). The daily rows are never trimmed,
-//! unlike the request log.
+//! the history's database (docs/adr/0003). A model is named by the PC
+//! service's id, as the Strata page lists it, not by Strata's name. The
+//! daily rows are never trimmed, unlike the request log.
 
 use std::{
     collections::BTreeMap,
@@ -21,7 +22,7 @@ use crate::{clock, state::AppState};
 
 /// The table `create_tables` of the history adds: one row per day (in the
 /// NAS's time zone, `2026-10-28`) and model.
-pub const TABLE: &str = "CREATE TABLE IF NOT EXISTS request_energy (
+const TABLE: &str = "CREATE TABLE IF NOT EXISTS request_energy (
      day TEXT NOT NULL,
      model TEXT NOT NULL,
      wh REAL NOT NULL,
@@ -29,6 +30,38 @@ pub const TABLE: &str = "CREATE TABLE IF NOT EXISTS request_energy (
      requests INTEGER NOT NULL,
      PRIMARY KEY (day, model)
  );";
+
+/// One row: whether the rows saved before request energy counted for the
+/// PC service's model ids still wait for their move.
+const MOVE_TABLE: &str = "CREATE TABLE IF NOT EXISTS request_energy_move (
+     pending INTEGER NOT NULL
+ );";
+
+/// Creates the tables for `create_tables` of the history. A table of
+/// daily rows from an earlier version, which saved them under the names
+/// Strata answered with, gets its move; a new one never does.
+pub(crate) fn create_tables(db: &Connection) -> rusqlite::Result<()> {
+    let first = !exists(db, "request_energy_move")?;
+    let earlier = exists(db, "request_energy")?;
+    db.execute_batch(TABLE)?;
+    db.execute_batch(MOVE_TABLE)?;
+    if first {
+        db.execute(
+            "INSERT INTO request_energy_move (pending) VALUES (?1)",
+            [earlier],
+        )?;
+    }
+    Ok(())
+}
+
+fn exists(db: &Connection, table: &str) -> rusqlite::Result<bool> {
+    db.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+}
 
 /// A request needs this many readings for its energy.
 const MIN_READINGS: u32 = 2;
@@ -49,15 +82,57 @@ pub struct RequestEnergy {
     running: Mutex<BTreeMap<u64, Shares>>,
     /// The loop that reads the plug runs.
     sampling: AtomicBool,
+    /// The rows of an earlier version wait for their move.
+    move_pending: AtomicBool,
 }
 
 impl RequestEnergy {
     /// The figures in `db`, which holds the table `request_energy`.
     pub fn new(db: Arc<Mutex<Connection>>) -> Self {
+        let pending = pending(&db.lock().unwrap()).unwrap_or_else(|e| {
+            tracing::warn!("request energy's move not read: {e}");
+            false
+        });
         Self {
             db,
             running: Mutex::default(),
             sampling: AtomicBool::new(false),
+            move_pending: AtomicBool::new(pending),
+        }
+    }
+
+    /// Moves the rows of an earlier version to the model `info` marks as
+    /// active, once; read on a blocking thread. Without a model marked
+    /// active the rows wait for the next report.
+    pub async fn move_saved(&self, info: &StrataInfo) {
+        if !self.move_pending.load(Ordering::SeqCst) {
+            return;
+        }
+        let db = Arc::clone(&self.db);
+        let info = info.clone();
+        let moved = tokio::task::spawn_blocking(move || move_rows(&mut db.lock().unwrap(), &info))
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("request energy not moved: {e}");
+                Ok(false)
+            });
+        self.note_move(moved);
+    }
+
+    /// `move_saved` at the proxy's start, with the report kept from before:
+    /// before it serves anything, like the history's import of
+    /// `events.jsonl`, so the first page already shows the moved rows.
+    pub fn move_saved_at_start(&self, info: &StrataInfo) {
+        if self.move_pending.load(Ordering::SeqCst) {
+            self.note_move(move_rows(&mut self.db.lock().unwrap(), info));
+        }
+    }
+
+    fn note_move(&self, moved: rusqlite::Result<bool>) {
+        match moved {
+            Ok(true) => self.move_pending.store(false, Ordering::SeqCst),
+            Ok(false) => {}
+            Err(e) => tracing::warn!("request energy not moved: {e}"),
         }
     }
 
@@ -165,6 +240,76 @@ async fn sample(state: Arc<AppState>) {
         }
         tokio::time::sleep(cfg.request_plug_sample.saturating_sub(started.elapsed())).await;
     }
+}
+
+/// The model a request Strata answered as `answered` counts for: the one
+/// the PC service's last report marks as active, which is how the Strata
+/// page names it. Without one, Strata's name, an alias counting for its
+/// model.
+pub fn model_for(state: &AppState, answered: &str) -> String {
+    state
+        .strata
+        .last_info()
+        .and_then(|info| active(&info).map(str::to_string))
+        .unwrap_or_else(|| state.models.model_of(answered))
+}
+
+fn active(info: &StrataInfo) -> Option<&str> {
+    info.models.iter().find(|m| m.active).map(|m| m.id.as_str())
+}
+
+/// Whether the rows of an earlier version still wait for their move.
+fn pending(db: &Connection) -> rusqlite::Result<bool> {
+    db.query_row("SELECT pending FROM request_energy_move", [], |row| {
+        row.get(0)
+    })
+}
+
+/// Moves every day row not under one of `info`'s models to the one it
+/// marks as active, adding up rows of the same day; `false` without a model
+/// marked active or without a move waiting.
+fn move_rows(db: &mut Connection, info: &StrataInfo) -> rusqlite::Result<bool> {
+    let Some(active) = active(info) else {
+        return Ok(false);
+    };
+    let transaction = db.transaction()?;
+    if !pending(&transaction)? {
+        return Ok(false);
+    }
+    let installed: Vec<&str> = info.models.iter().map(|m| m.id.as_str()).collect();
+    let rows: Vec<(String, String, f64, i64, i64)> = transaction
+        .prepare("SELECT day, model, wh, output_tokens, requests FROM request_energy")?
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    for (day, model, wh, output_tokens, requests) in rows {
+        if installed.contains(&model.as_str()) {
+            continue;
+        }
+        transaction.execute(
+            "DELETE FROM request_energy WHERE day = ?1 AND model = ?2",
+            params![day, model],
+        )?;
+        transaction.execute(
+            "INSERT INTO request_energy (day, model, wh, output_tokens, requests) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT (day, model) DO UPDATE SET \
+             wh = wh + excluded.wh, \
+             output_tokens = output_tokens + excluded.output_tokens, \
+             requests = requests + excluded.requests",
+            params![day, active, wh, output_tokens, requests],
+        )?;
+    }
+    transaction.execute("UPDATE request_energy_move SET pending = 0", [])?;
+    transaction.commit()?;
+    Ok(true)
 }
 
 /// `wh` in € at `price_ct_per_kwh`.

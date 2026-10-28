@@ -78,6 +78,8 @@ Aliases follow as entries of their own (the same fields, with the alias as `id` 
 
 Strata serves a request with the model it runs whatever `model` it names (`model_for` in `serve/server.py`: "Other names are still served, as before"). It answers with the requested name only when that is one of the run config's `aliases` (#297), else with its real id, the same as `model` in `/health`. The name is in `model` of a chat or messages answer and of each OpenAI chunk, in `message.model` of Anthropic's `message_start` and in `response.model` of the Responses API's events (`serve/responses.py`). The proxy's public model name (README) relies on this: it sends a hiding key's requests with `/health`'s `model` and puts the public name into these fields of the answers.
 
+Strata's real id and the PC service's id of the same model differ: Strata answers as `qwen3.8-flash-next-iq3_s` where the PC service and the Strata page say `IQ3_S` (*Model ID* below). Request energy counts for the PC service's id.
+
 ## Summary of an update: `POST /v1/chat/completions`
 
 For the summary of a Strata update on the *Version & benchmark* tab, the proxy asks Strata itself, with its key and without streaming. Strata takes `reasoning_effort` per request (`none`, `low`, `medium` or `high`); the proxy sets `medium`. The answer is in `choices[0].message.content`, the thinking is not in it. On its own it only asks when `/health` reports `loaded: true` and the metrics show no running or waiting request; the *Generate summary now* button also asks a busy or unloaded Strata and then gives it two more minutes to load. `max_context` from `/health` limits the length of the request.

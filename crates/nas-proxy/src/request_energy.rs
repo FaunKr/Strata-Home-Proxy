@@ -2,8 +2,8 @@
 //! requests run, each reading split evenly among the requests running then,
 //! and each model's energy per 1000 tokens from one row per day and model in
 //! the history's database (docs/adr/0003). A model is named by the PC
-//! service's id, as the Strata page lists it, not by Strata's name. The daily rows are never trimmed,
-//! unlike the request log.
+//! service's id, as the Strata page lists it, not by Strata's name. The
+//! daily rows are never trimmed, unlike the request log.
 
 use std::{
     collections::BTreeMap,
@@ -89,13 +89,10 @@ pub struct RequestEnergy {
 impl RequestEnergy {
     /// The figures in `db`, which holds the table `request_energy`.
     pub fn new(db: Arc<Mutex<Connection>>) -> Self {
-        let pending = db
-            .lock()
-            .unwrap()
-            .query_row("SELECT pending FROM request_energy_move", [], |row| {
-                row.get::<_, bool>(0)
-            })
-            .unwrap_or(false);
+        let pending = pending(&db.lock().unwrap()).unwrap_or_else(|e| {
+            tracing::warn!("request energy's move not read: {e}");
+            false
+        });
         Self {
             db,
             running: Mutex::default(),
@@ -115,11 +112,16 @@ impl RequestEnergy {
         let info = info.clone();
         let moved = tokio::task::spawn_blocking(move || move_rows(&mut db.lock().unwrap(), &info))
             .await
-            .unwrap_or(Ok(false));
+            .unwrap_or_else(|e| {
+                tracing::warn!("request energy not moved: {e}");
+                Ok(false)
+            });
         self.note_move(moved);
     }
 
-    /// `move_saved` at the proxy's start, with the report kept from before.
+    /// `move_saved` at the proxy's start, with the report kept from before:
+    /// before it serves anything, like the history's import of
+    /// `events.jsonl`, so the first page already shows the moved rows.
     pub fn move_saved_at_start(&self, info: &StrataInfo) {
         if self.move_pending.load(Ordering::SeqCst) {
             self.note_move(move_rows(&mut self.db.lock().unwrap(), info));
@@ -256,6 +258,13 @@ fn active(info: &StrataInfo) -> Option<&str> {
     info.models.iter().find(|m| m.active).map(|m| m.id.as_str())
 }
 
+/// Whether the rows of an earlier version still wait for their move.
+fn pending(db: &Connection) -> rusqlite::Result<bool> {
+    db.query_row("SELECT pending FROM request_energy_move", [], |row| {
+        row.get(0)
+    })
+}
+
 /// Moves every day row not under one of `info`'s models to the one it
 /// marks as active, adding up rows of the same day; `false` without a model
 /// marked active or without a move waiting.
@@ -264,11 +273,7 @@ fn move_rows(db: &mut Connection, info: &StrataInfo) -> rusqlite::Result<bool> {
         return Ok(false);
     };
     let transaction = db.transaction()?;
-    let pending: bool =
-        transaction.query_row("SELECT pending FROM request_energy_move", [], |row| {
-            row.get(0)
-        })?;
-    if !pending {
+    if !pending(&transaction)? {
         return Ok(false);
     }
     let installed: Vec<&str> = info.models.iter().map(|m| m.id.as_str()).collect();

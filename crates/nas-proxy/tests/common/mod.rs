@@ -258,8 +258,46 @@ impl FakePc {
         }
     }
 
+    /// Changes the job, e.g. its progress or its end. A done Activate makes its
+    /// model the active one in the Strata report, as the real service's start
+    /// of Strata does.
     pub fn update_job(&self, change: impl FnOnce(&mut StrataJob)) {
-        change(self.strata_job.lock().unwrap().as_mut().expect("no job"));
+        let done = {
+            let mut job = self.strata_job.lock().unwrap();
+            let job = job.as_mut().expect("no job");
+            change(job);
+            (job.state == StrataJobState::Done && job.kind == StrataJobKind::Activate)
+                .then(|| job.model.clone())
+                .flatten()
+        };
+        if let Some(model) = done {
+            self.set_active_model(&model);
+        }
+    }
+
+    /// Marks `model` as the one active in the Strata report, and no other.
+    fn set_active_model(&self, model: &str) {
+        let mut report = self.strata_info.lock().unwrap();
+        let Some(models) = report.as_mut().map(|r| &mut r.info.models) else {
+            return;
+        };
+        for m in models.iter_mut() {
+            m.active = m.id == model;
+        }
+    }
+
+    /// The model the Strata report marks as active, as the PC service reads it
+    /// from Strata's start script.
+    fn active_model(&self) -> Option<String> {
+        self.strata_info
+            .lock()
+            .unwrap()
+            .as_ref()?
+            .info
+            .models
+            .iter()
+            .find(|m| m.active)
+            .map(|m| m.id.clone())
     }
     /// What the PC service's `/status` answers now.
     fn status(&self) -> PcStatus {
@@ -848,6 +886,16 @@ fn start_job(pc: &Pc, body: Value) -> Response {
     };
     if let Some(reason) = pc.refuse_job.lock().unwrap().clone() {
         return (StatusCode::CONFLICT, Json(Refused::new(reason))).into_response();
+    }
+    // Like the PC service: a model that is active already is no job.
+    if let StrataJobRequest::Activate { model } = &request
+        && pc.active_model().as_deref() == Some(model.as_str())
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(Refused::new(format!("{model} is active already"))),
+        )
+            .into_response();
     }
     let model = match &request {
         StrataJobRequest::Install { size, .. } => size.clone(),

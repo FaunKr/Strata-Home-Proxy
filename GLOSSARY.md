@@ -118,6 +118,14 @@ _Avoid_: power consumption, Leistung
 The energy the PC used over a period of the history, in kWh and € at today's price. Measured where the power plug has readings for at least half of that hour, otherwise from the energy estimate; the web UI says "measured", "estimated" or "mixed".
 _Avoid_: power consumption, Verbrauch
 
+**Request energy**:
+The energy one finished request took, in Wh and € at today's price, from the power plug's readings while Strata worked on it (every `REQUEST_PLUG_SAMPLE_MS`, each reading split evenly among the requests running then); waking and loading do not count. Only a request that got its answer, with at least one output token and two readings; none without a power plug. The request log shows it.
+_Avoid_: power per request, cost per request
+
+**Energy per 1000 tokens**:
+A model's request energy ÷ its output tokens × 1000, over the last 30 days and over all time, in Wh and € at today's price; the *Models* tab shows it for each installed model. The proxy keeps one row per day and model for it, never trimmed, also for removed models.
+_Avoid_: power per token, efficiency
+
 **Energy estimate**:
 Energy from the settings instead of readings: awake hours (gaming mode included) × `POWER_AWAKE_WATTS`, asleep hours × `POWER_ASLEEP_WATTS`. Unknown time does not count.
 _Avoid_: Stromschätzung
@@ -169,7 +177,7 @@ What the proxy keeps of events and power plug readings over time; the web UI sho
 _Avoid_: log, Verlauf
 
 **Request log**:
-The proxy's list of the last 1000 requests through it that made the model work, or would have and were refused, with key, model, type, tokens, speeds and outcome, never their text; requests on their way show as *waking PC* or *running*; the web UI shows it live in the Strata area (tab *Requests*). Not an event, and not Strata's own request monitor.
+The proxy's list of the last 1000 requests through it that made the model work, or would have and were refused, with key, model, type, tokens, speeds, request energy and outcome, never their text; requests on their way show as *waking PC* or *running*; the web UI shows it live in the Strata area (tab *Requests*). Not an event, and not Strata's own request monitor.
 _Avoid_: access log, request history
 
 **Strata key**:

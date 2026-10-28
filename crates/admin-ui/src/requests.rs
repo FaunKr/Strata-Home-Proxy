@@ -11,6 +11,7 @@ use crate::api::{
     RequestAnswer, RequestApi, RequestOutcome, RequestRefusal, RequestRow, RequestStart,
     RequestState,
 };
+use crate::energy::{eur_text, request_energy_text, wh_text};
 use crate::request_stats::{ChartPoint, ModelAverages, filtered, keys, request_stats, ticks};
 
 /// Finished rows the tab keeps, like the proxy's `LIMIT`.
@@ -367,6 +368,7 @@ fn RequestTable(rows: Memo<Vec<RequestRow>>, open: RwSignal<Vec<u64>>) -> impl I
                         <th scope="col" class="wide num">"First token"</th>
                         <th scope="col" class="wide num">"Duration"</th>
                         <th scope="col" class="wide num">"Wait"</th>
+                        <th scope="col" class="wide num">"Energy"</th>
                         <th scope="col" class="wide">"Status"</th>
                     </tr>
                 </thead>
@@ -403,6 +405,7 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
         ("First token", millis(row.first_token_ms)),
         ("Duration", duration(&row)),
         ("Wait", wait(&row)),
+        ("Energy", request_energy_text(&row)),
         ("Status", status_text(&row)),
     ];
     let unusual = !is_done(&row);
@@ -438,12 +441,16 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
                 <td class="wide num">{millis(row.first_token_ms)}</td>
                 <td class="wide num">{duration(&row)}</td>
                 <td class="wide num">{wait(&row)}</td>
+                <td class="wide num">
+                    {row.energy_wh.map(wh_text).unwrap_or_else(|| "–".into())}
+                    {row.energy_eur.map(|eur| view! { <span class="sub">{eur_text(eur)}</span> })}
+                </td>
                 <td class="wide status" class:bad=is_bad(&row)>
                     {status_text(&row)}
                 </td>
             </tr>
             <tr class="request-more">
-                <td colspan="14">
+                <td colspan="15">
                     <dl>
                         {details
                             .into_iter()

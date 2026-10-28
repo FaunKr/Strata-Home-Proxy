@@ -87,6 +87,9 @@ pub struct AppState {
     pub events: History,
     /// The last requests that made the model work.
     pub requests: crate::request_log::RequestLog,
+    /// The power plug's readings while requests run, and each model's
+    /// energy per 1000 tokens.
+    pub request_energy: crate::request_energy::RequestEnergy,
     /// Live state for the overview page.
     pub overview: Monitor,
     /// Strata jobs on the PC.
@@ -173,11 +176,13 @@ impl AppState {
             .filter(|t| *t > SystemTime::now());
         let events = History::new(cfg.data_dir.clone());
         let requests = crate::request_log::RequestLog::new(events.database());
+        let request_energy = crate::request_energy::RequestEnergy::new(events.database());
         let state = Arc::new(Self {
             auth: Auth::new(cfg.data_dir.clone(), cfg.ui_password.clone()),
             api_keys: ApiKeys::new(cfg.data_dir.clone()),
             events,
             requests,
+            request_energy,
             upstream,
             overview: Monitor::default(),
             strata: crate::strata::StrataState::new(cfg.data_dir.clone()),

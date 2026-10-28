@@ -26,6 +26,7 @@ mod proxy;
 mod public_name;
 mod relay;
 mod reported_mac;
+mod request_energy;
 mod request_log;
 mod settings;
 mod settings_page;

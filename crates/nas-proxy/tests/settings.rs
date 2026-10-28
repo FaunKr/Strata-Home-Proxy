@@ -111,3 +111,44 @@ async fn changed_wol_addr_goes_into_the_next_magic_packet() {
     assert_eq!(resp.status(), 200);
     assert!(s.pc.wol_packets.load(Ordering::SeqCst) >= 1);
 }
+
+#[tokio::test]
+async fn request_plug_sample_ms_is_a_setting() {
+    let s = setup(true, |_| {}).await;
+    assert!(s.state.settings.set("REQUEST_PLUG_SAMPLE_MS", "0").is_err());
+    s.state
+        .settings
+        .set("REQUEST_PLUG_SAMPLE_MS", "10000")
+        .unwrap();
+    assert_eq!(s.state.cfg().request_plug_sample, Duration::from_secs(10));
+    // One reading before the next would be due: no request energy.
+    s.state.settings.set("SHELLY_URL", &s.plug).unwrap();
+    let chunk = |extra: &str| {
+        format!(
+            r#"data: {{"model": "IQ3_XXS", "choices": [{{"delta": {{"content": "Hi"}}}}]{extra}}}"#
+        ) + "\n\n"
+    };
+    s.pc.set_strata_stream(
+        "/v1/chat/completions",
+        vec![
+            chunk(""),
+            chunk(r#", "usage": {"prompt_tokens": 5, "completion_tokens": 40}"#),
+            "data: [DONE]\n\n".into(),
+        ],
+        Duration::from_millis(300),
+    );
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open_at(&b, "/admin/api/requests-stream").await;
+    live.until("all", |m| m["kind"] == "all").await;
+    let body = json!({"stream": true, "messages": []});
+    let resp = post_json(&s, "/v1/chat/completions", body).await;
+    resp.text().await.unwrap();
+    let row = live
+        .until("finished row", |m| {
+            m["kind"] == "row" && m["row"]["state"] == "finished"
+        })
+        .await["row"]
+        .clone();
+    assert_eq!(row["output_tokens"], 40, "{row}");
+    assert_eq!(row["energy_wh"], Value::Null, "{row}");
+}

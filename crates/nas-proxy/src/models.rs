@@ -50,6 +50,19 @@ impl SavedModels {
         self.list.lock().unwrap().clone()
     }
 
+    /// The model `name` stands for: the one an alias in the saved list
+    /// names (`alias_of`), else `name` itself.
+    pub fn model_of(&self, name: &str) -> String {
+        self.get()
+            .and_then(|list| serde_json::from_str::<serde_json::Value>(&list.body).ok())
+            .and_then(|v| {
+                v["data"].as_array()?.iter().find(|m| m["id"] == name)?["alias_of"]
+                    .as_str()
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| name.to_string())
+    }
+
     /// Takes a `200` answer of Strata's to the list as the new copy, unless
     /// it lists no model: Strata lists none while no model is loaded and it
     /// does not unload on idle, and the copy is for the time it does not

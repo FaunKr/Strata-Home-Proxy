@@ -107,8 +107,9 @@ impl RequestLog {
         let _ = self.changes.send(row);
     }
 
-    /// Written at once, like an event, so a killed proxy loses nothing.
-    fn finish(&self, row: RequestRow) {
+    /// Written at once, like an event, so a killed proxy loses nothing; a
+    /// row with request energy adds it to its model's day in the same write.
+    fn finish(&self, row: RequestRow, model: Option<String>) {
         self.running.lock().unwrap().remove(&row.id);
         let limit = self.limit.load(Ordering::SeqCst) as i64;
         let written = serde_json::to_string(&row)
@@ -119,6 +120,12 @@ impl RequestLog {
                     "INSERT INTO requests (id, row) VALUES (?1, ?2)",
                     params![row.id as i64, json],
                 )
+                .and_then(|_| match (&model, row.energy_wh, row.output_tokens) {
+                    (Some(model), Some(wh), Some(tokens)) => {
+                        crate::request_energy::add(&db, row.at, model, wh, tokens)
+                    }
+                    _ => Ok(()),
+                })
                 .and_then(|_| {
                     db.execute(
                         "DELETE FROM requests WHERE seq NOT IN \
@@ -180,7 +187,7 @@ pub fn watch(state: &Arc<AppState>) -> BoxStream<'static, RequestLogMessage> {
     let changes = futures_util::stream::unfold((rx, state), |(mut rx, state)| async move {
         let message = match rx.recv().await {
             Ok(mut row) => {
-                with_time(&mut row);
+                with_time(&mut row, state.cfg().price_ct_per_kwh);
                 RequestLogMessage::Row { row: Box::new(row) }
             }
             // Missed changes may have finished a running row: all again.
@@ -203,12 +210,18 @@ async fn whole(state: Arc<AppState>) -> RequestLogMessage {
         .filter(|r| !finished.iter().any(|f| f.id == r.id))
         .collect();
     rows.extend(finished);
-    rows.iter_mut().for_each(with_time);
+    let price = state.cfg().price_ct_per_kwh;
+    rows.iter_mut().for_each(|row| with_time(row, price));
     RequestLogMessage::All { rows }
 }
 
-fn with_time(row: &mut RequestRow) {
+/// What a row shows that is not kept: its local time, and its energy at
+/// today's price.
+fn with_time(row: &mut RequestRow, price_ct_per_kwh: f64) {
     row.time = clock::local_time_text(row.at);
+    row.energy_eur = row
+        .energy_wh
+        .map(|wh| wh / 1000.0 * price_ct_per_kwh / 100.0);
 }
 
 /// One request on its way: the meter and what the proxy itself clocks. A
@@ -240,6 +253,7 @@ impl Recording {
     /// The request went to Strata at `at`.
     pub fn sent(&mut self, at: Instant) {
         self.sent = Some(at);
+        self.state.request_energy.start(&self.state, self.id);
         self.show(RequestState::Running);
     }
 
@@ -361,7 +375,19 @@ impl Recording {
         ) {
             row = row.without_counts();
         }
-        self.state.requests.finish(row);
+        // Counted from the request going to Strata: waking and loading cost
+        // the same however many tokens follow.
+        let energy = self
+            .sent
+            .and_then(|sent| self.state.request_energy.end(self.id, sent));
+        if row.outcome == RequestOutcome::Done && row.output_tokens.is_some_and(|t| t > 0) {
+            row.energy_wh = energy;
+        }
+        let model = row
+            .energy_wh
+            .and(row.model.as_deref())
+            .map(|name| self.state.models.model_of(name));
+        self.state.requests.finish(row, model);
     }
 
     /// From arrival until `sent` to Strata.

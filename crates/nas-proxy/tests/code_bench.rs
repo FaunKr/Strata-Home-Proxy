@@ -1608,3 +1608,46 @@ async fn deleting_all_code_runs_of_an_installed_model_is_refused() {
     assert_eq!(v["history"][0]["runs"].as_array().unwrap().len(), 1, "{v}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[tokio::test]
+async fn code_benchmark_requests_count_toward_the_average() {
+    let (s, runner) = with_runner().await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    let key = runner.started.lock().unwrap().first().cloned().unwrap()["api_key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    *s.pc.plug_watts.lock().unwrap() = 300.0;
+    s.state.settings.set("SHELLY_URL", &s.plug).unwrap();
+    let chunk = |extra: &str| {
+        format!(
+            r#"data: {{"model": "IQ3_XXS", "choices": [{{"delta": {{"content": "Hi"}}}}]{extra}}}"#
+        ) + "\n\n"
+    };
+    s.pc.set_strata_stream(
+        "/v1/chat/completions",
+        vec![
+            chunk(""),
+            chunk(r#", "usage": {"prompt_tokens": 5, "completion_tokens": 40}"#),
+            "data: [DONE]\n\n".into(),
+        ],
+        Duration::from_millis(300),
+    );
+    // As opencode asks, with the run's own key.
+    let body = json!({"stream": true, "messages": []});
+    let resp = post_json_to(&s.url, &key, "/v1/chat/completions", body).await;
+    assert_eq!(resp.status(), 200);
+    resp.text().await.unwrap();
+    let mut averages = Vec::new();
+    for _ in 0..100 {
+        averages = s.state.request_energy.averages(30.0, None).await;
+        if !averages.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(averages.len(), 1, "{averages:?}");
+    assert_eq!(averages[0].model, "IQ3_XXS");
+    assert_eq!(averages[0].all_time.unwrap().requests, 1);
+}

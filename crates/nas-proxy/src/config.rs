@@ -44,6 +44,9 @@ pub struct Config {
     /// How often the power of the power plug is recorded for the history
     /// (`PLUG_SAMPLE_SECS`).
     pub plug_sample: Duration,
+    /// How often the power plug is read while a request runs, for its
+    /// request energy (`REQUEST_PLUG_SAMPLE_MS`).
+    pub request_plug_sample: Duration,
     /// Time without requests before the PC is asked to sleep (`IDLE_TIMEOUT_SECS`).
     pub idle_timeout: Duration,
     /// Longest time a request waits for the PC to wake up (`WAKE_TIMEOUT_SECS`).
@@ -139,6 +142,7 @@ pub const FIELDS: &[Field] = &[
     optional("UPDATE_SUMMARY_TIMEOUT_SECS"),
     optional("CODE_BENCH_TASK_TIMEOUT_SECS"),
     field("PLUG_SAMPLE_SECS"),
+    field("REQUEST_PLUG_SAMPLE_MS"),
     field("IDLE_TIMEOUT_SECS"),
     field("WAKE_TIMEOUT_SECS"),
     field("WOL_RESEND_SECS"),
@@ -178,6 +182,7 @@ impl Default for Config {
             update_summary_timeout: None,
             code_bench_task_timeout: None,
             plug_sample: Duration::from_secs(60),
+            request_plug_sample: Duration::from_millis(2000),
             idle_timeout: Duration::from_secs(900),
             wake_timeout: Duration::from_secs(240),
             wol_resend: Duration::from_secs(10),
@@ -253,6 +258,7 @@ impl Config {
                 self.code_bench_task_timeout = text.map(|t| limit(&t)).transpose()?
             }
             "PLUG_SAMPLE_SECS" => self.plug_sample = positive(secs(raw)?)?,
+            "REQUEST_PLUG_SAMPLE_MS" => self.request_plug_sample = positive(millis(raw)?)?,
             "IDLE_TIMEOUT_SECS" => self.idle_timeout = secs(raw)?,
             "WAKE_TIMEOUT_SECS" => self.wake_timeout = secs(raw)?,
             "WOL_RESEND_SECS" => self.wol_resend = positive(secs(raw)?)?,
@@ -289,6 +295,7 @@ impl Config {
             "UPDATE_SUMMARY_TIMEOUT_SECS" => self.update_summary_timeout.and_then(secs),
             "CODE_BENCH_TASK_TIMEOUT_SECS" => self.code_bench_task_timeout.and_then(secs),
             "PLUG_SAMPLE_SECS" => secs(self.plug_sample),
+            "REQUEST_PLUG_SAMPLE_MS" => millis(self.request_plug_sample),
             "IDLE_TIMEOUT_SECS" => secs(self.idle_timeout),
             "WAKE_TIMEOUT_SECS" => secs(self.wake_timeout),
             "WOL_RESEND_SECS" => secs(self.wol_resend),

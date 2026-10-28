@@ -12,13 +12,13 @@ proxy can't migrate). Minor: new features. Patch: fixes.
 
 ## 1.1.0
 
-Energy per answer, a fairer code benchmark and engine tips that fit the PC.
+Request energy, a stricter code benchmark and speed switch tips in the optimization prompt.
 
 - With a power plug, each finished request in the request log shows the energy it took, in Wh and €, and the *Models* tab shows each installed model's energy per 1000 tokens over the last 30 days and over all time.
 - The optimization prompt suggests Strata's speed switches and the documented engine environment variables that suit this PC (needs PC service 1.1.0).
 - The code benchmark's repo task asks for all tests to pass, old and new, and each earlier test a model breaks costs a point.
 - *Benchmark all models* starts with the active model and no longer fails it with "is active already".
-- Models start again after a Strata update deleted an older Strata folder their settings pointed into (PC service 1.0.1).
+- Models start again after a Strata update deleted an older Strata folder their settings pointed into (needs PC service 1.0.1).
 
 ## 1.0.0
 

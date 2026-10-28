@@ -12,6 +12,8 @@ use std::{
 
 use common::*;
 use serde_json::{Value, json};
+use strata_nas_proxy::events::EventKind;
+use strata_pc_protocol::{StrataJobState, StrataReport};
 
 const STREAM: &str = "/admin/api/requests-stream";
 const CHAT: &str = "/v1/chat/completions";
@@ -440,4 +442,214 @@ async fn a_removed_model_keeps_its_figures_and_is_not_installed() {
     let energy = energy_of(&mut b, "coder-IQ1_M").await;
     assert_eq!(energy["installed"], true, "{energy}");
     assert_eq!(energy["all_time"]["wh_per_1000"], 2.0, "{energy}");
+}
+
+/// The name Strata answers with for the model the PC service calls
+/// `IQ3_XXS`.
+const SERVED: &str = "qwen3.8-flash-next-iq3_xxs";
+
+/// The models whose energy the averages list, in their order.
+async fn averaged(state: &strata_nas_proxy::state::AppState) -> Vec<String> {
+    state
+        .request_energy
+        .averages(30.0, None)
+        .await
+        .into_iter()
+        .map(|e| e.model)
+        .collect()
+}
+
+/// A PC service report with `IQ3_XXS` active and `coder-IQ1_M` installed.
+fn two_models() -> StrataReport {
+    let mut info = strata_info(true);
+    info.info
+        .models
+        .push(model("coder-IQ1_M", Some("coder"), 9_000_000_000, false));
+    info
+}
+
+/// Makes `dir`'s history database look as an earlier version left it: no
+/// move done, and a row of today for each of `rows` (model, Wh, tokens).
+fn earlier_rows(dir: &std::path::Path, rows: &[(&str, f64, u64)]) {
+    std::fs::create_dir_all(dir).unwrap();
+    let conn = rusqlite::Connection::open(dir.join("events.db")).unwrap();
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS request_energy_move;
+         CREATE TABLE IF NOT EXISTS request_energy (
+             day TEXT NOT NULL,
+             model TEXT NOT NULL,
+             wh REAL NOT NULL,
+             output_tokens INTEGER NOT NULL,
+             requests INTEGER NOT NULL,
+             PRIMARY KEY (day, model)
+         );",
+    )
+    .unwrap();
+    let day = strata_nas_proxy::clock::day_key(now());
+    for (model, wh, tokens) in rows {
+        conn.execute(
+            "INSERT INTO request_energy VALUES (?1, ?2, ?3, ?4, 1)",
+            rusqlite::params![day, model, wh, *tokens as i64],
+        )
+        .unwrap();
+    }
+}
+
+/// A proxy over `dir` whose PC service reports `report`, kept by a visit
+/// of the Strata page; the history's database is then made as an earlier
+/// version left it, with `rows`, and the proxy restarted over it.
+async fn restarted_over_earlier_rows(
+    dir: &str,
+    report: StrataReport,
+    rows: &[(&str, f64, u64)],
+) -> (Setup, std::sync::Arc<strata_nas_proxy::state::AppState>) {
+    let dir = data_dir(dir);
+    let s = setup(true, |c| c.data_dir = Some(dir.clone())).await;
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    earlier_rows(&dir, rows);
+    let state = restarted(&s);
+    (s, state)
+}
+
+/// The all-time average of `model`, in Wh per 1000 tokens, and its requests.
+async fn all_time_of(state: &strata_nas_proxy::state::AppState, model: &str) -> (f64, u64) {
+    let averages = state.request_energy.averages(30.0, None).await;
+    let entry = averages
+        .iter()
+        .find(|e| e.model == model)
+        .unwrap_or_else(|| panic!("no energy of {model}"));
+    let all = entry.all_time.unwrap();
+    (all.wh_per_1000, all.requests)
+}
+
+#[tokio::test]
+async fn a_request_counts_for_the_model_the_pc_reports_active() {
+    let s = with_model().await;
+    let mut b = logged_in(&s.url).await;
+    // The visit keeps the PC service's report.
+    page(&mut b).await;
+    plug(&s, 360.0);
+    answers(&s, SERVED, 40, Duration::from_millis(300));
+    let row = one_row(&s, &b).await;
+    assert_eq!(row["model"], SERVED, "{row}");
+    let wh = row["energy_wh"].as_f64().unwrap_or_else(|| panic!("{row}"));
+    let page = page(&mut b).await;
+    let energy = page["energy"].as_array().unwrap();
+    assert_eq!(energy.len(), 1, "{}", page["energy"]);
+    assert_eq!(energy[0]["model"], "IQ3_XXS");
+    assert_eq!(energy[0]["installed"], true);
+    let per_1000 = energy[0]["all_time"]["wh_per_1000"].as_f64().unwrap();
+    assert!((per_1000 - wh / 40.0 * 1000.0).abs() < 1e-9, "{energy:?}");
+}
+
+#[tokio::test]
+async fn without_a_report_a_request_counts_under_stratas_name() {
+    let s = setup(true, |_| {}).await;
+    plug(&s, 360.0);
+    answers(&s, SERVED, 40, Duration::from_millis(300));
+    let b = logged_in(&s.url).await;
+    let row = one_row(&s, &b).await;
+    assert!(row["energy_wh"].is_f64(), "{row}");
+    assert_eq!(averaged(&s.state).await, [SERVED]);
+}
+
+#[tokio::test]
+async fn a_model_activated_by_a_job_counts_from_its_end() {
+    let s = setup(true, |_| {}).await;
+    *s.pc.strata_info.lock().unwrap() = Some(two_models());
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    let resp = b
+        .call(
+            "strata-job",
+            &[("kind", "activate"), ("model", "coder-IQ1_M")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    // Noted by the status poll, without another visit of the page.
+    eventually("job done", || {
+        kinds(&s.state).contains(&EventKind::StrataJobDone)
+    })
+    .await;
+    plug(&s, 360.0);
+    answers(&s, "qwen3.8-coder-iq1_m", 40, Duration::from_millis(300));
+    let row = one_row(&s, &b).await;
+    assert!(row["energy_wh"].is_f64(), "{row}");
+    assert_eq!(averaged(&s.state).await, ["coder-IQ1_M"]);
+}
+
+#[tokio::test]
+async fn saved_rows_move_to_the_active_model_at_the_start() {
+    let (_s, state) = restarted_over_earlier_rows(
+        "energy-move-start",
+        strata_info(true),
+        &[(SERVED, 3.0, 1000), ("IQ3_XXS", 1.0, 1000)],
+    )
+    .await;
+    assert_eq!(averaged(&state).await, ["IQ3_XXS"]);
+    let (per_1000, requests) = all_time_of(&state, "IQ3_XXS").await;
+    assert!((per_1000 - 2.0).abs() < 1e-9, "{per_1000}");
+    assert_eq!(requests, 2);
+}
+
+#[tokio::test]
+async fn the_move_waits_for_a_report() {
+    let dir = data_dir("energy-move-waits");
+    earlier_rows(&dir, &[(SERVED, 2.0, 1000)]);
+    let s = setup(true, |c| c.data_dir = Some(dir.clone())).await;
+    assert_eq!(averaged(&s.state).await, [SERVED]);
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    assert_eq!(averaged(&s.state).await, ["IQ3_XXS"]);
+}
+
+#[tokio::test]
+async fn rows_under_an_installed_model_stay_in_the_move() {
+    let (_s, state) = restarted_over_earlier_rows(
+        "energy-move-installed",
+        two_models(),
+        &[(SERVED, 2.0, 1000), ("coder-IQ1_M", 4.0, 1000)],
+    )
+    .await;
+    let mut models = averaged(&state).await;
+    models.sort();
+    assert_eq!(models, ["IQ3_XXS", "coder-IQ1_M"]);
+    let (per_1000, _) = all_time_of(&state, "coder-IQ1_M").await;
+    assert!((per_1000 - 4.0).abs() < 1e-9, "{per_1000}");
+}
+
+#[tokio::test]
+async fn the_move_runs_only_once() {
+    let (s, state) = restarted_over_earlier_rows(
+        "energy-move-once",
+        strata_info(true),
+        &[(SERVED, 2.0, 1000)],
+    )
+    .await;
+    assert_eq!(averaged(&state).await, ["IQ3_XXS"]);
+    // A model removed later keeps its figures over the next start.
+    state.request_energy.record(now(), "coder-IQ1_M", 4.0, 1000);
+    drop(state);
+    let again = restarted(&s);
+    let mut models = averaged(&again).await;
+    models.sort();
+    assert_eq!(models, ["IQ3_XXS", "coder-IQ1_M"]);
+}
+
+#[tokio::test]
+async fn a_new_database_never_moves_rows() {
+    let s = setup(true, |c| c.data_dir = Some(data_dir("energy-move-new"))).await;
+    s.state
+        .request_energy
+        .record(now(), "coder-IQ1_M", 4.0, 1000);
+    *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
+    let mut b = logged_in(&s.url).await;
+    page(&mut b).await;
+    assert_eq!(averaged(&s.state).await, ["coder-IQ1_M"]);
+    let again = restarted(&s);
+    assert_eq!(averaged(&again).await, ["coder-IQ1_M"]);
 }

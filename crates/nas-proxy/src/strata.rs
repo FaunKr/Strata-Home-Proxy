@@ -213,7 +213,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
         };
     };
     with_local_times(&mut info);
-    state.strata.set_last(info.clone());
+    keep(state, &info).await;
     state.strata.benchmarks.take(&info, clock::unix_now());
     let benchmarks = state.strata.benchmarks.page(Some(&info));
     let energy = energy(state, Some(&info)).await;
@@ -251,6 +251,13 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
 async fn energy(state: &AppState, info: Option<&StrataInfo>) -> Vec<ModelEnergy> {
     let price = state.cfg().price_ct_per_kwh;
     state.request_energy.averages(price, info).await
+}
+
+/// Keeps `info` as the PC service's last report, and moves the request
+/// energy of an earlier version to its active model.
+async fn keep(state: &AppState, info: &StrataInfo) {
+    state.strata.set_last(info.clone());
+    state.request_energy.move_saved(info).await;
 }
 
 /// Relay mode as an answering PC service reports it, and why its switch
@@ -625,15 +632,19 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
             format!("{}: interrupted", detail(&job)),
         ),
     };
-    // A run of the same model before the page is opened again would take
-    // this one's place in the PC service's report. Taken before the event,
-    // which tells that the job ended.
-    if matches!(
-        job.kind,
-        StrataJobKind::Benchmark | StrataJobKind::CompareModels
-    ) && let Some((info, _)) = agent.strata().await
-    {
-        strata.benchmarks.take(&info, clock::unix_now());
+    // The job may have switched the active model, which request energy
+    // counts for. A run of the same model before the page is opened again
+    // would take this one's place in the PC service's report. Taken before
+    // the event, which tells that the job ended.
+    if let Some((mut info, _)) = agent.strata().await {
+        if matches!(
+            job.kind,
+            StrataJobKind::Benchmark | StrataJobKind::CompareModels
+        ) {
+            strata.benchmarks.take(&info, clock::unix_now());
+        }
+        with_local_times(&mut info);
+        keep(state, &info).await;
     }
     state.events.record(kind, Some(detail));
     state.overview.refresh_now();

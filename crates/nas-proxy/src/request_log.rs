@@ -383,7 +383,7 @@ impl Recording {
         let model = row
             .energy_wh
             .and(row.model.as_deref())
-            .map(|name| self.state.models.model_of(name));
+            .map(|name| crate::request_energy::model_for(&self.state, name));
         self.state.requests.finish(row, model);
     }
 

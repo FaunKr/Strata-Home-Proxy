@@ -208,6 +208,9 @@ impl AppState {
         // Before this start the proxy saw nothing, so the time until the first
         // known state of the history stays unknown.
         state.events.record(EventKind::ProxyStarted, None);
+        if let Some(info) = state.strata.last_info() {
+            state.request_energy.move_saved_at_start(&info);
+        }
         state
     }
 

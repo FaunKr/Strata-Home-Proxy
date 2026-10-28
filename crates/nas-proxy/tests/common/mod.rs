@@ -1333,7 +1333,9 @@ pub async fn change(b: &mut Browser, current: &str, new: &str) -> reqwest::Respo
     .await
 }
 
-/// A browser logged in with an own password.
+/// A browser logged in with an own password. It changes the password from
+/// `admin`, so a second browser on the same proxy, or after `restarted`,
+/// takes `logged_in_again`.
 pub async fn logged_in(base: &str) -> Browser {
     let mut b = Browser::new(base);
     b.call("login", &[("password", "admin")]).await;

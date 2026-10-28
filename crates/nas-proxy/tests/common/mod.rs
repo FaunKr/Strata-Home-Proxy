@@ -299,6 +299,7 @@ impl FakePc {
             .find(|m| m.active)
             .map(|m| m.id.clone())
     }
+
     /// What the PC service's `/status` answers now.
     fn status(&self) -> PcStatus {
         PcStatus {

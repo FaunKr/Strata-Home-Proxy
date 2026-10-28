@@ -365,16 +365,6 @@ fn set_contexts(s: &Setup, contexts: &[Option<u32>]) {
     }
 }
 
-/// Marks `model` as the one the simulated PC service's Strata report counts as
-/// active, and no other.
-fn set_active(s: &Setup, model: &str) {
-    let mut info = s.pc.strata_info.lock().unwrap();
-    let models = &mut info.as_mut().expect("the PC reports Strata").info.models;
-    for m in models.iter_mut() {
-        m.active = m.id == model;
-    }
-}
-
 #[tokio::test]
 async fn a_run_hands_the_runner_the_active_models_context() {
     let (s, runner) = with_runner().await;
@@ -900,11 +890,11 @@ async fn a_model_that_does_not_load_keeps_its_earlier_result_next_to_the_failed_
     let mut b = logged_in(&s.url).await;
     // An earlier run of the first model, which then fails to load in the run
     // over all models. The second model is the active one when that run starts.
-    set_active(&s, ids[0]);
+    s.pc.set_active_model(ids[0]);
     assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
     drive_end(&s, &runner, ids[0], run(ids[0], "done")).await;
     eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
-    set_active(&s, ids[1]);
+    s.pc.set_active_model(ids[1]);
 
     assert_eq!(b.call("code-bench-start-all", &[]).await.status(), 200);
     drive(&s, &runner, ids[1]).await;
@@ -1225,7 +1215,7 @@ async fn after_a_restart_mid_run_the_current_run_is_followed_and_the_model_broug
     std::fs::write(dir.join("code-bench-restore"), ids[1]).unwrap();
     *runner.current.lock().unwrap() = Some(run(ids[0], "running"));
     // The run had loaded the first model before the restart.
-    set_active(&s, ids[0]);
+    s.pc.set_active_model(ids[0]);
 
     // The proxy starts again with the same DATA_DIR: it follows the run that is
     // still going, keeps its result, brings the model active before the run

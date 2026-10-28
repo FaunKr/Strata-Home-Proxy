@@ -124,6 +124,23 @@ Strata writes its output into the service. If the service is stopped or
 restarted while Strata is running, Strata's output goes nowhere; if
 Strata crashes because of it, the restarted service starts it again.
 
+## A script's output for a test fixture
+
+A fixture of real output from a Python script the service runs with the
+Terminal's Python (the `-c` scripts in `crates/pc-agent/src`, such as the
+options and catalog scripts) comes from a run that matches the service's own:
+
+- Working folder: the Terminal root. The service passes the script with `-c`,
+  which puts that folder first on `sys.path`. A script run as a file finds
+  `strata_control` only with `$env:PYTHONPATH` set to the Terminal root.
+- Environment: `STRATA_INSTALL_DIR` (the Terminal's `install` folder) and
+  `PYTHONNOUSERSITE=1`, as `Terminal::install_env` sets them.
+- Output: Windows PowerShell 5.1's `>` writes UTF-16. Pipe to
+  `Out-File -Encoding utf8` (it adds a byte order mark; strip it when writing
+  the fixture).
+
+The script's argument list is the one the `CommandSpec` of that script names.
+
 ## Managed values
 
 If the service sets up Strata itself (*Strata* area of the web UI),

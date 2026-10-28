@@ -761,8 +761,7 @@ async fn activate(state: &Arc<AppState>, model: &str) -> Result<(), String> {
         let _ = job_end(state, &agent).await;
     }
     // A model that is active already needs no load. Without an answer from the
-    // PC service, or without a model it marks as active, the job goes out as
-    // before.
+    // PC service, or without a model it marks as active, the job goes out.
     if active_now(&agent, model).await {
         return Ok(());
     }

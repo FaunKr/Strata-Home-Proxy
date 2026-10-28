@@ -276,7 +276,7 @@ impl FakePc {
     }
 
     /// Marks `model` as the one active in the Strata report, and no other.
-    fn set_active_model(&self, model: &str) {
+    pub fn set_active_model(&self, model: &str) {
         let mut report = self.strata_info.lock().unwrap();
         let Some(models) = report.as_mut().map(|r| &mut r.info.models) else {
             return;

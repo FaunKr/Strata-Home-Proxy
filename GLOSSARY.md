@@ -219,5 +219,5 @@ A code benchmark task that is a real feature of this repo: the agent works in a 
 _Avoid_: Rust task (except as a title), real task
 
 **Run over all models**:
-What *Benchmark all models* starts: each installed model in turn solves the tasks; other keys' requests wait meanwhile, and the model active before comes back at the end.
+What *Benchmark all models* starts: each installed model in turn solves the tasks, the one active at the start first, so it needs no load; other keys' requests wait meanwhile, and the model active before comes back at the end.
 _Avoid_: batch run, all-models run

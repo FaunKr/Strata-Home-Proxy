@@ -25,7 +25,7 @@
 - A refactor that lands as one PR is one ticket with a checklist, not a tree of sub-tickets.
 - A spec that lands as one PR is implemented in the thread itself: no implementer subagents, worktrees or merger.
 - /to-spec writes the test seams into the spec's Testing Decisions (where the tests drive the feature, and each new fake or setter for tests, named as new) and publishes the spec in the same step: Faun reviews the seams with the published spec.
-- Each new behaviour in a spec's Testing Decisions gets a test of its own, named after it, never "extend test X" (`CODING_STANDARDS.md`, *New behaviour gets a test of its own*): an implementer follows the spec even where it contradicts the standard.
+- Each new behaviour in a spec's Testing Decisions gets a test of its own, named after it: two cases are two tests, never one named `x_or_y`, and never "extend test X" (`CODING_STANDARDS.md`, *New behaviour gets a test of its own*): an implementer follows the spec even where it contradicts the standard.
 - When grilling changes what the code benchmark asks of the model (a TASK.md or the runner's prompt), ask whether the score should count the new demand too: a rule the score ignores costs a model nothing.
 - When Strata changed something the PC service reads (setup's output, a file it writes), extend the reader's unit test with the new line copied from Strata's source, not a made-up one, and update `docs/strata-api.md`.
 - When the PC service keeps or starts with a path Strata wrote (a run config's `cwd`, args, the picture reader's program), check whether `strata update` can delete what it names: updates keep only the new and the previous Control or engine folder (`docs/strata-api.md`, *Folders updates delete*).

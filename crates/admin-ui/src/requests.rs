@@ -350,6 +350,10 @@ fn tokens_text(v: f64) -> String {
 
 #[component]
 fn RequestTable(rows: Memo<Vec<RequestRow>>, open: RwSignal<Vec<u64>>) -> impl IntoView {
+    // At 1280 px these columns fill the table: one more made CI's ui-check
+    // fail ("table scrolls sideways") while the session's run passed, its
+    // numbers being shorter. A new value goes under a column (`sub`) or
+    // into the details.
     view! {
         <div class="request-table">
             <table>

@@ -363,6 +363,25 @@
         "families": ["flash-next"]
       }
     ],
-    "engine_help": "strata generate --pack DIR --tokens \"1,2,3\" [options]\n\n  --pack DIR           the pack directory (default pack/full)"
+    "engine_help": "strata generate --pack DIR --tokens \"1,2,3\" [options]\n\n  --pack DIR           the pack directory (default pack/full)",
+    "switches": [
+      {
+        "label": "Faster long prompts",
+        "effect": "Reads very long prompts faster by approximating part of the work. Off by default: answers about long documents can miss or mix up details.",
+        "default_on": false,
+        "env": {"STRATA_KVA": "1"},
+        "models": ["IQ3_XXS"]
+      }
+    ],
+    "documented": [
+      {
+        "name": "STRATA_RESIDENT_HEADROOM_GIB",
+        "value": null,
+        "text": "The GiB of available RAM the resident copy of the experts leaves free (default 4).",
+        "changes_answers": false,
+        "needs_args": ["--resident-experts", "--resident-budget-gib"],
+        "not_with_args": []
+      }
+    ]
   }
 }

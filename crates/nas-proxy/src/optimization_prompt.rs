@@ -7,9 +7,9 @@ use std::{fmt::Write, sync::Arc};
 
 use strata_admin_ui::api::{CodeBenchRun, CodeBenchState, RunSettings, SpeedRun};
 use strata_pc_protocol::{
-    LOAD_LINES, MachineFacts, NeverRule, PresetState, SamplingField, SamplingSource,
-    SamplingSupport, StrataInfo, StrataModel, StrataOptions, StrataPreset, StrataTune, TuneMode,
-    TuneUse, TunerOption, TunerTry,
+    DocumentedVariable, LOAD_LINES, MachineFacts, NeverRule, PresetState, SamplingField,
+    SamplingSource, SamplingSupport, SpeedSwitch, StrataInfo, StrataModel, StrataOptions,
+    StrataPreset, StrataTune, TuneMode, TuneUse, TunerOption, TunerTry,
 };
 
 use crate::{clock, state::AppState};
@@ -95,7 +95,7 @@ pub fn build(
     if let Some(options) = &info.options {
         options_lines(out, options);
     }
-    env_variables(out, info.options.as_ref());
+    env_variables(out, info.options.as_ref(), model);
 
     let _ = writeln!(out, "\n## Model {}\n", model.id);
     model_lines(out, info, model);
@@ -389,9 +389,11 @@ fn options_lines(out: &mut String, options: &StrataOptions) {
     }
 }
 
-/// The engine environment variables an answer may suggest: those of the
-/// tuner's tries, and those it never sets, with Strata's words.
-fn env_variables(out: &mut String, options: Option<&StrataOptions>) {
+/// The engine environment variables an answer may suggest for `model`:
+/// those of the tuner's tries and of Strata's speed switches, those the
+/// tuner never sets, with Strata's words, and those only Strata's
+/// documentation names.
+fn env_variables(out: &mut String, options: Option<&StrataOptions>, model: &StrataModel) {
     let _ = writeln!(out, "\n### Engine environment variables\n");
     let tries: Vec<&TunerTry> = options
         .map(|o| o.tries.iter().filter(|t| !t.env.is_empty()).collect())
@@ -399,17 +401,38 @@ fn env_variables(out: &mut String, options: Option<&StrataOptions>) {
     let never: Vec<&NeverRule> = options
         .map(|o| o.never.iter().filter(|rule| rule.env).collect())
         .unwrap_or_default();
-    if tries.is_empty() && never.is_empty() {
+    let switches: Vec<&SpeedSwitch> = options
+        .map(|o| {
+            o.switches
+                .iter()
+                .filter(|s| !s.env.is_empty())
+                .filter(|s| s.models.iter().any(|m| m.eq_ignore_ascii_case(&model.id)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let args = model.started_args.as_deref().unwrap_or_default();
+    let documented: Vec<&DocumentedVariable> = options
+        .map(|o| o.documented.iter().filter(|d| applies(d, args)).collect())
+        .unwrap_or_default();
+    if tries.is_empty() && never.is_empty() && switches.is_empty() && documented.is_empty() {
         let _ = writeln!(
             out,
             "The PC service did not report the variables Strata's tuner knows, so suggest none."
         );
         return;
     }
-    let _ = writeln!(
-        out,
-        "The variables Strata's tuner knows; suggest no others. Answers as in *Options the tuner knows*.\n"
-    );
+    if switches.is_empty() && documented.is_empty() {
+        let _ = writeln!(
+            out,
+            "The variables Strata's tuner knows; suggest no others. Answers as in *Options the tuner knows*.\n"
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "Suggest only variables listed in this section. The tuner's are answered as in \
+             *Options the tuner knows*.\n"
+        );
+    }
     for one in tries {
         let set: Vec<String> = one
             .env
@@ -429,6 +452,51 @@ fn env_variables(out: &mut String, options: Option<&StrataOptions>) {
             one_line(&format!("never {}: {}", never_text(rule), rule.reason))
         );
     }
+    for switch in switches {
+        let set: Vec<String> = switch
+            .env
+            .iter()
+            .map(|(name, value)| format!("`{name}={value}`"))
+            .collect();
+        let default = if switch.default_on { "on" } else { "off" };
+        let text = format!(
+            "{} ({default} by default): {}. {}",
+            set.join(", "),
+            switch.label,
+            switch.effect
+        );
+        let _ = writeln!(out, "- {}", one_line(&text));
+    }
+    if documented.is_empty() {
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "\n#### From Strata's documentation, not tried by its tuner\n"
+    );
+    for one in documented {
+        let value = one.value.as_deref().unwrap_or("<value>");
+        let answers = if one.changes_answers {
+            "Changes answers at rounding level."
+        } else {
+            "Does not change answers."
+        };
+        let text = format!("`{}={value}`: {} {answers}", one.name, one.text);
+        let _ = writeln!(out, "- {}", one_line(&text));
+    }
+}
+
+/// Whether a documented variable counts for a model started with `args`.
+fn applies(variable: &DocumentedVariable, args: &[String]) -> bool {
+    let has = |flag: &String| {
+        args.iter().any(|a| {
+            a == flag
+                || a.strip_prefix(flag.as_str())
+                    .is_some_and(|v| v.starts_with('='))
+        })
+    };
+    (variable.needs_args.is_empty() || variable.needs_args.iter().any(has))
+        && !variable.not_with_args.iter().any(has)
 }
 
 fn option_values(option: &TunerOption) -> String {

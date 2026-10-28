@@ -13,7 +13,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use strata_admin_ui::{
-    api::{RelayView, StrataJobForm, StrataPage},
+    api::{ModelEnergy, RelayView, StrataJobForm, StrataPage},
     labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED, strata_job_label},
 };
 
@@ -174,11 +174,13 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
                 ..RelayView::default()
             },
             benchmarks: Vec::new(),
+            energy: energy(state, None).await,
         };
     }
     let Some(status) = state.ask_pc(&agent).await else {
         let (info, as_of) = state.strata.shown_last().unzip();
         let benchmarks = state.strata.benchmarks.page(info.as_ref());
+        let energy = energy(state, info.as_ref()).await;
         return StrataPage {
             problem: Some(ASLEEP.into()),
             gaming: false,
@@ -193,6 +195,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
                 blocked: Some(RELAY_ASLEEP.into()),
             },
             benchmarks,
+            energy,
         };
     };
     let Some((mut info, incoming)) = agent.strata().await else {
@@ -206,12 +209,14 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             key_unreported: false,
             relay: relay_view(&status, None),
             benchmarks: Vec::new(),
+            energy: energy(state, None).await,
         };
     };
     with_local_times(&mut info);
     state.strata.set_last(info.clone());
     state.strata.benchmarks.take(&info, clock::unix_now());
     let benchmarks = state.strata.benchmarks.page(Some(&info));
+    let energy = energy(state, Some(&info)).await;
     let job = status.strata_job
         || info
             .job
@@ -238,7 +243,14 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
         update,
         key_unreported: state.strata_key.unreported(),
         benchmarks,
+        energy,
     }
+}
+
+/// Each model's energy per 1000 tokens at today's price.
+async fn energy(state: &AppState, info: Option<&StrataInfo>) -> Vec<ModelEnergy> {
+    let price = state.cfg().price_ct_per_kwh;
+    state.request_energy.averages(price, info).await
 }
 
 /// Relay mode as an answering PC service reports it, and why its switch

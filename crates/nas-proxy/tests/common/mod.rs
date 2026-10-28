@@ -134,6 +134,8 @@ pub struct FakePc {
     pub plug_down: AtomicBool,
     /// The power plug takes longer than any probe timeout to answer.
     pub plug_hangs: AtomicBool,
+    /// Calls of the power plug, of either generation.
+    pub plug_reads: AtomicUsize,
     /// Relay mode: Strata listens on the PC only, and the PC service's
     /// `/relay` passes requests on; the status reports it.
     pub relay: AtomicBool,
@@ -289,6 +291,7 @@ pub type Pc = Arc<FakePc>;
 
 /// Waits forever while the power plug hangs; 503 while it is down.
 async fn plug_trouble(pc: &FakePc) -> Option<Response> {
+    pc.plug_reads.fetch_add(1, Ordering::SeqCst);
     if pc.plug_hangs.load(Ordering::SeqCst) {
         std::future::pending::<()>().await;
     }
@@ -1146,6 +1149,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         ping_interval: Duration::from_millis(200),
         idle_check: Duration::from_millis(50),
         plug_sample: Duration::from_millis(100),
+        request_plug_sample: Duration::from_millis(20),
         sleep_retry: Duration::from_millis(300),
         sleep_settle: Duration::from_millis(200),
         // The default: answers the simulated PC gives must not miss it under

@@ -11,6 +11,7 @@ use crate::api::{
     RequestAnswer, RequestApi, RequestOutcome, RequestRefusal, RequestRow, RequestStart,
     RequestState,
 };
+use crate::energy::{request_energy_text, wh_text};
 use crate::request_stats::{ChartPoint, ModelAverages, filtered, keys, request_stats, ticks};
 
 /// Finished rows the tab keeps, like the proxy's `LIMIT`.
@@ -403,6 +404,7 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
         ("First token", millis(row.first_token_ms)),
         ("Duration", duration(&row)),
         ("Wait", wait(&row)),
+        ("Energy", request_energy_text(&row)),
         ("Status", status_text(&row)),
     ];
     let unusual = !is_done(&row);
@@ -436,7 +438,11 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
                 <td class="wide num">{rate(row.prefill_tok_s())}</td>
                 <td class="num">{rate(row.generation_tok_s())}</td>
                 <td class="wide num">{millis(row.first_token_ms)}</td>
-                <td class="wide num">{duration(&row)}</td>
+                <td class="wide num">
+                    {duration(&row)}
+                    // The request energy under the time it took; with € on tap.
+                    {row.energy_wh.map(|wh| view! { <span class="sub">{wh_text(wh)}</span> })}
+                </td>
                 <td class="wide num">{wait(&row)}</td>
                 <td class="wide status" class:bad=is_bad(&row)>
                     {status_text(&row)}

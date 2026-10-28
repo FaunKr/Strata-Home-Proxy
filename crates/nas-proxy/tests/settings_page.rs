@@ -107,6 +107,7 @@ async fn each_area_shows_its_own_settings() {
                 "PC_AGENT_TOKEN",
                 "SHELLY_URL",
                 "PLUG_SAMPLE_SECS",
+                "REQUEST_PLUG_SAMPLE_MS",
                 "IDLE_TIMEOUT_SECS",
                 "WAKE_TIMEOUT_SECS",
                 "WOL_RESEND_SECS",

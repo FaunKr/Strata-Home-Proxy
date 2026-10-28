@@ -36,6 +36,20 @@ pub fn local_date(ts: u64) -> String {
     zoned(ts).strftime("%d.%m.%Y").to_string()
 }
 
+/// `2026-10-17`: the day of `ts`, sortable as text.
+pub fn day_key(ts: u64) -> String {
+    zoned(ts).strftime("%Y-%m-%d").to_string()
+}
+
+/// The `day_key` of the day `days` before the day of `ts`.
+pub fn day_key_days_ago(ts: u64, days: i64) -> String {
+    let date = zoned(ts).date();
+    date.checked_sub(jiff::Span::new().days(days))
+        .unwrap_or(date)
+        .strftime("%Y-%m-%d")
+        .to_string()
+}
+
 /// `14:03` for today, `17.10. 14:03` for other days.
 pub fn local_text(ts: u64) -> String {
     let at = zoned(ts);

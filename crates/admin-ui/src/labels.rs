@@ -67,6 +67,10 @@ pub fn label(key: &str) -> Label {
             "Power history interval",
             "Time between two readings of the power plug kept for the history.",
         ),
+        "REQUEST_PLUG_SAMPLE_MS" => (
+            "Power interval during requests",
+            "Time between two readings of the power plug while a request runs, for its energy in the request log.",
+        ),
         "IDLE_TIMEOUT_SECS" => (
             "Idle time before sleep",
             "Without requests for this long, the PC goes to sleep.",
@@ -146,7 +150,7 @@ pub const PC_CONNECTION: SectionDef = SectionDef {
         "PC_AGENT_TOKEN",
         "SHELLY_URL",
     ],
-    advanced: &["PLUG_SAMPLE_SECS"],
+    advanced: &["PLUG_SAMPLE_SECS", "REQUEST_PLUG_SAMPLE_MS"],
 };
 
 pub const PC_WAKE_SLEEP: SectionDef = SectionDef {

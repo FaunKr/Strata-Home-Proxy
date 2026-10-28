@@ -346,7 +346,8 @@ fn create_tables(conn: &Connection) -> rusqlite::Result<()> {
              ts INTEGER NOT NULL
          );",
     )?;
-    conn.execute_batch(crate::request_log::TABLE)
+    conn.execute_batch(crate::request_log::TABLE)?;
+    conn.execute_batch(crate::request_energy::TABLE)
 }
 
 /// Moves the events of `events.jsonl` into the database in one transaction,

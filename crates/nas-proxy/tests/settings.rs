@@ -111,3 +111,17 @@ async fn changed_wol_addr_goes_into_the_next_magic_packet() {
     assert_eq!(resp.status(), 200);
     assert!(s.pc.wol_packets.load(Ordering::SeqCst) >= 1);
 }
+
+#[tokio::test]
+async fn request_plug_sample_ms_is_a_setting() {
+    let s = setup(true, |_| {}).await;
+    assert!(s.state.settings.set("REQUEST_PLUG_SAMPLE_MS", "0").is_err());
+    s.state
+        .settings
+        .set("REQUEST_PLUG_SAMPLE_MS", "500")
+        .unwrap();
+    assert_eq!(
+        s.state.cfg().request_plug_sample,
+        Duration::from_millis(500)
+    );
+}

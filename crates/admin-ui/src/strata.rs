@@ -12,12 +12,13 @@ use crate::{
     api::{
         BenchmarkKind, CancelCodeBench, CancelStrataJob, CodeBenchModelRuns, CodeBenchRun,
         CodeBenchState, CodeBenchTask, CodeBenchTaskInfo, DeleteBenchmarkModel, DeleteBenchmarkRun,
-        ForceRestartStrata, ForcedRestart, GenerateUpdateSummary, GetOptimizationPrompt, PcView,
-        PresetState, RelayView, RunSettings, SamplingField, SamplingSource, SamplingSupport,
-        SetRelay, SpeedModelRuns, SpeedRun, StartCodeBench, StartCodeBenchAll, StartStrataJob,
-        StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel, StrataPage,
-        StrataPreset, StrataPresets, StrataSampling, StrataSize, StrataTune, StrataUpdate,
-        TuneMode, TuneSpeed, TuneUse, UpdateSummary, error_text, get_code_bench, get_strata,
+        ForceRestartStrata, ForcedRestart, GenerateUpdateSummary, GetOptimizationPrompt,
+        ModelEnergy, PcView, PresetState, RelayView, RunSettings, SamplingField, SamplingSource,
+        SamplingSupport, SetRelay, SpeedModelRuns, SpeedRun, StartCodeBench, StartCodeBenchAll,
+        StartStrataJob, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
+        StrataPage, StrataPreset, StrataPresets, StrataSampling, StrataSize, StrataTune,
+        StrataUpdate, TuneMode, TuneSpeed, TuneUse, UpdateSummary, error_text, get_code_bench,
+        get_strata,
     },
     confirm::{Confirm, Question},
     copy::CopyText,
@@ -663,7 +664,10 @@ pub fn ModelsTab() -> impl IntoView {
         match page.info {
             None => ().into_any(),
             Some(info) if !info.installed => view! { <Install info actions blocked /> }.into_any(),
-            Some(info) => view! { <Models info actions blocked /> }.into_any(),
+            Some(info) => {
+                let energy = page.energy;
+                view! { <Models info energy actions blocked /> }.into_any()
+            }
         }
     })
 }
@@ -1236,7 +1240,13 @@ fn Install(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl In
 }
 
 #[component]
-fn Models(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl IntoView {
+fn Models(
+    info: StrataInfo,
+    /// Each model's energy per 1000 tokens.
+    energy: Vec<ModelEnergy>,
+    actions: Actions,
+    blocked: Signal<bool>,
+) -> impl IntoView {
     let installed: Vec<String> = info.models.iter().map(|m| m.id.clone()).collect();
     let models = info
         .models
@@ -1249,8 +1259,12 @@ fn Models(info: StrataInfo, actions: Actions, blocked: Signal<bool>) -> impl Int
                 .any(|f| f.speed_projection && m.family.as_deref() == Some(f.id.as_str()));
             let contexts = info.contexts.clone();
             let default_context = info.default_context;
+            let energy = energy
+                .iter()
+                .find(|e| e.model == m.id)
+                .and_then(crate::energy::model_energy_line);
             view! {
-                <ModelRow model=m takes_projection contexts default_context actions blocked />
+                <ModelRow model=m takes_projection contexts default_context energy actions blocked />
             }
         })
         .collect_view();
@@ -1313,6 +1327,8 @@ fn ModelRow(
     /// The contexts setup offers, and its pick.
     contexts: Vec<u32>,
     default_context: u32,
+    /// Its energy per 1000 tokens, as the line reads.
+    energy: Option<String>,
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
@@ -1547,6 +1563,7 @@ fn ModelRow(
                     })}
             </div>
             <p class="muted small">{meta}</p>
+            {energy.map(|line| view! { <p class="muted small">{line}</p> })}
             {sampling}
             {last_tune}
             {preset_line}

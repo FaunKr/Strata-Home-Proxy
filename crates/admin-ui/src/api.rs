@@ -451,6 +451,13 @@ pub struct RequestRow {
     pub wait_ms: u64,
     /// From arrival to the answer's end.
     pub duration_ms: u64,
+    /// The request energy in Wh: from the power plug's readings while
+    /// Strata worked on it; only for a finished request that got an answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_wh: Option<f64>,
+    /// `energy_wh` at today's price, filled in when the row is sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_eur: Option<f64>,
     /// Where the request is; only a finished one has an outcome.
     #[serde(default)]
     pub state: RequestState,
@@ -869,6 +876,30 @@ pub struct StrataPage {
     /// while the PC sleeps.
     #[serde(default)]
     pub benchmarks: Vec<SpeedModelRuns>,
+    /// Each model's energy per 1000 tokens, also while the PC sleeps.
+    #[serde(default)]
+    pub energy: Vec<ModelEnergy>,
+}
+
+/// A model's energy per 1000 tokens over two periods.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelEnergy {
+    pub model: String,
+    /// The PC service's last report lists the model.
+    pub installed: bool,
+    /// Today and the 29 days before; `None` without a request then.
+    pub last_30_days: Option<EnergyAverage>,
+    pub all_time: Option<EnergyAverage>,
+}
+
+/// Σ request energy ÷ Σ output tokens × 1000 over a period.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EnergyAverage {
+    pub wh_per_1000: f64,
+    /// At today's price.
+    pub eur_per_1000: f64,
+    /// The requests counted.
+    pub requests: u64,
 }
 
 /// What a model ran with when a benchmark of it ran, from the PC service's

@@ -328,7 +328,7 @@ async fn the_page_reports_speed_switches_and_documented_variables() {
     s.fake.command(
         "python options",
         FakeCommand {
-            lines: vec![OPTIONS_027.trim_end().to_string()],
+            lines: OPTIONS_027.lines().map(String::from).collect(),
             ..Default::default()
         },
     );
@@ -336,7 +336,10 @@ async fn the_page_reports_speed_switches_and_documented_variables() {
     let options = &view["options"];
     assert_eq!(options["switches"][0]["label"], "Faster long prompts");
     assert_eq!(options["switches"][0]["env"], json!({"STRATA_KVA": "1"}));
-    assert_eq!(options["switches"][0]["models"], json!(["IQ3_XXS"]));
+    assert_eq!(
+        options["switches"][0]["models"],
+        json!(["coder-iq1_m", "iq3_s", "iq3_xxs", "q2_0"])
+    );
     assert_eq!(options["documented"][0]["name"], "STRATA_HIP_PROMPT_F16");
     assert_eq!(options["documented"].as_array().unwrap().len(), 5);
 }
@@ -348,7 +351,7 @@ async fn a_newly_installed_model_gets_the_options_read_again() {
     s.fake.command(
         "python options",
         FakeCommand {
-            lines: vec![OPTIONS_027.trim_end().to_string()],
+            lines: OPTIONS_027.lines().map(String::from).collect(),
             ..Default::default()
         },
     );

@@ -1112,6 +1112,10 @@ mod tests {
         text.iter().map(|l| l.to_string()).collect()
     }
 
+    fn output(text: &str) -> Vec<String> {
+        text.lines().map(String::from).collect()
+    }
+
     // The answers as `run` in strata_cli/update_cmd.py prints them (Strata
     // 011c9e6): `{"schema_version": 1, "ok": …, **run_update(…)}` with the
     // engine's result from `update_engine` in strata_control/updater.py.
@@ -1273,34 +1277,31 @@ mod tests {
     }
 
     /// The options script's output with Strata 0.2.7's speed switches
-    /// (`strata_control/speed_switches.py`) on a PC with an RX 6000 card.
+    /// (`strata_control/speed_switches.py`) on a PC with an RX 6000 card,
+    /// warnings of Strata's setup module first. Run by hand from another
+    /// folder, so the tuner's table was not found (`tuner_error`).
     const OPTIONS_027: &str = include_str!("../fixtures/strata-options-0.2.7.json");
 
     #[test]
     fn speed_switches_are_read_with_the_models_they_apply_to() {
-        let options = read_options(&lines(&[OPTIONS_027.trim_end()]), "0.2.7").unwrap();
+        let options = read_options(&output(OPTIONS_027), "0.2.7").unwrap();
         assert_eq!(options.switches.len(), 5);
         let long = &options.switches[0];
         assert_eq!(long.label, "Faster long prompts");
         assert!(long.effect.starts_with("Reads very long prompts faster"));
         assert!(!long.default_on);
         assert_eq!(long.env, [("STRATA_KVA".into(), "1".into())].into());
-        assert_eq!(long.models, ["IQ3_XXS"]);
+        assert_eq!(long.models, ["coder-iq1_m", "iq3_s", "iq3_xxs", "q2_0"]);
         let nvidia = &options.switches[1];
         assert!(nvidia.default_on);
         assert!(nvidia.models.is_empty());
         assert_eq!(options.switches[3].env.len(), 7);
-        assert_eq!(
-            options.tuner,
-            read_options(&lines(&[OPTIONS.trim_end()]), "0.2.7")
-                .unwrap()
-                .tuner
-        );
+        assert!(options.engine_help.is_some());
     }
 
     #[test]
     fn an_rx_6000_card_gets_its_documented_variables() {
-        let options = read_options(&lines(&[OPTIONS_027.trim_end()]), "0.2.7").unwrap();
+        let options = read_options(&output(OPTIONS_027), "0.2.7").unwrap();
         let names: Vec<&str> = options.documented.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(
             names,
@@ -1336,7 +1337,7 @@ mod tests {
         assert_ne!(other, OPTIONS_027);
         assert_ne!(undetected, OPTIONS_027);
         for out in [other, undetected] {
-            let options = read_options(&lines(&[out.trim_end()]), "0.2.7").unwrap();
+            let options = read_options(&output(&out), "0.2.7").unwrap();
             let names: Vec<&str> = options.documented.iter().map(|d| d.name.as_str()).collect();
             assert_eq!(
                 names,

@@ -11,7 +11,7 @@ use crate::api::{
     RequestAnswer, RequestApi, RequestOutcome, RequestRefusal, RequestRow, RequestStart,
     RequestState,
 };
-use crate::energy::{eur_text, request_energy_text, wh_text};
+use crate::energy::{request_energy_text, wh_text};
 use crate::request_stats::{ChartPoint, ModelAverages, filtered, keys, request_stats, ticks};
 
 /// Finished rows the tab keeps, like the proxy's `LIMIT`.
@@ -368,7 +368,6 @@ fn RequestTable(rows: Memo<Vec<RequestRow>>, open: RwSignal<Vec<u64>>) -> impl I
                         <th scope="col" class="wide num">"First token"</th>
                         <th scope="col" class="wide num">"Duration"</th>
                         <th scope="col" class="wide num">"Wait"</th>
-                        <th scope="col" class="wide num">"Energy"</th>
                         <th scope="col" class="wide">"Status"</th>
                     </tr>
                 </thead>
@@ -439,18 +438,18 @@ fn RequestLine(row: RequestRow, open: RwSignal<Vec<u64>>) -> impl IntoView {
                 <td class="wide num">{rate(row.prefill_tok_s())}</td>
                 <td class="num">{rate(row.generation_tok_s())}</td>
                 <td class="wide num">{millis(row.first_token_ms)}</td>
-                <td class="wide num">{duration(&row)}</td>
-                <td class="wide num">{wait(&row)}</td>
                 <td class="wide num">
-                    {row.energy_wh.map(wh_text).unwrap_or_else(|| "–".into())}
-                    {row.energy_eur.map(|eur| view! { <span class="sub">{eur_text(eur)}</span> })}
+                    {duration(&row)}
+                    // The request energy under the time it took; with € on tap.
+                    {row.energy_wh.map(|wh| view! { <span class="sub">{wh_text(wh)}</span> })}
                 </td>
+                <td class="wide num">{wait(&row)}</td>
                 <td class="wide status" class:bad=is_bad(&row)>
                     {status_text(&row)}
                 </td>
             </tr>
             <tr class="request-more">
-                <td colspan="15">
+                <td colspan="14">
                     <dl>
                         {details
                             .into_iter()

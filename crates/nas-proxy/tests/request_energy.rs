@@ -66,7 +66,7 @@ async fn next_row(live: &mut Live) -> Value {
         .clone()
 }
 
-async fn live(b: &Browser) -> Live {
+async fn open_log(b: &Browser) -> Live {
     let mut live = Live::open_at(b, STREAM).await;
     live.until("all", |m| m["kind"] == "all").await;
     live
@@ -74,7 +74,7 @@ async fn live(b: &Browser) -> Live {
 
 /// One request's row, sent while the stream is open.
 async fn one_row(s: &Setup, b: &Browser) -> Value {
-    let mut live = live(b).await;
+    let mut live = open_log(b).await;
     ask(s).await;
     next_row(&mut live).await
 }
@@ -92,10 +92,19 @@ fn assert_near(actual: f64, expected: f64, what: &str) {
     );
 }
 
-/// The history's loop, with `PLUG_SAMPLE_SECS` at an hour, has made its
-/// first round without a plug and sleeps.
-async fn history_loop_past_its_first_round() {
-    tokio::time::sleep(Duration::from_millis(100)).await;
+/// With `PLUG_SAMPLE_SECS` at an hour, the history's loop makes its first
+/// round at the start, with or without the plug set, then sleeps: waits
+/// until the plug has been quiet for a while; the samples there are then.
+async fn samples_after_the_history_loop_settled(s: &Setup) -> usize {
+    let mut last = usize::MAX;
+    loop {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let reads = s.pc.plug_reads.load(Ordering::SeqCst);
+        if reads == last {
+            return s.state.events.samples(0, u64::MAX).await.len();
+        }
+        last = reads;
+    }
 }
 
 fn now() -> u64 {
@@ -163,7 +172,7 @@ async fn overlapping_requests_split_the_shared_readings() {
     plug(&s, 400.0);
     answers(&s, "IQ3_XXS", 40, Duration::from_millis(600));
     let b = logged_in(&s.url).await;
-    let mut live = live(&b).await;
+    let mut live = open_log(&b).await;
     tokio::join!(ask(&s), ask(&s));
     for _ in 0..2 {
         let row = next_row(&mut live).await;
@@ -212,8 +221,8 @@ async fn a_refused_or_cancelled_request_has_no_energy() {
     plug(&s, 360.0);
     answers(&s, "IQ3_XXS", 40, Duration::from_secs(2));
     let b = logged_in(&s.url).await;
-    let mut live = live(&b).await;
-    // The client hangs up while Strata is at work.
+    let mut live = open_log(&b).await;
+    // The client hangs up while Strata is at work, long after two readings.
     let resp = post_json(&s, CHAT, chat()).await;
     assert_eq!(resp.status(), 200);
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -222,12 +231,15 @@ async fn a_refused_or_cancelled_request_has_no_energy() {
     assert_eq!(row["outcome"]["kind"], "cancelled_by_client", "{row}");
     assert_eq!(row["energy_wh"], Value::Null, "{row}");
 
-    // Strata answers with an error.
-    s.pc.chat_fails.store(true, Ordering::SeqCst);
-    let failed = post_json(&s, CHAT, json!({"messages": []})).await;
-    assert_eq!(failed.status(), 500);
-    let row = next_row(&mut live).await;
-    assert_eq!(row["outcome"]["kind"], "strata_error", "{row}");
+    // The proxy answers itself in gaming mode.
+    let s = setup(true, |_| {}).await;
+    s.pc.gaming.store(true, Ordering::SeqCst);
+    plug(&s, 360.0);
+    let b = logged_in(&s.url).await;
+    let mut refused = open_log(&b).await;
+    assert_eq!(post_json(&s, CHAT, chat()).await.status(), 503);
+    let row = next_row(&mut refused).await;
+    assert_eq!(row["outcome"]["kind"], "refused", "{row}");
     assert_eq!(row["energy_wh"], Value::Null, "{row}");
 }
 
@@ -250,23 +262,24 @@ async fn the_energy_in_euro_uses_todays_price() {
 #[tokio::test]
 async fn requests_do_not_add_samples_to_the_history() {
     let s = setup(true, |c| c.plug_sample = Duration::from_secs(3600)).await;
-    history_loop_past_its_first_round().await;
     plug(&s, 360.0);
+    let before = samples_after_the_history_loop_settled(&s).await;
     answers(&s, "IQ3_XXS", 40, Duration::from_millis(300));
     let b = logged_in(&s.url).await;
     let row = one_row(&s, &b).await;
     assert!(row["energy_wh"].is_f64(), "{row}");
     let samples = s.state.events.samples(0, u64::MAX).await;
-    assert!(samples.is_empty(), "{samples:?}");
+    assert_eq!(samples.len(), before, "{samples:?}");
 }
 
 #[tokio::test]
 async fn the_plug_is_not_read_while_no_request_runs() {
     let s = setup(true, |c| c.plug_sample = Duration::from_secs(3600)).await;
-    history_loop_past_its_first_round().await;
     plug(&s, 360.0);
+    samples_after_the_history_loop_settled(&s).await;
+    let quiet = s.pc.plug_reads.load(Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(s.pc.plug_reads.load(Ordering::SeqCst), 0);
+    assert_eq!(s.pc.plug_reads.load(Ordering::SeqCst), quiet);
 
     answers(&s, "IQ3_XXS", 40, Duration::from_millis(300));
     let b = logged_in(&s.url).await;
@@ -274,7 +287,7 @@ async fn the_plug_is_not_read_while_no_request_runs() {
     assert!(row["energy_wh"].is_f64(), "{row}");
     tokio::time::sleep(Duration::from_millis(100)).await;
     let after = s.pc.plug_reads.load(Ordering::SeqCst);
-    assert!(after >= 2, "{after} reads");
+    assert!(after >= quiet + 2, "{after} reads after {quiet}");
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(s.pc.plug_reads.load(Ordering::SeqCst), after);
 }
@@ -368,7 +381,7 @@ async fn the_daily_figures_outlive_the_request_log_limit() {
     plug(&s, 360.0);
     answers(&s, "IQ3_XXS", 40, Duration::from_millis(300));
     let mut b = logged_in(&s.url).await;
-    let mut live = live(&b).await;
+    let mut live = open_log(&b).await;
     for _ in 0..2 {
         ask(&s).await;
         let row = next_row(&mut live).await;
@@ -416,5 +429,15 @@ async fn a_removed_model_keeps_its_figures_and_is_not_installed() {
         .record(now(), "coder-IQ1_M", 2.0, 1000);
     let energy = energy_of(&mut b, "coder-IQ1_M").await;
     assert_eq!(energy["installed"], false, "{energy}");
+    assert_eq!(energy["all_time"]["wh_per_1000"], 2.0, "{energy}");
+
+    // Installed again under the same name: its figures count again.
+    let mut info = strata_info(true);
+    info.info
+        .models
+        .push(model("coder-IQ1_M", Some("coder"), 9_000_000_000, false));
+    *s.pc.strata_info.lock().unwrap() = Some(info);
+    let energy = energy_of(&mut b, "coder-IQ1_M").await;
+    assert_eq!(energy["installed"], true, "{energy}");
     assert_eq!(energy["all_time"]["wh_per_1000"], 2.0, "{energy}");
 }

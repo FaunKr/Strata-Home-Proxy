@@ -14,7 +14,7 @@ use std::{
 };
 
 use rusqlite::{Connection, params};
-use strata_admin_ui::api::{EnergyAverage, ModelEnergy};
+use strata_admin_ui::api::{EnergyAverage, ModelEnergy, RequestOutcome, RequestRow};
 use strata_pc_protocol::StrataInfo;
 
 use crate::{clock, state::AppState};
@@ -101,18 +101,25 @@ impl RequestEnergy {
 
     /// The request `id` went to Strata: it takes its share of each reading
     /// from now on, and the plug is read while any request runs.
+    /// Without a power plug nothing runs: no request gets energy then.
     pub fn start(&self, state: &Arc<AppState>, id: u64) {
+        if state.cfg().shelly_url.is_none() {
+            return;
+        }
         self.running.lock().unwrap().insert(id, Shares::default());
         if !self.sampling.swap(true, Ordering::SeqCst) {
             tokio::spawn(sample(Arc::clone(state)));
         }
     }
 
-    /// Ends the request `id`, sent to Strata at `sent`: its energy in Wh, or
-    /// `None` with fewer than `MIN_READINGS` readings.
-    pub fn end(&self, id: u64, sent: Instant) -> Option<f64> {
+    /// Ends the request `id`, sent to Strata at `sent`, as `row` finished:
+    /// its energy in Wh, or `None` for a request without an answer or
+    /// without output tokens, or with fewer than `MIN_READINGS` readings.
+    pub fn end(&self, id: u64, sent: Instant, row: &RequestRow) -> Option<f64> {
         let shares = self.running.lock().unwrap().remove(&id)?;
-        (shares.readings >= MIN_READINGS).then(|| {
+        let answered =
+            row.outcome == RequestOutcome::Done && row.output_tokens.is_some_and(|t| t > 0);
+        (answered && shares.readings >= MIN_READINGS).then(|| {
             let mean = shares.watts / f64::from(shares.readings);
             mean * sent.elapsed().as_secs_f64() / 3600.0
         })
@@ -160,8 +167,13 @@ async fn sample(state: Arc<AppState>) {
     }
 }
 
+/// `wh` in € at `price_ct_per_kwh`.
+pub fn eur(wh: f64, price_ct_per_kwh: f64) -> f64 {
+    wh / 1000.0 * price_ct_per_kwh / 100.0
+}
+
 /// Adds one request to its day's row, in `db`'s lock the caller holds.
-pub fn add(
+pub(crate) fn add(
     db: &Connection,
     at: u64,
     model: &str,
@@ -195,7 +207,7 @@ impl Sums {
             let wh_per_1000 = self.wh / self.output_tokens as f64 * 1000.0;
             EnergyAverage {
                 wh_per_1000,
-                eur_per_1000: wh_per_1000 / 1000.0 * price_ct_per_kwh / 100.0,
+                eur_per_1000: eur(wh_per_1000, price_ct_per_kwh),
                 requests: self.requests,
             }
         })

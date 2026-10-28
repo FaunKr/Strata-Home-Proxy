@@ -187,7 +187,7 @@ pub fn watch(state: &Arc<AppState>) -> BoxStream<'static, RequestLogMessage> {
     let changes = futures_util::stream::unfold((rx, state), |(mut rx, state)| async move {
         let message = match rx.recv().await {
             Ok(mut row) => {
-                with_time(&mut row, state.cfg().price_ct_per_kwh);
+                for_sending(&mut row, state.cfg().price_ct_per_kwh);
                 RequestLogMessage::Row { row: Box::new(row) }
             }
             // Missed changes may have finished a running row: all again.
@@ -211,17 +211,17 @@ async fn whole(state: Arc<AppState>) -> RequestLogMessage {
         .collect();
     rows.extend(finished);
     let price = state.cfg().price_ct_per_kwh;
-    rows.iter_mut().for_each(|row| with_time(row, price));
+    rows.iter_mut().for_each(|row| for_sending(row, price));
     RequestLogMessage::All { rows }
 }
 
 /// What a row shows that is not kept: its local time, and its energy at
 /// today's price.
-fn with_time(row: &mut RequestRow, price_ct_per_kwh: f64) {
+fn for_sending(row: &mut RequestRow, price_ct_per_kwh: f64) {
     row.time = clock::local_time_text(row.at);
     row.energy_eur = row
         .energy_wh
-        .map(|wh| wh / 1000.0 * price_ct_per_kwh / 100.0);
+        .map(|wh| crate::request_energy::eur(wh, price_ct_per_kwh));
 }
 
 /// One request on its way: the meter and what the proxy itself clocks. A
@@ -377,12 +377,9 @@ impl Recording {
         }
         // Counted from the request going to Strata: waking and loading cost
         // the same however many tokens follow.
-        let energy = self
+        row.energy_wh = self
             .sent
-            .and_then(|sent| self.state.request_energy.end(self.id, sent));
-        if row.outcome == RequestOutcome::Done && row.output_tokens.is_some_and(|t| t > 0) {
-            row.energy_wh = energy;
-        }
+            .and_then(|sent| self.state.request_energy.end(self.id, sent, &row));
         let model = row
             .energy_wh
             .and(row.model.as_deref())

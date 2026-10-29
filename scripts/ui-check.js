@@ -625,7 +625,8 @@ async function engineOptions(page, errors, name) {
 
 // Shows the 1k | 1M switch for the energy lines at the top of the models
 // list: 1k pressed at first; after pressing 1M and reloading the page, 1M is
-// pressed and 1k is not, remembered in this browser.
+// pressed and 1k is not, remembered in this browser. Then back to 1k, so a
+// later check of this page and a second run of this one see 1k again.
 // Returns the number of findings.
 async function energyUnit(page, errors, name) {
   const wait = { timeout: 15000 };
@@ -655,6 +656,14 @@ async function energyUnit(page, errors, name) {
     }
     if (await pressed(again.getByRole('button', { name: '1k', exact: true }))) {
       throw new Error('1k is pressed after the reload');
+    }
+    // Back to 1k: the stored choice is what every later check of this page runs in.
+    await again.getByRole('button', { name: '1k', exact: true }).click(wait);
+    if (!(await pressed(again.getByRole('button', { name: '1k', exact: true })))) {
+      throw new Error('1k is not pressed after the second click');
+    }
+    if (await pressed(again.getByRole('button', { name: '1M', exact: true }))) {
+      throw new Error('1M is still pressed after the second click');
     }
   } catch (e) {
     issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];

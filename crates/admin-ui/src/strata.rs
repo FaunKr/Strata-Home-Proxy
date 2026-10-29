@@ -1307,11 +1307,11 @@ fn Models(
     view! {
         <section class="card">
             <h2>"Installed models"</h2>
-            <div class="chips" role="group" aria-label="Energy per">
-                <span class="muted small">"Energy per"</span>
+            <div class="chips" role="group" aria-labelledby="energy-per-label">
+                <span class="muted small" id="energy-per-label">"Energy per"</span>
                 {UNIT_CHOICES
                     .iter()
-                    .map(|(name, to)| unit_choice(unit, name, *to))
+                    .map(|to| unit_choice(unit, *to))
                     .collect::<Vec<_>>()}
             </div>
             <ul class="list">{models}</ul>
@@ -1333,11 +1333,10 @@ fn Models(
 }
 
 /// The token units the *Models* tab can show its energy lines in.
-const UNIT_CHOICES: &[(&str, TokenUnit)] =
-    &[("1k", TokenUnit::Thousand), ("1M", TokenUnit::Million)];
+const UNIT_CHOICES: &[TokenUnit] = &[TokenUnit::Thousand, TokenUnit::Million];
 
 /// One unit the page can press, remembered in this browser (energy.rs).
-fn unit_choice(unit: RwSignal<TokenUnit>, name: &'static str, to: TokenUnit) -> impl IntoView {
+fn unit_choice(unit: RwSignal<TokenUnit>, to: TokenUnit) -> impl IntoView {
     let pressed = move || unit.with(|u| *u == to);
     view! {
         <button
@@ -1349,7 +1348,7 @@ fn unit_choice(unit: RwSignal<TokenUnit>, name: &'static str, to: TokenUnit) -> 
                 crate::energy::store_unit(to);
             }
         >
-            {name}
+            {to.name()}
         </button>
     }
 }

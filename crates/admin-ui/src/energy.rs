@@ -16,7 +16,7 @@ pub enum TokenUnit {
 
 impl TokenUnit {
     /// The name in the line and in what the browser stores.
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Thousand => "1k",
             Self::Million => "1M",
@@ -33,8 +33,9 @@ impl TokenUnit {
 }
 
 /// The browser's local storage key holding this browser's choice, written as
-/// [`TokenUnit::name`].
-pub const TOKEN_UNIT_KEY: &str = "energy-token-unit";
+/// [`TokenUnit::name`]. Only the browser half reads or writes it.
+#[cfg(feature = "hydrate")]
+const TOKEN_UNIT_KEY: &str = "energy-token-unit";
 
 /// The unit the stored text says: `1M` is million; anything else, or nothing,
 /// is thousand.

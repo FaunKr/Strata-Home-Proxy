@@ -123,7 +123,7 @@ The energy one finished request took, in Wh and € at today's price, from the p
 _Avoid_: power per request, cost per request
 
 **Energy per 1000 tokens**:
-A model's request energy ÷ its output tokens × 1000, over the last 30 days and over all time, in Wh and € at today's price; the *Models* tab shows it for each installed model. The proxy keeps one row per day and model for it, never trimmed, also for removed models; a request counts for the model the PC service's last report marks as active.
+A model's request energy ÷ its output tokens × 1000, over the last 30 days and over all time, in Wh and € at today's price; the *Models* tab shows it for each installed model. The proxy keeps one row per day and model for it, never trimmed, also for removed models; a request counts for the model the PC service's last report marks as active. The *Models* tab can show it per 1M tokens instead, a choice each browser keeps.
 _Avoid_: power per token, efficiency
 
 **Energy estimate**:

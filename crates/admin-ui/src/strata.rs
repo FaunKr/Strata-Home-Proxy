@@ -22,6 +22,7 @@ use crate::{
     },
     confirm::{Confirm, Question},
     copy::CopyText,
+    energy::TokenUnit,
     labels::{STRATA_CONNECTION, STRATA_TIMEOUTS, TOO_OLD_FOR_KEY, strata_badge, strata_job_label},
     overview::{Live, strata_sentence},
     settings::SettingsSections,
@@ -1247,6 +1248,14 @@ fn Models(
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
+    // The token unit of every model's energy line; the switch at the top of
+    // the list sets it for all models at once. The server draws 1k; after
+    // hydration the unit remembered in this browser takes over.
+    let unit = RwSignal::new(TokenUnit::default());
+    #[cfg(feature = "hydrate")]
+    {
+        Effect::new(move |_| unit.set(crate::energy::stored_unit()));
+    }
     let installed: Vec<String> = info.models.iter().map(|m| m.id.clone()).collect();
     let models = info
         .models
@@ -1259,12 +1268,9 @@ fn Models(
                 .any(|f| f.speed_projection && m.family.as_deref() == Some(f.id.as_str()));
             let contexts = info.contexts.clone();
             let default_context = info.default_context;
-            let energy = energy
-                .iter()
-                .find(|e| e.model == m.id)
-                .and_then(crate::energy::model_energy_line);
+            let energy = energy.iter().find(|e| e.model == m.id).cloned();
             view! {
-                <ModelRow model=m takes_projection contexts default_context energy actions blocked />
+                <ModelRow model=m takes_projection contexts default_context energy unit=unit.into() actions blocked />
             }
         })
         .collect_view();
@@ -1301,6 +1307,13 @@ fn Models(
     view! {
         <section class="card">
             <h2>"Installed models"</h2>
+            <div class="chips" role="group" aria-label="Energy per">
+                <span class="muted small">"Energy per"</span>
+                {UNIT_CHOICES
+                    .iter()
+                    .map(|(name, to)| unit_choice(unit, name, *to))
+                    .collect::<Vec<_>>()}
+            </div>
             <ul class="list">{models}</ul>
             {sampling_note}
         </section>
@@ -1319,6 +1332,28 @@ fn Models(
     .into_any()
 }
 
+/// The token units the *Models* tab can show its energy lines in.
+const UNIT_CHOICES: &[(&str, TokenUnit)] =
+    &[("1k", TokenUnit::Thousand), ("1M", TokenUnit::Million)];
+
+/// One unit the page can press, remembered in this browser (energy.rs).
+fn unit_choice(unit: RwSignal<TokenUnit>, name: &'static str, to: TokenUnit) -> impl IntoView {
+    let pressed = move || unit.with(|u| *u == to);
+    view! {
+        <button
+            type="button"
+            class="chip"
+            aria-pressed=move || if pressed() { "true" } else { "false" }
+            on:click=move |_| {
+                unit.set(to);
+                crate::energy::store_unit(to);
+            }
+        >
+            {name}
+        </button>
+    }
+}
+
 #[component]
 fn ModelRow(
     model: StrataModel,
@@ -1327,12 +1362,21 @@ fn ModelRow(
     /// The contexts setup offers, and its pick.
     contexts: Vec<u32>,
     default_context: u32,
-    /// Its energy per 1000 tokens, as the line reads.
-    energy: Option<String>,
+    /// Its energy figures, if the proxy has any for it.
+    energy: Option<ModelEnergy>,
+    /// The token unit of the energy line, shared with the switch.
+    unit: Signal<TokenUnit>,
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
     let size = bytes_gb(model.disk_bytes);
+    // The energy line follows the switch on top of the list, at once and
+    // without asking the proxy again.
+    let energy_line = move || {
+        energy
+            .as_ref()
+            .and_then(|e| crate::energy::model_energy_line(e, unit.get()))
+    };
     // Only with word from the PC service on the context: an older one does not say.
     // Without Strata's catalog there are no contexts to offer.
     let switch = model
@@ -1563,7 +1607,7 @@ fn ModelRow(
                     })}
             </div>
             <p class="muted small">{meta}</p>
-            {energy.map(|line| view! { <p class="muted small">{line}</p> })}
+            {move || energy_line().map(|line| view! { <p class="muted small">{line}</p> })}
             {sampling}
             {last_tune}
             {preset_line}

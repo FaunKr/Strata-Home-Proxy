@@ -623,6 +623,47 @@ async function engineOptions(page, errors, name) {
   return issue ? 1 : 0;
 }
 
+// Shows the 1k | 1M switch for the energy lines at the top of the models
+// list: 1k pressed at first; after pressing 1M and reloading the page, 1M is
+// pressed and 1k is not, remembered in this browser.
+// Returns the number of findings.
+async function energyUnit(page, errors, name) {
+  const wait = { timeout: 15000 };
+  errors.length = 0;
+  let issue = null;
+  try {
+    await page.goto(base + '/admin/strata', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    const group = page.getByRole('group', { name: 'Energy per' });
+    const k = group.getByRole('button', { name: '1k', exact: true });
+    const m = group.getByRole('button', { name: '1M', exact: true });
+    await k.waitFor(wait);
+    const pressed = async button => (await button.getAttribute('aria-pressed')) === 'true';
+    if (!(await pressed(k))) throw new Error('1k is not pressed at first');
+    if (await pressed(m)) throw new Error('1M is pressed at first');
+    await m.click(wait);
+    if (await pressed(k)) throw new Error('1k is still pressed after the click');
+    if (!(await pressed(m))) throw new Error('1M is not pressed after the click');
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/${name}_energy-unit.jpg`, type: 'jpeg', quality: 60, fullPage: true });
+    }
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    const again = page.getByRole('group', { name: 'Energy per' });
+    if (!(await pressed(again.getByRole('button', { name: '1M', exact: true })))) {
+      throw new Error('1M is not pressed after the reload');
+    }
+    if (await pressed(again.getByRole('button', { name: '1k', exact: true }))) {
+      throw new Error('1k is pressed after the reload');
+    }
+  } catch (e) {
+    issue = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n')[0];
+  }
+  if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+  console.log(`${issue ? 'FAIL' : 'ok  '} ${name} energy unit switch${issue ? '\n     ' + issue : ''}`);
+  return issue ? 1 : 0;
+}
+
 // Opens Tune of the first installed model: the dialog with how long and for
 // what, closed again without starting; then the preset lines, Undo's and Turn off's questions, and a
 // running tune's log and measurements. Returns the number of findings.
@@ -765,6 +806,7 @@ async function codeBench(page, errors) {
     findings += await benchHistory(page, errors, name);
     findings += await tune(page, errors, name);
     findings += await engineOptions(page, errors, name);
+    findings += await energyUnit(page, errors, name);
     findings += await sameVersion(page, errors, name);
     findings += await publicName(page, errors, name);
     if (name === 'desk') {

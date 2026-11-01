@@ -31,6 +31,8 @@ pub struct StrataHealth {
     pub max_context: Option<u64>,
 }
 
+const NO_METRICS: &str = "no metrics from Strata";
+
 /// Strata's numbers from `/metrics?format=prometheus`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Metrics {
@@ -130,17 +132,22 @@ impl StrataClient {
     }
 
     pub async fn metrics(&self) -> Result<Metrics, String> {
-        const NONE: &str = "no metrics from Strata";
+        parse_metrics(&self.metrics_text().await?).ok_or_else(|| NO_METRICS.into())
+    }
+
+    /// Strata's metrics as Prometheus text, unchanged: for the Overview and
+    /// the proxy's own metrics endpoint.
+    pub async fn metrics_text(&self) -> Result<String, String> {
         // Not `/metrics/prometheus`: its tokens/s counts finished requests only,
         // and each scrape resets that window for other scrapers.
         let resp = self
             .send(self.request(&self.probe, Method::GET, "/metrics?format=prometheus"))
             .await
-            .map_err(|_| NONE)?;
+            .map_err(|_| NO_METRICS)?;
         if !resp.status().is_success() {
-            return Err(NONE.into());
+            return Err(NO_METRICS.into());
         }
-        parse_metrics(&resp.text().await.map_err(|_| NONE)?).ok_or_else(|| NONE.into())
+        resp.text().await.map_err(|_| NO_METRICS.into())
     }
 
     /// `GET /v1/models`: its `Content-Type` and body, for a `200` only.

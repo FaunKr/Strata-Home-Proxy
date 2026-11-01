@@ -108,8 +108,9 @@ impl RequestLog {
     }
 
     /// Written at once, like an event, so a killed proxy loses nothing; a
-    /// row with request energy adds it to its model's day in the same write.
-    fn finish(&self, row: RequestRow, model: Option<String>) {
+    /// row with request energy adds it to its model's day in the same write,
+    /// and every row adds to the request totals of `totals_model`.
+    fn finish(&self, row: RequestRow, model: Option<String>, totals_model: &str) {
         self.running.lock().unwrap().remove(&row.id);
         let limit = self.limit.load(Ordering::SeqCst) as i64;
         let written = serde_json::to_string(&row)
@@ -120,6 +121,7 @@ impl RequestLog {
                     "INSERT INTO requests (id, row) VALUES (?1, ?2)",
                     params![row.id as i64, json],
                 )
+                .and_then(|_| crate::request_totals::add(&db, &row, totals_model))
                 .and_then(|_| match (&model, row.energy_wh, row.output_tokens) {
                     (Some(model), Some(wh), Some(tokens)) => {
                         crate::request_energy::add(&db, row.at, model, wh, tokens)
@@ -384,7 +386,8 @@ impl Recording {
             .energy_wh
             .and(row.model.as_deref())
             .map(|name| crate::request_energy::model_for(&self.state, name));
-        self.state.requests.finish(row, model);
+        let totals_model = crate::request_totals::model_for(&self.state, &row);
+        self.state.requests.finish(row, model, &totals_model);
     }
 
     /// From arrival until `sent` to Strata.

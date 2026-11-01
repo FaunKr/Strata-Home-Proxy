@@ -12,6 +12,7 @@ pub mod files;
 pub mod forced;
 pub mod history;
 pub mod lifecycle;
+pub mod metrics;
 pub mod models;
 pub mod optimization_prompt;
 pub mod overview;
@@ -23,6 +24,7 @@ pub mod public_name;
 pub mod request_energy;
 pub mod request_log;
 pub mod request_meter;
+pub mod request_totals;
 pub mod settings;
 pub mod speed_history;
 pub mod state;
@@ -47,14 +49,15 @@ pub use config::Config;
 pub use settings::Settings;
 pub use state::AppState;
 
-/// The router on the API port: the web UI under `/admin/`, every other path
-/// is forwarded to Strata. UI calls never wake the PC or count as activity.
+/// The router on the API port: the web UI under `/admin/`, the metrics
+/// endpoint, every other path is forwarded to Strata. UI calls never wake the PC or count as activity.
 pub fn api_router(state: Arc<AppState>) -> Router {
     let options = strata_admin_ui::server::options(strata_admin_ui::server::site_root());
     let admin = strata_admin_ui::server::router(options, admin::backend(&state));
     Router::new()
         .merge(admin)
         .merge(pc_setup::router())
+        .merge(metrics::router())
         .fallback(fallback)
         .with_state(state)
 }

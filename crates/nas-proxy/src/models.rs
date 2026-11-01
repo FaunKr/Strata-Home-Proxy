@@ -63,6 +63,23 @@ impl SavedModels {
             .unwrap_or_else(|| name.to_string())
     }
 
+    /// The ids of the image models in the saved list: those whose output is
+    /// pictures. They keep their names for keys that hide the model.
+    pub fn image_models(&self) -> Vec<String> {
+        self.get()
+            .and_then(|list| serde_json::from_str::<serde_json::Value>(&list.body).ok())
+            .and_then(|v| {
+                let data = v["data"].as_array()?;
+                Some(
+                    data.iter()
+                        .filter(|m| crate::public_name::makes_pictures(m))
+                        .filter_map(|m| m["id"].as_str().map(str::to_string))
+                        .collect(),
+                )
+            })
+            .unwrap_or_default()
+    }
+
     /// Takes a `200` answer of Strata's to the list as the new copy, unless
     /// it lists no model: Strata lists none while no model is loaded and it
     /// does not unload on idle, and the copy is for the time it does not

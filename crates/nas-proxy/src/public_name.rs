@@ -156,10 +156,77 @@ pub fn list(public: &str, body: &str) -> String {
     serde_json::to_string(&map).expect("JSON serializes")
 }
 
-fn makes_pictures(entry: &Value) -> bool {
+pub(crate) fn makes_pictures(entry: &Value) -> bool {
     entry["architecture"]["output_modalities"]
         .as_array()
         .is_some_and(|m| m.iter().any(|m| m == "image"))
+}
+
+/// Strata's Prometheus text as a key that hides the model sees it: every
+/// `model_name` label names `public`, except those naming one of `images`.
+/// Comments and lines without the label pass unchanged.
+pub fn prometheus(public: &str, images: &[String], text: &str) -> String {
+    const LABEL: &str = "model_name=\"";
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        if line.starts_with('#') {
+            out.push_str(line);
+            continue;
+        }
+        let mut rest = line;
+        while let Some(at) = find_label(rest, LABEL) {
+            let start = at + LABEL.len();
+            out.push_str(&rest[..start]);
+            let Some(len) = quoted_len(&rest[start..]) else {
+                break;
+            };
+            let value = &rest[start..start + len];
+            if images.iter().any(|i| *i == value) {
+                out.push_str(value);
+            } else {
+                out.push_str(&escape_label(public));
+            }
+            rest = &rest[start + len..];
+        }
+        out.push_str(rest);
+    }
+    out
+}
+
+/// Where the label `label` starts in a sample line: at the start of the
+/// label set or after a comma, so `xmodel_name` does not count.
+fn find_label(line: &str, label: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(i) = line[from..].find(label) {
+        let at = from + i;
+        if at > 0 && matches!(line.as_bytes()[at - 1], b'{' | b',' | b' ') {
+            return Some(at);
+        }
+        from = at + label.len();
+    }
+    None
+}
+
+/// The length of a label value up to its closing quote, escapes included.
+fn quoted_len(value: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (i, c) in value.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A label value as Prometheus' text format writes it.
+pub fn escape_label(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 /// The end of the first whole event in `bytes`: after its blank line.

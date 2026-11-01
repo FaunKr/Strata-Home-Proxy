@@ -111,6 +111,9 @@ pub struct AppState {
     /// The PC service last reported a tune. The tuner's engine may answer on
     /// Strata's port meanwhile, so Strata's health says nothing then.
     tuning: AtomicBool,
+    /// The plug loop's latest reading in watts; `None` before the first or
+    /// after a failed one.
+    plug_latest: Mutex<Option<f64>>,
     /// The PC service reported Strata running in relay mode: calls to
     /// Strata go through its relay. Kept in `DATA_DIR`, so that after a
     /// restart of the proxy or while the PC sleeps a request still takes
@@ -194,6 +197,7 @@ impl AppState {
             probe: Mutex::new((cfg.probe_timeout, probe_client(cfg.probe_timeout))),
             in_flight: AtomicUsize::new(0),
             tuning: AtomicBool::new(false),
+            plug_latest: Mutex::new(None),
             relay: AtomicBool::new(relay_file(&cfg.data_dir).is_some_and(|p| p.exists())),
             give_up: tokio::sync::watch::Sender::new(None),
             quiet_since: Mutex::new(None),
@@ -317,6 +321,16 @@ impl AppState {
     pub fn agent(&self) -> AgentClient {
         let cfg = self.cfg();
         AgentClient::new(&cfg, self.probe(&cfg))
+    }
+
+    /// The plug loop's latest reading in watts, without asking the plug.
+    pub fn plug_latest(&self) -> Option<f64> {
+        *self.plug_latest.lock().unwrap()
+    }
+
+    /// A tune runs on the PC, as the PC service last reported.
+    pub fn tuning(&self) -> bool {
+        self.tuning.load(Ordering::SeqCst)
     }
 
     pub fn pc_state(&self) -> PcState {
@@ -853,7 +867,9 @@ impl AppState {
 
     async fn sample_plug(&self, cfg: &Config, url: &str) {
         let ts = clock::unix_now();
-        match crate::plug::power(&self.probe(cfg), url).await {
+        let watts = crate::plug::power(&self.probe(cfg), url).await;
+        *self.plug_latest.lock().unwrap() = watts;
+        match watts {
             Some(watts) => self.events.record_sample(Sample { ts, watts }),
             None => tracing::debug!("Power plug {url} gave no reading"),
         }

@@ -13,6 +13,7 @@ mod forced;
 mod hardware;
 mod history;
 mod login;
+mod metrics;
 mod models_list;
 mod optimization_prompt;
 mod overview;

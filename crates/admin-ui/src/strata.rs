@@ -6,19 +6,22 @@ use std::collections::BTreeMap;
 
 use leptos::{html::Dialog, prelude::*};
 use leptos_router::components::{A, Outlet};
-use strata_pc_protocol::{BenchTool, MAX_SWITCHED_CONTEXT, Pictures, StrataFamily, StrataInstall};
+use strata_pc_protocol::{
+    BenchTool, ExpertProfiles, MAX_SWITCHED_CONTEXT, Pictures, STANDARD_PROFILE, StrataFamily,
+    StrataInstall,
+};
 
 use crate::{
     api::{
         BenchmarkKind, CancelCodeBench, CancelStrataJob, CodeBenchModelRuns, CodeBenchRun,
         CodeBenchState, CodeBenchTask, CodeBenchTaskInfo, DeleteBenchmarkModel, DeleteBenchmarkRun,
-        ForceRestartStrata, ForcedRestart, GenerateUpdateSummary, GetOptimizationPrompt,
-        ModelEnergy, PcView, PresetState, RelayView, RunSettings, SamplingField, SamplingSource,
-        SamplingSupport, SetRelay, SpeedModelRuns, SpeedRun, StartCodeBench, StartCodeBenchAll,
-        StartStrataJob, StrataInfo, StrataJob, StrataJobKind, StrataJobState, StrataModel,
-        StrataPage, StrataPreset, StrataPresets, StrataSampling, StrataSize, StrataTune,
-        StrataUpdate, TuneMode, TuneSpeed, TuneUse, UpdateSummary, error_text, get_code_bench,
-        get_strata,
+        ExpertCounts, ForceRestartStrata, ForcedRestart, GenerateUpdateSummary,
+        GetOptimizationPrompt, ModelEnergy, PcView, PresetState, RelayView, RunSettings,
+        SamplingField, SamplingSource, SamplingSupport, SetRelay, SpeedModelRuns, SpeedRun,
+        StartCodeBench, StartCodeBenchAll, StartStrataJob, StrataInfo, StrataJob, StrataJobKind,
+        StrataJobState, StrataModel, StrataPage, StrataPreset, StrataPresets, StrataSampling,
+        StrataSize, StrataTune, StrataUpdate, TuneMode, TuneSpeed, TuneUse, UpdateSummary,
+        error_text, get_code_bench, get_strata,
     },
     confirm::{Confirm, Question},
     copy::CopyText,
@@ -168,6 +171,11 @@ impl Actions {
             preset: None,
             options: None,
             env: None,
+            profile: None,
+            learn: None,
+            new_profile: None,
+            tokens: None,
+            minutes: None,
         });
     }
 
@@ -185,6 +193,11 @@ impl Actions {
             preset: None,
             options: None,
             env: None,
+            profile: None,
+            learn: None,
+            new_profile: None,
+            tokens: None,
+            minutes: None,
         });
     }
 
@@ -202,6 +215,11 @@ impl Actions {
             preset: None,
             options: None,
             env: None,
+            profile: None,
+            learn: None,
+            new_profile: None,
+            tokens: None,
+            minutes: None,
         });
     }
 
@@ -219,6 +237,11 @@ impl Actions {
             preset: None,
             options: None,
             env: None,
+            profile: None,
+            learn: None,
+            new_profile: None,
+            tokens: None,
+            minutes: None,
         });
     }
 
@@ -236,6 +259,11 @@ impl Actions {
             preset: None,
             options: None,
             env: None,
+            profile: None,
+            learn: None,
+            new_profile: None,
+            tokens: None,
+            minutes: None,
         });
     }
 
@@ -255,6 +283,39 @@ impl Actions {
             preset: None,
             options,
             env: Some(env),
+            profile: None,
+            learn: None,
+            new_profile: None,
+            tokens: None,
+            minutes: None,
+        });
+    }
+
+    /// Uses, learns into or ends learning of a profile of `model`
+    /// (`None`: the one Strata ships), or deletes it.
+    fn expert_profile(&self, model: String, job: ExpertJob) {
+        self.start.dispatch(StartStrataJob {
+            kind: if job.delete {
+                StrataJobKind::DeleteExpertProfile
+            } else {
+                StrataJobKind::ExpertProfile
+            },
+            family: None,
+            size: None,
+            context: None,
+            model: Some(model),
+            speed_projection: None,
+            pictures: None,
+            tune_mode: None,
+            tune_use: None,
+            preset: None,
+            options: None,
+            env: None,
+            profile: job.profile,
+            learn: Some(job.learn),
+            new_profile: Some(job.new_profile),
+            tokens: job.tokens,
+            minutes: job.minutes,
         });
     }
 
@@ -272,6 +333,11 @@ impl Actions {
             preset: None,
             options: None,
             env: None,
+            profile: None,
+            learn: None,
+            new_profile: None,
+            tokens: None,
+            minutes: None,
         });
     }
 
@@ -294,6 +360,11 @@ impl Actions {
             preset: Some(preset),
             options: None,
             env: None,
+            profile: None,
+            learn: None,
+            new_profile: None,
+            tokens: None,
+            minutes: None,
         });
     }
 
@@ -312,6 +383,11 @@ impl Actions {
             preset: None,
             options: None,
             env: None,
+            profile: None,
+            learn: None,
+            new_profile: None,
+            tokens: None,
+            minutes: None,
         });
     }
 }
@@ -667,7 +743,8 @@ pub fn ModelsTab() -> impl IntoView {
             Some(info) if !info.installed => view! { <Install info actions blocked /> }.into_any(),
             Some(info) => {
                 let energy = page.energy;
-                view! { <Models info energy actions blocked /> }.into_any()
+                let counts = page.expert_counts;
+                view! { <Models info energy counts actions blocked /> }.into_any()
             }
         }
     })
@@ -1103,6 +1180,11 @@ fn ModelChoice(
             preset: None,
             options: None,
             env: None,
+            profile: None,
+            learn: None,
+            new_profile: None,
+            tokens: None,
+            minutes: None,
         });
     };
     let picker = format!("{kind:?}-size");
@@ -1245,6 +1327,8 @@ fn Models(
     info: StrataInfo,
     /// Each model's energy per 1000 tokens.
     energy: Vec<ModelEnergy>,
+    /// How far each learned expert profile has learned.
+    counts: Vec<ExpertCounts>,
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
@@ -1269,8 +1353,10 @@ fn Models(
             let contexts = info.contexts.clone();
             let default_context = info.default_context;
             let energy = energy.iter().find(|e| e.model == m.id).cloned();
+            let counts: Vec<ExpertCounts> =
+                counts.iter().filter(|c| c.model == m.id).cloned().collect();
             view! {
-                <ModelRow model=m takes_projection contexts default_context energy unit=unit.into() actions blocked />
+                <ModelRow model=m takes_projection contexts default_context energy counts unit=unit.into() actions blocked />
             }
         })
         .collect_view();
@@ -1363,6 +1449,8 @@ fn ModelRow(
     default_context: u32,
     /// Its energy figures, if the proxy has any for it.
     energy: Option<ModelEnergy>,
+    /// How far its learned expert profiles have learned.
+    counts: Vec<ExpertCounts>,
     /// The token unit of the energy line, shared with the switch.
     unit: Signal<TokenUnit>,
     actions: Actions,
@@ -1534,6 +1622,12 @@ fn ModelRow(
         .last_tune
         .as_ref()
         .map(|tune| view! { <p class="muted small">{last_tune_text(tune)}</p> });
+    let expert_line = model.expert_profiles.as_ref().and_then(|p| {
+        let name = p.active.as_deref();
+        let c = name.and_then(|n| counts.iter().find(|c| c.profile == n));
+        crate::expert::card_line(name, p.learning && !p.held, c)
+            .map(|text| view! { <p class="muted small expert-line">{text}</p> })
+    });
     let presets = model.presets.as_ref();
     let preset_line = presets
         .and_then(preset_text)
@@ -1550,6 +1644,8 @@ fn ModelRow(
     let engine = model.env.clone().map(|env| {
         let started = model.started_args.clone().unwrap_or_default();
         let preset = presets.and_then(|p| p.latest.clone());
+        let expert = model.expert_profiles.clone();
+        let counts = counts.clone();
         view! {
             <EngineSettings
                 id=model.id.clone()
@@ -1558,6 +1654,8 @@ fn ModelRow(
                 env
                 started
                 preset
+                expert
+                counts
                 actions
                 blocked
             />
@@ -1610,6 +1708,7 @@ fn ModelRow(
             {sampling}
             {last_tune}
             {preset_line}
+            {expert_line}
             {switch}
             <div class="model-actions">
                 {activate}{projection}{pictures}{engine}<OptimizationPrompt model=model.id.clone() />{preset_button}{preset_off}{tune}
@@ -1634,6 +1733,10 @@ fn EngineSettings(
     env: BTreeMap<String, String>,
     started: Vec<String>,
     preset: Option<StrataPreset>,
+    /// `None` from a PC service before expert profiles, for an old Strata
+    /// folder and for a model without a shipped profile.
+    expert: Option<ExpertProfiles>,
+    counts: Vec<ExpertCounts>,
     actions: Actions,
     blocked: Signal<bool>,
 ) -> impl IntoView {
@@ -1774,6 +1877,20 @@ fn EngineSettings(
             </div>
             {started_line.map(|text| view! { <p class="muted small started-args">{text}</p> })}
             {preset_note}
+            {expert
+                .map(|profiles| {
+                    view! {
+                        <ExpertProfilesSection
+                            id=id.clone()
+                            active
+                            profiles
+                            counts
+                            actions
+                            blocked
+                            close=Callback::new(move |()| close())
+                        />
+                    }
+                })}
             {active
                 .then(|| {
                     view! {
@@ -1797,6 +1914,373 @@ fn EngineSettings(
             </div>
         </dialog>
     }
+}
+
+/// A profile job as the *Expert profiles* section sends it.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct ExpertJob {
+    /// `None`: the profile Strata ships.
+    profile: Option<String>,
+    learn: bool,
+    new_profile: bool,
+    delete: bool,
+    tokens: Option<String>,
+    minutes: Option<String>,
+}
+
+/// A profile job waiting for its confirmation inside the dialog.
+#[derive(Clone, Debug, PartialEq)]
+struct ExpertAsk {
+    question: String,
+    confirm: &'static str,
+    job: ExpertJob,
+}
+
+/// The hint under *Learn new profile*, from Strata's docs.
+const EXPERT_HINT: &str =
+    "A profile learned from one kind of text speeds that kind up and can slow others.";
+
+/// *Expert profiles* in *Engine settings*: the one Strata ships, the
+/// learned ones with their state and buttons, and *Learn new profile*. A
+/// job that restarts the active model asks first, inside the dialog.
+#[component]
+fn ExpertProfilesSection(
+    id: String,
+    active: bool,
+    profiles: ExpertProfiles,
+    counts: Vec<ExpertCounts>,
+    actions: Actions,
+    blocked: Signal<bool>,
+    close: Callback<()>,
+) -> impl IntoView {
+    let heading = view! { <h3>"Expert profiles"</h3> };
+    if profiles.by_hand {
+        return view! {
+            <div class="expert-profiles">
+                {heading}
+                <p class="muted small">"Expert profile set by hand"</p>
+            </div>
+        }
+        .into_any();
+    }
+    let name = RwSignal::new(String::new());
+    let tokens = RwSignal::new("1000000".to_string());
+    let minutes = RwSignal::new(String::new());
+    let ask = RwSignal::new(None::<ExpertAsk>);
+    let sending = RwSignal::new(Saving::Idle);
+    let refused = RwSignal::new(None::<String>);
+    Effect::new(move || {
+        let pending = actions.start.pending().get();
+        match sending.get() {
+            Saving::Sent if pending => sending.set(Saving::Pending),
+            Saving::Pending if !pending => {
+                sending.set(Saving::Idle);
+                match actions.start.value().get_untracked() {
+                    Some(Err(e)) => refused.set(Some(error_text(&e))),
+                    _ => close.run(()),
+                }
+            }
+            _ => {}
+        }
+    });
+    let model = StoredValue::new(id.clone());
+    let send = move |job: ExpertJob| {
+        refused.set(None);
+        ask.set(None);
+        sending.set(Saving::Sent);
+        actions.expert_profile(model.get_value(), job);
+    };
+    // Asks first when the job restarts the running model or deletes.
+    let restarts = if active {
+        " Strata restarts once it is idle."
+    } else {
+        ""
+    };
+    let request = move |question: String, confirm: &'static str, job: ExpertJob, always: bool| {
+        if active || always {
+            ask.set(Some(ExpertAsk {
+                question: format!("{question}{restarts}"),
+                confirm,
+                job,
+            }));
+        } else {
+            send(job);
+        }
+    };
+    let limits = move || {
+        let field = |s: RwSignal<String>| Some(s.get()).filter(|t| !t.trim().is_empty());
+        (field(tokens), field(minutes))
+    };
+    let learning = profiles.learning.then_some(()).and(profiles.active.clone());
+    let row = |label: String, is_active: bool, state: Option<String>, buttons: AnyView| {
+        view! {
+            <li>
+                <span class="strong">{label}</span>
+                {is_active
+                    .then(|| {
+                        view! {
+                            <span class="badge is-ok">
+                                <span class="dot"></span>
+                                "Active"
+                            </span>
+                        }
+                    })}
+                {state.map(|t| view! { <span class="muted small">{t}</span> })}
+                <span class="expert-buttons">{buttons}</span>
+            </li>
+        }
+    };
+    let use_button = move |profile: Option<String>| {
+        let label = profile.clone().unwrap_or_else(|| STANDARD_PROFILE.into());
+        view! {
+            <button
+                type="button"
+                class="secondary"
+                disabled=move || blocked.get()
+                on:click=move |_| {
+                    request(
+                        format!("Use the expert profile {label}?"),
+                        "Use",
+                        ExpertJob { profile: profile.clone(), ..ExpertJob::default() },
+                        false,
+                    )
+                }
+            >
+                "Use"
+            </button>
+        }
+    };
+    let standard = row(
+        STANDARD_PROFILE.into(),
+        profiles.active.is_none(),
+        Some("the profile Strata ships".into()),
+        if profiles.active.is_some() {
+            use_button(None).into_any()
+        } else {
+            ().into_any()
+        },
+    );
+    let learned = profiles
+        .profiles
+        .iter()
+        .map(|p| {
+            let is_active = profiles.active.as_deref() == Some(p.name.as_str());
+            let is_learning = learning.as_deref() == Some(p.name.as_str());
+            let c = counts.iter().find(|c| c.profile == p.name);
+            let state = if is_learning {
+                let progress = c.map(crate::expert::progress_text);
+                let mut text = match progress {
+                    Some(progress) => format!("learning: {progress}"),
+                    None => "learning".to_string(),
+                };
+                if profiles.held {
+                    text.push_str(" (held for a benchmark)");
+                }
+                text
+            } else if p.saved.is_none() {
+                "never saved".to_string()
+            } else {
+                match c.filter(|c| c.total_tokens + c.tokens > 0 || c.total_secs + c.secs > 0) {
+                    Some(c) => format!(
+                        "learned from {}",
+                        crate::expert::learned_text(
+                            c.total_tokens + c.tokens,
+                            c.total_secs + c.secs
+                        )
+                    ),
+                    None => "learned".to_string(),
+                }
+            };
+            let name = p.name.clone();
+            let saved = p.saved.is_some();
+            let use_it = (!is_active && saved).then(|| use_button(Some(name.clone())));
+            let more = (!is_learning && saved).then(|| {
+                let name = name.clone();
+                view! {
+                    <button
+                        type="button"
+                        class="secondary"
+                        disabled=move || blocked.get()
+                        on:click=move |_| {
+                            let (tokens, minutes) = limits();
+                            request(
+                                format!("Learn more into {name} with the limits below?"),
+                                "Learn more",
+                                ExpertJob {
+                                    profile: Some(name.clone()),
+                                    learn: true,
+                                    tokens,
+                                    minutes,
+                                    ..ExpertJob::default()
+                                },
+                                false,
+                            )
+                        }
+                    >
+                        "Learn more"
+                    </button>
+                }
+            });
+            let stop = is_learning.then(|| {
+                let name = name.clone();
+                view! {
+                    <button
+                        type="button"
+                        class="secondary"
+                        disabled=move || blocked.get()
+                        on:click=move |_| {
+                            request(
+                                format!("Stop learning into {name}? It stays active."),
+                                "Stop learning",
+                                ExpertJob { profile: Some(name.clone()), ..ExpertJob::default() },
+                                false,
+                            )
+                        }
+                    >
+                        "Stop learning"
+                    </button>
+                }
+            });
+            let delete = {
+                let name = name.clone();
+                let what = if is_active {
+                    format!("Delete the expert profile {name}? The model goes back to Standard.")
+                } else {
+                    format!("Delete the expert profile {name}?")
+                };
+                view! {
+                    <button
+                        type="button"
+                        class="ghost-danger"
+                        disabled=move || blocked.get()
+                        on:click=move |_| {
+                            request(
+                                what.clone(),
+                                "Delete",
+                                ExpertJob {
+                                    profile: Some(name.clone()),
+                                    delete: true,
+                                    ..ExpertJob::default()
+                                },
+                                true,
+                            )
+                        }
+                    >
+                        "Delete"
+                    </button>
+                }
+            };
+            row(
+                p.name.clone(),
+                is_active,
+                Some(state),
+                view! { {use_it}{more}{stop}{delete} }.into_any(),
+            )
+        })
+        .collect_view();
+    let (name_id, tokens_id, minutes_id) = (
+        format!("{id}-expert-name"),
+        format!("{id}-expert-tokens"),
+        format!("{id}-expert-minutes"),
+    );
+    let learn_new = move |_| {
+        let (tokens, minutes) = limits();
+        let profile = name.get().trim().to_string();
+        request(
+            format!("Learn the new expert profile {profile}? The model uses it at once."),
+            "Learn",
+            ExpertJob {
+                profile: Some(profile),
+                learn: true,
+                new_profile: true,
+                tokens,
+                minutes,
+                ..ExpertJob::default()
+            },
+            false,
+        )
+    };
+    view! {
+        <div class="expert-profiles">
+            {heading}
+            <ul class="expert-list">{standard}{learned}</ul>
+            <div class="expert-new">
+                <div>
+                    <label for=name_id.clone()>"Name"</label>
+                    <input
+                        id=name_id
+                        type="text"
+                        maxlength="40"
+                        placeholder="e.g. coding"
+                        prop:value=move || name.get()
+                        on:input=move |ev| name.set(event_target_value(&ev))
+                    />
+                </div>
+                <div>
+                    <label for=tokens_id.clone()>"Tokens"</label>
+                    <input
+                        id=tokens_id
+                        type="text"
+                        inputmode="numeric"
+                        placeholder="no limit"
+                        prop:value=move || tokens.get()
+                        on:input=move |ev| tokens.set(event_target_value(&ev))
+                    />
+                </div>
+                <div>
+                    <label for=minutes_id.clone()>"Minutes"</label>
+                    <input
+                        id=minutes_id
+                        type="text"
+                        inputmode="numeric"
+                        placeholder="no limit"
+                        prop:value=move || minutes.get()
+                        on:input=move |ev| minutes.set(event_target_value(&ev))
+                    />
+                </div>
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || blocked.get() || name.with(|n| n.trim().is_empty())
+                    on:click=learn_new
+                >
+                    "Learn new profile"
+                </button>
+            </div>
+            <p class="muted small">
+                {EXPERT_HINT}
+                " Learning ends at the first limit reached; Learn more takes the limits above."
+            </p>
+            {move || {
+                ask.get()
+                    .map(|a| {
+                        let job = a.job.clone();
+                        view! {
+                            <div class="expert-ask" role="alertdialog">
+                                <p>{a.question}</p>
+                                <div class="actions">
+                                    <button
+                                        type="button"
+                                        class="secondary"
+                                        on:click=move |_| ask.set(None)
+                                    >
+                                        "Cancel"
+                                    </button>
+                                    <button
+                                        type="button"
+                                        on:click=move |_| send(job.clone())
+                                    >
+                                        {a.confirm}
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    })
+            }}
+            {move || refused.get().map(|e| view! { <p class="error" role="alert">{e}</p> })}
+        </div>
+    }
+    .into_any()
 }
 
 /// Where a save of *Engine settings* is.

@@ -26,5 +26,11 @@
   "relay": {
     "on": false,
     "wanted": true
+  },
+  "expert_learning": {
+    "model": "IQ3_XXS",
+    "profile": "coding",
+    "held": false,
+    "secs": 7800
   }
 }

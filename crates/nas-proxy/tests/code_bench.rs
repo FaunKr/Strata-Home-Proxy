@@ -1831,3 +1831,66 @@ async fn code_benchmark_requests_count_toward_the_average() {
     assert_eq!(averages[0].model, "IQ3_XXS");
     assert_eq!(averages[0].all_time.unwrap().requests, 1);
 }
+
+// --- learned expert profiles ---
+
+fn hold_jobs(s: &Setup) -> Vec<Value> {
+    s.pc.job_bodies
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|b| b["kind"] == "hold_learning")
+        .cloned()
+        .collect()
+}
+
+/// Starts a run while a profile learns; the hold job ends as the PC
+/// service's would, so the run goes on.
+async fn start_while_learning(s: &Setup) -> Browser {
+    s.pc.set_expert_learning("IQ3_XXS", "coding", false, 0);
+    let b = logged_in(&s.url).await;
+    let mut started = Browser {
+        base: b.base.clone(),
+        cookie: b.cookie.clone(),
+    };
+    let start = tokio::spawn(async move { started.call("code-bench-start", &[]).await.status() });
+    eventually("the hold job", || !hold_jobs(s).is_empty()).await;
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    assert_eq!(start.await.unwrap(), 200);
+    b
+}
+
+#[tokio::test]
+async fn code_bench_holds_learning_while_a_profile_learns() {
+    let (s, runner) = with_runner().await;
+    start_while_learning(&s).await;
+    assert_eq!(
+        hold_jobs(&s),
+        [json!({"kind": "hold_learning", "on": true})]
+    );
+    // Held before the run's first request.
+    assert_eq!(runner.started.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn code_bench_without_learning_sends_no_hold() {
+    let (s, runner) = with_runner().await;
+    let mut b = logged_in(&s.url).await;
+    assert_eq!(b.call("code-bench-start", &[]).await.status(), 200);
+    assert_eq!(runner.started.lock().unwrap().len(), 1);
+    assert!(hold_jobs(&s).is_empty());
+}
+
+#[tokio::test]
+async fn code_bench_lifts_the_hold_after_a_cancelled_run() {
+    let (s, _runner) = with_runner().await;
+    let mut b = start_while_learning(&s).await;
+    assert_eq!(b.call("code-bench-cancel", &[]).await.status(), 200);
+    eventually("the hold lifted", || hold_jobs(&s).len() == 2).await;
+    assert_eq!(
+        hold_jobs(&s)[1],
+        json!({"kind": "hold_learning", "on": false})
+    );
+    s.pc.update_job(|j| j.state = StrataJobState::Done);
+    eventually_for(Duration::from_secs(10), "key revoked", || !has_key(&s)).await;
+}

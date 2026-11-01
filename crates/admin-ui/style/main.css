@@ -307,6 +307,14 @@ textarea.code.text {
 .model-actions .push { margin-left: auto; }
 .model-actions:empty { display: none; }
 .engine-settings textarea { width: 100%; }
+.expert-profiles { margin-top: 12px; }
+.expert-list { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 8px; }
+.expert-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.expert-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.expert-new { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.expert-new > div { flex: 1 1 140px; }
+.expert-new input { width: 100%; }
+.expert-ask { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
 .started-args { overflow-wrap: anywhere; }
 .inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
 .inline-form button { white-space: nowrap; }

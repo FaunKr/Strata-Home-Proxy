@@ -68,6 +68,10 @@ cancel_wait_secs = 60
 # answers; if it still answers then, the update does not happen.
 update_stop_wait_secs = 10
 
+# While an expert profile learns, Strata is stopped with Ctrl+Break, so the
+# engine saves what it learned; after this long it is ended hard anyway.
+clean_stop_secs = 60
+
 # MAC address reported to the NAS. Usually left empty: the service then
 # reports that of the network card through which the NAS reaches it.
 #mac = "AA-BB-CC-DD-EE-FF"

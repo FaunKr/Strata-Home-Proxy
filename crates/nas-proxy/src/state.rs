@@ -98,6 +98,8 @@ pub struct AppState {
     pub strata_key: crate::strata_key::StrataKey,
     /// Setting up the PC service from the NAS.
     pub pc_setup: crate::pc_setup::PcSetup,
+    /// How far each learned expert profile has learned.
+    pub expert_learning: crate::expert_learning::ExpertLearning,
     /// The code benchmark in the container code-bench.
     pub code_bench: crate::code_bench::CodeBench,
     /// Strata's last list of models, answered while Strata is not ready.
@@ -194,6 +196,7 @@ impl AppState {
             strata: crate::strata::StrataState::new(cfg.data_dir.clone()),
             strata_key: Default::default(),
             pc_setup: crate::pc_setup::PcSetup::new(cfg.data_dir.clone()),
+            expert_learning: crate::expert_learning::ExpertLearning::new(cfg.data_dir.clone()),
             code_bench: crate::code_bench::CodeBench::new(cfg.data_dir.clone()),
             models: crate::models::SavedModels::new(cfg.data_dir.clone()),
             running_model: Mutex::new(None),
@@ -275,6 +278,7 @@ impl AppState {
         }
         crate::strata_key::note_status(self, agent, status).await;
         crate::strata::note_status(self, agent, status).await;
+        crate::expert_learning::note_status(self, agent, status).await;
     }
 
     /// Strata at the current address with the current key; `None` without

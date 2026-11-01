@@ -211,6 +211,33 @@ impl<'a> StrataProcess<'a> {
         true
     }
 
+    /// Ends Strata; while an expert profile learns, cleanly: Ctrl+Break
+    /// first, so the engine saves what it learned, and a hard end only when
+    /// Strata has not ended within `clean_stop_secs` or the signal could
+    /// not be sent. False as [`stop`](Self::stop).
+    pub async fn stop_cleanly(&self) -> bool {
+        let agent = self.agent;
+        if !agent.expert.any_learning() || !agent.output.reading() {
+            return self.stop();
+        }
+        agent.times.0.lock().unwrap().stop = Some(Instant::now());
+        agent.output.stopping();
+        tracing::info!("Stopping Strata cleanly, so the engine saves the expert profile it learns");
+        if let Err(e) = agent.platform().break_strata() {
+            tracing::warn!("Ctrl+Break not sent to Strata: {e:#}");
+            return self.stop();
+        }
+        let deadline = Instant::now() + agent.cfg.clean_stop();
+        while agent.output.reading() {
+            if Instant::now() >= deadline {
+                tracing::warn!("Strata did not end after Ctrl+Break, ending it");
+                return self.stop();
+            }
+            tokio::time::sleep(LOAD_CHECK.min(agent.cfg.clean_stop())).await;
+        }
+        true
+    }
+
     /// Strata was started within `within`.
     pub fn started_within(&self, within: Duration) -> bool {
         self.agent
@@ -260,9 +287,10 @@ impl<'a> StrataProcess<'a> {
         Ok(self.start_once())
     }
 
-    /// Stops Strata and starts it again unless gaming mode is on.
+    /// Stops Strata (cleanly while a profile learns) and starts it again
+    /// unless gaming mode is on.
     pub async fn restart(&self) {
-        self.stop();
+        self.stop_cleanly().await;
         self.start_again().await;
     }
 

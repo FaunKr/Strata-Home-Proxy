@@ -175,6 +175,10 @@ pub struct StrataModel {
     /// without the Strata Terminal, or from older services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presets: Option<crate::StrataPresets>,
+    /// Its expert profiles; `None` for a model whose run config names no
+    /// expert profile, without the Strata Terminal, or from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expert_profiles: Option<crate::ExpertProfiles>,
 }
 
 /// Picture reading of an installed model, as its run config has it.

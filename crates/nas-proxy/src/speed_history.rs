@@ -301,6 +301,11 @@ pub fn run_settings(
             }),
         env: entry.and_then(|m| m.env.clone()),
         engine_options: entry.and_then(|m| m.user_args.clone()),
+        expert_profile: entry.and_then(|m| m.expert_profiles.as_ref()).map(|p| {
+            p.active
+                .clone()
+                .unwrap_or_else(|| strata_pc_protocol::STANDARD_PROFILE.to_string())
+        }),
         sampling: entry.and_then(|m| m.sampling.clone()),
     }
 }

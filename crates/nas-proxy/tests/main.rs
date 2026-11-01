@@ -8,6 +8,7 @@ mod api_keys;
 mod code_bench;
 mod data_files;
 mod events;
+mod expert_profiles;
 mod favicon;
 mod forced;
 mod hardware;

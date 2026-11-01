@@ -42,6 +42,15 @@ const USER_KEY: &str = "user_args";
 /// The engine's environment, which Strata puts over the GPU choice's at
 /// every start (`serve/server.py`).
 const ENV_KEY: &str = "env";
+/// Strata's learned expert profile: where the engine saves what its expert
+/// cache learned, and how often (`learned_profile_args` in Strata's
+/// `serve/server.py`).
+pub const EXPERT_SAVE_KEY: &str = "expert_profile_save";
+pub const EXPERT_EVERY_KEY: &str = "expert_profile_save_every";
+/// The expert profile the engine starts from.
+pub const EXPERT_PROFILE_FLAG: &str = "--expert-profile";
+/// The engine flag `expert_profile_save` becomes.
+pub const EXPERT_SAVE_FLAG: &str = "--expert-profile-save";
 /// Environment variables the GPU choice in Strata's setup sets for the
 /// engine, and its search path for the engine's libraries; Windows reads
 /// names without case.
@@ -839,12 +848,97 @@ impl Model {
     pub fn restore_args(&mut self, before: &Model) {
         let args = before.args().to_vec();
         *self.args_mut() = args;
-        for key in [WRITTEN_KEY, USER_KEY, ENV_KEY] {
+        for key in [
+            WRITTEN_KEY,
+            USER_KEY,
+            ENV_KEY,
+            EXPERT_SAVE_KEY,
+            EXPERT_EVERY_KEY,
+        ] {
             match before.fields.get(key) {
                 Some(v) => self.fields.insert(key.into(), v.clone()),
                 None => self.fields.remove(key),
             };
         }
+    }
+
+    /// The file `--expert-profile` in `args` names.
+    pub fn expert_profile_arg(&self) -> Option<String> {
+        groups(self.args())
+            .into_iter()
+            .find(|g| flag_of(g) == EXPERT_PROFILE_FLAG)
+            .and_then(|g| g.get(1).and_then(Value::as_str).map(String::from))
+    }
+
+    /// Points `--expert-profile` in `args` (and `args_written`) at `path`;
+    /// nothing for a config without the option.
+    pub fn set_expert_profile_arg(&mut self, path: &str) {
+        let path = Value::from(path);
+        self.change_args(&[], |args| {
+            if let Some(at) = args
+                .iter()
+                .position(|a| a.as_str() == Some(EXPERT_PROFILE_FLAG))
+                && let Some(value) = args.get_mut(at + 1)
+            {
+                *value = path.clone();
+            }
+        });
+    }
+
+    /// The options of `args` and `user_args`, each without its value.
+    pub fn option_names(&self) -> (Vec<String>, Vec<String>) {
+        let names = |args: &[Value]| -> Vec<String> {
+            groups(args)
+                .iter()
+                .map(|g| {
+                    let flag = flag_of(g);
+                    flag.split_once('=').map_or(flag, |(f, _)| f).to_string()
+                })
+                .filter(|f| !f.is_empty())
+                .collect()
+        };
+        let user = self
+            .fields
+            .get(USER_KEY)
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        (names(self.args()), names(user))
+    }
+
+    /// `expert_profile_save` as the config has it: its text, or the JSON of
+    /// anything else.
+    pub fn expert_save(&self) -> Option<String> {
+        self.fields.get(EXPERT_SAVE_KEY).map(|v| match v {
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        })
+    }
+
+    pub fn has_expert_every(&self) -> bool {
+        self.fields.contains_key(EXPERT_EVERY_KEY)
+    }
+
+    /// Sets `expert_profile_save` to `save` with `expert_profile_save_every`
+    /// `every` minutes, or removes both.
+    pub fn set_expert_save(&mut self, save: Option<(&str, u64)>) {
+        match save {
+            Some((path, every)) => {
+                self.fields.insert(EXPERT_SAVE_KEY.into(), path.into());
+                self.fields.insert(EXPERT_EVERY_KEY.into(), every.into());
+            }
+            None => {
+                self.fields.remove(EXPERT_SAVE_KEY);
+                self.fields.remove(EXPERT_EVERY_KEY);
+            }
+        }
+    }
+
+    /// The folder Strata starts the engine in (`cwd`).
+    pub fn cwd(&self) -> Option<String> {
+        self.fields
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(String::from)
     }
 
     /// Changes `args`, and `args_written` the same way, so that Strata does

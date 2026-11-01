@@ -692,6 +692,9 @@ pub enum EventKind {
     ForcedStrataRestart,
     /// "Generate summary now" on the Version tab (detail: who).
     UpdateSummaryRequested,
+    /// A learned expert profile reached its limit and stopped learning
+    /// (detail: profile, model, tokens and time).
+    ExpertProfileLearned,
 }
 
 impl EventKind {
@@ -879,6 +882,29 @@ pub struct StrataPage {
     /// Each model's energy per 1000 tokens, also while the PC sleeps.
     #[serde(default)]
     pub energy: Vec<ModelEnergy>,
+    /// What each learned expert profile learned from, as the proxy counts
+    /// it.
+    #[serde(default)]
+    pub expert_counts: Vec<ExpertCounts>,
+}
+
+/// How far a learned expert profile has learned: its current round against
+/// its limits, and what it learned in all.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpertCounts {
+    /// The PC service's model id.
+    pub model: String,
+    pub profile: String,
+    /// A round of learning runs.
+    pub learning: bool,
+    /// This round's tokens and seconds.
+    pub tokens: u64,
+    pub secs: u64,
+    pub token_limit: Option<u64>,
+    pub minute_limit: Option<u64>,
+    /// Every finished round, this one not included.
+    pub total_tokens: u64,
+    pub total_secs: u64,
 }
 
 /// A model's energy per 1000 tokens over two periods.
@@ -922,6 +948,10 @@ pub struct RunSettings {
     /// service did not say.
     #[serde(default)]
     pub engine_options: Option<Vec<String>>,
+    /// The expert profile the model started with: a learned profile's name
+    /// or `Standard`; `None` when the PC service did not say.
+    #[serde(default)]
+    pub expert_profile: Option<String>,
     #[serde(default)]
     pub sampling: Option<StrataSampling>,
 }
@@ -1048,6 +1078,11 @@ mod strata_job {
         preset: Option<String>,
         options: Option<String>,
         env: Option<String>,
+        profile: Option<String>,
+        learn: Option<bool>,
+        new_profile: Option<bool>,
+        tokens: Option<String>,
+        minutes: Option<String>,
     ) -> Result<(), ServerFnError> {
         require_login(false).await?;
         let form = StrataJobForm {
@@ -1063,6 +1098,11 @@ mod strata_job {
             preset,
             options,
             env,
+            profile,
+            learn: learn.unwrap_or(false),
+            new_profile: new_profile.unwrap_or(false),
+            tokens,
+            minutes,
         };
         backend()?.start_strata_job(form).await.map_err(bad_request)
     }
@@ -1353,6 +1393,16 @@ pub struct StrataJobForm {
     pub options: Option<String>,
     /// The engine environment to save, as its field holds it.
     pub env: Option<String>,
+    /// The expert profile to use, learn or delete; `None` is the one Strata
+    /// ships.
+    pub profile: Option<String>,
+    /// Learn into `profile`; `false` ends learning.
+    pub learn: bool,
+    /// `profile` is a new one: refused when the model has it already.
+    pub new_profile: bool,
+    /// The limits of a round of learning, as their fields hold them.
+    pub tokens: Option<String>,
+    pub minutes: Option<String>,
 }
 
 // --- History: the PC's states over a range of days ---

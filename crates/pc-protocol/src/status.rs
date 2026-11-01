@@ -50,6 +50,10 @@ pub struct PcStatus {
     /// before relay mode, which cannot relay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay: Option<Relay>,
+    /// The expert profile that learns on the active model; missing without
+    /// one and from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expert_learning: Option<crate::ExpertLearning>,
 }
 
 /// Relay mode: Strata listens only on the PC itself, and the PC service

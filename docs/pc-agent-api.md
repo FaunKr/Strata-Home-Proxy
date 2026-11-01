@@ -126,6 +126,16 @@ switch the web UI disables as too old. The proxy follows `on` for every call to 
 value in `DATA_DIR` (`relay-mode`), so a request after a restart of the
 proxy or while the PC sleeps takes the same way.
 
+`expert_learning` (since 1.3.0) is the learned expert profile that learns on
+the active model: `model`, `profile`, `held` (a benchmark or the proxy's
+code benchmark holds learning, so Strata runs without saving) and `secs`,
+the seconds learned in this round. The service counts a second while its
+Strata answers `/health` with that profile learning, not held, and no job
+runs, and keeps the count in its state folder at every watchdog check.
+Missing without a learning profile on the active model and from older
+services. The proxy counts the tokens of the requests it forwards meanwhile
+and ends learning at a limit (below, `expert_profile`).
+
 If the service does not answer, the proxy assumes the PC is asleep and wakes
 it.
 
@@ -705,6 +715,65 @@ Strata output are then in the job's `lines`. If the wait is
 cancelled, the old `args` are restored as well. A job does not start in
 gaming mode (`409`, as every job); if gaming mode comes on while the job
 waits, Strata does not restart, and there is no waiting.
+
+#### Expert profiles (since 1.3.0)
+
+Only for the Strata Terminal, and only for models whose run config names
+setup's `--expert-profile` in `args`. `GET /strata` gives each such model
+`expert_profiles`: `active` (the learned profile Strata starts it with,
+`null` for *Standard*), `learning`, `held`, `by_hand` and `profiles` (each
+with `name`, `bytes` and `saved`, the Unix time of its last save; both
+`null` before the engine first saved it). Learned profiles live in
+`<strata_home>\expert-profiles\<model id>\<name>.bin`, outside the folders
+Strata updates delete. The service's state folder keeps which profile of
+each model learns, whether learning is held and the shipped file's name
+(`expert-profiles.json`).
+
+What lands in the run config: for *Standard* `--expert-profile` in `args`
+(and `args_written`) names the shipped file in `<cwd>\data`; for a learned
+profile its own file. A learning profile also gets `expert_profile_save`
+(its file) and `expert_profile_save_every: 5`; `--expert-profile` names its
+file once it exists, the shipped one before. While learning is held, the two
+save keys are left out. After every setup run the service puts them back
+with the other keys it keeps.
+
+A run config with `expert_profile_save` or `expert_profile_save_every` that
+the state does not account for, `--expert-profile-save` in `args` or
+`user_args`, `--expert-profile` in `user_args`, or an `--expert-profile`
+outside `<cwd>\data` and the model's `expert-profiles` folder is *set by
+hand*: `by_hand` is `true`, the service writes no profile keys for it and
+refuses its profile jobs with `409` "Expert profile set by hand in the run
+config".
+
+- `expert_profile` (`model`, `profile`, `learn`) uses a profile (`profile`
+  missing: *Standard*), starts learning into one (`learn: true`: a new name
+  starts from *Standard*, an existing file continues) or ends learning
+  (`learn: false` for the learning profile, which stays active). `400` for a
+  name that is empty, longer than 40 characters, holds anything but letters,
+  digits, spaces and dashes, or is "Standard" in any case, and for
+  `learn: true` without a name. `409` for `learn: true` while another
+  profile of the model learns (naming it) and for a named profile with
+  `learn: false` that never saved.
+- `delete_expert_profile` (`model`, `profile`) ends learning of that profile
+  first, switches the model to *Standard* when it is active, then deletes
+  the file. `400` for *Standard*, `409` for a profile the model does not
+  have. `delete` of a model deletes its `expert-profiles` folder too.
+- `hold_learning` (`on`) holds learning for every model for the proxy's code
+  benchmark, or lifts the hold. The service's own `benchmark` and
+  `compare_models` hold learning for their duration in the same way and
+  lift it after, also after a cancel or failure.
+
+Each of them restarts Strata once it is idle when the active model's run
+config changed, with the rollback of the other settings jobs when Strata
+does not come up; for another model nothing restarts.
+
+**Clean stop:** while any model has a learning profile, every stop of Strata
+the service makes (a switch, a settings job's restart, an update, a hold)
+first sends Strata Ctrl+Break, which Strata takes like Ctrl+C: it tells the
+engine to quit, which saves the learning profile, then ends. After
+`clean_stop_secs` (60 by default) without an end, or at once when the signal
+cannot be sent, the service ends Strata as before. Without a learning
+profile every stop is as before; *Force restart Strata* stays a hard kill.
 
 ### `GET /strata/job`
 

@@ -47,10 +47,17 @@ pub enum StrataJobKind {
     /// Sets up again the models whose run config points into a Strata
     /// folder an update deleted; the PC service starts it by itself.
     RepairRunConfigs,
+    /// Makes a profile a model's active expert profile, starts or ends its
+    /// learning.
+    ExpertProfile,
+    /// Deletes a learned expert profile.
+    DeleteExpertProfile,
+    /// Holds learning for a benchmark, or lifts the hold.
+    HoldLearning,
 }
 
 impl StrataJobKind {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 24] = [
         Self::Install,
         Self::AddModel,
         Self::Activate,
@@ -72,6 +79,9 @@ impl StrataJobKind {
         Self::PresetOff,
         Self::SetRelay,
         Self::RepairRunConfigs,
+        Self::ExpertProfile,
+        Self::DeleteExpertProfile,
+        Self::HoldLearning,
     ];
 }
 
@@ -256,6 +266,27 @@ pub enum StrataJobRequest {
     /// Sets up again every model whose run config points into a Strata
     /// folder that is gone, as the PC service does by itself at its start.
     RepairRunConfigs,
+    /// Makes `profile` the active expert profile of `model` (`None`: the one
+    /// Strata ships). `learn` starts learning into it (a name without a file
+    /// starts from the shipped one) or, `false` for the learning profile,
+    /// ends learning and keeps it active.
+    ExpertProfile {
+        model: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        learn: bool,
+    },
+    /// Deletes a learned expert profile of `model`.
+    DeleteExpertProfile {
+        model: String,
+        profile: String,
+    },
+    /// Holds learning for every model (Strata runs without saving), or lifts
+    /// the hold.
+    HoldLearning {
+        on: bool,
+    },
 }
 
 impl StrataJobRequest {
@@ -282,6 +313,9 @@ impl StrataJobRequest {
             Self::PresetOff { .. } => StrataJobKind::PresetOff,
             Self::SetRelay { .. } => StrataJobKind::SetRelay,
             Self::RepairRunConfigs => StrataJobKind::RepairRunConfigs,
+            Self::ExpertProfile { .. } => StrataJobKind::ExpertProfile,
+            Self::DeleteExpertProfile { .. } => StrataJobKind::DeleteExpertProfile,
+            Self::HoldLearning { .. } => StrataJobKind::HoldLearning,
         }
     }
 }

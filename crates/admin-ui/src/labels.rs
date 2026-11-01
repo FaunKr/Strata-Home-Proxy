@@ -276,6 +276,7 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::ForcedSleep => "Forced sleep",
         EventKind::ForcedStrataRestart => "Forced Strata restart",
         EventKind::UpdateSummaryRequested => "Update summary requested",
+        EventKind::ExpertProfileLearned => "Expert profile learned",
     }
 }
 
@@ -337,6 +338,9 @@ pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
         StrataJobKind::ApplyPreset => "Applying preset",
         StrataJobKind::UndoPreset => "Undoing preset",
         StrataJobKind::RepairRunConfigs => "Repairing models after a Strata update",
+        StrataJobKind::ExpertProfile => "Changing the expert profile",
+        StrataJobKind::DeleteExpertProfile => "Deleting an expert profile",
+        StrataJobKind::HoldLearning => "Holding or resuming learning",
     }
 }
 

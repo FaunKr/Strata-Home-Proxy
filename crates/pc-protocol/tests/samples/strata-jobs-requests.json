@@ -116,5 +116,29 @@
   },
   {
     "kind": "repair_run_configs"
+  },
+  {
+    "kind": "expert_profile",
+    "model": "IQ3_XXS",
+    "profile": "coding",
+    "learn": true
+  },
+  {
+    "kind": "expert_profile",
+    "model": "IQ3_XXS",
+    "profile": "coding"
+  },
+  {
+    "kind": "expert_profile",
+    "model": "IQ3_XXS"
+  },
+  {
+    "kind": "delete_expert_profile",
+    "model": "IQ3_XXS",
+    "profile": "coding"
+  },
+  {
+    "kind": "hold_learning",
+    "on": true
   }
 ]

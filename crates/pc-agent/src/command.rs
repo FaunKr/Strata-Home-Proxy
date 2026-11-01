@@ -28,6 +28,7 @@ pub struct Running {
     lines: mpsc::UnboundedReceiver<String>,
     exit: oneshot::Receiver<Option<i32>>,
     cancel: Cancel,
+    pid: Option<u32>,
 }
 
 impl Running {
@@ -44,7 +45,13 @@ impl Running {
             lines,
             exit,
             cancel,
+            pid: None,
         }
+    }
+
+    /// The process id of the program started, where known.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
     }
 
     /// The next line of output; `None` once the command closed its output.
@@ -112,7 +119,9 @@ pub fn spawn(spec: &CommandSpec) -> Result<Running> {
             kill_tree(pid);
         }
     });
-    Ok(Running::new(lines, exit, cancel))
+    let mut running = Running::new(lines, exit, cancel);
+    running.pid = pid;
+    Ok(running)
 }
 
 /// Sends every line of `from` to `to`. Progress bars rewrite their line with

@@ -35,18 +35,27 @@ pub async fn prompt(state: &Arc<AppState>, model: &str) -> Result<String, String
     };
     let speed = state.strata.benchmarks.runs_of(model);
     let code = state.code_bench.runs_of(model);
-    build(&info, model, &speed, &code, read_at)
+    let learned = info
+        .models
+        .iter()
+        .find(|m| m.id == model)
+        .and_then(|m| m.expert_profiles.as_ref())
+        .and_then(|p| p.active.as_deref())
+        .and_then(|name| state.expert_learning.learned_tokens(model, name));
+    build(&info, model, &speed, &code, read_at, learned)
 }
 
 /// The prompt for installed model `id` from `info` and the model's speed
 /// and code benchmark runs, newest first; `read_at` is when `info` was
-/// read, if not just now.
+/// read, if not just now; `learned` the tokens the model's active learned
+/// expert profile learned from, as the proxy counted them.
 pub fn build(
     info: &StrataInfo,
     id: &str,
     speed: &[SpeedRun],
     code: &[CodeBenchRun],
     read_at: Option<u64>,
+    learned: Option<u64>,
 ) -> Result<String, String> {
     let model = info
         .models
@@ -166,6 +175,9 @@ pub fn build(
 
     let _ = writeln!(out, "\n### Strata's tuning\n");
     let _ = writeln!(out, "- Preset: {}", preset_text(model));
+    if let Some(profiles) = &model.expert_profiles {
+        let _ = writeln!(out, "- {}", expert_profile_text(profiles, learned));
+    }
     let _ = writeln!(
         out,
         "- Last tune: {}",
@@ -207,6 +219,29 @@ fn answer_lines(out: &mut String, model: &StrataModel) {
          3. Sampling: a `json` block with the whole new `sampling` object of the run config.\n\n\
          Leave a block empty when nothing in its field should change."
     );
+}
+
+/// The expert profile the model starts with: "Expert profile: coding
+/// (learned from 1.0M tokens)" or "Expert profile: Standard".
+fn expert_profile_text(
+    profiles: &strata_pc_protocol::ExpertProfiles,
+    learned: Option<u64>,
+) -> String {
+    let Some(name) = &profiles.active else {
+        return format!("Expert profile: {}", strata_pc_protocol::STANDARD_PROFILE);
+    };
+    let mut text = format!("Expert profile: {}", plain(name));
+    if let Some(tokens) = learned {
+        let _ = write!(
+            text,
+            " (learned from {} tokens)",
+            strata_admin_ui::expert::tokens_short(tokens)
+        );
+    }
+    if profiles.learning && !profiles.held {
+        text.push_str(", still learning from my requests");
+    }
+    text
 }
 
 /// The model's preset and Strata's word on it: an active one wins over the
@@ -894,6 +929,9 @@ fn settings_text(s: &RunSettings) -> String {
         ),
         None => "no preset".into(),
     });
+    if let Some(profile) = &s.expert_profile {
+        parts.push(format!("expert profile {}", plain(profile)));
+    }
     if let Some(env) = &s.env {
         parts.push(if env.is_empty() {
             "no engine environment".into()

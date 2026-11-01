@@ -4,6 +4,11 @@ What each version brings, newest first. The web UI's PC service card shows
 the versions an update brings; each line is written for the user. Rules:
 `docs/pc-service.md`.
 
+## 1.3.0
+
+- Learned expert profiles: each model can learn expert profiles of its own from your requests, switch between them and back to Standard, all from Engine settings. Benchmarks never teach them.
+- While an expert profile learns, Strata stops cleanly, so the engine saves what it learned before it ends.
+
 ## 1.2.0
 
 - Reports the graphics card's power in watts on AMD cards, from the Adrenalin driver, so the Overview and the metrics endpoint show it.

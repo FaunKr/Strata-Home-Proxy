@@ -74,6 +74,11 @@ pub struct Config {
     /// one still answering then refuses the update.
     #[serde(default = "default_update_stop_wait")]
     pub update_stop_wait_secs: u64,
+    /// While an expert profile learns, how long a stop of Strata waits for
+    /// it to end after Ctrl+Break (so the engine saves what it learned)
+    /// before it ends Strata hard.
+    #[serde(default = "default_clean_stop")]
+    pub clean_stop_secs: u64,
     /// Folder for the gaming flag and the log; next to the program by default.
     #[serde(default)]
     pub state_dir: Option<PathBuf>,
@@ -143,6 +148,9 @@ fn default_stop_settle() -> u64 {
 fn default_cancel_wait() -> u64 {
     60
 }
+fn default_clean_stop() -> u64 {
+    60
+}
 fn default_update_stop_wait() -> u64 {
     10
 }
@@ -201,6 +209,10 @@ impl Config {
 
     pub fn cancel_wait(&self) -> Duration {
         Duration::from_secs(self.cancel_wait_secs)
+    }
+
+    pub fn clean_stop(&self) -> Duration {
+        Duration::from_secs(self.clean_stop_secs)
     }
 
     pub fn update_stop_wait(&self) -> Duration {

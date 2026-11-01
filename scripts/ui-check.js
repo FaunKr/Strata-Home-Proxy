@@ -1,5 +1,7 @@
 // Run through scripts/ui-check.sh. Prints one line per area and viewport and
-// exits with 1 when any area has a finding.
+// exits with 1 when any area has a finding. All checks of one viewport share
+// a browser context: a check that changes what the browser stores (a choice
+// in local storage) sets it back before it ends.
 const fs = require('fs');
 const { chromium } = require('playwright');
 

@@ -10,19 +10,21 @@ fi
 # Run by hand when a session started without it: the repo is two levels up.
 cd "${CLAUDE_PROJECT_DIR:-$(dirname "$0")/../..}"
 
+# Targets first: a step below that fails ends the hook (set -e).
 rustup target add wasm32-unknown-unknown
+# The Windows check in scripts/check.sh runs only with this target.
+rustup target add x86_64-pc-windows-gnu
 # cargo-leptos for scripts/ui-check.sh.
 scripts/install-cargo-leptos.sh || true
 # cargo-nextest, the test runner of scripts/check.sh.
 scripts/install-nextest.sh || echo "cargo-nextest not installed" >&2
-cargo test --no-run --quiet
+# A build error here is for the session to fix; the installs below still run.
+cargo test --no-run --quiet || true
 # The same arguments as scripts/check.sh, or clippy checks again; a warning
 # here is for the session to fix, not a reason to fail the start.
 cargo clippy --all-targets --quiet -- -D warnings || true
 cargo clippy -p strata-admin-ui --target wasm32-unknown-unknown --no-default-features --features hydrate --quiet -- -D warnings || true
-# The Windows check in scripts/check.sh runs only with this target; mingw links
-# the PC service for Windows (also what the Docker image uses).
-rustup target add x86_64-pc-windows-gnu
+# mingw links the PC service for Windows (also what the Docker image uses).
 if ! command -v x86_64-w64-mingw32-gcc >/dev/null; then
   (apt-get install -y -q gcc-mingw-w64-x86-64 || (apt-get update -q && apt-get install -y -q gcc-mingw-w64-x86-64)) >/dev/null 2>&1 || true
 fi

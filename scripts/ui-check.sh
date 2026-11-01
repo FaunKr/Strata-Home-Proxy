@@ -68,6 +68,15 @@ for _ in $(seq 50); do
 done
 
 mkdir -p target/ui-check
-# The proxy's log goes with the data directory; a failure shows its end.
-BASE="http://127.0.0.1:$port" PROGRAM="$data/strata-pc-agent.exe" FAKE_PC="http://127.0.0.1:$pc_port" OUT=target/ui-check node scripts/ui-check.js ||
-  { echo "--- proxy.log" >&2; tail -n 200 "$data/proxy.log" >&2; exit 1; }
+# The proxy's log goes with the data directory; a failure shows its end,
+# then the failed checks again, so `tail` of the output finds them.
+if ! BASE="http://127.0.0.1:$port" PROGRAM="$data/strata-pc-agent.exe" FAKE_PC="http://127.0.0.1:$pc_port" OUT=target/ui-check \
+  node scripts/ui-check.js | tee "$data/checks.log"; then
+  echo "--- proxy.log" >&2
+  tail -n 200 "$data/proxy.log" >&2
+  echo "--- failed checks"
+  grep -A1 '^FAIL' "$data/checks.log" || true
+  echo "ui-check.sh: FAILED"
+  exit 1
+fi
+echo "ui-check.sh: PASSED"

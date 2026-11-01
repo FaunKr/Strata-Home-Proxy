@@ -29,6 +29,7 @@ type Malloc = unsafe extern "system" fn(i32) -> *mut c_void;
 type ControlCreate = unsafe extern "C" fn(Malloc, i32, *mut Context) -> i32;
 type NumberOfAdapters = unsafe extern "C" fn(Context, *mut i32) -> i32;
 type AdapterInfoGet = unsafe extern "C" fn(Context, *mut AdapterInfo, i32) -> i32;
+type ControlDestroy = unsafe extern "C" fn(Context) -> i32;
 type QueryPmLog = unsafe extern "C" fn(Context, i32, *mut PmLogDataOutput) -> i32;
 /// What `GetProcAddress` gives.
 type Symbol = unsafe extern "system" fn() -> isize;
@@ -111,9 +112,10 @@ fn load() -> Option<Adl> {
         unsafe { GetProcAddress(lib, name.as_ptr() as PCSTR) }
     };
     // SAFETY: each symbol has the signature `adl_sdk`'s headers give it.
-    let (create, count, info, query) = unsafe {
+    let (create, destroy, count, info, query) = unsafe {
         (
             std::mem::transmute::<Symbol, ControlCreate>(symbol(b"ADL2_Main_Control_Create\0")?),
+            std::mem::transmute::<Symbol, ControlDestroy>(symbol(b"ADL2_Main_Control_Destroy\0")?),
             std::mem::transmute::<Symbol, NumberOfAdapters>(symbol(
                 b"ADL2_Adapter_NumberOfAdapters_Get\0",
             )?),
@@ -124,10 +126,30 @@ fn load() -> Option<Adl> {
         )
     };
     let mut context: Context = std::ptr::null_mut();
-    // SAFETY: 1 lists only the adapters that are connected, as AMD's samples do.
+    // SAFETY: `malloc` has the callback's signature and `context` is
+    // written by the call. 1 lists only the adapters that are connected, as
+    // AMD's samples do.
     if unsafe { create(malloc, 1, &mut context) } != OK {
         return None;
     }
+    let adapters = adapters(context, count, info);
+    if adapters.is_none() {
+        // SAFETY: the context was created above and is used no more.
+        unsafe { destroy(context) };
+    }
+    Some(Adl {
+        context,
+        query,
+        adapters: adapters?,
+    })
+}
+
+/// ADL's adapters with their PCI addresses; `None` if ADL does not list them.
+fn adapters(
+    context: Context,
+    count: NumberOfAdapters,
+    info: AdapterInfoGet,
+) -> Option<Vec<AdlAdapter>> {
     let mut n = 0;
     // SAFETY: the context is open.
     if unsafe { count(context, &mut n) } != OK || n <= 0 {
@@ -157,9 +179,5 @@ fn load() -> Option<Adl> {
             },
         })
         .collect();
-    Some(Adl {
-        context,
-        query,
-        adapters,
-    })
+    Some(adapters)
 }

@@ -14,7 +14,7 @@
       "vram_total_bytes": 17163091968,
       "fan_rpm": 0,
       "power_pct": 41.0,
-      "power_watts": 182.0
+      "power_watts": 64.0
     },
     "cpu": {
       "load_pct": 12.0,

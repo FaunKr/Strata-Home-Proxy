@@ -26,7 +26,7 @@ fn status() {
     assert_eq!(status.version.as_deref(), Some("0.1.0+558db97"));
     let gpu = status.hardware.unwrap().gpu.unwrap();
     assert_eq!(gpu.fan_rpm, Some(0));
-    assert_eq!(gpu.power_watts, Some(182.0));
+    assert_eq!(gpu.power_watts, Some(64.0));
     assert_eq!(status.strata_key_generation, Some(7));
     assert_eq!(
         status.relay,

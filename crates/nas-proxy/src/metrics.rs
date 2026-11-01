@@ -341,11 +341,11 @@ pub fn render(s: &Scrape, hiding: Option<&Hiding>) -> String {
         );
     }
 
-    // Series that share all labels for this key add up into one line.
     if let Some(hardware) = &s.hardware {
         render_hardware(&mut out, hardware);
     }
 
+    // Series that share all labels for this key add up into one line.
     let mut requests: BTreeMap<(String, String, Outcome), u64> = BTreeMap::new();
     for t in &s.totals {
         *requests

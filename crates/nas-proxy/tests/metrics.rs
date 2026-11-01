@@ -458,11 +458,11 @@ async fn reporting(hardware: Hardware) -> Setup {
     s
 }
 
-/// Scrapes until `done` holds for the answer, which it returns.
-async fn until_text(s: &Setup, what: &str, done: impl Fn(&str) -> bool) -> String {
+/// Scrapes with `key` until `done` holds for the answer, which it returns.
+async fn until_text(s: &Setup, key: &str, what: &str, done: impl Fn(&str) -> bool) -> String {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let text = scrape(s, &s.key).await;
+        let text = scrape(s, key).await;
         if done(&text) {
             return text;
         }
@@ -591,7 +591,7 @@ async fn no_hardware_lines_while_the_pc_sleeps() {
 async fn hardware_lines_come_in_gaming_mode() {
     let s = reporting(readings()).await;
     s.pc.gaming.store(true, Ordering::SeqCst);
-    until_text(&s, "GPU load in gaming mode", |text| {
+    until_text(&s, &s.key, "GPU load in gaming mode", |text| {
         value(text, "strata_proxy_pc_state", &[("state", "gaming")]) == Some(1.0)
             && value(text, "strata_proxy_gpu_load_ratio", &[]) == Some(0.37)
     })
@@ -604,7 +604,10 @@ async fn hardware_lines_disappear_once_the_last_answer_is_older_than_two_idle_ch
     until_value(&s, "strata_proxy_gpu_load_ratio", &[], 0.37).await;
     // The PC service stops answering while the PC and Strata stay up.
     s.pc.status_misses.store(usize::MAX / 2, Ordering::SeqCst);
-    let text = until_text(&s, "hardware lines gone", |text| !has_hardware_lines(text)).await;
+    let text = until_text(&s, &s.key, "hardware lines gone", |text| {
+        !has_hardware_lines(text)
+    })
+    .await;
     assert_eq!(
         value(&text, "strata_proxy_pc_state", &[("state", "awake")]),
         Some(1.0),
@@ -614,29 +617,30 @@ async fn hardware_lines_disappear_once_the_last_answer_is_older_than_two_idle_ch
 
 #[tokio::test]
 async fn no_hardware_lines_from_a_pc_service_without_hardware_readings() {
-    let s = setup(true, |_| {}).await;
-    until_value(&s, "strata_proxy_strata_up", &[], 1.0).await;
-    // Several idle checks with answers that carry no readings.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let text = scrape(&s, &s.key).await;
-    assert!(!has_hardware_lines(&text), "{text}");
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_gpu_load_ratio", &[], 0.37).await;
+    // The PC service goes back to a version before hardware readings.
+    *s.pc.hardware.lock().unwrap() = None;
+    let text = until_text(&s, &s.key, "hardware lines gone", |text| {
+        !has_hardware_lines(text)
+    })
+    .await;
+    assert_eq!(
+        value(&text, "strata_proxy_pc_state", &[("state", "awake")]),
+        Some(1.0),
+        "{text}"
+    );
 }
 
 #[tokio::test]
 async fn a_key_that_hides_the_model_sees_the_same_hardware_lines() {
     let s = reporting(readings()).await;
     let hidden = key(&s, "Phone", ModelName::Hide);
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let text = scrape(&s, &hidden).await;
-        if value(&text, "strata_proxy_gpu_power_watts", &[]) == Some(182.5)
-            && value(&text, "strata_proxy_gpu_vram_used_bytes", &[]) == Some(12_670_000_000.0)
-        {
-            break;
-        }
-        assert!(std::time::Instant::now() < deadline, "{text}");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    until_text(&s, &hidden, "hardware lines for the hiding key", |text| {
+        value(text, "strata_proxy_gpu_power_watts", &[]) == Some(182.5)
+            && value(text, "strata_proxy_gpu_vram_used_bytes", &[]) == Some(12_670_000_000.0)
+    })
+    .await;
 }
 
 // --- Requests and tokens ---

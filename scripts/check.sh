@@ -13,9 +13,20 @@ cd "$(dirname "$0")/.."
 # The last line always says how the run ended, so a log read with `tail` or
 # a grep cannot mistake a failed run for a passed one.
 sample=""
+# Checks a missing tool skipped, repeated above the last line: a WARNING in
+# the middle of a long run is easy to miss.
+skipped=()
+skip() {
+  echo "WARNING: $1" >&2
+  skipped+=("$1")
+}
 finish() {
   local status=$?
   rm -f "$sample"
+  local s
+  for s in ${skipped[@]+"${skipped[@]}"}; do
+    echo "check.sh: skipped: $s"
+  done
   if ((status == 0)); then
     echo "check.sh: PASSED"
   else
@@ -167,14 +178,18 @@ if selected strata-pc-agent; then
   if rustup target list --installed 2>/dev/null | grep -qx x86_64-pc-windows-gnu; then
     cargo clippy -p strata-pc-agent --all-targets --target x86_64-pc-windows-gnu -- -D warnings
   else
-    echo "WARNING: Windows check of the PC service skipped (rustup target add x86_64-pc-windows-gnu)" >&2
+    skip "Windows target missing, the PC service's Windows code not checked (rustup target add x86_64-pc-windows-gnu)"
   fi
 fi
 # install.ps1 parses, as the workflow windows.yml checks it; only where
 # PowerShell is installed. The proxy serves the script, the PC service runs it.
-if (selected strata-pc-agent || selected strata-nas-proxy) && command -v pwsh >/dev/null; then
-  # shellcheck disable=SC2016 # PowerShell variables, for pwsh to expand.
-  pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("deploy/windows/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
+if selected strata-pc-agent || selected strata-nas-proxy; then
+  if command -v pwsh >/dev/null; then
+    # shellcheck disable=SC2016 # PowerShell variables, for pwsh to expand.
+    pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("deploy/windows/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
+  else
+    skip "pwsh missing, deploy/windows/install.ps1 not parsed"
+  fi
 fi
 # The Docker build's version check, on a sample file: the crate version
 # matches, another version or one with a build suffix does not.
@@ -202,13 +217,13 @@ if command -v shellcheck >/dev/null; then
     tools/local-agent/shims/local-agent \
     scripts/*.sh .claude/hooks/*.sh
 else
-  echo "WARNING: shellcheck missing, tools/local-agent and scripts not checked" >&2
+  skip "shellcheck missing, tools/local-agent and scripts not checked"
 fi
 # The workflows: every broken push to them costs a full CI run.
 if command -v actionlint >/dev/null; then
   actionlint
 else
-  echo "WARNING: actionlint missing, .github/workflows not checked (scripts/install-actionlint.sh)" >&2
+  skip "actionlint missing, .github/workflows not checked (scripts/install-actionlint.sh)"
 fi
 # In an expression, `cond && x || y` gives y whenever x is falsy (0, false,
 # ''), whatever cond is; actionlint does not catch it (#344's fetch-depth).
@@ -232,12 +247,12 @@ if command -v pwsh >/dev/null; then
     $found | ForEach-Object { "{0}:{1}: {2}: {3}" -f $_.ScriptPath, $_.Line, $_.RuleName, $_.Message }
     if ($found) { exit 1 }' || lint=$?
   if ((lint == 3)); then
-    echo "WARNING: PSScriptAnalyzer missing, tools/local-agent/*.ps1 not linted (scripts/install-psscriptanalyzer.sh)" >&2
+    skip "PSScriptAnalyzer missing, tools/local-agent/*.ps1 not linted (scripts/install-psscriptanalyzer.sh)"
   elif ((lint != 0)); then
     exit "$lint"
   fi
 else
-  echo "WARNING: pwsh missing, the PowerShell port of local-agent not tested" >&2
+  skip "pwsh missing, the PowerShell port of local-agent not tested"
 fi
 # The code benchmark's runner, against a faked opencode.
 python3 tools/code-bench/test_runner.py

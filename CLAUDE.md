@@ -1,7 +1,7 @@
 ## Working in the repo
 
 - PRs go against `main`. Start implementing from a freshly fetched `origin/main`: the session's clone may be hours behind.
-- Before pushing, run `scripts/check.sh` and push only when its last line reads `check.sh: PASSED`: the same checks as the CI job `test`. To iterate, `scripts/check.sh <crate>…` checks only those crates. Keep its full output (`mkdir -p target && scripts/check.sh 2>&1 | tee target/check.log`) and filter that file: a test that fails once is read there, not rerun blind.
+- Before pushing, run `scripts/check.sh` and push only when its last line reads `check.sh: PASSED`: the same checks as the CI job `test`. A `check.sh: skipped:` line above it names a check that did not run: install what it names (*Tools check.sh needs*, below) and run again. To iterate, `scripts/check.sh <crate>…` checks only those crates. Keep its full output (`mkdir -p target && scripts/check.sh 2>&1 | tee target/check.log`) and filter that file: a test that fails once is read there, not rerun blind.
 - Before you suggest merging a PR: `/code-review` over its diff. In this repo that is the skill `mattpocock-skills:code-review` (Standards against `CODING_STANDARDS.md`, Spec against the issue); the built-in `code-review` reads neither.
 - Bringing a PR to merge: read `.claude/skills/steward/SKILL.md` when opening a PR, before waiting on CI and before every merge, also after the context was compacted. Session skill lists may not show it.
 - Right after opening a PR or pushing to one, schedule the check-in of steward rule 2 (`send_later`) in the same turn. A green CI run sends no event: without the check-in a green PR waits unreported until someone asks.

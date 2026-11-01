@@ -1,7 +1,9 @@
 //! The wire format against stored answers of the PC service: each sample in
 //! `samples/` is what today's PC service sends or takes. A type that stops
 //! parsing one, or writes it back differently, breaks the proxy or an older
-//! PC service.
+//! PC service. `status.json` is also what `scripts/fake-pc.js` reports, and
+//! `scripts/ui-check.js` expects its values on the Overview: a changed value
+//! changes that expectation too.
 
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};

@@ -88,11 +88,16 @@ fn gpu_values(gpu: &Gpu) -> Vec<(&'static str, String)> {
         ("Temperature", or_none(gpu.temp_c, |t| format!("{t:.0} °C"))),
         ("VRAM", memory(gpu.vram_used_bytes, gpu.vram_total_bytes)),
         ("Fan", or_none(gpu.fan_rpm, |r| format!("{r} rpm"))),
-        (
-            "Power",
-            or_none(gpu.power_pct, |p| format!("{p:.0} % of limit")),
-        ),
+        ("Power", gpu_power(gpu)),
     ]
+}
+
+/// Watts when the PC service knows them, else the share of the power limit.
+fn gpu_power(gpu: &Gpu) -> String {
+    match (gpu.power_watts, gpu.power_pct) {
+        (Some(watts), _) => format!("{watts:.0} W"),
+        (None, pct) => or_none(pct, |p| format!("{p:.0} % of limit")),
+    }
 }
 
 fn cpu_values(cpu: &Cpu) -> Vec<(&'static str, String)> {
@@ -117,4 +122,33 @@ fn memory(used: Option<u64>, total: Option<u64>) -> String {
         return NONE.to_string();
     }
     format!("{} / {} GB", gb(used), gb(total))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gpu_power_shows_watts_when_known() {
+        let gpu = Gpu {
+            power_pct: Some(71.0),
+            power_watts: Some(182.0),
+            ..Gpu::default()
+        };
+        assert_eq!(gpu_power(&gpu), "182 W");
+    }
+
+    #[test]
+    fn gpu_power_shows_the_share_of_the_limit_without_watts() {
+        let gpu = Gpu {
+            power_pct: Some(71.0),
+            ..Gpu::default()
+        };
+        assert_eq!(gpu_power(&gpu), "71 % of limit");
+    }
+
+    #[test]
+    fn gpu_power_shows_none_without_watts_or_share() {
+        assert_eq!(gpu_power(&Gpu::default()), NONE);
+    }
 }

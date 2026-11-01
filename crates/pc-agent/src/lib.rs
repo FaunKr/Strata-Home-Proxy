@@ -1,6 +1,8 @@
 //! Service on the Strata PC: sleeps on request from the NAS, switches gaming
 //! mode and restarts Strata when it stops answering.
 
+#[cfg(windows)]
+mod adl;
 pub mod agent;
 pub mod catalog;
 pub mod command;

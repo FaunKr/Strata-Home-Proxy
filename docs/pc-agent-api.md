@@ -78,8 +78,9 @@ configuration. If it is unknown, the field is missing. The proxy remembers the
 reported MAC in `DATA_DIR` and wakes with it; it takes precedence over `PC_MAC`
 and the values from the web UI.
 
-`hardware` are the hardware readings for the Overview. The service reads them
-from Windows itself, without drivers: as long as `/status` is being asked, it
+`hardware` are the hardware readings for the Overview and the metrics
+endpoint. The service reads them from Windows itself; only `power_watts` comes
+from AMD's driver library (below). As long as `/status` is being asked, it
 measures every 2 s in the background and answers with the last measurement.
 The first request after 30 s of quiet starts measuring and gets only `null`
 values (`Hardware`).
@@ -87,6 +88,13 @@ values (`Hardware`).
 - `gpu` is the graphics card with the most VRAM, `null` without a graphics card.
 - `power_pct` is the power draw as a share of the card's power limit, not
   watts.
+- `power_watts` (since 1.2.0) is the GPU chip's power draw in watts: the ASIC
+  power of ADL's PMLog (`ADL2_New_QueryPMLogData_Get`, `PMLOG_ASIC_POWER`),
+  from `atiadlxx.dll`, which AMD's Adrenalin driver installs. It is the chip's
+  draw, roughly the TGP, not the whole card's. The service loads the library
+  once per run and takes ADL's adapter at the same PCI address as the card
+  above. `null` on other cards, without the library, without an ADL adapter
+  there, and when the sensor is unsupported or reads 0.
 - `fan_rpm: 0` means the fan is stopped. If the driver reports 0 and no
   maximum speed, it does not know the fan, and the value is `null`.
 - The driver reports temperature and power as 0 when it does not know them;

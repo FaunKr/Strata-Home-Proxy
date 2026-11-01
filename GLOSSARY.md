@@ -95,7 +95,7 @@ The short time after an accepted sleep request during which the PC may still ans
 _Avoid_: Nachlauf
 
 **Hardware readings**:
-What the PC service reports about load, temperature, memory and fans of the graphics card and CPU; the Overview shows them.
+What the PC service reports about load, temperature, memory, fans and power of the graphics card and CPU; the Overview shows them and the metrics endpoint exports them. The graphics card's power comes as a share of its power limit and, on AMD cards, in watts.
 _Avoid_: stats, telemetry, Hardwarewerte
 
 **Load lines**:

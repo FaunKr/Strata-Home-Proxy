@@ -64,6 +64,56 @@ pub struct History {
     /// The latest events, for the overview, without asking the database.
     recent: Mutex<VecDeque<Event>>,
     db: Arc<Mutex<Connection>>,
+    /// The PC's energy from all saved samples, once the metrics endpoint
+    /// asked for it; every sample saved afterwards adds to it.
+    pc_energy: Arc<Mutex<Option<PcEnergy>>>,
+}
+
+/// The PC's energy from the saved samples: each interval of `step` seconds
+/// that has samples counts for `step` seconds at their mean.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PcEnergy {
+    step: u64,
+    /// The intervals before `open`, in joules.
+    closed: f64,
+    /// The latest interval with samples, which more samples may still join.
+    open: Option<OpenSlot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct OpenSlot {
+    slot: u64,
+    watts: f64,
+    samples: u32,
+}
+
+impl PcEnergy {
+    fn joules(&self) -> f64 {
+        self.closed
+            + self
+                .open
+                .map_or(0.0, |o| o.watts / f64::from(o.samples) * self.step as f64)
+    }
+
+    fn add(&mut self, sample: Sample) {
+        let slot = sample.ts / self.step;
+        match &mut self.open {
+            Some(open) if open.slot == slot => {
+                open.watts += sample.watts;
+                open.samples += 1;
+            }
+            // A sample older than the open interval would count twice.
+            Some(open) if open.slot > slot => {}
+            _ => {
+                self.closed = self.joules();
+                self.open = Some(OpenSlot {
+                    slot,
+                    watts: sample.watts,
+                    samples: 1,
+                });
+            }
+        }
+    }
 }
 
 impl History {
@@ -88,6 +138,7 @@ impl History {
         Self {
             recent: Mutex::new(recent.into()),
             db: Arc::new(Mutex::new(db)),
+            pc_energy: Arc::default(),
         }
     }
 
@@ -196,13 +247,66 @@ impl History {
 
     /// Written at once, like `record`, so a killed proxy loses nothing.
     pub fn record_sample(&self, sample: Sample) {
-        let written = self.db.lock().unwrap().execute(
+        let db = self.db.lock().unwrap();
+        let written = db.execute(
             "INSERT INTO samples (ts, watts) VALUES (?1, ?2)",
             params![to_sql(sample.ts), sample.watts],
         );
         if let Err(e) = written {
             tracing::warn!("power plug reading not written: {e}");
+            return;
         }
+        // Under the database's lock, so the sum read from the database and
+        // the samples added to it neither miss nor repeat one.
+        if let Some(energy) = self.pc_energy.lock().unwrap().as_mut() {
+            energy.add(sample);
+        }
+    }
+
+    /// The PC's energy in joules from every saved sample: each interval of
+    /// `step` seconds with samples counts for `step` seconds at their mean.
+    /// The first call reads all samples on a blocking thread; later calls
+    /// only add the samples saved since, unless `step` changed.
+    pub async fn pc_energy(&self, step: u64) -> f64 {
+        let step = step.max(1);
+        if let Some(energy) = *self.pc_energy.lock().unwrap()
+            && energy.step == step
+        {
+            return energy.joules();
+        }
+        let (db, held) = (Arc::clone(&self.db), Arc::clone(&self.pc_energy));
+        tokio::task::spawn_blocking(move || {
+            let db = db.lock().unwrap();
+            let energy = read_pc_energy(&db, step).unwrap_or_else(|e| {
+                tracing::warn!("power plug readings not read: {e}");
+                PcEnergy {
+                    step,
+                    closed: 0.0,
+                    open: None,
+                }
+            });
+            *held.lock().unwrap() = Some(energy);
+            energy.joules()
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// How many wake packets the history holds.
+    pub async fn wake_packets(&self) -> u64 {
+        self.blocking(|db| {
+            db.query_row(
+                "SELECT COUNT(*) FROM events WHERE kind = ?1",
+                [kind_name(EventKind::WakeSent)],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n.max(0) as u64)
+            .unwrap_or_else(|e| {
+                tracing::warn!("wake packets not counted: {e}");
+                0
+            })
+        })
+        .await
     }
 
     /// Every sample with `from <= ts <= to`, oldest first. The query runs on a
@@ -347,6 +451,7 @@ fn create_tables(conn: &Connection) -> rusqlite::Result<()> {
          );",
     )?;
     conn.execute_batch(crate::request_log::TABLE)?;
+    conn.execute_batch(crate::request_totals::TABLE)?;
     crate::request_energy::create_tables(conn)
 }
 
@@ -442,5 +547,40 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
         ts: ts as u64,
         kind,
         detail: row.get(2)?,
+    })
+}
+
+/// See [`History::pc_energy`]: the intervals before the latest one summed,
+/// the latest one open for more samples.
+fn read_pc_energy(db: &Connection, step: u64) -> rusqlite::Result<PcEnergy> {
+    let step_sql = to_sql(step);
+    let (closed, last): (f64, Option<i64>) = db.query_row(
+        "SELECT IFNULL(SUM(watts), 0), MAX(slot) FROM \
+         (SELECT ts / ?1 AS slot, AVG(watts) AS watts FROM samples GROUP BY ts / ?1)",
+        [step_sql],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let Some(last) = last else {
+        return Ok(PcEnergy {
+            step,
+            closed: 0.0,
+            open: None,
+        });
+    };
+    let (watts, samples): (f64, i64) = db.query_row(
+        "SELECT SUM(watts), COUNT(*) FROM samples WHERE ts / ?1 = ?2",
+        [step_sql, last],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let samples = samples.max(1) as u32;
+    let open_mean = watts / f64::from(samples);
+    Ok(PcEnergy {
+        step,
+        closed: (closed - open_mean) * step as f64,
+        open: Some(OpenSlot {
+            slot: last.max(0) as u64,
+            watts,
+            samples,
+        }),
     })
 }

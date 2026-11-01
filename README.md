@@ -222,6 +222,9 @@ is in English and split into five areas: *Overview*, *PC*, *Strata*
   does not wake the PC and does not keep it awake. For the metrics the
   proxy needs the Strata key, which it fetches from the PC service. Which Strata endpoints
   the proxy uses: [docs/strata-api.md](docs/strata-api.md).
+- **Prometheus:** `/metrics` answers with the PC's state, power, requests,
+  tokens and energy, plus Strata's own metrics while it is up, with any API
+  key; a scrape never wakes the PC: [docs/metrics.md](docs/metrics.md).
 - **Buttons:** *Wake PC* (the 15 min idle timeout counts from the wake-up),
   *Sleep now* (if the PC service refuses, the reason is shown), the switch
   *Gaming mode* (wakes a sleeping PC first; after *off* the

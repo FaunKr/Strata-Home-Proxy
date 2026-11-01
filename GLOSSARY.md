@@ -180,6 +180,14 @@ _Avoid_: log, Verlauf
 The proxy's list of the last 1000 requests through it that made the model work, or would have and were refused, with key, model, type, tokens, speeds, request energy and outcome, never their text; requests on their way show as *waking PC* or *running*; the web UI shows it live in the Strata area (tab *Requests*). Not an event, and not Strata's own request monitor.
 _Avoid_: access log, request history
 
+**Request totals**:
+Requests and their prompt, cached and output tokens per day, API key, model and outcome, kept forever in the history's database for the metrics endpoint; every finished row of the request log adds to them. They start with the release that brought them.
+_Avoid_: request stats, usage table
+
+**Metrics endpoint**:
+What the proxy answers on `/metrics` and `/metrics/prometheus` for Prometheus, with any API key: the PC's state, power, request totals, request energy, the PC's energy and wake packets, plus Strata's own lines while it is up. A scrape never wakes the PC and is no activity. Rules in `docs/metrics.md`.
+_Avoid_: telemetry, stats, exporter
+
 **Strata key**:
 The key Strata asks of every request (`api_key` in the model configs). The PC service makes a new one before every start of Strata it makes, and the proxy fetches it from the PC service whenever its generation changes. Only the proxy and the PC service know it (in relay mode only the PC service); clients use their own API keys.
 _Avoid_: Strata API key, STRATA_API_KEY (an older setting of the proxy), token (that is the shared secret of proxy and PC service)

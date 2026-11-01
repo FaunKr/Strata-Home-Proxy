@@ -2,7 +2,7 @@
 
 Strata is its own engine ([Niko1221/Strata](https://github.com/Niko1221/Strata)), not llama-server. Some endpoints carry llama-server or vLLM names so that third-party tools work. What they really return is only in Strata's code.
 
-In the proxy, only `crates/nas-proxy/src/strata_client.rs` talks to Strata: `/health`, the metrics, the request for an update's summary, the list of models after a wake-up and the forwarding. A new call belongs there.
+In the proxy, only `crates/nas-proxy/src/strata_client.rs` talks to Strata: `/health`, the metrics (for the Overview and the metrics endpoint), the request for an update's summary, the list of models after a wake-up and the forwarding. A new call belongs there.
 
 As of: commit [`cbfd5b9`](https://github.com/Niko1221/Strata/tree/cbfd5b9) (2026-10-20). The line numbers refer to it.
 
@@ -88,7 +88,7 @@ Since commit f31b6efd, Strata shortens a `max_tokens` that does not fit into the
 
 ## Metrics: `GET /metrics?format=prometheus`
 
-The Overview uses this endpoint. It needs the key (line 5997) and returns Prometheus text with vLLM names and `strata:` names (`serve/prometheus.py`, `render`). Every line carries the label `model_name`:
+The Overview uses this endpoint, and so does the proxy's own metrics endpoint, which appends these lines unchanged while Strata is up (`docs/metrics.md`); clients no longer reach Strata's `/metrics` through the proxy. It needs the key (line 5997) and returns Prometheus text with vLLM names and `strata:` names (`serve/prometheus.py`, `render`). Every line carries the label `model_name`:
 
 | Name | Meaning |
 |---|---|
@@ -103,7 +103,7 @@ The tests read real output of `render` from `crates/nas-proxy/tests/fixtures/str
 
 ## `GET /metrics/prometheus`: not for the Overview
 
-This endpoint returns llama-server names (`llamacpp:*`, `Service.prometheus`, line 4289), needs the key and is not suitable for the Overview. Two reasons:
+This endpoint returns llama-server names (`llamacpp:*`, `Service.prometheus`, line 4289), needs the key and is not suitable for the Overview. The proxy answers `/metrics/prometheus` itself (`docs/metrics.md`) and never fetches Strata's. Two reasons:
 - `llamacpp:predicted_tokens_seconds` counts only finished requests and stays at 0 during a running request.
 - Every fetch resets the time window of these values, also for other readers such as Grafana.
 

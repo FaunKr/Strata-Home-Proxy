@@ -254,7 +254,7 @@ pub fn model_for(state: &AppState, answered: &str) -> String {
         .unwrap_or_else(|| state.models.model_of(answered))
 }
 
-fn active(info: &StrataInfo) -> Option<&str> {
+pub(crate) fn active(info: &StrataInfo) -> Option<&str> {
     info.models.iter().find(|m| m.active).map(|m| m.id.as_str())
 }
 
@@ -335,6 +335,14 @@ pub(crate) fn add(
         params![clock::day_key(at), model, wh, output_tokens as i64],
     )
     .map(|_| ())
+}
+
+/// Each model's request energy over all days, in Wh, for the metrics
+/// endpoint.
+pub(crate) fn all_time_wh(db: &Connection) -> rusqlite::Result<Vec<(String, f64)>> {
+    db.prepare("SELECT model, SUM(wh) FROM request_energy GROUP BY model ORDER BY model")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect()
 }
 
 /// Energy, output tokens and requests over some days.

@@ -174,7 +174,7 @@ fn tagged(mut resp: Response, tag: &'static str) -> Response {
 /// The API keys a client sent: `x-api-key` (Anthropic) and a bearer token in
 /// `authorization` (OpenAI). Some clients send both, one of them stale, so
 /// either may hold the valid key.
-fn client_keys(headers: &HeaderMap) -> impl Iterator<Item = &str> {
+pub(crate) fn client_keys(headers: &HeaderMap) -> impl Iterator<Item = &str> {
     let x_api_key = headers
         .get("x-api-key")
         .and_then(|v| v.to_str().ok())
@@ -192,7 +192,7 @@ fn client_keys(headers: &HeaderMap) -> impl Iterator<Item = &str> {
 
 /// Answer for a missing or unknown API key. It comes before anything else, so
 /// such a request never wakes the PC or counts as activity.
-fn unauthorized(flavor: Flavor) -> Response {
+pub(crate) fn unauthorized(flavor: Flavor) -> Response {
     const MESSAGE: &str = "No valid API key. Keys are in the proxy's web UI under Access.";
     let body = match flavor {
         Flavor::Anthropic => flavor.error_json("authentication_error", MESSAGE),

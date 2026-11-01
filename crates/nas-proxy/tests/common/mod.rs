@@ -86,6 +86,10 @@ pub struct FakePc {
     /// `Authorization` header of the last metrics request.
     pub metrics_auth: Mutex<Option<String>>,
     /// What the PC service's `GET /strata` answers; 404 (an older service) if unset.
+    /// The proxy takes it over (`StrataState::last_info`) only when the Strata
+    /// page is read (`b.call("strata", &[])`) or a Strata job ends, not on a
+    /// status poll: a test that needs the PC service's model names (request
+    /// energy, request totals, `strata_up`) reads the page after setting it.
     pub strata_info: Mutex<Option<StrataReport>>,
     /// The PC service's running or last Strata job.
     pub strata_job: Mutex<Option<StrataJob>>,

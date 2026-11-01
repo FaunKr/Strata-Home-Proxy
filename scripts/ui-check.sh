@@ -75,7 +75,8 @@ if ! BASE="http://127.0.0.1:$port" PROGRAM="$data/strata-pc-agent.exe" FAKE_PC="
   echo "--- proxy.log" >&2
   tail -n 200 "$data/proxy.log" >&2
   echo "--- failed checks"
-  grep -A1 '^FAIL' "$data/checks.log" || true
+  # Each FAIL line with the indented lines of its issues.
+  awk '/^FAIL/ { on = 1; print; next } on && /^     / { print; next } { on = 0 }' "$data/checks.log"
   echo "ui-check.sh: FAILED"
   exit 1
 fi

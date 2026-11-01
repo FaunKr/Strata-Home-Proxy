@@ -10,10 +10,10 @@ fi
 # Run by hand when a session started without it: the repo is two levels up.
 cd "${CLAUDE_PROJECT_DIR:-$(dirname "$0")/../..}"
 
-# Targets first: a step below that fails ends the hook (set -e).
-rustup target add wasm32-unknown-unknown
+# Targets first, each on its own: a failed step ends the hook (set -e).
+rustup target add wasm32-unknown-unknown || echo "wasm32 target not added" >&2
 # The Windows check in scripts/check.sh runs only with this target.
-rustup target add x86_64-pc-windows-gnu
+rustup target add x86_64-pc-windows-gnu || echo "Windows target not added" >&2
 # cargo-leptos for scripts/ui-check.sh.
 scripts/install-cargo-leptos.sh || true
 # cargo-nextest, the test runner of scripts/check.sh.

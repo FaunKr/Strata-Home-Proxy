@@ -178,14 +178,18 @@ if selected strata-pc-agent; then
   if rustup target list --installed 2>/dev/null | grep -qx x86_64-pc-windows-gnu; then
     cargo clippy -p strata-pc-agent --all-targets --target x86_64-pc-windows-gnu -- -D warnings
   else
-    skip "Windows check of the PC service skipped (rustup target add x86_64-pc-windows-gnu)"
+    skip "Windows target missing, the PC service's Windows code not checked (rustup target add x86_64-pc-windows-gnu)"
   fi
 fi
 # install.ps1 parses, as the workflow windows.yml checks it; only where
 # PowerShell is installed. The proxy serves the script, the PC service runs it.
-if (selected strata-pc-agent || selected strata-nas-proxy) && command -v pwsh >/dev/null; then
-  # shellcheck disable=SC2016 # PowerShell variables, for pwsh to expand.
-  pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("deploy/windows/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
+if selected strata-pc-agent || selected strata-nas-proxy; then
+  if command -v pwsh >/dev/null; then
+    # shellcheck disable=SC2016 # PowerShell variables, for pwsh to expand.
+    pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("deploy/windows/install.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
+  else
+    skip "pwsh missing, deploy/windows/install.ps1 not parsed"
+  fi
 fi
 # The Docker build's version check, on a sample file: the crate version
 # matches, another version or one with a build suffix does not.

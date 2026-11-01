@@ -14,6 +14,8 @@ use axum::{
     routing::get,
 };
 
+use strata_pc_protocol::{Gpu, Hardware};
+
 use crate::{
     lifecycle::PcState,
     proxy::{self, Flavor},
@@ -83,6 +85,9 @@ pub struct Scrape {
     /// `None` without a power plug.
     pub pc_energy_joules: Option<f64>,
     pub wake_packets: u64,
+    /// The PC service's last hardware readings, while the PC is awake or
+    /// gaming and they are recent.
+    pub hardware: Option<Hardware>,
     /// Strata's Prometheus text while it is up and answers.
     pub strata: Option<String>,
 }
@@ -122,6 +127,11 @@ impl Scrape {
         } else {
             None
         };
+        // Two idle checks: one missed answer does not drop the lines.
+        let hardware = match pc {
+            PcState::Awake | PcState::Gaming => st.hardware_within(cfg.idle_check * 2),
+            _ => None,
+        };
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             pc: Some(pc),
@@ -136,6 +146,7 @@ impl Scrape {
             request_energy_wh: if plug { request_energy_wh } else { Vec::new() },
             pc_energy_joules,
             wake_packets: st.events.wake_packets().await,
+            hardware,
             strata,
         }
     }
@@ -174,6 +185,85 @@ const PC_STATES: [(PcState, &str); 5] = [
     (PcState::Awake, "awake"),
     (PcState::Gaming, "gaming"),
 ];
+
+/// One hardware gauge: its name, help and the reading it shows, if known.
+struct HardwareGauge {
+    name: &'static str,
+    help: &'static str,
+    of: fn(&Hardware) -> Option<f64>,
+}
+
+/// An `f32` reading as written, not as its nearest `f64` (`182.3`, not
+/// `182.3000030517578`).
+fn wide(value: f32) -> f64 {
+    value.to_string().parse().unwrap_or(f64::from(value))
+}
+
+fn gpu(h: &Hardware) -> Option<&Gpu> {
+    h.gpu.as_ref()
+}
+
+const HARDWARE: [HardwareGauge; 10] = [
+    HardwareGauge {
+        name: "strata_proxy_gpu_load_ratio",
+        help: "The GPU's load, 0 to 1.",
+        of: |h| gpu(h)?.load_pct.map(|p| wide(p) / 100.0),
+    },
+    HardwareGauge {
+        name: "strata_proxy_gpu_temperature_celsius",
+        help: "The GPU's temperature.",
+        of: |h| gpu(h)?.temp_c.map(wide),
+    },
+    HardwareGauge {
+        name: "strata_proxy_gpu_vram_used_bytes",
+        help: "VRAM in use.",
+        of: |h| gpu(h)?.vram_used_bytes.map(|b| b as f64),
+    },
+    HardwareGauge {
+        name: "strata_proxy_gpu_vram_total_bytes",
+        help: "VRAM in total.",
+        of: |h| gpu(h)?.vram_total_bytes.map(|b| b as f64),
+    },
+    HardwareGauge {
+        name: "strata_proxy_gpu_fan_rpm",
+        help: "The GPU's fan speed; 0 while the fan stands still.",
+        of: |h| gpu(h)?.fan_rpm.map(f64::from),
+    },
+    HardwareGauge {
+        name: "strata_proxy_gpu_power_ratio",
+        help: "The GPU's power as a share of its power limit, 0 to 1.",
+        of: |h| gpu(h)?.power_pct.map(|p| wide(p) / 100.0),
+    },
+    HardwareGauge {
+        name: "strata_proxy_gpu_power_watts",
+        help: "The GPU chip's power (AMD's ASIC power).",
+        of: |h| gpu(h)?.power_watts.map(wide),
+    },
+    HardwareGauge {
+        name: "strata_proxy_cpu_load_ratio",
+        help: "The CPU's load, 0 to 1.",
+        of: |h| h.cpu.load_pct.map(|p| wide(p) / 100.0),
+    },
+    HardwareGauge {
+        name: "strata_proxy_ram_used_bytes",
+        help: "RAM in use.",
+        of: |h| h.cpu.ram_used_bytes.map(|b| b as f64),
+    },
+    HardwareGauge {
+        name: "strata_proxy_ram_total_bytes",
+        help: "RAM in total.",
+        of: |h| h.cpu.ram_total_bytes.map(|b| b as f64),
+    },
+];
+
+/// One line per known hardware reading.
+fn render_hardware(out: &mut String, hardware: &Hardware) {
+    for gauge in HARDWARE {
+        if let Some(value) = (gauge.of)(hardware) {
+            Family::new(out, gauge.name, "gauge", gauge.help).line(gauge.name, &[], value);
+        }
+    }
+}
 
 /// One token counter: its name, help and the sum it shows.
 struct TokenCounter {
@@ -249,6 +339,10 @@ pub fn render(s: &Scrape, hiding: Option<&Hiding>) -> String {
             &[],
             watts,
         );
+    }
+
+    if let Some(hardware) = &s.hardware {
+        render_hardware(&mut out, hardware);
     }
 
     // Series that share all labels for this key add up into one line.

@@ -17,6 +17,16 @@ Code: `crates/nas-proxy/src/metrics.rs`. Tests: `crates/nas-proxy/tests/metrics.
 | `strata_proxy_tuning` | gauge, 0 or 1 | none | always |
 | `strata_proxy_strata_up` | gauge, 0 or 1 | `model`: the active model, while up and the PC service's last report marks one | always |
 | `strata_proxy_power_watts` | gauge | none | with a power plug and a latest reading |
+| `strata_proxy_gpu_load_ratio` | gauge, 0 to 1 | none | with hardware readings (below) |
+| `strata_proxy_gpu_temperature_celsius` | gauge | none | with hardware readings |
+| `strata_proxy_gpu_vram_used_bytes` | gauge | none | with hardware readings |
+| `strata_proxy_gpu_vram_total_bytes` | gauge | none | with hardware readings |
+| `strata_proxy_gpu_fan_rpm` | gauge, 0 while the fan stands still | none | with hardware readings |
+| `strata_proxy_gpu_power_ratio` | gauge, share of the power limit, 0 to 1 | none | with hardware readings |
+| `strata_proxy_gpu_power_watts` | gauge | none | with hardware readings, AMD cards with PC service 1.2.0 or newer |
+| `strata_proxy_cpu_load_ratio` | gauge, 0 to 1 | none | with hardware readings |
+| `strata_proxy_ram_used_bytes` | gauge | none | with hardware readings |
+| `strata_proxy_ram_total_bytes` | gauge | none | with hardware readings |
 | `strata_proxy_requests_total` | counter | `key`, `model`, `outcome`: `answered`, `refused`, `failed` | per series with at least one request |
 | `strata_proxy_prompt_tokens_total` | counter | `key`, `model` | per series with at least one request |
 | `strata_proxy_cached_tokens_total` | counter | `key`, `model` | per series with at least one request |
@@ -28,6 +38,7 @@ Code: `crates/nas-proxy/src/metrics.rs`. Tests: `crates/nas-proxy/tests/metrics.
 - **PC state** is the state the proxy holds; a scrape does not ask the PC service. **Tuning** is 1 while the PC service reports a tune.
 - **Strata up** is 0 while the PC is asleep or waking, during a tune and while Strata's address is missing; otherwise Strata answered `/health` in the last seconds or answers one now, with the probe timeout.
 - **Power** is the plug loop's latest reading (`PLUG_SAMPLE_SECS`); a scrape never asks the plug itself.
+- **Hardware readings** are those of the PC service's last answer to `/status`, which the proxy asks on every idle check (`IDLE_CHECK_SECS`) and for the Overview; a scrape never asks the PC service. They are there while the PC is awake or in gaming mode and that answer came within the last two idle checks; otherwise there are no hardware lines. Each reading the PC service does not know is left out, never 0, and without a graphics card there are no GPU lines. The GPU is the one with the most VRAM. **GPU power in watts** is AMD's ASIC power, the GPU chip's draw from the Adrenalin driver (`docs/pc-agent-api.md`), not the whole card's; other cards have no watts line.
 - **Requests and tokens** come from the request totals: every finished row of the request log adds to its day, API key, model and outcome. `answered` is *done* and *cut off*; `refused` is every request the proxy answered itself; `failed` is Strata's error status, no answer, lost, and cancelled by the client. Requests the request log does not count (the list of models, `/health`) are not here either. The code benchmark's requests count under its key name, `Code benchmark`.
 - **Model** is the PC service's name, as the Strata page lists it (e.g. `IQ3_S`), the one request energy counts for; the image model keeps Strata's name; a request refused before it reached Strata has no `model` label.
 - **Request energy** is the request energy of all days per model, in joules (Wh × 3600), so it adds up to the same figures as the energy per 1000 tokens.

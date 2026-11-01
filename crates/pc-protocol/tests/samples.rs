@@ -26,6 +26,7 @@ fn status() {
     assert_eq!(status.version.as_deref(), Some("0.1.0+558db97"));
     let gpu = status.hardware.unwrap().gpu.unwrap();
     assert_eq!(gpu.fan_rpm, Some(0));
+    assert_eq!(gpu.power_watts, Some(64.0));
     assert_eq!(status.strata_key_generation, Some(7));
     assert_eq!(
         status.relay,
@@ -235,6 +236,22 @@ fn an_older_status_still_parses() {
     assert_eq!(status.hardware, None);
     assert_eq!(status.mac, None);
     assert_eq!(status.relay, None);
+}
+
+#[test]
+fn a_gpu_without_power_watts_reads_as_unknown() {
+    // A PC service before 1.2.0 sends no watts.
+    let gpu: Gpu = serde_json::from_value(json!({
+        "load_pct": 37.0,
+        "temp_c": 61.5,
+        "vram_used_bytes": 1,
+        "vram_total_bytes": 2,
+        "fan_rpm": 0,
+        "power_pct": 41.0
+    }))
+    .unwrap();
+    assert_eq!(gpu.power_watts, None);
+    assert_eq!(gpu.power_pct, Some(41.0));
 }
 
 #[test]

@@ -12,7 +12,7 @@ const areas = ['/admin', '/admin/pc', '/admin/pc/history', '/admin/strata', '/ad
 // Each text must show at both widths: a column with the class `wide` is
 // hidden on a phone, so a text only it shows belongs in a check of its own.
 const expected = {
-  '/admin': ['87 W', 'Awake', '11.8 / 16.0 GB', '0 rpm', '41 % of limit', 'Last 7 days', 'kWh'],
+  '/admin': ['87 W', 'Awake', '11.8 / 16.0 GB', '0 rpm', '64 W', 'Last 7 days', 'kWh'],
   // The catalog from scripts/fake-pc.js: Gyro's memory is RAM + VRAM.
   '/admin/strata': ['needs 62 GB RAM (recommended)', 'needs 28 GB RAM + VRAM', 'needs 35 GB RAM + VRAM (not enough RAM + VRAM)', 'DeepSeek-V4.1-Flash UD-Q8_K_XL · 508.4 GB download · needs 306 GB RAM + VRAM (experimental) (does not fit)', '3.5-bit i-quant, the best quality (matches the full model), the slowest. On this PC: fits.'],
   // The program and changelog from scripts/ui-check.sh.

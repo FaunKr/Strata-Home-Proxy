@@ -4,6 +4,10 @@ What each version brings, newest first. The web UI's PC service card shows
 the versions an update brings; each line is written for the user. Rules:
 `docs/pc-service.md`.
 
+## 1.2.0
+
+- Reports the graphics card's power in watts on AMD cards, from the Adrenalin driver, so the Overview and the metrics endpoint show it.
+
 ## 1.1.0
 
 - Tells the web UI Strata's speed switches and the documented engine environment variables that suit this PC, so the optimization prompt can suggest them.

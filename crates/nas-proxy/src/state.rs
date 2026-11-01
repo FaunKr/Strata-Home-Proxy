@@ -14,7 +14,7 @@ use std::{
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use strata_admin_ui::labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED};
-use strata_pc_protocol::{PcStatus, StrataJobKind};
+use strata_pc_protocol::{Hardware, PcStatus, StrataJobKind};
 
 use crate::{
     agent::{AgentClient, SleepAnswer},
@@ -114,6 +114,9 @@ pub struct AppState {
     /// The plug loop's latest reading in watts; `None` before the first or
     /// after a failed one.
     plug_latest: Mutex<Option<f64>>,
+    /// The hardware readings of the PC service's last answer to `/status`
+    /// and when it came; `None` readings from a service before them.
+    last_hardware: Mutex<Option<(Instant, Option<Hardware>)>>,
     /// The PC service reported Strata running in relay mode: calls to
     /// Strata go through its relay. Kept in `DATA_DIR`, so that after a
     /// restart of the proxy or while the PC sleeps a request still takes
@@ -198,6 +201,7 @@ impl AppState {
             in_flight: AtomicUsize::new(0),
             tuning: AtomicBool::new(false),
             plug_latest: Mutex::new(None),
+            last_hardware: Mutex::new(None),
             relay: AtomicBool::new(relay_file(&cfg.data_dir).is_some_and(|p| p.exists())),
             give_up: tokio::sync::watch::Sender::new(None),
             quiet_since: Mutex::new(None),
@@ -252,6 +256,7 @@ impl AppState {
     }
 
     async fn take_over(&self, agent: &AgentClient, status: &PcStatus) {
+        *self.last_hardware.lock().unwrap() = Some((Instant::now(), status.hardware.clone()));
         self.tuning.store(tuning(status), Ordering::SeqCst);
         self.note_relay(status.relay_on());
         if let Some(mac) = status.mac.as_deref().and_then(|m| parse_mac(m).ok())
@@ -326,6 +331,15 @@ impl AppState {
     /// The plug loop's latest reading in watts, without asking the plug.
     pub fn plug_latest(&self) -> Option<f64> {
         *self.plug_latest.lock().unwrap()
+    }
+
+    /// The hardware readings of the PC service's last answer, if it came
+    /// within `within`.
+    pub fn hardware_within(&self, within: Duration) -> Option<Hardware> {
+        match &*self.last_hardware.lock().unwrap() {
+            Some((at, hardware)) if at.elapsed() < within => hardware.clone(),
+            _ => None,
+        }
     }
 
     /// A tune runs on the PC, as the PC service last reported.

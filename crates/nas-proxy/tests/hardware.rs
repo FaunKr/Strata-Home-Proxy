@@ -134,7 +134,8 @@ async fn gpu_values_reach_the_overview() {
         v["hardware"]["Values"],
         json!({
             "gpu": {"load_pct": 37.0, "temp_c": null, "vram_used_bytes": 12_670_000_000u64,
-                    "vram_total_bytes": 17_163_091_968u64, "fan_rpm": null, "power_pct": null},
+                    "vram_total_bytes": 17_163_091_968u64, "fan_rpm": null, "power_pct": null,
+                    "power_watts": null},
             "cpu": {"load_pct": 12.5, "ram_used_bytes": 21_400_000_000u64, "ram_total_bytes": 34_359_738_368u64}
         })
     );
@@ -160,4 +161,24 @@ async fn a_stopped_fan_stays_zero() {
         .await;
     assert_eq!(v["hardware"]["Values"]["gpu"]["fan_rpm"], 0);
     assert_eq!(v["hardware"]["Values"]["gpu"]["power_pct"], Value::Null);
+}
+
+#[tokio::test]
+async fn the_overview_shows_gpu_watts_from_the_pc_service() {
+    let s = setup(true, |_| {}).await;
+    let hardware = Hardware {
+        gpu: Some(Gpu {
+            power_pct: Some(71.0),
+            power_watts: Some(182.0),
+            ..Gpu::default()
+        }),
+        cpu: Cpu::default(),
+    };
+    *s.pc.hardware.lock().unwrap() = Some(hardware);
+    let b = logged_in(&s.url).await;
+    let mut live = Live::open(&b).await;
+    let v = live
+        .until("hardware readings", |v| v["hardware"]["Values"].is_object())
+        .await;
+    assert_eq!(v["hardware"]["Values"]["gpu"]["power_watts"], 182.0);
 }

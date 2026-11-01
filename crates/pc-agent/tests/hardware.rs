@@ -80,7 +80,8 @@ async fn status_reports_the_gpu() {
         status["hardware"]["gpu"],
         json!({
             "load_pct": 37.0, "temp_c": null, "vram_used_bytes": 12_670_000_000u64,
-            "vram_total_bytes": 17_163_091_968u64, "fan_rpm": null, "power_pct": null
+            "vram_total_bytes": 17_163_091_968u64, "fan_rpm": null, "power_pct": null,
+            "power_watts": null
         })
     );
 }
@@ -103,6 +104,22 @@ async fn status_reports_temperature_fan_and_power() {
     assert_eq!(gpu["fan_rpm"], 0);
     assert_eq!(gpu["power_pct"], 41.0);
     assert_eq!(gpu["load_pct"], Value::Null);
+}
+
+#[tokio::test]
+async fn status_reports_gpu_power_in_watts() {
+    let s = setup("hardware-watts").await;
+    *s.fake.hardware.lock().unwrap() = Hardware {
+        gpu: Some(Gpu {
+            power_pct: Some(71.0),
+            power_watts: Some(182.0),
+            ..Gpu::default()
+        }),
+        cpu: Cpu::default(),
+    };
+    let gpu = &status_json(&s).await["hardware"]["gpu"];
+    assert_eq!(gpu["power_watts"], 182.0);
+    assert_eq!(gpu["power_pct"], 71.0);
 }
 
 /// The real reading, in the manual workflow `windows.yml`: gets through D3DKMT and PDH

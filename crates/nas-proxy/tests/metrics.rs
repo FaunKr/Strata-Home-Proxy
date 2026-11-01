@@ -17,7 +17,7 @@ use strata_nas_proxy::{
     events::{EventKind, Sample},
     lifecycle::PcState,
 };
-use strata_pc_protocol::{StrataJobKind, StrataJobState};
+use strata_pc_protocol::{Cpu, Gpu, Hardware, StrataJobKind, StrataJobState};
 
 const CHAT: &str = "/v1/chat/completions";
 const STREAM: &str = "/admin/api/requests-stream";
@@ -427,6 +427,220 @@ async fn the_info_line_names_the_product_version() {
         Some(1.0),
         "{text}"
     );
+}
+
+// --- Hardware readings ---
+
+/// Readings that differ from each other and from what a wrong unit gives.
+fn readings() -> Hardware {
+    Hardware {
+        gpu: Some(Gpu {
+            load_pct: Some(37.0),
+            temp_c: Some(61.5),
+            vram_used_bytes: Some(12_670_000_000),
+            vram_total_bytes: Some(17_163_091_968),
+            fan_rpm: Some(1450),
+            power_pct: Some(71.0),
+            power_watts: Some(182.5),
+        }),
+        cpu: Cpu {
+            load_pct: Some(12.5),
+            ram_used_bytes: Some(21_400_000_000),
+            ram_total_bytes: Some(34_359_738_368),
+        },
+    }
+}
+
+/// An awake PC whose PC service reports `hardware`.
+async fn reporting(hardware: Hardware) -> Setup {
+    let s = setup(true, |_| {}).await;
+    *s.pc.hardware.lock().unwrap() = Some(hardware);
+    s
+}
+
+/// Scrapes with `key` until `done` holds for the answer, which it returns.
+async fn until_text(s: &Setup, key: &str, what: &str, done: impl Fn(&str) -> bool) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let text = scrape(s, key).await;
+        if done(&text) {
+            return text;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "never {what}:\n{text}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn has_hardware_lines(text: &str) -> bool {
+    text.contains("strata_proxy_gpu_")
+        || text.contains("strata_proxy_cpu_")
+        || text.contains("strata_proxy_ram_")
+}
+
+#[tokio::test]
+async fn the_gpu_load_gauge_shows_the_last_reading_as_a_ratio() {
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_gpu_load_ratio", &[], 0.37).await;
+}
+
+#[tokio::test]
+async fn the_gpu_temperature_gauge_shows_the_last_reading() {
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_gpu_temperature_celsius", &[], 61.5).await;
+}
+
+#[tokio::test]
+async fn the_vram_used_gauge_shows_bytes_in_use() {
+    let s = reporting(readings()).await;
+    until_value(
+        &s,
+        "strata_proxy_gpu_vram_used_bytes",
+        &[],
+        12_670_000_000.0,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn the_vram_total_gauge_shows_the_cards_vram() {
+    let s = reporting(readings()).await;
+    until_value(
+        &s,
+        "strata_proxy_gpu_vram_total_bytes",
+        &[],
+        17_163_091_968.0,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn the_gpu_fan_gauge_shows_rpm() {
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_gpu_fan_rpm", &[], 1450.0).await;
+}
+
+#[tokio::test]
+async fn a_stopped_fan_shows_0_rpm() {
+    let mut hardware = readings();
+    hardware.gpu.as_mut().unwrap().fan_rpm = Some(0);
+    let s = reporting(hardware).await;
+    until_value(&s, "strata_proxy_gpu_fan_rpm", &[], 0.0).await;
+}
+
+#[tokio::test]
+async fn the_gpu_power_ratio_gauge_shows_the_share_of_the_limit() {
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_gpu_power_ratio", &[], 0.71).await;
+}
+
+#[tokio::test]
+async fn the_gpu_power_watts_gauge_shows_the_last_reading() {
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_gpu_power_watts", &[], 182.5).await;
+}
+
+#[tokio::test]
+async fn the_cpu_load_gauge_shows_the_last_reading_as_a_ratio() {
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_cpu_load_ratio", &[], 0.125).await;
+}
+
+#[tokio::test]
+async fn the_ram_used_gauge_shows_bytes_in_use() {
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_ram_used_bytes", &[], 21_400_000_000.0).await;
+}
+
+#[tokio::test]
+async fn the_ram_total_gauge_shows_the_pcs_ram() {
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_ram_total_bytes", &[], 34_359_738_368.0).await;
+}
+
+#[tokio::test]
+async fn an_unknown_reading_leaves_its_line_out() {
+    let mut hardware = readings();
+    hardware.gpu.as_mut().unwrap().power_watts = None;
+    let s = reporting(hardware).await;
+    let text = until_value(&s, "strata_proxy_gpu_power_ratio", &[], 0.71).await;
+    assert!(!text.contains("strata_proxy_gpu_power_watts"), "{text}");
+}
+
+#[tokio::test]
+async fn no_gpu_lines_without_a_graphics_card() {
+    let mut hardware = readings();
+    hardware.gpu = None;
+    let s = reporting(hardware).await;
+    let text = until_value(&s, "strata_proxy_cpu_load_ratio", &[], 0.125).await;
+    assert!(!text.contains("strata_proxy_gpu_"), "{text}");
+}
+
+#[tokio::test]
+async fn no_hardware_lines_while_the_pc_sleeps() {
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_gpu_load_ratio", &[], 0.37).await;
+    s.pc.awake.store(false, Ordering::SeqCst);
+    let text = until_value(&s, "strata_proxy_pc_state", &[("state", "asleep")], 1.0).await;
+    assert!(!has_hardware_lines(&text), "{text}");
+}
+
+#[tokio::test]
+async fn hardware_lines_come_in_gaming_mode() {
+    let s = reporting(readings()).await;
+    s.pc.gaming.store(true, Ordering::SeqCst);
+    until_text(&s, &s.key, "GPU load in gaming mode", |text| {
+        value(text, "strata_proxy_pc_state", &[("state", "gaming")]) == Some(1.0)
+            && value(text, "strata_proxy_gpu_load_ratio", &[]) == Some(0.37)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn hardware_lines_disappear_once_the_last_answer_is_older_than_two_idle_checks() {
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_gpu_load_ratio", &[], 0.37).await;
+    // The PC service stops answering while the PC and Strata stay up.
+    s.pc.status_misses.store(usize::MAX / 2, Ordering::SeqCst);
+    let text = until_text(&s, &s.key, "hardware lines gone", |text| {
+        !has_hardware_lines(text)
+    })
+    .await;
+    assert_eq!(
+        value(&text, "strata_proxy_pc_state", &[("state", "awake")]),
+        Some(1.0),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn no_hardware_lines_from_a_pc_service_without_hardware_readings() {
+    let s = reporting(readings()).await;
+    until_value(&s, "strata_proxy_gpu_load_ratio", &[], 0.37).await;
+    // The PC service goes back to a version before hardware readings.
+    *s.pc.hardware.lock().unwrap() = None;
+    let text = until_text(&s, &s.key, "hardware lines gone", |text| {
+        !has_hardware_lines(text)
+    })
+    .await;
+    assert_eq!(
+        value(&text, "strata_proxy_pc_state", &[("state", "awake")]),
+        Some(1.0),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_key_that_hides_the_model_sees_the_same_hardware_lines() {
+    let s = reporting(readings()).await;
+    let hidden = key(&s, "Phone", ModelName::Hide);
+    until_text(&s, &hidden, "hardware lines for the hiding key", |text| {
+        value(text, "strata_proxy_gpu_power_watts", &[]) == Some(182.5)
+            && value(text, "strata_proxy_gpu_vram_used_bytes", &[]) == Some(12_670_000_000.0)
+    })
+    .await;
 }
 
 // --- Requests and tokens ---

@@ -108,6 +108,10 @@ pub struct Gpu {
     pub fan_rpm: Option<u32>,
     /// Power draw as a share of the card's power limit.
     pub power_pct: Option<f32>,
+    /// The GPU chip's power draw in watts (AMD's ASIC power); `None` on
+    /// other cards and from a PC service before 1.2.0.
+    #[serde(default)]
+    pub power_watts: Option<f32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

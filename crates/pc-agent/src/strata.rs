@@ -1656,7 +1656,6 @@ async fn change_expert_profile(
     learning: Option<&str>,
 ) -> Result<(), Step> {
     let agent = job.agent();
-    let install = Installation::of(&agent.cfg);
     let model = load_model(agent, id).await?;
     let (start, save) =
         expert::planned(agent, id, &model, active, learning).map_err(Step::Failed)?;
@@ -1669,7 +1668,6 @@ async fn change_expert_profile(
         move |model| expert::apply(model, &start, save.as_deref()),
     )
     .await?;
-    drop(install);
     Ok(())
 }
 

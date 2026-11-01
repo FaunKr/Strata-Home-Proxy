@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn names_with_letters_digits_spaces_and_dashes_are_names() {
         assert_eq!(profile_name_problem("coding 2-b"), None);
-        assert_eq!(profile_name_problem("Übersetzung"), None);
+        assert_eq!(profile_name_problem("Café Ñandú"), None);
     }
 
     #[test]

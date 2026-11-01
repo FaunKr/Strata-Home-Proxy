@@ -565,7 +565,8 @@ fn profile_is_new(state: &AppState, request: &StrataJobRequest) -> Result<(), St
         .is_some_and(|p| p.profiles.iter().any(|p| p.name.eq_ignore_ascii_case(name)));
     if taken {
         return Err(format!(
-            "{model} has an expert profile named {name} already."
+            "{name}: {model} {}",
+            strata_admin_ui::labels::PROFILE_TAKEN
         ));
     }
     Ok(())

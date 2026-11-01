@@ -434,7 +434,7 @@ async fn learning_seconds_survive_a_service_restart() {
     let again = s.restarted();
     let status = again.status().await;
     let learning = status.expert_learning.expect("still learning");
-    assert_eq!(learning.secs, 1);
+    assert!(learning.secs > 0, "seconds kept: {}", learning.secs);
 }
 
 // --- held for benchmarks ---

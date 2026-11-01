@@ -40,9 +40,14 @@ struct Entry {
     secs: u64,
     total_tokens: u64,
     total_secs: u64,
-    /// The proxy asked the PC service to end learning: a limit was reached.
+    /// The proxy asked the PC service to end learning; the round is added
+    /// to the totals once the PC service no longer reports it learning.
     #[serde(default)]
     ending: bool,
+    /// The end was asked for from the web UI (*Stop learning*, *Use*,
+    /// *Learn more*), not by a limit: no event.
+    #[serde(default)]
+    quiet: bool,
     /// When the last round finished, in Unix seconds.
     #[serde(default)]
     finished: Option<u64>,
@@ -74,6 +79,7 @@ impl Entry {
         self.secs = 0;
         self.learning = false;
         self.ending = false;
+        self.quiet = false;
         self.finished = Some(clock::unix_now());
     }
 }
@@ -180,20 +186,39 @@ impl ExpertLearning {
     fn plan(&self, request: &StrataJobRequest, limits: Limits) -> Option<Kept> {
         let mut kept = self.kept.lock().unwrap();
         let before = kept.clone();
+        // Requests from now on go to the profile the job leaves learning:
+        // none until the PC service reports it.
+        let model = match request {
+            StrataJobRequest::ExpertProfile { model, .. }
+            | StrataJobRequest::DeleteExpertProfile { model, .. }
+            | StrataJobRequest::Delete { model } => model,
+            _ => return None,
+        };
+        let mut last = self.last.lock().unwrap();
+        if last.as_ref().is_some_and(|l| l.model == *model) {
+            *last = None;
+        }
+        drop(last);
         match request {
             StrataJobRequest::ExpertProfile {
                 model,
                 profile,
                 learn,
             } => {
-                // Any job of a model ends the round of its learning profile.
+                // Any job of a model ends the round of its learning profile,
+                // once the PC service reports it ended.
                 for e in kept.profiles.iter_mut().filter(|e| e.model == *model) {
-                    if e.learning {
-                        e.finish();
+                    if e.learning && !e.ending {
+                        e.ending = true;
+                        e.quiet = true;
                     }
                 }
                 if *learn && let Some(name) = profile {
                     let e = entry(&mut kept, model, name);
+                    if e.learning {
+                        // Learning into the learning one: a new round now.
+                        e.finish();
+                    }
                     e.learning = true;
                     e.token_limit = limits.tokens;
                     e.minute_limit = limits.minutes;
@@ -270,20 +295,25 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
         if !busy {
             for e in kept.profiles.iter_mut().filter(|e| e.ending) {
                 if now.as_ref().is_some_and(|l| e.is(&l.model, &l.profile)) {
-                    // The job did not end it, e.g. it failed: asked again.
+                    // The job did not end it, e.g. it failed: a limit asks
+                    // again, a step from the web UI is over.
                     e.ending = false;
+                    e.quiet = false;
                     continue;
                 }
-                learned.push((e.model.clone(), e.profile.clone(), e.tokens, e.secs));
+                if !e.quiet {
+                    learned.push((e.model.clone(), e.profile.clone(), e.tokens, e.secs));
+                }
                 e.finish();
             }
         }
         let mut to_end = None;
-        if let Some(l) = &now {
+        // While a job runs, the status can still show the round it ends.
+        if let Some(l) = now.as_ref().filter(|_| !busy) {
             let e = entry(kept, &l.model, &l.profile);
             e.learning = true;
             e.secs = e.secs.max(l.secs);
-            if !l.held && !busy && !e.ending && e.limit_reached() {
+            if !l.held && !e.ending && e.limit_reached() {
                 e.ending = true;
                 to_end = Some((e.model.clone(), e.profile.clone()));
             }

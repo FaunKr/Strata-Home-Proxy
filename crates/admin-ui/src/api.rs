@@ -265,6 +265,12 @@ pub async fn new_pc_setup_command() -> Result<PcSetupCommand, ServerFnError> {
 }
 
 #[cfg(feature = "ssr")]
+fn conflict(message: String) -> ServerFnError {
+    crate::server::set_status(axum::http::StatusCode::CONFLICT);
+    ServerFnError::new(message)
+}
+
+#[cfg(feature = "ssr")]
 fn bad_request(message: String) -> ServerFnError {
     crate::server::set_status(axum::http::StatusCode::BAD_REQUEST);
     ServerFnError::new(message)
@@ -1104,7 +1110,12 @@ mod strata_job {
             tokens,
             minutes,
         };
-        backend()?.start_strata_job(form).await.map_err(bad_request)
+        backend()?.start_strata_job(form).await.map_err(|e| {
+            match e.ends_with(crate::labels::PROFILE_TAKEN) {
+                true => conflict(e),
+                false => bad_request(e),
+            }
+        })
     }
 }
 

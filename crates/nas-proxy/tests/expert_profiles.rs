@@ -106,6 +106,27 @@ fn bodies(s: &Setup) -> Vec<Value> {
     s.pc.job_bodies.lock().unwrap().clone()
 }
 
+/// The event of a learned profile, asking for the status until it comes: a
+/// status the proxy's own poll fetched before the job ended can arrive late
+/// and still say the job runs.
+async fn learned_event(s: &Setup) -> strata_nas_proxy::events::Event {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        status_check(s).await;
+        let found = s
+            .state
+            .events
+            .recent()
+            .into_iter()
+            .find(|e| e.kind == EventKind::ExpertProfileLearned);
+        if let Some(event) = found {
+            return event;
+        }
+        assert!(std::time::Instant::now() < deadline, "no learned event");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 fn learning_ended(s: &Setup) -> bool {
     bodies(s).contains(&json!({"kind": "expert_profile", "model": "IQ3_XXS", "profile": "coding"}))
 }
@@ -186,8 +207,12 @@ async fn learn_new_profile_with_a_taken_name_is_refused() {
     let mut b = logged_in(&s.url).await;
     b.call("strata", &[]).await;
     let resp = learn_new(&mut b, "coding", "1000", "").await;
-    assert_ne!(resp.status(), 200);
-    assert!(resp.text().await.unwrap().contains("coding already"));
+    assert_eq!(resp.status(), 409);
+    let text = resp.text().await.unwrap();
+    assert!(
+        text.contains("coding: IQ3_XXS has an expert profile of that name already."),
+        "refusal: {text}"
+    );
     assert!(bodies(&s).is_empty());
 }
 
@@ -273,14 +298,7 @@ async fn learned_profile_records_an_event_with_tokens_and_time() {
     assert!(learning_ended(&s));
     s.pc.clear_expert_learning();
     job_done(&s).await;
-    status_check(&s).await;
-    let event = s
-        .state
-        .events
-        .recent()
-        .into_iter()
-        .find(|e| e.kind == EventKind::ExpertProfileLearned)
-        .expect("the event");
+    let event = learned_event(&s).await;
     assert_eq!(
         event.detail.as_deref(),
         Some("Expert profile coding of IQ3_XXS learned: 1K tokens, 2 h 10 min")

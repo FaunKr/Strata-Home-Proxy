@@ -5,6 +5,9 @@ use crate::api::{EventKind, Overview, PcView, StrataJobKind, StrataView};
 /// Messages that the proxy and the overview both show.
 pub const NOT_CONFIGURED: &str = "The Strata address is missing, the proxy is not set up.";
 pub const NO_MAC: &str = "No MAC address is known, so the PC cannot be woken.";
+/// The end of the refusal of *Learn new profile* for a name the model has
+/// already: a `409`, not a `400`.
+pub const PROFILE_TAKEN: &str = "has an expert profile of that name already.";
 pub const NO_AGENT: &str = "No PC service is set up (PC_AGENT_URL).";
 pub const NO_ANSWER: &str = "The PC service does not answer.";
 pub const TOO_OLD_TO_FORCE: &str =

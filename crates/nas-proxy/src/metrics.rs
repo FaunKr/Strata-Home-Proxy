@@ -41,8 +41,8 @@ async fn scrape(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response
             images: st.models.image_models(),
         })
     };
-    let snapshot = Snapshot::read(&st).await;
-    let mut resp = render(&snapshot, hiding.as_ref()).into_response();
+    let scrape_data = Scrape::read(&st).await;
+    let mut resp = render(&scrape_data, hiding.as_ref()).into_response();
     resp.headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(CONTENT_TYPE));
     resp
@@ -68,7 +68,7 @@ impl Hiding {
 
 /// What one scrape shows, read without waking the PC.
 #[derive(Clone, Debug, Default)]
-pub struct Snapshot {
+pub struct Scrape {
     pub version: String,
     pub pc: Option<PcState>,
     pub tuning: bool,
@@ -87,7 +87,7 @@ pub struct Snapshot {
     pub strata: Option<String>,
 }
 
-impl Snapshot {
+impl Scrape {
     async fn read(st: &Arc<AppState>) -> Self {
         let cfg = st.cfg();
         let plug = cfg.shelly_url.is_some();
@@ -175,23 +175,33 @@ const PC_STATES: [(PcState, &str); 5] = [
     (PcState::Gaming, "gaming"),
 ];
 
-const TOKENS: [(&str, &str); 3] = [
-    (
-        "strata_proxy_prompt_tokens_total",
-        "Prompt tokens of finished requests.",
-    ),
-    (
-        "strata_proxy_cached_tokens_total",
-        "The part of the prompt tokens Strata held already.",
-    ),
-    (
-        "strata_proxy_output_tokens_total",
-        "Output tokens of finished requests.",
-    ),
+/// One token counter: its name, help and the sum it shows.
+struct TokenCounter {
+    name: &'static str,
+    help: &'static str,
+    of: fn(&Total) -> u64,
+}
+
+const TOKENS: [TokenCounter; 3] = [
+    TokenCounter {
+        name: "strata_proxy_prompt_tokens_total",
+        help: "Prompt tokens of finished requests.",
+        of: |t| t.prompt_tokens,
+    },
+    TokenCounter {
+        name: "strata_proxy_cached_tokens_total",
+        help: "The part of the prompt tokens Strata held already.",
+        of: |t| t.cached_tokens,
+    },
+    TokenCounter {
+        name: "strata_proxy_output_tokens_total",
+        help: "Output tokens of finished requests.",
+        of: |t| t.output_tokens,
+    },
 ];
 
 /// The answer to a scrape: the proxy's own lines, then Strata's.
-pub fn render(s: &Snapshot, hiding: Option<&Hiding>) -> String {
+pub fn render(s: &Scrape, hiding: Option<&Hiding>) -> String {
     let model = |m: &str| hiding.map_or_else(|| m.to_string(), |h| h.model(m));
     let mut out = String::new();
 
@@ -243,16 +253,10 @@ pub fn render(s: &Snapshot, hiding: Option<&Hiding>) -> String {
 
     // Series that share all labels for this key add up into one line.
     let mut requests: BTreeMap<(String, String, Outcome), u64> = BTreeMap::new();
-    let mut tokens: BTreeMap<(String, String), [u64; 3]> = BTreeMap::new();
     for t in &s.totals {
-        let m = model(&t.model);
         *requests
-            .entry((t.key.clone(), m.clone(), t.outcome))
+            .entry((t.key.clone(), model(&t.model), t.outcome))
             .or_default() += t.requests;
-        let sums = tokens.entry((t.key.clone(), m)).or_default();
-        sums[0] += t.prompt_tokens;
-        sums[1] += t.cached_tokens;
-        sums[2] += t.output_tokens;
     }
     if !requests.is_empty() {
         let name = "strata_proxy_requests_total";
@@ -269,10 +273,14 @@ pub fn render(s: &Snapshot, hiding: Option<&Hiding>) -> String {
                 *n as f64,
             );
         }
-        for (i, (name, help)) in TOKENS.into_iter().enumerate() {
-            let mut f = Family::new(&mut out, name, "counter", help);
-            for ((key, m), sums) in &tokens {
-                f.line(name, &[("key", key), ("model", m)], sums[i] as f64);
+        for counter in TOKENS {
+            let mut sums: BTreeMap<(String, String), u64> = BTreeMap::new();
+            for t in &s.totals {
+                *sums.entry((t.key.clone(), model(&t.model))).or_default() += (counter.of)(t);
+            }
+            let mut f = Family::new(&mut out, counter.name, "counter", counter.help);
+            for ((key, m), n) in &sums {
+                f.line(counter.name, &[("key", key), ("model", m)], *n as f64);
             }
         }
     }

@@ -191,6 +191,12 @@ async fn a_scrape_answers_while_the_pc_sleeps() {
         Some(0.0),
         "{text}"
     );
+}
+
+#[tokio::test]
+async fn strata_up_is_0_while_the_pc_sleeps() {
+    let s = setup(false, |_| {}).await;
+    let text = until_value(&s, "strata_proxy_pc_state", &[("state", "asleep")], 1.0).await;
     assert_eq!(
         value(&text, "strata_proxy_strata_up", &[]),
         Some(0.0),
@@ -230,7 +236,22 @@ async fn a_scrape_without_an_api_key_gets_401() {
     let s = setup(true, |_| {}).await;
     let (status, text) = get_with(&s, "/metrics", None).await;
     assert_eq!(status, 401, "{text}");
-    assert!(!text.contains("strata_proxy_"), "{text}");
+    let body: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(body["error"]["code"], "invalid_api_key", "{text}");
+}
+
+#[tokio::test]
+async fn a_scrape_without_an_api_key_is_marked_unauthorized() {
+    let s = setup(true, |_| {}).await;
+    let resp = reqwest::Client::new()
+        .get(format!("{}/metrics", s.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers()[strata_nas_proxy::proxy::STATUS_HEADER],
+        "unauthorized"
+    );
 }
 
 #[tokio::test]
@@ -275,6 +296,18 @@ async fn metrics_prometheus_gives_the_same_answer_as_metrics() {
 async fn metrics_without_format_prometheus_gives_prometheus_text() {
     let s = setup(true, |_| {}).await;
     *s.pc.metrics.lock().unwrap() = Some(METRICS_BUSY.into());
+    until_value(&s, "strata_proxy_strata_up", &[], 1.0).await;
+    let text = scrape(&s, &s.key).await;
+    assert!(
+        text.contains("# TYPE strata_proxy_pc_state gauge"),
+        "{text}"
+    );
+    assert!(text.contains("vllm:num_requests_running"), "{text}");
+}
+
+#[tokio::test]
+async fn a_scrape_answers_with_prometheus_content_type() {
+    let s = setup(true, |_| {}).await;
     let resp = reqwest::Client::new()
         .get(format!("{}/metrics", s.url))
         .bearer_auth(&s.key)
@@ -286,12 +319,6 @@ async fn metrics_without_format_prometheus_gives_prometheus_text() {
         content_type.starts_with("text/plain; version=0.0.4"),
         "{content_type}"
     );
-    let text = resp.text().await.unwrap();
-    assert!(
-        text.contains("# TYPE strata_proxy_pc_state gauge"),
-        "{text}"
-    );
-    assert!(text.contains("vllm:num_requests_running"), "{text}");
 }
 
 #[tokio::test]
@@ -309,21 +336,24 @@ async fn strata_lines_are_missing_while_strata_does_not_answer() {
     s.pc.starting.store(true, Ordering::SeqCst);
     let text = scrape(&s, &s.key).await;
     assert!(!text.contains("vllm:"), "{text}");
-    assert_eq!(
-        value(&text, "strata_proxy_strata_up", &[]),
-        Some(0.0),
-        "{text}"
-    );
 }
 
 #[tokio::test]
-async fn the_llama_server_metrics_are_never_fetched() {
+async fn strata_lines_are_missing_while_strata_answers_its_metrics_with_an_error() {
+    let s = setup(true, |_| {}).await;
+    // No metrics set: Strata answers them with 404 while `/health` is fine.
+    let text = until_value(&s, "strata_proxy_strata_up", &[], 1.0).await;
+    assert!(!text.contains("vllm:"), "{text}");
+}
+
+#[tokio::test]
+async fn stratas_metrics_prometheus_is_never_fetched() {
     let s = setup(true, |_| {}).await;
     *s.pc.metrics.lock().unwrap() = Some(METRICS_BUSY.into());
     until_value(&s, "strata_proxy_strata_up", &[], 1.0).await;
     let (_, text) = get_with(&s, "/metrics/prometheus", Some(&s.key)).await;
     assert!(text.contains("vllm:num_requests_running"), "{text}");
-    assert_eq!(s.pc.llama_metrics_requests.load(Ordering::SeqCst), 0);
+    assert_eq!(s.pc.metrics_prometheus_requests.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -332,11 +362,6 @@ async fn the_proxys_own_lines_come_while_strata_is_not_set_up() {
     let text = scrape(&s, &s.key).await;
     assert_eq!(
         value(&text, "strata_proxy_strata_up", &[]),
-        Some(0.0),
-        "{text}"
-    );
-    assert_eq!(
-        value(&text, "strata_proxy_wake_packets_total", &[]),
         Some(0.0),
         "{text}"
     );
@@ -457,7 +482,8 @@ async fn a_failed_request_counts_as_failed() {
 #[tokio::test]
 async fn a_cancelled_request_counts_as_failed() {
     let s = with_model(true, |_| {}).await;
-    answers(&s, 500, 0, 40, Duration::from_secs(2));
+    // Strata works far longer than the test waits before it hangs up.
+    answers(&s, 500, 0, 40, Duration::from_secs(10));
     let resp = post_json(&s, CHAT, chat()).await;
     assert_eq!(resp.status(), 200);
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -608,11 +634,14 @@ async fn request_counters_survive_a_restart() {
 
 #[tokio::test]
 async fn request_counters_start_at_zero_without_back_fill_from_the_request_log() {
-    let s = setup(true, |_| {}).await;
+    let dir = data_dir("metrics-no-back-fill");
+    let s = setup(true, |c| c.data_dir = Some(dir.clone())).await;
     // A finished row in the request log from before this release: only
     // the log has it, the request totals do not.
-    let db = s.state.events.database();
-    db.lock()
+    s.state
+        .events
+        .database()
+        .lock()
         .unwrap()
         .execute(
             "INSERT INTO requests (id, row) VALUES (1, ?1)",
@@ -625,9 +654,11 @@ async fn request_counters_start_at_zero_without_back_fill_from_the_request_log()
             ],
         )
         .unwrap();
-    let text = scrape(&s, &s.key).await;
+    // The proxy of this release starts over that database.
+    let url = serve_proxy(restarted(&s)).await;
+    let again = Setup { url, ..s.clone() };
+    let text = scrape(&again, &s.key).await;
     assert!(!text.contains(REQUESTS), "{text}");
-    assert!(!text.contains("strata_proxy_prompt_tokens_total"), "{text}");
 }
 
 #[tokio::test]

@@ -81,8 +81,8 @@ pub struct FakePc {
     /// (an older build) if unset.
     pub metrics: Mutex<Option<String>>,
     pub metrics_requests: AtomicUsize,
-    /// Requests to Strata's llama-server metrics, `/metrics/prometheus`.
-    pub llama_metrics_requests: AtomicUsize,
+    /// Requests to Strata's `/metrics/prometheus`.
+    pub metrics_prometheus_requests: AtomicUsize,
     /// `Authorization` header of the last metrics request.
     pub metrics_auth: Mutex<Option<String>>,
     /// What the PC service's `GET /strata` answers; 404 (an older service) if unset.
@@ -652,10 +652,11 @@ pub async fn metrics(
     }
 }
 
-/// Strata's `/metrics/prometheus` with llama-server names: only counted,
-/// since every read resets its time window (docs/strata-api.md).
-pub async fn llama_metrics(State(pc): State<Pc>) -> Response {
-    pc.llama_metrics_requests.fetch_add(1, Ordering::SeqCst);
+/// Strata's `/metrics/prometheus` (`llamacpp:*` names): only counted, since
+/// every read resets its time window (docs/strata-api.md).
+pub async fn metrics_prometheus(State(pc): State<Pc>) -> Response {
+    pc.metrics_prometheus_requests
+        .fetch_add(1, Ordering::SeqCst);
     "llamacpp:predicted_tokens_seconds 0\n".into_response()
 }
 
@@ -1043,7 +1044,7 @@ pub async fn serve_strata(pc: Pc) -> SocketAddr {
         Router::new()
             .route("/health", get(health))
             .route("/metrics", get(metrics))
-            .route("/metrics/prometheus", get(llama_metrics))
+            .route("/metrics/prometheus", get(metrics_prometheus))
             .route("/v1/messages", post(messages))
             .route("/v1/chat/completions", post(chat))
             .route("/v1/responses", post(responses))

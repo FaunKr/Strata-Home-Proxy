@@ -88,6 +88,14 @@ struct OpenSlot {
 }
 
 impl PcEnergy {
+    fn empty(step: u64) -> Self {
+        Self {
+            step,
+            closed: 0.0,
+            open: None,
+        }
+    }
+
     fn joules(&self) -> f64 {
         self.closed
             + self
@@ -279,11 +287,7 @@ impl History {
             let db = db.lock().unwrap();
             let energy = read_pc_energy(&db, step).unwrap_or_else(|e| {
                 tracing::warn!("power plug readings not read: {e}");
-                PcEnergy {
-                    step,
-                    closed: 0.0,
-                    open: None,
-                }
+                PcEnergy::empty(step)
             });
             *held.lock().unwrap() = Some(energy);
             energy.joules()
@@ -561,11 +565,7 @@ fn read_pc_energy(db: &Connection, step: u64) -> rusqlite::Result<PcEnergy> {
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     let Some(last) = last else {
-        return Ok(PcEnergy {
-            step,
-            closed: 0.0,
-            open: None,
-        });
+        return Ok(PcEnergy::empty(step));
     };
     let (watts, samples): (f64, i64) = db.query_row(
         "SELECT SUM(watts), COUNT(*) FROM samples WHERE ts / ?1 = ?2",

@@ -1,6 +1,6 @@
 [package]
 name = "strata-pc-agent"
-version = "1.3.0"
+version = "1.3.1"
 edition = "2024"
 license.workspace = true
 # One test binary for all files in tests/ (tests/main.rs lists them): each

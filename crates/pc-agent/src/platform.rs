@@ -120,8 +120,10 @@ mod imp {
     }
 
     /// Ctrl+Break to the console of process `pid` (Strata runs in a hidden
-    /// console of its own): this service joins that console for the send
-    /// and ignores the event itself.
+    /// console of its own): this service joins that console for the send.
+    /// The event goes to `pid`'s process group alone, which `pid` started
+    /// as [`CommandSpec::own_group`]: sent to every process on the console,
+    /// it would end this service too, as nothing here ignores Ctrl+Break.
     pub fn break_process(pid: u32) -> Result<()> {
         use windows_sys::Win32::System::Console::{
             AttachConsole, CTRL_BREAK_EVENT, FreeConsole, GenerateConsoleCtrlEvent,
@@ -138,7 +140,7 @@ mod imp {
                 );
             }
             SetConsoleCtrlHandler(None, 1);
-            let sent = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, 0);
+            let sent = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid);
             let error = std::io::Error::last_os_error();
             FreeConsole();
             if sent == 0 {
@@ -389,6 +391,8 @@ fn strata_command(program: &Path, args: &[String]) -> Result<CommandSpec> {
         program: program.to_path_buf(),
         args: args.to_vec(),
         dir: dir.map(Path::to_path_buf),
+        // The clean stop sends Ctrl+Break to this group alone.
+        own_group: true,
         ..Default::default()
     })
 }
@@ -396,6 +400,10 @@ fn strata_command(program: &Path, args: &[String]) -> Result<CommandSpec> {
 /// Keeps helper programs from flashing a console window.
 #[cfg(windows)]
 pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Starts a program as the first of a process group of its own.
+#[cfg(windows)]
+pub(crate) const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 #[cfg(windows)]
 pub(crate) use imp::hidden;
@@ -508,4 +516,88 @@ pub fn notify(title: &str, message: &str) {
     }
     #[cfg(not(windows))]
     println!("{title}: {message}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strata_starts_in_its_own_process_group() {
+        let spec = strata_command(Path::new("start-strata.bat"), &[]).unwrap();
+        assert!(spec.own_group);
+    }
+
+    #[test]
+    fn commands_other_than_strata_share_the_service_group() {
+        assert!(!CommandSpec::default().own_group);
+    }
+
+    /// The clean stop on real Windows: a program started as Strata is, sent
+    /// the clean stop's Ctrl+Break. Run by the workflow *Windows*.
+    #[cfg(windows)]
+    mod ctrl_break {
+        use std::time::Duration;
+
+        use super::*;
+
+        /// Joining a console is for the whole process: one test at a time.
+        static CONSOLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+        const SLEEPER: &str = "platform::tests::ctrl_break::sleeper_for_ctrl_break";
+
+        /// Not a test: the program the tests send Ctrl+Break to, this test
+        /// binary run with only this function, which waits a minute. A Rust
+        /// program has no handler of its own, so Ctrl+Break ends it.
+        #[test]
+        #[ignore = "started by the Ctrl+Break tests"]
+        fn sleeper_for_ctrl_break() {
+            std::thread::sleep(Duration::from_secs(60));
+        }
+
+        /// Starts the sleeper the way Strata is started and sends it the
+        /// clean stop's Ctrl+Break.
+        async fn break_sleeper() -> Running {
+            let spec = CommandSpec {
+                program: std::env::current_exe().unwrap(),
+                args: ["--exact", SLEEPER, "--ignored", "--nocapture"]
+                    .map(String::from)
+                    .to_vec(),
+                ..strata_command(&std::env::current_exe().unwrap(), &[]).unwrap()
+            };
+            let run = command::spawn(&spec).unwrap();
+            // Time for the sleeper to come up with its console.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            imp::break_process(run.pid().unwrap()).unwrap();
+            run
+        }
+
+        #[tokio::test]
+        async fn ctrl_break_ends_the_program_in_its_own_group() {
+            let _console = CONSOLE.lock().await;
+            let run = break_sleeper().await;
+            let cancel = run.canceller();
+            let ended = tokio::time::timeout(Duration::from_secs(10), run.wait()).await;
+            if ended.is_err() {
+                cancel();
+            }
+            // STATUS_CONTROL_C_EXIT: ended by the signal, not for another reason.
+            assert_eq!(
+                ended.ok().flatten(),
+                Some(0xC000_013A_u32 as i32),
+                "the program did not end by Ctrl+Break"
+            );
+        }
+
+        #[tokio::test]
+        async fn ctrl_break_leaves_the_service_running() {
+            let _console = CONSOLE.lock().await;
+            let run = break_sleeper().await;
+            // Sent to the whole console, Ctrl+Break ends this whole test
+            // process within this time: the run fails as a crash, not as
+            // this test failing.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            run.canceller()();
+        }
+    }
 }

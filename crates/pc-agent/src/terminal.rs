@@ -332,6 +332,7 @@ impl Terminal {
             .to_vec(),
             dir: None,
             env: vec![("STRATA_DATA_DIR".into(), self.home.display().to_string())],
+            ..Default::default()
         }
     }
 
@@ -342,6 +343,7 @@ impl Terminal {
             args: args.iter().map(|a| a.to_string()).collect(),
             dir: Some(self.root()),
             env: vec![self.install_env()],
+            ..Default::default()
         }
     }
 
@@ -380,6 +382,7 @@ impl Terminal {
                 self.install_env(),
                 ("PYTHONNOUSERSITE".into(), "1".into()),
             ],
+            ..Default::default()
         }
     }
 
@@ -394,6 +397,7 @@ impl Terminal {
             args,
             dir: Some(root),
             env: vec![self.install_env(), ("PYTHONNOUSERSITE".into(), "1".into())],
+            ..Default::default()
         }
     }
 
@@ -411,6 +415,7 @@ impl Terminal {
             ],
             dir: Some(root),
             env: vec![self.install_env(), ("PYTHONNOUSERSITE".into(), "1".into())],
+            ..Default::default()
         }
     }
 

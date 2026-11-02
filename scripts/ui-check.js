@@ -349,6 +349,15 @@ async function forced(page, errors) {
     await row.getByRole('button', { name: 'Switch picture reading on' }).waitFor(wait);
     await fakePc('gaming');
   });
+  await step('Restart at next sleep: planned, then cancelled', 'planned-restart', async () => {
+    await fakePc('awake');
+    await page.goto(base + '/admin', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'Restart at next sleep' }).click(wait);
+    await sees('Restart planned');
+    await page.locator('.restart').getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('button', { name: 'Restart at next sleep' }).waitFor(wait);
+    await fakePc('gaming');
+  });
   await step('Force sleep in the gaming state', 'gaming-overview', async () => {
     await page.goto(base + '/admin', { waitUntil: 'domcontentloaded' });
     await force.click(wait);

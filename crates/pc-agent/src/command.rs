@@ -18,6 +18,10 @@ pub struct CommandSpec {
     pub dir: Option<PathBuf>,
     /// Environment variables on top of the service's own.
     pub env: Vec<(String, String)>,
+    /// On Windows a process group of its own, so a Ctrl+Break sent to that
+    /// group reaches this program and what it starts, never the service.
+    /// Elsewhere every command gets one anyway.
+    pub own_group: bool,
 }
 
 /// Ends a running command and the programs it started.
@@ -94,7 +98,11 @@ pub fn spawn(spec: &CommandSpec) -> Result<Running> {
     // would come in batches instead of live.
     cmd.env("PYTHONUNBUFFERED", "1");
     #[cfg(windows)]
-    cmd.creation_flags(crate::platform::CREATE_NO_WINDOW);
+    cmd.creation_flags(if spec.own_group {
+        crate::platform::CREATE_NO_WINDOW | crate::platform::CREATE_NEW_PROCESS_GROUP
+    } else {
+        crate::platform::CREATE_NO_WINDOW
+    });
     // Its own process group, so a cancel reaches everything it started.
     #[cfg(unix)]
     cmd.process_group(0);

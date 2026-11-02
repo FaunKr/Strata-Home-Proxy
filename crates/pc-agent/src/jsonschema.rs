@@ -113,6 +113,7 @@ async fn ensure(
         args: args.iter().map(|a| a.to_string()).collect(),
         dir: python.parent().map(Into::into),
         env: vec![("PYTHONNOUSERSITE".into(), "1".into())],
+        ..Default::default()
     };
     let check = exit_within(agent, &spec(&["-c", CHECK]), limits.check, cancelled).await;
     if check.as_ref().is_ok_and(|(code, _)| *code == 0) || cancelled() {

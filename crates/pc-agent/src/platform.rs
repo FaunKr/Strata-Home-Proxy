@@ -576,16 +576,26 @@ mod tests {
         async fn ctrl_break_ends_the_program_in_its_own_group() {
             let _console = CONSOLE.lock().await;
             let run = break_sleeper().await;
+            let cancel = run.canceller();
             let ended = tokio::time::timeout(Duration::from_secs(10), run.wait()).await;
-            assert!(ended.is_ok(), "the program still runs after Ctrl+Break");
+            if ended.is_err() {
+                cancel();
+            }
+            // STATUS_CONTROL_C_EXIT: ended by the signal, not for another reason.
+            assert_eq!(
+                ended.ok().flatten(),
+                Some(0xC000_013A_u32 as i32),
+                "the program did not end by Ctrl+Break"
+            );
         }
 
         #[tokio::test]
         async fn ctrl_break_leaves_the_service_running() {
             let _console = CONSOLE.lock().await;
             let run = break_sleeper().await;
-            // Sent to the whole console, Ctrl+Break ends this process
-            // within this time, and the test run fails.
+            // Sent to the whole console, Ctrl+Break ends this whole test
+            // process within this time: the run fails as a crash, not as
+            // this test failing.
             tokio::time::sleep(Duration::from_secs(2)).await;
             run.canceller()();
         }

@@ -1327,3 +1327,336 @@ async fn the_image_model_keeps_its_name_for_a_key_that_hides_the_model() {
     .await;
     assert!(!text.contains("Qwen3-30B-A3B"), "{text}");
 }
+
+// --- Expert tiers ---
+
+const EXPERTS: &str = "strata_proxy_expert_tokens_total";
+
+/// One of Strata's finished requests (`history.append`'s keys the proxy
+/// reads); `None` is Strata's `null`.
+fn entry(id: &str, output: u64, hit: Option<f64>, pcie: Option<f64>) -> Value {
+    json!({"id": id, "finish": "stop", "prompt_tokens": 500, "output_tokens": output,
+           "engine_generated": output, "hit_rate": hit, "pcie_share": pcie})
+}
+
+/// Waits until the simulated Strata answered `n` reads of its finished
+/// requests.
+async fn finished_reads(s: &Setup, n: usize) {
+    let pc = s.pc.clone();
+    eventually(
+        &format!("{n} reads of Strata's finished requests"),
+        move || pc.finished_requests_reads.load(Ordering::SeqCst) >= n,
+    )
+    .await;
+}
+
+/// A proxy with `IQ3_XXS` active that read Strata's finished requests once
+/// while there were none, so the next ones count.
+async fn primed(tweak: impl FnOnce(&mut strata_nas_proxy::Config)) -> Setup {
+    let s = with_model(true, tweak).await;
+    answers(&s, 500, 0, 40, Duration::ZERO);
+    s.pc.set_strata_finished_requests(vec![]);
+    ask_with(&s, &s.key).await;
+    finished_reads(&s, 1).await;
+    s
+}
+
+/// Strata lists `finished` (newest first) after the next request.
+async fn ask_with_finished(s: &Setup, finished: Vec<Value>) {
+    s.pc.set_strata_finished_requests(finished);
+    ask_with(s, &s.key).await;
+}
+
+/// The tokens of `tier` over all models.
+fn tier_sum(text: &str, tier: &str) -> f64 {
+    text.lines()
+        .filter(|l| l.starts_with(EXPERTS) && l.contains(&format!("tier=\"{tier}\"")))
+        .map(|l| l.rsplit_once(' ').unwrap().1.parse::<f64>().unwrap())
+        .sum()
+}
+
+/// Scrapes with `key` until the tiers over all models hold `[vram, pcie, cpu]`.
+async fn until_tiers(s: &Setup, key: &str, expected: [f64; 3]) -> String {
+    until_text(s, key, &format!("expert tiers {expected:?}"), |text| {
+        ["vram", "pcie", "cpu"]
+            .iter()
+            .zip(expected)
+            .all(|(tier, n)| (tier_sum(text, tier) - n).abs() < 1e-6)
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_request_splits_its_output_tokens_into_vram_pcie_and_cpu() {
+    let s = primed(|_| {}).await;
+    ask_with_finished(&s, vec![entry("a", 100, Some(0.8), Some(0.25))]).await;
+    until_tiers(&s, &s.key, [60.0, 25.0, 15.0]).await;
+}
+
+#[tokio::test]
+async fn a_strata_request_counts_once_across_reads() {
+    let s = primed(|_| {}).await;
+    ask_with_finished(&s, vec![entry("a", 100, Some(1.0), Some(0.0))]).await;
+    until_tiers(&s, &s.key, [100.0, 0.0, 0.0]).await;
+    ask_with_finished(
+        &s,
+        vec![
+            entry("b", 10, Some(1.0), Some(0.0)),
+            entry("a", 100, Some(1.0), Some(0.0)),
+        ],
+    )
+    .await;
+    until_tiers(&s, &s.key, [110.0, 0.0, 0.0]).await;
+}
+
+#[tokio::test]
+async fn requests_strata_held_at_the_first_read_are_not_counted() {
+    let s = with_model(true, |_| {}).await;
+    answers(&s, 500, 0, 40, Duration::ZERO);
+    ask_with_finished(&s, vec![entry("a", 100, Some(1.0), Some(0.0))]).await;
+    finished_reads(&s, 1).await;
+    ask_with_finished(
+        &s,
+        vec![
+            entry("b", 10, Some(1.0), Some(0.0)),
+            entry("a", 100, Some(1.0), Some(0.0)),
+        ],
+    )
+    .await;
+    until_tiers(&s, &s.key, [10.0, 0.0, 0.0]).await;
+}
+
+#[tokio::test]
+async fn an_entry_without_a_hit_rate_counts_in_no_tier() {
+    let s = primed(|_| {}).await;
+    ask_with_finished(
+        &s,
+        vec![
+            entry("b", 10, Some(0.0), Some(0.0)),
+            entry("a", 100, None, Some(0.0)),
+        ],
+    )
+    .await;
+    until_tiers(&s, &s.key, [0.0, 0.0, 10.0]).await;
+}
+
+#[tokio::test]
+async fn an_entry_without_a_pcie_share_counts_in_no_tier() {
+    let s = primed(|_| {}).await;
+    ask_with_finished(
+        &s,
+        vec![
+            entry("b", 10, Some(0.0), Some(0.0)),
+            entry("a", 100, Some(0.5), None),
+        ],
+    )
+    .await;
+    until_tiers(&s, &s.key, [0.0, 0.0, 10.0]).await;
+}
+
+#[tokio::test]
+async fn expert_tokens_count_for_the_pc_services_model_name() {
+    let s = primed(|_| {}).await;
+    ask_with_finished(&s, vec![entry("a", 100, Some(1.0), Some(0.0))]).await;
+    let text = until_value(
+        &s,
+        EXPERTS,
+        &[("model", "IQ3_XXS"), ("tier", "vram")],
+        100.0,
+    )
+    .await;
+    assert!(!text.contains(STRATA_NAME), "{text}");
+}
+
+/// The proxy started again over `s`'s data folder, on a new address.
+async fn after_restart(s: &Setup) -> Setup {
+    let state = restarted(s);
+    let url = serve_proxy(Arc::clone(&state)).await;
+    Setup {
+        url,
+        state,
+        ..s.clone()
+    }
+}
+
+#[tokio::test]
+async fn expert_tokens_survive_a_restart() {
+    let dir = data_dir("metrics-experts-restart");
+    let s = primed(|c| c.data_dir = Some(dir.clone())).await;
+    ask_with_finished(&s, vec![entry("a", 100, Some(0.5), Some(0.0))]).await;
+    until_tiers(&s, &s.key, [50.0, 0.0, 50.0]).await;
+    let again = after_restart(&s).await;
+    let text = scrape(&again, &s.key).await;
+    assert_eq!(
+        value(&text, EXPERTS, &[("model", "IQ3_XXS"), ("tier", "cpu")]),
+        Some(50.0),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_counts_no_entry_again() {
+    let dir = data_dir("metrics-experts-no-recount");
+    let s = primed(|c| c.data_dir = Some(dir.clone())).await;
+    ask_with_finished(&s, vec![entry("a", 100, Some(1.0), Some(0.0))]).await;
+    until_tiers(&s, &s.key, [100.0, 0.0, 0.0]).await;
+    let again = after_restart(&s).await;
+    s.pc.set_strata_finished_requests(vec![
+        entry("b", 10, Some(1.0), Some(0.0)),
+        entry("a", 100, Some(1.0), Some(0.0)),
+    ]);
+    ask_with(&again, &s.key).await;
+    until_tiers(&again, &s.key, [110.0, 0.0, 0.0]).await;
+}
+
+#[tokio::test]
+async fn entries_after_a_strata_restart_count() {
+    let s = primed(|_| {}).await;
+    ask_with_finished(&s, vec![entry("a", 100, Some(1.0), Some(0.0))]).await;
+    until_tiers(&s, &s.key, [100.0, 0.0, 0.0]).await;
+    // A new start of Strata: it lists only the requests since.
+    ask_with_finished(&s, vec![entry("x", 20, Some(0.0), Some(1.0))]).await;
+    until_tiers(&s, &s.key, [100.0, 20.0, 0.0]).await;
+}
+
+#[tokio::test]
+async fn entries_a_failed_read_missed_count_with_the_next_read() {
+    let s = primed(|_| {}).await;
+    // Strata answers without its finished requests: the read fails.
+    *s.pc.finished_requests.lock().unwrap() = None;
+    ask_with(&s, &s.key).await;
+    finished_reads(&s, 2).await;
+    ask_with_finished(
+        &s,
+        vec![
+            entry("b", 10, Some(1.0), Some(0.0)),
+            entry("a", 100, Some(1.0), Some(0.0)),
+        ],
+    )
+    .await;
+    until_tiers(&s, &s.key, [110.0, 0.0, 0.0]).await;
+}
+
+#[tokio::test]
+async fn expert_tokens_show_while_the_pc_sleeps() {
+    let s = primed(|_| {}).await;
+    ask_with_finished(&s, vec![entry("a", 100, Some(1.0), Some(0.0))]).await;
+    until_tiers(&s, &s.key, [100.0, 0.0, 0.0]).await;
+    s.pc.awake.store(false, Ordering::SeqCst);
+    let text = until_value(&s, "strata_proxy_pc_state", &[("state", "asleep")], 1.0).await;
+    assert_eq!(
+        value(&text, EXPERTS, &[("model", "IQ3_XXS"), ("tier", "vram")]),
+        Some(100.0),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn there_are_no_expert_token_lines_before_an_entry_counted() {
+    let s = primed(|_| {}).await;
+    ask_with_finished(&s, vec![entry("a", 100, None, None)]).await;
+    finished_reads(&s, 2).await;
+    // Reads run one at a time: the third starts once the second is saved.
+    ask_with(&s, &s.key).await;
+    finished_reads(&s, 3).await;
+    let text = scrape(&s, &s.key).await;
+    assert!(!text.contains(EXPERTS), "{text}");
+}
+
+#[tokio::test]
+async fn a_model_with_counted_entries_shows_all_three_tiers() {
+    let s = primed(|_| {}).await;
+    ask_with_finished(&s, vec![entry("a", 100, Some(1.0), Some(0.0))]).await;
+    let text = until_value(
+        &s,
+        EXPERTS,
+        &[("model", "IQ3_XXS"), ("tier", "vram")],
+        100.0,
+    )
+    .await;
+    for tier in ["pcie", "cpu"] {
+        assert_eq!(
+            value(&text, EXPERTS, &[("model", "IQ3_XXS"), ("tier", tier)]),
+            Some(0.0),
+            "{text}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_scrape_never_reads_stratas_finished_requests() {
+    let s = primed(|_| {}).await;
+    for _ in 0..3 {
+        scrape(&s, &s.key).await;
+    }
+    ask_with_finished(&s, vec![entry("a", 100, Some(1.0), Some(0.0))]).await;
+    until_tiers(&s, &s.key, [100.0, 0.0, 0.0]).await;
+    // The priming request's read and this request's: none for the scrapes.
+    assert_eq!(s.pc.finished_requests_reads.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn an_image_request_reads_no_finished_requests() {
+    let s = primed(|_| {}).await;
+    s.pc.list_alias_and_image.store(true, Ordering::SeqCst);
+    let list = reqwest::Client::new()
+        .get(format!("{}/v1/models", s.url))
+        .bearer_auth(&s.key)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list.status(), 200);
+    list.text().await.unwrap();
+    s.pc.set_strata_finished_requests(vec![entry("a", 100, Some(1.0), Some(0.0))]);
+    let resp = post_json(
+        &s,
+        "/v1/images/generations",
+        json!({"model": "flux-schnell"}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    resp.text().await.unwrap();
+    until_value(
+        &s,
+        REQUESTS,
+        &[
+            ("key", "Test"),
+            ("model", "flux-schnell"),
+            ("outcome", "answered"),
+        ],
+        1.0,
+    )
+    .await;
+    // A read for the image request would count "a" for the image model.
+    ask_with_finished(
+        &s,
+        vec![
+            entry("b", 10, Some(1.0), Some(0.0)),
+            entry("a", 100, Some(1.0), Some(0.0)),
+        ],
+    )
+    .await;
+    let text = until_value(
+        &s,
+        EXPERTS,
+        &[("model", "IQ3_XXS"), ("tier", "vram")],
+        110.0,
+    )
+    .await;
+    assert!(!text.contains("model=\"flux-schnell\",tier"), "{text}");
+}
+
+#[tokio::test]
+async fn a_key_that_hides_the_model_sees_the_public_name_in_expert_tokens() {
+    let s = primed(|_| {}).await;
+    ask_with_finished(&s, vec![entry("a", 100, Some(1.0), Some(0.0))]).await;
+    until_tiers(&s, &s.key, [100.0, 0.0, 0.0]).await;
+    let hidden = key(&s, "Phone", ModelName::Hide);
+    let text = scrape(&s, &hidden).await;
+    assert_eq!(
+        value(&text, EXPERTS, &[("model", "strata"), ("tier", "vram")]),
+        Some(100.0),
+        "{text}"
+    );
+    assert!(!text.contains("IQ3_XXS"), "{text}");
+}

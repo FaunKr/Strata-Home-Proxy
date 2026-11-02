@@ -31,6 +31,7 @@ Code: `crates/nas-proxy/src/metrics.rs`. Tests: `crates/nas-proxy/tests/metrics.
 | `strata_proxy_prompt_tokens_total` | counter | `key`, `model` | per series with at least one request |
 | `strata_proxy_cached_tokens_total` | counter | `key`, `model` | per series with at least one request |
 | `strata_proxy_output_tokens_total` | counter | `key`, `model` | per series with at least one request |
+| `strata_proxy_expert_tokens_total` | counter | `model`, `tier`: `vram`, `pcie`, `cpu` | all three tiers per model with at least one counted Strata request, also while the PC sleeps |
 | `strata_proxy_request_energy_joules_total` | counter | `model` | with a power plug, per model with request energy |
 | `strata_proxy_pc_energy_joules_total` | counter | none | with a power plug |
 | `strata_proxy_wake_packets_total` | counter | none | always |
@@ -44,6 +45,14 @@ Code: `crates/nas-proxy/src/metrics.rs`. Tests: `crates/nas-proxy/tests/metrics.
 - **Request energy** is the request energy of all days per model, in joules (Wh × 3600), so it adds up to the same figures as the energy per 1000 tokens.
 - **PC energy** counts the power plug's readings in the history: each interval of `PLUG_SAMPLE_SECS` with readings counts for that long at their mean. Only measured readings count, never the energy estimate from `POWER_AWAKE_WATTS` and `POWER_ASLEEP_WATTS`. It agrees with the history's *Energy* for every fully measured hour.
 - **Wake packets** counts the wake packets in the history.
+- **Expert tokens** are the output tokens of Strata's requests split by the expert tiers: where the routed experts of the decode ran, from the GPU's expert cache in VRAM (`vram`), copied over PCIe (`pcie`) or computed by the CPU from RAM (`cpu`). A request with n output tokens, Strata's `hit_rate` h and `pcie_share` p adds n × (1 − p) × h, n × p and n × (1 − p) × (1 − h); the three add up to n. After each finished request that reached Strata (not image requests), the proxy reads Strata's finished requests (`docs/strata-api.md`) in the background, never while the PC sleeps or wakes, and counts each Strata request once, by Strata's own id, for the model of the request that started the read (when several requests finish during one read, the latest of them). A request without a hit rate or a PCIe share (no expert lookups, an older engine) counts in no tier. There is no `key` label: Strata names no client there, and the code benchmark's requests count too. A failed read counts nothing; the next one catches up while Strata still holds the requests (its last 500). The counter started at 0 with the release that brought it: the requests Strata held at the first read do not count.
+
+  The CPU's share of the decode over 5 minutes, and the expert cache hit rate the same way with `vram`:
+
+  ```promql
+  sum by (model) (rate(strata_proxy_expert_tokens_total{tier="cpu"}[5m]))
+    / sum by (model) (rate(strata_proxy_expert_tokens_total[5m]))
+  ```
 
 The counters carry on across restarts: they are read from the history's database. The request totals started empty with the release that brought them; the request energy, the PC energy and the wake packets include everything saved before. A deleted database, or a changed `PLUG_SAMPLE_SECS` for the PC energy, makes a counter drop, which Prometheus treats as a reset.
 

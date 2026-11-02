@@ -184,8 +184,12 @@ _Avoid_: access log, request history
 Requests and their prompt, cached and output tokens per day, API key, model and outcome, kept forever in the history's database for the metrics endpoint; every finished row of the request log adds to them. They start with the release that brought them.
 _Avoid_: request stats, usage table
 
+**Expert tiers**:
+Where the routed experts of a request's decode ran: from the GPU's expert cache in VRAM (`vram`), copied over PCIe (`pcie`), or computed by the CPU from RAM (`cpu`). The metrics endpoint counts each Strata request's output tokens per tier, per model, read from Strata's finished requests after each finished request; they start with the release that brought them.
+_Avoid_: expert placement, offload rate
+
 **Metrics endpoint**:
-What the proxy answers on `/metrics` and `/metrics/prometheus` for Prometheus, with any API key: the PC's state, power, request totals, request energy, the PC's energy and wake packets, plus Strata's own lines while it is up and Strata's tool-call counters at the last value read. A scrape never wakes the PC and is no activity. Rules in `docs/metrics.md`.
+What the proxy answers on `/metrics` and `/metrics/prometheus` for Prometheus, with any API key: the PC's state, power, request totals, expert tiers, request energy, the PC's energy and wake packets, plus Strata's own lines while it is up and Strata's tool-call counters at the last value read. A scrape never wakes the PC and is no activity. Rules in `docs/metrics.md`.
 _Avoid_: telemetry, stats, exporter
 
 **Strata key**:

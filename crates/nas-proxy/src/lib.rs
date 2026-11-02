@@ -9,6 +9,7 @@ pub mod code_bench;
 pub mod config;
 pub mod events;
 pub mod expert_learning;
+pub mod expert_tiers;
 pub mod files;
 pub mod forced;
 pub mod history;

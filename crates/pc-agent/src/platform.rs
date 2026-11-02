@@ -21,6 +21,11 @@ pub trait Platform: Send + Sync + 'static {
     fn user_idle(&self) -> Duration;
     /// Puts the PC into standby. Returns after the PC wakes up again.
     fn suspend(&self) -> Result<()>;
+    /// Restarts the PC (a Planned restart), without installing updates and
+    /// without forcing programs closed. Returns once Windows has begun.
+    fn restart(&self) -> Result<()> {
+        anyhow::bail!("not supported here")
+    }
     /// Starts Strata without a window; its console output comes through the
     /// returned command.
     fn start_strata(&self, program: &Path, args: &[String]) -> Result<Running>;
@@ -115,6 +120,85 @@ mod imp {
                 "SetSuspendState failed: {}",
                 std::io::Error::last_os_error()
             );
+        }
+        Ok(())
+    }
+
+    /// Restarts Windows: with the shutdown privilege, which a program must
+    /// switch on for itself, and without `SHUTDOWN_INSTALL_UPDATES`, so
+    /// updates stay the user's. An update that only waits for a restart
+    /// still finishes; programs that hold the restart are not forced.
+    pub fn restart() -> Result<()> {
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, HANDLE},
+            Security::{
+                AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW,
+                SE_PRIVILEGE_ENABLED, SE_SHUTDOWN_NAME, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES,
+                TOKEN_QUERY,
+            },
+            System::{
+                Shutdown::{
+                    InitiateShutdownW, SHTDN_REASON_FLAG_PLANNED, SHTDN_REASON_MAJOR_OTHER,
+                    SHTDN_REASON_MINOR_OTHER, SHUTDOWN_RESTART,
+                },
+                Threading::{GetCurrentProcess, OpenProcessToken},
+            },
+        };
+        // SAFETY: the token handle is checked and closed; every pointer is to
+        // a local that lives through the call; the strings are Windows' own
+        // NUL-terminated constants or null.
+        unsafe {
+            let mut token: HANDLE = std::ptr::null_mut();
+            if OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                &mut token,
+            ) == 0
+            {
+                bail!(
+                    "process token not opened: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+            let mut privileges = TOKEN_PRIVILEGES {
+                PrivilegeCount: 1,
+                Privileges: [LUID_AND_ATTRIBUTES {
+                    Luid: std::mem::zeroed(),
+                    Attributes: SE_PRIVILEGE_ENABLED,
+                }],
+            };
+            let looked_up = LookupPrivilegeValueW(
+                std::ptr::null(),
+                SE_SHUTDOWN_NAME,
+                &mut privileges.Privileges[0].Luid,
+            );
+            let adjusted = looked_up != 0
+                && AdjustTokenPrivileges(
+                    token,
+                    0,
+                    &privileges,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ) != 0;
+            let error = std::io::Error::last_os_error();
+            CloseHandle(token);
+            if !adjusted {
+                bail!("shutdown privilege not switched on: {error}");
+            }
+            let code = InitiateShutdownW(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                SHUTDOWN_RESTART,
+                SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER | SHTDN_REASON_FLAG_PLANNED,
+            );
+            if code != 0 {
+                bail!(
+                    "InitiateShutdownW failed: {}",
+                    std::io::Error::from_raw_os_error(code as i32)
+                );
+            }
         }
         Ok(())
     }
@@ -221,6 +305,10 @@ mod imp {
 
     pub fn suspend() -> Result<()> {
         bail!("Standby exists only on Windows")
+    }
+
+    pub fn restart() -> Result<()> {
+        bail!("Restart exists only on Windows")
     }
 
     pub fn break_process(_pid: u32) -> Result<()> {
@@ -448,6 +536,9 @@ impl Platform for System {
     }
     fn suspend(&self) -> Result<()> {
         imp::suspend()
+    }
+    fn restart(&self) -> Result<()> {
+        imp::restart()
     }
     fn start_strata(&self, program: &Path, args: &[String]) -> Result<Running> {
         let run = command::spawn(&strata_command(program, args)?)?;

@@ -13,11 +13,14 @@ use std::{
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use strata_admin_ui::labels::{NO_AGENT, NO_MAC, NOT_CONFIGURED};
+use strata_admin_ui::{
+    api::RestartView,
+    labels::{NEEDS_RESTART_SERVICE, NO_AGENT, NO_MAC, NOT_CONFIGURED},
+};
 use strata_pc_protocol::{Hardware, PcStatus, StrataJobKind};
 
 use crate::{
-    agent::{AgentClient, SleepAnswer},
+    agent::{AgentClient, RestartAnswer, SleepAnswer},
     api_keys::ApiKeys,
     auth::Auth,
     clock,
@@ -135,6 +138,8 @@ pub struct AppState {
     quiet_since: Mutex<Option<Instant>>,
     /// `LOST_AFTER`; shorter in tests.
     lost_after: Mutex<Duration>,
+    /// `RESTART_OVERDUE_AFTER`; shorter in tests.
+    restart_overdue_after: Mutex<Duration>,
     lifecycle: Mutex<Lifecycle>,
     wake_lock: tokio::sync::Mutex<()>,
     /// When the last wake packet went out, by a wake-up or ahead of one.
@@ -186,6 +191,8 @@ impl AppState {
             .and_then(|text| serde_json::from_str::<KeepAwakeFile>(&text).ok())
             .map(|f| SystemTime::UNIX_EPOCH + Duration::from_secs(f.until))
             .filter(|t| *t > SystemTime::now());
+        let mut lifecycle = Lifecycle::new(Now::read(), keep_awake_until);
+        lifecycle.plan_restart(restart_file(&cfg.data_dir).is_some_and(|p| p.exists()));
         let events = History::new(cfg.data_dir.clone());
         let requests = crate::request_log::RequestLog::new(events.database());
         let request_energy = crate::request_energy::RequestEnergy::new(events.database());
@@ -215,7 +222,8 @@ impl AppState {
             give_up: tokio::sync::watch::Sender::new(None),
             quiet_since: Mutex::new(None),
             lost_after: Mutex::new(LOST_AFTER),
-            lifecycle: Mutex::new(Lifecycle::new(Now::read(), keep_awake_until)),
+            restart_overdue_after: Mutex::new(RESTART_OVERDUE_AFTER),
+            lifecycle: Mutex::new(lifecycle),
             wake_lock: tokio::sync::Mutex::new(()),
             last_wol: Mutex::new(None),
             packet_ahead: Mutex::new(None),
@@ -402,6 +410,68 @@ impl AppState {
         if let Err(e) = written {
             tracing::warn!("Keep awake not saved: {e}");
         }
+    }
+
+    /// Arms a Planned restart for `by`; refused while the PC service that
+    /// answered last takes none. Kept in `DATA_DIR`, so a restart of the
+    /// proxy does not lose it.
+    pub fn plan_restart(&self, by: &str) -> Result<(), String> {
+        if !self.agent().configured() {
+            return Err(NO_AGENT.into());
+        }
+        let mut lifecycle = self.lifecycle.lock().unwrap();
+        if lifecycle.takes_restart() == Some(false) {
+            return Err(NEEDS_RESTART_SERVICE.into());
+        }
+        if lifecycle.plan_restart(true) {
+            self.save_restart_plan(true);
+            self.events
+                .record(EventKind::RestartPlanned, Some(by.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Calls off a Planned restart, with `detail` (who, or why).
+    pub fn cancel_restart(&self, detail: &str) {
+        let mut lifecycle = self.lifecycle.lock().unwrap();
+        if lifecycle.plan_restart(false) {
+            self.save_restart_plan(false);
+            self.events
+                .record(EventKind::RestartCancelled, Some(detail.to_string()));
+        }
+    }
+
+    fn save_restart_plan(&self, planned: bool) {
+        let Some(dir) = self.cfg().data_dir.clone() else {
+            return;
+        };
+        let written = if planned {
+            crate::files::write_private(&dir, RESTART_FILE, b"")
+        } else {
+            match std::fs::remove_file(dir.join(RESTART_FILE)) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                other => other,
+            }
+        };
+        if let Err(e) = written {
+            tracing::warn!("Planned restart not saved: {e}");
+        }
+    }
+
+    /// The Planned restart as the PC card shows it.
+    pub fn restart_view(&self) -> RestartView {
+        let lifecycle = self.lifecycle.lock().unwrap();
+        let view = lifecycle.restart_view(Now::read(), *self.restart_overdue_after.lock().unwrap());
+        let unavailable = !self.agent().configured() || lifecycle.takes_restart() == Some(false);
+        if view == RestartView::Off && unavailable {
+            return RestartView::Unavailable;
+        }
+        view
+    }
+
+    /// Changes `RESTART_OVERDUE_AFTER`; for tests.
+    pub fn set_restart_overdue_after(&self, after: Duration) {
+        *self.restart_overdue_after.lock().unwrap() = after;
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -753,10 +823,12 @@ impl AppState {
         // A missed answer is no sleeping PC while Strata still answers (a
         // busy PC or network); waking it again would restart the idle time.
         let strata_answers_nas = status.is_none() && self.strata_healthy().await;
-        {
+        let restart = {
             let (mut lifecycle, now, t) = self.lifecycle();
             let seen = lifecycle.pc_answered(status.as_ref(), strata_answers_nas, now, t);
             self.record(seen.record);
+            let overdue_after = *self.restart_overdue_after.lock().unwrap();
+            self.record(lifecycle.restart_overdue(now, overdue_after));
             // A tune holds the idle time: its end starts it again.
             if status.as_ref().is_some_and(tuning) {
                 lifecycle.touch(now);
@@ -765,10 +837,36 @@ impl AppState {
             if !seen.up || !lifecycle.wants_sleep(self.in_flight(), now, t) {
                 return;
             }
+            lifecycle.restart_planned()
+        };
+        if restart && !self.request_restart(&agent).await {
+            return;
         }
         if let Err(e) = self.request_sleep(&agent).await {
             tracing::warn!("Sleep request failed: {e}");
         }
+    }
+
+    /// Asks the PC service for the Planned restart in place of the sleep
+    /// request and notes the answer; `true` when a service too old for it
+    /// called the plan off and the sleep request is still to be sent.
+    async fn request_restart(&self, agent: &AgentClient) -> bool {
+        let answer = agent.request_restart().await;
+        if let Err(e) = &answer {
+            tracing::warn!("Planned restart not asked: {e}");
+        }
+        if matches!(answer, Ok(RestartAnswer::TooOld)) {
+            self.cancel_restart(RESTART_TOO_OLD);
+            return true;
+        }
+        let (mut lifecycle, now, t) = self.lifecycle();
+        if matches!(answer, Ok(RestartAnswer::Accepted)) {
+            self.save_restart_plan(false);
+        }
+        for record in lifecycle.restart_answered(answer.as_ref().ok(), now, t) {
+            self.record(record);
+        }
+        false
     }
 
     /// Asks the PC service to sleep and notes the answer. A refusal or an
@@ -951,6 +1049,20 @@ impl Drop for ActivityGuard {
 }
 
 const KEEP_AWAKE_FILE: &str = "keep-awake.json";
+
+/// There while a Planned restart is armed.
+const RESTART_FILE: &str = "planned-restart";
+
+/// How long after an accepted restart the PC service may stay silent before
+/// the overview and the history say the PC is not back.
+const RESTART_OVERDUE_AFTER: Duration = Duration::from_secs(300);
+
+/// Why a Planned restart ended without one.
+const RESTART_TOO_OLD: &str = "the PC service is too old for a Planned restart";
+
+fn restart_file(data_dir: &Option<PathBuf>) -> Option<PathBuf> {
+    data_dir.as_ref().map(|dir| dir.join(RESTART_FILE))
+}
 
 /// There while the PC service last reported relay mode.
 const RELAY_FILE: &str = "relay-mode";

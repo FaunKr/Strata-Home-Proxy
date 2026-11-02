@@ -4,6 +4,10 @@ What each version brings, newest first. The web UI's PC service card shows
 the versions an update brings; each line is written for the user. Rules:
 `docs/pc-service.md`.
 
+## 1.4.0
+
+- Restarts the PC when the proxy asks for a Planned restart (*Restart at next sleep* on the Overview), without installing Windows updates.
+
 ## 1.3.1
 
 - Stopping Strata cleanly while an expert profile learns no longer ends the PC service too.

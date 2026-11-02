@@ -394,6 +394,7 @@ fn build(state: &AppState, probe: &Probe, week: HistoryView) -> Overview {
         strata,
         last_request: snap.last_request.map(|t| clock::local_text(clock::unix(t))),
         sleep,
+        restart: state.restart_view(),
         keep_awake_until,
         events,
         pc_service,

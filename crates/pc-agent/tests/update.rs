@@ -220,6 +220,22 @@ async fn no_job_starts_and_no_sleep_while_an_update_loads() {
 }
 
 #[tokio::test]
+async fn restart_is_refused_while_the_service_updates() {
+    let addr = slower_nas().await;
+    let s = setup_with("update-restart", |c| {
+        c.nas_url = Some(format!("http://{addr}"))
+    })
+    .await;
+    let update = start_update(&s);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (code, body) = restart_answer(&s).await;
+    assert_eq!(code, 409, "{body}");
+    assert_eq!(body["reason"], "The PC service is updating");
+    assert_eq!(update.await.unwrap(), 202);
+    assert_eq!(s.fake.restarts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn neither_forced_sleep_nor_forced_restart_while_an_update_loads() {
     let addr = slower_nas().await;
     let s = setup_with("update-force", |c| {

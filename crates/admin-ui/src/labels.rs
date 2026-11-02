@@ -10,6 +10,8 @@ pub const NO_MAC: &str = "No MAC address is known, so the PC cannot be woken.";
 pub const PROFILE_TAKEN: &str = "has an expert profile of that name already.";
 pub const NO_AGENT: &str = "No PC service is set up (PC_AGENT_URL).";
 pub const NO_ANSWER: &str = "The PC service does not answer.";
+/// The PC service that answered last takes no Planned restart.
+pub const NEEDS_RESTART_SERVICE: &str = "Needs PC service 1.4.0";
 pub const TOO_OLD_TO_FORCE: &str =
     "The PC service is too old for this, update it in the PC section.";
 pub const TOO_OLD_FOR_KEY: &str =
@@ -280,15 +282,21 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::ForcedStrataRestart => "Forced Strata restart",
         EventKind::UpdateSummaryRequested => "Update summary requested",
         EventKind::ExpertProfileLearned => "Expert profile learned",
+        EventKind::RestartPlanned => "Restart planned",
+        EventKind::RestartCancelled => "Restart cancelled",
+        EventKind::RestartAccepted => "Restart accepted",
+        EventKind::RestartRefused => "Restart refused",
+        EventKind::RestartOverdue => "Not back after restart",
     }
 }
 
 /// The color of an event's dot; the text says the same.
 pub fn event_class(kind: EventKind) -> &'static str {
     match kind {
-        EventKind::WakeTimeout | EventKind::StrataJobFailed | EventKind::PcServiceUpdateFailed => {
-            "is-bad"
-        }
+        EventKind::WakeTimeout
+        | EventKind::StrataJobFailed
+        | EventKind::PcServiceUpdateFailed
+        | EventKind::RestartOverdue => "is-bad",
         EventKind::SleepRefused
         | EventKind::GamingRejected
         | EventKind::GamingOn
@@ -298,7 +306,9 @@ pub fn event_class(kind: EventKind) -> &'static str {
         | EventKind::KeepAwakeSet
         | EventKind::StrataJobCancelled
         | EventKind::ForcedSleep
-        | EventKind::ForcedStrataRestart => "is-warn",
+        | EventKind::ForcedStrataRestart
+        | EventKind::RestartRefused
+        | EventKind::RestartAccepted => "is-warn",
         EventKind::SleepAccepted
         | EventKind::SleepRequested
         | EventKind::PcSeenAsleep

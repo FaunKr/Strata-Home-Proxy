@@ -90,6 +90,10 @@ _Avoid_: shutdown, sleep command, Schlafen-Anfrage
 A sleep request from the web UI's *Force sleep* button that the PC service refuses only during an update. It overrides user activity, a request in Strata and gaming mode (which stays on), and cancels a running Strata job first; downloaded parts are kept. The proxy treats it like an accepted sleep request.
 _Avoid_: hard sleep
 
+**Planned restart**:
+A restart of the PC that the proxy asks for instead of its next sleep request after the idle timeout. Armed with *Restart at next sleep* on the Overview; the PC service refuses it for the reasons it refuses a sleep request. Ends once the PC service accepts it.
+_Avoid_: reboot, restart request
+
 **Settling**:
 The short time after an accepted sleep request during which the PC may still answer and yet counts as asleep.
 _Avoid_: Nachlauf

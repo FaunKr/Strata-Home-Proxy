@@ -437,6 +437,138 @@ async fn a_second_sleep_while_standby_is_pending_brings_no_second_standby() {
     assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 1);
 }
 
+// --- Planned restart ---
+
+#[tokio::test]
+async fn restart_is_accepted_when_nothing_holds_it() {
+    let s = setup("restart").await;
+    let (code, body) = restart_answer(&s).await;
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(body["accepted"], true);
+    // The answer goes out first, the restart follows a moment later.
+    assert_eq!(s.fake.restarts.load(Ordering::SeqCst), 0);
+    eventually("restart", || s.fake.restarts.load(Ordering::SeqCst) == 1).await;
+    assert_eq!(
+        s.fake.stops.load(Ordering::SeqCst),
+        1,
+        "Strata stopped first"
+    );
+    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn restart_is_refused_while_someone_works() {
+    let s = setup("restart-user").await;
+    *s.fake.idle.lock().unwrap() = Duration::from_secs(30);
+    let (code, body) = restart_answer(&s).await;
+    assert_eq!(code, 409);
+    assert!(body["reason"].as_str().unwrap().contains("using the PC"));
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(s.fake.restarts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn restart_is_refused_while_strata_works() {
+    let s = setup("restart-busy").await;
+    s.fake.strata_busy.store(true, Ordering::SeqCst);
+    let (code, body) = restart_answer(&s).await;
+    assert_eq!(code, 409);
+    assert!(body["reason"].as_str().unwrap().contains("Strata"));
+    assert_eq!(s.fake.restarts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn restart_is_refused_in_gaming_mode() {
+    let s = setup("restart-gaming").await;
+    s.agent.set_gaming(true);
+    let (code, body) = restart_answer(&s).await;
+    assert_eq!(code, 409);
+    assert_eq!(body["reason"], "Gaming mode is on");
+    assert_eq!(s.fake.restarts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn the_status_answers_503_while_the_pc_restarts() {
+    let s = setup("restart-status").await;
+    let (code, _) = restart_answer(&s).await;
+    assert_eq!(code, 200);
+    let resp = client()
+        .get(format!("{}/status", s.url))
+        .bearer_auth("secret")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+}
+
+#[tokio::test]
+async fn a_sleep_while_a_restart_is_pending_joins_it() {
+    let s = setup("restart-then-sleep").await;
+    let (code, _) = restart_answer(&s).await;
+    assert_eq!(code, 200);
+    let (code, body) = sleep_answer(&s).await;
+    assert_eq!(code, 200, "{body}");
+    eventually("restart", || s.fake.restarts.load(Ordering::SeqCst) == 1).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(s.fake.suspends.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_failed_restart_starts_strata_again() {
+    let s = setup("restart-fails").await;
+    s.fake.restart_fails.store(true, Ordering::SeqCst);
+    let (code, _) = restart_answer(&s).await;
+    assert_eq!(code, 200);
+    eventually("Strata started again", || {
+        s.fake.starts.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    assert_eq!(s.fake.restarts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        status_json(&s).await["gaming_mode"],
+        false,
+        "status answers again"
+    );
+}
+
+#[tokio::test]
+async fn gaming_mode_switched_on_before_the_restart_calls_it_off() {
+    let s = setup("restart-gaming-later").await;
+    let (code, _) = restart_answer(&s).await;
+    assert_eq!(code, 200);
+    s.agent.set_gaming(true);
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(s.fake.restarts.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        status_json(&s).await["gaming_mode"],
+        true,
+        "status answers again"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_windows_did_not_carry_out_starts_strata_again() {
+    let s = setup_with("restart-given-up", |c| c.restart_given_up_secs = 1).await;
+    let (code, _) = restart_answer(&s).await;
+    assert_eq!(code, 200);
+    eventually("restart", || s.fake.restarts.load(Ordering::SeqCst) == 1).await;
+    eventually("Strata started again", || {
+        s.fake.starts.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    assert_eq!(
+        status_json(&s).await["restart"],
+        true,
+        "status answers again"
+    );
+}
+
+#[tokio::test]
+async fn status_reports_that_the_service_takes_restart() {
+    let s = setup("restart-field").await;
+    assert_eq!(status_json(&s).await["restart"], true);
+}
+
 #[tokio::test]
 async fn a_stopped_strata_does_not_count_as_running_within_its_load_time() {
     let s = setup_with("force-restart-stopped", |c| c.load_time_secs = 30).await;

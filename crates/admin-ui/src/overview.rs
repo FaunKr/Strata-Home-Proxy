@@ -6,15 +6,17 @@ use leptos::prelude::*;
 
 use crate::{
     api::{
-        ForceSleep, KeepAwake, KeepAwakeChoice, Overview, PcServiceView, PcView, PowerView,
-        SetGaming, Setup, SleepAnswer, SleepNow, SleepView, StrataView, Wake, error_text,
-        get_setup,
+        CancelRestart, ForceSleep, KeepAwake, KeepAwakeChoice, Overview, PcServiceView, PcView,
+        PlanRestart, PowerView, RestartView, SetGaming, Setup, SleepAnswer, SleepNow, SleepView,
+        StrataView, Wake, error_text, get_setup,
     },
     confirm::{Confirm, Question},
     hardware::HardwareCard,
     history::WeekCard,
     icons::Icon,
-    labels::{event_class, event_label, pc_badge, strata_badge, strata_job_label},
+    labels::{
+        NEEDS_RESTART_SERVICE, event_class, event_label, pc_badge, strata_badge, strata_job_label,
+    },
 };
 
 /// The buttons' actions; made once per page, so a result stays visible
@@ -26,6 +28,8 @@ struct Actions {
     force_sleep: ServerAction<ForceSleep>,
     gaming: ServerAction<SetGaming>,
     keep: ServerAction<KeepAwake>,
+    plan_restart: ServerAction<PlanRestart>,
+    cancel_restart: ServerAction<CancelRestart>,
     /// The keep-awake choice pressed last, to mark it while it lasts.
     picked: RwSignal<Option<KeepAwakeChoice>>,
 }
@@ -68,6 +72,8 @@ pub fn OverviewPage() -> impl IntoView {
         force_sleep: ServerAction::new(),
         gaming: ServerAction::new(),
         keep: ServerAction::new(),
+        plan_restart: ServerAction::new(),
+        cancel_restart: ServerAction::new(),
         picked: RwSignal::new(None),
     };
     view! {
@@ -255,12 +261,24 @@ fn Hero(overview: Overview, actions: Actions) -> impl IntoView {
         wake,
         sleep,
         force_sleep,
+        plan_restart,
+        cancel_restart,
         ..
     } = actions;
     let confirm = expect_context::<Confirm>();
     let pc = overview.pc;
     let (_, class) = pc_badge(pc);
-    let (title, sub) = match pc {
+    let restart = overview.restart.clone();
+    let (title, sub) = match (&restart, pc) {
+        (RestartView::Restarting, _) => (
+            "Restarting …".to_string(),
+            "The PC restarts and comes back by itself.".to_string(),
+        ),
+        (RestartView::Overdue, _) => (
+            "Not back yet".to_string(),
+            "The PC restarted 5 minutes ago and the PC service does not answer: it may wait at the login screen, or an app holds the restart.".to_string(),
+        ),
+        _ => match pc {
         PcView::Asleep => (
             "Asleep".to_string(),
             "The next request wakes it automatically.".to_string(),
@@ -278,6 +296,7 @@ fn Hero(overview: Overview, actions: Actions) -> impl IntoView {
             "Unknown".to_string(),
             "The proxy has not reached the PC yet.".to_string(),
         ),
+        },
     };
     let setup = overview.setup;
     let can_wake = setup.mac_known && setup.configured;
@@ -360,7 +379,74 @@ fn Hero(overview: Overview, actions: Actions) -> impl IntoView {
                 offer=pc == PcView::Awake && setup.agent_configured
             />
             <ForceSleepResult force_sleep asleep=pc == PcView::Asleep />
+            <RestartControls restart agent=setup.agent_configured plan_restart cancel_restart />
         </section>
+    }
+}
+
+/// The Planned restart: the button that arms it, or that it is armed with
+/// *Cancel* and the last refusal.
+#[component]
+fn RestartControls(
+    restart: RestartView,
+    agent: bool,
+    plan_restart: ServerAction<PlanRestart>,
+    cancel_restart: ServerAction<CancelRestart>,
+) -> impl IntoView {
+    let controls = match restart {
+        RestartView::Off => Some(
+            view! {
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || plan_restart.pending().get()
+                    on:click=move |_| {
+                        plan_restart.dispatch(PlanRestart {});
+                    }
+                >
+                    <Icon icon=Icon::Power size=16 />
+                    "Restart at next sleep"
+                </button>
+            }
+            .into_any(),
+        ),
+        RestartView::Unavailable if agent => Some(
+            view! {
+                <button type="button" class="secondary" disabled>
+                    <Icon icon=Icon::Power size=16 />
+                    "Restart at next sleep"
+                </button>
+                <p class="hint">{NEEDS_RESTART_SERVICE}</p>
+            }
+            .into_any(),
+        ),
+        RestartView::Planned { refused } => Some(
+            view! {
+                <div class="toggle-row">
+                    <p role="status">"Restart planned"</p>
+                    <button
+                        type="button"
+                        class="secondary"
+                        disabled=move || cancel_restart.pending().get()
+                        on:click=move |_| {
+                            cancel_restart.dispatch(CancelRestart {});
+                        }
+                    >
+                        "Cancel"
+                    </button>
+                </div>
+                {refused.map(|r| view! { <p class="hint">{format!("Last try refused: {r}")}</p> })}
+            }
+            .into_any(),
+        ),
+        RestartView::Unavailable | RestartView::Restarting | RestartView::Overdue => None,
+    };
+    view! {
+        <div class="restart">
+            {controls}
+            {result_text(plan_restart.value())}
+            {result_text(cancel_restart.value())}
+        </div>
     }
 }
 

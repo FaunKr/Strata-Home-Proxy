@@ -77,6 +77,12 @@ pub trait Backend: Send + Sync + 'static {
     fn sleep_now(&self) -> BoxFuture<'static, Result<SleepAnswer, String>>;
     /// Asks the awake PC's service for a forced sleep; never wakes the PC.
     fn force_sleep(&self) -> BoxFuture<'static, Result<(), String>>;
+    /// Arms a Planned restart: the next sleep after the idle timeout becomes
+    /// a restart of the PC; a message for the user if the PC service takes
+    /// none.
+    fn plan_restart(&self) -> Result<(), String>;
+    /// Calls off a Planned restart.
+    fn cancel_restart(&self);
     /// Asks the awake PC's service for a forced Strata restart; never wakes
     /// the PC.
     fn force_restart_strata(&self) -> BoxFuture<'static, Result<ForcedRestart, String>>;

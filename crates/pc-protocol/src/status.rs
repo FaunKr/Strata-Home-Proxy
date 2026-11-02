@@ -1,4 +1,4 @@
-//! `GET /status`, `POST /gaming`, `POST /sleep`, `POST /sleep/force`,
+//! `GET /status`, `POST /gaming`, `POST /sleep`, `POST /restart`, `POST /sleep/force`,
 //! `POST /strata/kill`, `POST /update`, `GET /strata/key`, the relay and the
 //! body of every refusal.
 
@@ -54,6 +54,10 @@ pub struct PcStatus {
     /// one and from older services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expert_learning: Option<crate::ExpertLearning>,
+    /// The service takes `POST /restart` (a Planned restart); `false` from
+    /// services before it.
+    #[serde(default)]
+    pub restart: bool,
 }
 
 /// Relay mode: Strata listens only on the PC itself, and the PC service
@@ -131,7 +135,7 @@ pub struct GamingRequest {
     pub enabled: bool,
 }
 
-/// The answer to `POST /sleep` and an accepted `POST /update`.
+/// The answer to `POST /sleep`, `POST /restart` and an accepted `POST /update`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Answer {
     pub accepted: bool,

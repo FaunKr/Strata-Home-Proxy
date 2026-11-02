@@ -547,6 +547,28 @@ async fn a_second_job_is_refused_while_one_runs() {
 }
 
 #[tokio::test]
+async fn restart_is_refused_while_a_strata_job_runs() {
+    let s = setup("strata-restart-job").await;
+    installable(&s);
+    s.fake.command(
+        "python",
+        FakeCommand {
+            hang: true,
+            ..FakeCommand::default()
+        },
+    );
+    post(&s, "/strata/jobs", install()).await;
+    job_until(&s, "setup running", |_| {
+        !s.fake.runs_of("python").is_empty()
+    })
+    .await;
+    let (code, answer) = restart_answer(&s).await;
+    assert_eq!(code, 409);
+    assert_eq!(answer["reason"], "A Strata job is running");
+    assert_eq!(s.fake.restarts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn a_running_job_keeps_the_pc_awake_and_the_watchdog_away() {
     let s = setup("strata-awake").await;
     installable(&s);

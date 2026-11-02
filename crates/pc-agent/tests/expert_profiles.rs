@@ -578,6 +578,19 @@ async fn stop_without_learning_ends_hard_at_once() {
 }
 
 #[tokio::test]
+async fn restart_stops_strata_cleanly_while_an_expert_profile_learns() {
+    let s = setup("expert-planned-restart").await;
+    installed(&s);
+    job(&s, learn("coder-IQ1_M", "coding")).await;
+    strata_running(&s);
+    let (code, answer) = restart_answer(&s).await;
+    assert_eq!(code, 200, "{answer}");
+    eventually("restart", || s.fake.restarts.load(Ordering::SeqCst) == 1).await;
+    assert_eq!(s.fake.breaks.load(Ordering::SeqCst), 1);
+    assert_eq!(s.fake.stops.load(Ordering::SeqCst), 0, "no hard kill");
+}
+
+#[tokio::test]
 async fn forced_restart_while_learning_ends_hard_at_once() {
     let s = setup("expert-forced").await;
     installed(&s);

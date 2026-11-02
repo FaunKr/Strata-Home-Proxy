@@ -139,9 +139,23 @@ impl StrataClient {
     /// the proxy's own metrics endpoint.
     pub async fn metrics_text(&self) -> Result<String, String> {
         // Not `/metrics/prometheus`: its tokens/s counts finished requests only,
-        // and each scrape resets that window for other scrapers.
+        // and each read resets that window (docs/strata-api.md).
         let resp = self
             .send(self.request(&self.probe, Method::GET, "/metrics?format=prometheus"))
+            .await
+            .map_err(|_| NO_METRICS)?;
+        if !resp.status().is_success() {
+            return Err(NO_METRICS.into());
+        }
+        resp.text().await.map_err(|_| NO_METRICS.into())
+    }
+
+    /// Strata's `/metrics/prometheus` (`llamacpp:*` names) as text, unchanged:
+    /// only for the tool-call counters of the proxy's own metrics endpoint,
+    /// which Strata prints nowhere else.
+    pub async fn metrics_prometheus_text(&self) -> Result<String, String> {
+        let resp = self
+            .send(self.request(&self.probe, Method::GET, "/metrics/prometheus"))
             .await
             .map_err(|_| NO_METRICS)?;
         if !resp.status().is_success() {

@@ -81,6 +81,9 @@ pub struct FakePc {
     /// (an older build) if unset.
     pub metrics: Mutex<Option<String>>,
     pub metrics_requests: AtomicUsize,
+    /// Body of Strata's `/metrics/prometheus` (`llamacpp:*` names), e.g.
+    /// `METRICS_LLAMACPP`; 404 if unset.
+    pub metrics_prometheus: Mutex<Option<String>>,
     /// Requests to Strata's `/metrics/prometheus`.
     pub metrics_prometheus_requests: AtomicUsize,
     /// `Authorization` header of the last metrics request.
@@ -690,18 +693,32 @@ pub async fn metrics(
     }
 }
 
-/// Strata's `/metrics/prometheus` (`llamacpp:*` names): only counted, since
-/// every read resets its time window (docs/strata-api.md).
-pub async fn metrics_prometheus(State(pc): State<Pc>) -> Response {
+/// Strata's `/metrics/prometheus` (`llamacpp:*` names): the text set in
+/// `metrics_prometheus`, like Strata; 401 without its key.
+pub async fn metrics_prometheus(State(pc): State<Pc>, headers: axum::http::HeaderMap) -> Response {
+    if !pc.strata_up() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     pc.metrics_prometheus_requests
         .fetch_add(1, Ordering::SeqCst);
-    "llamacpp:predicted_tokens_seconds 0\n".into_response()
+    if let Some(key) = pc.strata_key.lock().unwrap().clone()
+        && SeenCredentials::of(&headers).authorization != Some(format!("Bearer {key}"))
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match pc.metrics_prometheus.lock().unwrap().clone() {
+        Some(body) => body.into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// Real output of Strata's `serve/prometheus.py` (docs/strata-api.md): one
 /// request generating at 38.5 tokens/s with one waiting, and nothing running.
 pub const METRICS_BUSY: &str = include_str!("../fixtures/strata-metrics-busy.prom");
 pub const METRICS_IDLE: &str = include_str!("../fixtures/strata-metrics-idle.prom");
+/// Output of Strata c62d5e3a's `Service.prometheus` (`/metrics/prometheus`),
+/// written from its format: 3 tool calls returned as text, 5 repaired arguments.
+pub const METRICS_LLAMACPP: &str = include_str!("../fixtures/strata-metrics-llamacpp.prom");
 
 pub async fn agent_gaming(State(pc): State<Pc>, Json(body): Json<GamingRequest>) -> Response {
     if !pc.up() {

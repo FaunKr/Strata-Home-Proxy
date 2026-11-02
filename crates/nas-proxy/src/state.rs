@@ -116,6 +116,8 @@ pub struct AppState {
     /// The plug loop's latest reading in watts; `None` before the first or
     /// after a failed one.
     plug_latest: Mutex<Option<f64>>,
+    /// Strata's tool-call counters as the metrics endpoint last read them.
+    pub tool_calls: Mutex<crate::metrics::ToolCalls>,
     /// The hardware readings of the PC service's last answer to `/status`
     /// and when it came; `None` readings from a service before them.
     last_hardware: Mutex<Option<(Instant, Option<Hardware>)>>,
@@ -204,6 +206,7 @@ impl AppState {
             in_flight: AtomicUsize::new(0),
             tuning: AtomicBool::new(false),
             plug_latest: Mutex::new(None),
+            tool_calls: Mutex::new(Default::default()),
             last_hardware: Mutex::new(None),
             relay: AtomicBool::new(relay_file(&cfg.data_dir).is_some_and(|p| p.exists())),
             give_up: tokio::sync::watch::Sender::new(None),

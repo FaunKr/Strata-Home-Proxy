@@ -30,6 +30,7 @@ fn status() {
     assert_eq!(gpu.fan_rpm, Some(0));
     assert_eq!(gpu.power_watts, Some(64.0));
     assert_eq!(status.strata_key_generation, Some(7));
+    assert!(status.restart);
     assert_eq!(
         status.relay,
         Some(Relay {
@@ -238,6 +239,7 @@ fn an_older_status_still_parses() {
     assert_eq!(status.hardware, None);
     assert_eq!(status.mac, None);
     assert_eq!(status.relay, None);
+    assert!(!status.restart);
 }
 
 #[test]

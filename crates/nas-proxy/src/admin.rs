@@ -232,6 +232,17 @@ impl Backend for UiBackend {
         async move { crate::forced::sleep(&state, BY_UI).await }.boxed()
     }
 
+    fn plan_restart(&self) -> Result<(), String> {
+        let planned = self.0.plan_restart(BY_UI);
+        self.0.overview.refresh_now();
+        planned
+    }
+
+    fn cancel_restart(&self) {
+        self.0.cancel_restart(BY_UI);
+        self.0.overview.refresh_now();
+    }
+
     fn force_restart_strata(&self) -> BoxFuture<'static, Result<ForcedRestart, String>> {
         let state = Arc::clone(&self.0);
         async move { crate::forced::restart_strata(&state, BY_UI).await }.boxed()

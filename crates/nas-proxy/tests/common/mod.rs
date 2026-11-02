@@ -122,6 +122,13 @@ pub struct FakePc {
     pub hardware: Mutex<Option<Hardware>>,
     /// Calls of `POST /sleep/force`, answered or not.
     pub force_sleeps: AtomicUsize,
+    /// Calls of `POST /restart` (a Planned restart), answered or not.
+    pub restart_requests: AtomicUsize,
+    /// The PC service reports in `/status` that it takes `POST /restart`;
+    /// unset, like a service before the Planned restart.
+    pub takes_restart: AtomicBool,
+    /// `POST /restart` answers 404, like a service before it.
+    pub no_restart: AtomicBool,
     /// Calls of `POST /strata/kill`, answered or not.
     pub strata_kills: AtomicUsize,
     /// An old PC service without the forced sleep and restart (404).
@@ -368,6 +375,7 @@ impl FakePc {
             hardware: self.hardware.lock().unwrap().clone(),
             strata_key_generation: self.reported_generation(),
             expert_learning: self.expert_learning.lock().unwrap().clone(),
+            restart: self.takes_restart.load(Ordering::SeqCst),
             relay: Some(Relay {
                 on: self.relay.load(Ordering::SeqCst),
                 wanted: (!self.no_switch.load(Ordering::SeqCst)).then(|| {
@@ -757,6 +765,21 @@ pub async fn agent_gaming(State(pc): State<Pc>, Json(body): Json<GamingRequest>)
 
 pub async fn agent_sleep(State(pc): State<Pc>) -> Response {
     pc.sleep_requests.fetch_add(1, Ordering::SeqCst);
+    if pc.refuse_sleep.load(Ordering::SeqCst) {
+        return (StatusCode::CONFLICT, Json(Answer::refused("User active"))).into_response();
+    }
+    pc.awake.store(false, Ordering::SeqCst);
+    Json(Answer::accepted()).into_response()
+}
+
+/// `POST /restart`: refused for the same reasons as `/sleep` (here
+/// `refuse_sleep`); an accepted one takes the PC down until a test brings
+/// it back by setting `awake`.
+pub async fn agent_restart(State(pc): State<Pc>) -> Response {
+    pc.restart_requests.fetch_add(1, Ordering::SeqCst);
+    if pc.no_restart.load(Ordering::SeqCst) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     if pc.refuse_sleep.load(Ordering::SeqCst) {
         return (StatusCode::CONFLICT, Json(Answer::refused("User active"))).into_response();
     }
@@ -1253,6 +1276,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
             .route("/status", get(agent_status))
             .route("/sleep", post(agent_sleep))
             .route("/sleep/force", post(agent_force_sleep))
+            .route("/restart", post(agent_restart))
             .route("/strata/kill", post(agent_strata_kill))
             .route("/gaming", post(agent_gaming))
             .route("/strata", get(agent_strata))

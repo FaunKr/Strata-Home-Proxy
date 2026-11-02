@@ -20,6 +20,15 @@ pub enum SleepAnswer {
     Refused(String),
 }
 
+/// The PC service's answer to `POST /restart` (a Planned restart).
+#[derive(Debug, PartialEq, Eq)]
+pub enum RestartAnswer {
+    Accepted,
+    Refused(String),
+    /// A service from before the endpoint (404).
+    TooOld,
+}
+
 /// The reason in a refusal, or the status if there is none.
 async fn reason(resp: reqwest::Response) -> String {
     let status = resp.status();
@@ -134,6 +143,21 @@ impl AgentClient {
         }
         let reason = reason(resp).await;
         Ok(SleepAnswer::Refused(reason))
+    }
+
+    /// Asks for a Planned restart, with the checks of a sleep request.
+    pub async fn request_restart(&self) -> anyhow::Result<RestartAnswer> {
+        let req = self
+            .request(reqwest::Method::POST, "/restart")
+            .ok_or_else(|| anyhow::anyhow!("PC_AGENT_URL is not set"))?;
+        let resp = req.send().await?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(RestartAnswer::TooOld);
+        }
+        if resp.status().is_success() {
+            return Ok(RestartAnswer::Accepted);
+        }
+        Ok(RestartAnswer::Refused(reason(resp).await))
     }
 
     /// A forced sleep: standby follows unless the service updates itself.

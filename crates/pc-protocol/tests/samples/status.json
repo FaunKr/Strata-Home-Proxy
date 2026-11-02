@@ -32,5 +32,6 @@
     "profile": "coding",
     "held": false,
     "secs": 7800
-  }
+  },
+  "restart": true
 }

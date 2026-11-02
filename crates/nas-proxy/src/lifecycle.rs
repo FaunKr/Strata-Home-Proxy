@@ -1,5 +1,6 @@
 //! The PC lifecycle: every decision about the PC's state, the idle timeout,
-//! settling after an accepted sleep request, refusals and keep awake.
+//! settling after an accepted sleep request, refusals, keep awake and the
+//! Planned restart.
 //!
 //! It does no I/O and reads no clock. The shell in `state` asks the PC service
 //! and Strata, sends magic packets and tells this module what it saw, with
@@ -14,10 +15,14 @@
 use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
-use strata_admin_ui::api::PcView;
+use strata_admin_ui::api::{PcView, RestartView};
 use strata_pc_protocol::PcStatus;
 
-use crate::{agent::SleepAnswer, config::Config, events::EventKind};
+use crate::{
+    agent::{RestartAnswer, SleepAnswer},
+    config::Config,
+    events::EventKind,
+};
 
 /// Healthy answers younger than this skip the `/health` check.
 const HEALTH_CACHE: Duration = Duration::from_secs(5);
@@ -145,6 +150,14 @@ pub struct Lifecycle {
     last_status: Option<PcStatus>,
     /// The PC service's missed answers in a row.
     misses: u32,
+    /// A Planned restart is armed.
+    restart_planned: bool,
+    /// Why the PC service refused the Planned restart last.
+    restart_refused: Option<String>,
+    /// The PC service took a Planned restart and has not answered since.
+    restart_accepted_at: Option<Instant>,
+    /// The restart that is not back yet was recorded as overdue.
+    restart_overdue_noted: bool,
 }
 
 impl Lifecycle {
@@ -163,6 +176,10 @@ impl Lifecycle {
             unknown_since_start: true,
             last_status: None,
             misses: 0,
+            restart_planned: false,
+            restart_refused: None,
+            restart_accepted_at: None,
+            restart_overdue_noted: false,
         }
     }
 
@@ -224,6 +241,7 @@ impl Lifecycle {
             }
             Some(s) if s.gaming_mode => {
                 self.pc = PcState::Gaming;
+                self.restart_back();
                 false
             }
             // A PC that just accepted sleep may still answer.
@@ -273,6 +291,7 @@ impl Lifecycle {
     pub fn seen_gaming(&mut self) -> Option<Record> {
         let from = self.pc;
         self.pc = PcState::Gaming;
+        self.restart_back();
         self.seen(from)
     }
 
@@ -331,6 +350,7 @@ impl Lifecycle {
         if self.pc == PcState::Waking {
             self.pc = PcState::Awake;
         }
+        self.restart_back();
         self.touch(now);
         Record::new(
             EventKind::Awake,
@@ -342,6 +362,7 @@ impl Lifecycle {
     pub fn woken_elsewhere(&mut self) -> Option<Record> {
         let from = self.pc;
         self.pc = PcState::Awake;
+        self.restart_back();
         self.seen(from)
     }
 
@@ -397,6 +418,7 @@ impl Lifecycle {
     /// the idle timeout starts now. Unknown since the start: it keeps
     /// running from the start.
     fn mark_awake(&mut self, now: Now) {
+        self.restart_back();
         match self.pc {
             PcState::Awake => {}
             PcState::Unknown if self.unknown_since_start => self.pc = PcState::Awake,
@@ -405,6 +427,97 @@ impl Lifecycle {
                 self.touch(now);
             }
         }
+    }
+
+    /// Arms (`true`) or calls off a Planned restart; whether that changed
+    /// anything.
+    pub fn plan_restart(&mut self, planned: bool) -> bool {
+        if self.restart_planned == planned {
+            return false;
+        }
+        self.restart_planned = planned;
+        self.restart_refused = None;
+        true
+    }
+
+    pub fn restart_planned(&self) -> bool {
+        self.restart_planned
+    }
+
+    /// Whether the PC service that answered last takes a Planned restart;
+    /// `None` before its first answer.
+    pub fn takes_restart(&self) -> Option<bool> {
+        self.last_status.as_ref().map(|s| s.restart)
+    }
+
+    /// Notes the answer to a Planned restart in place of the sleep request;
+    /// `None` when none came. An accepted one ends the plan and counts as an
+    /// accepted sleep request from then on; a refusal or a missing answer
+    /// keeps it and waits the retry time, as for a sleep request. A service
+    /// too old for it is the shell's to handle.
+    pub fn restart_answered(
+        &mut self,
+        answer: Option<&RestartAnswer>,
+        now: Now,
+        t: Timings,
+    ) -> Vec<Record> {
+        match answer {
+            Some(RestartAnswer::Accepted) => {
+                self.restart_planned = false;
+                self.restart_refused = None;
+                self.restart_accepted_at = Some(now.at);
+                self.restart_overdue_noted = false;
+                let mut records = vec![Record::new(EventKind::RestartAccepted, None)];
+                records.extend(self.sleep_answered(Some(&SleepAnswer::Accepted), now, t));
+                records
+            }
+            Some(RestartAnswer::Refused(reason)) => {
+                self.next_sleep_attempt = Some(now.at + t.retry);
+                self.restart_refused = Some(reason.clone());
+                vec![Record::new(EventKind::RestartRefused, Some(reason.clone()))]
+            }
+            Some(RestartAnswer::TooOld) | None => {
+                self.next_sleep_attempt = Some(now.at + t.retry);
+                Vec::new()
+            }
+        }
+    }
+
+    /// The event once a restart the PC service took is `after` old and the
+    /// PC service has not answered since; only once per restart.
+    pub fn restart_overdue(&mut self, now: Now, after: Duration) -> Option<Record> {
+        let overdue = self
+            .restart_accepted_at
+            .is_some_and(|at| now.at.saturating_duration_since(at) >= after);
+        if !overdue || self.restart_overdue_noted {
+            return None;
+        }
+        self.restart_overdue_noted = true;
+        Some(Record::new(EventKind::RestartOverdue, None))
+    }
+
+    /// The Planned restart for the overview; `Unavailable` is the shell's.
+    pub fn restart_view(&self, now: Now, overdue_after: Duration) -> RestartView {
+        if let Some(at) = self.restart_accepted_at {
+            return if now.at.saturating_duration_since(at) >= overdue_after {
+                RestartView::Overdue
+            } else {
+                RestartView::Restarting
+            };
+        }
+        if self.restart_planned {
+            RestartView::Planned {
+                refused: self.restart_refused.clone(),
+            }
+        } else {
+            RestartView::Off
+        }
+    }
+
+    /// The PC is back: a restart it took has ended.
+    fn restart_back(&mut self) {
+        self.restart_accepted_at = None;
+        self.restart_overdue_noted = false;
     }
 
     /// The event of a state the proxy noticed on its own, if it changed

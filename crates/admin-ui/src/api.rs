@@ -333,6 +333,8 @@ pub struct Overview {
     /// Start or end of the last API request, as local time text.
     pub last_request: Option<String>,
     pub sleep: SleepView,
+    /// The Planned restart.
+    pub restart: RestartView,
     /// End of "keep awake", as local time text.
     pub keep_awake_until: Option<String>,
     /// The latest PC events, newest first.
@@ -346,6 +348,22 @@ pub struct Overview {
     pub power: PowerView,
     /// The history of the last 7 days, summed at most once a minute.
     pub week: HistoryView,
+}
+
+/// A Planned restart, as the PC card shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RestartView {
+    /// No PC service, or the one that answered last takes no restart.
+    Unavailable,
+    /// None planned.
+    Off,
+    /// Armed for the next sleep after the idle timeout; with the reason of
+    /// the last refusal.
+    Planned { refused: Option<String> },
+    /// The PC service took the restart and has not answered since.
+    Restarting,
+    /// Still no answer some minutes after the restart was taken.
+    Overdue,
 }
 
 /// The power of the power plug for the overview; independent of the PC's
@@ -701,6 +719,16 @@ pub enum EventKind {
     /// A learned expert profile reached its limit and stopped learning
     /// (detail: profile, model, tokens and time).
     ExpertProfileLearned,
+    /// A Planned restart armed or called off (detail: who; for a PC service
+    /// too old for it, why).
+    RestartPlanned,
+    RestartCancelled,
+    /// The PC service took the Planned restart; `SleepAccepted` follows.
+    RestartAccepted,
+    /// Detail: the PC service's reason.
+    RestartRefused,
+    /// The PC service had not answered 5 minutes after an accepted restart.
+    RestartOverdue,
 }
 
 impl EventKind {
@@ -833,6 +861,21 @@ pub async fn sleep_now() -> Result<SleepAnswer, ServerFnError> {
 pub async fn force_sleep() -> Result<(), ServerFnError> {
     require_login(false).await?;
     backend()?.force_sleep().await.map_err(bad_request)
+}
+
+/// Arms a Planned restart: the next sleep after the idle timeout becomes a
+/// restart of the PC.
+#[server(prefix = "/admin/api", endpoint = "plan-restart")]
+pub async fn plan_restart() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?.plan_restart().map_err(bad_request)
+}
+
+#[server(prefix = "/admin/api", endpoint = "cancel-restart")]
+pub async fn cancel_restart() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?.cancel_restart();
+    Ok(())
 }
 
 #[server(prefix = "/admin/api", endpoint = "gaming")]

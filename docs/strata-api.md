@@ -35,7 +35,8 @@ Move the pin above only after comparing the code, not only the commit subjects: 
 | `strata_control/user_args.py`, `engine_args` in `serve/server.py` | `install.rs` (`started_args`, `change_args`) | `speed_projection` and `context` in `GET /strata` |
 | `serve/server.py` (the engine's environment from the run config's `env`), `setup.py` (`SETUP_ENV`, `carry_over`) | `install.rs` (`set_env`, `REFUSED_ENV`) | `env` in `GET /strata`, `set_engine_settings` |
 | `setup.py`: `step`, `fail`, download and check lines | the PC service's setup output reader | the job's step and progress |
-| `serve/prometheus.py` | `crates/nas-proxy/tests/fixtures/strata-metrics-*.prom` | the Overview |
+| `serve/prometheus.py` | `crates/nas-proxy/tests/fixtures/strata-metrics-busy.prom`, `strata-metrics-idle.prom` | the Overview |
+| `Service.prometheus` in `serve/server.py` | `crates/nas-proxy/tests/fixtures/strata-metrics-llamacpp.prom` | the tool-call counters of the metrics endpoint |
 | `serve/server.py`: `do_GET`, `_authorized`, `/health`, `MODEL_CARD_SAMPLING`, `sampling_defaults_from_config` | `strata_client.rs`, `crates/pc-agent/src/sampling.rs` | the proxy, the sampling the PC service writes |
 | `START-HERE.bat`, `UPDATE.bat`, `BENCH.bat`, `tools/strata_bench.py` | `crates/pc-agent/src/strata.rs` | install, update and benchmark jobs on a Strata folder from source |
 | `packaging/install.ps1`, `packaging/package_terminal.py` (the Terminal's files, `STRATA_DATA_DIR`) | `crates/pc-agent/src/terminal.rs` (`root`, `program`, `version`, `install`) | the install job, `install` and `version` in `GET /strata` |
@@ -88,7 +89,7 @@ Since commit f31b6efd, Strata shortens a `max_tokens` that does not fit into the
 
 ## Metrics: `GET /metrics?format=prometheus`
 
-The Overview uses this endpoint, and so does the proxy's own metrics endpoint, which appends these lines unchanged while Strata is up (`docs/metrics.md`); clients no longer reach Strata's `/metrics` through the proxy. It needs the key (line 5997) and returns Prometheus text with vLLM names and `strata:` names (`serve/prometheus.py`, `render`). Every line carries the label `model_name`:
+The Overview uses this endpoint, and so does the proxy's own metrics endpoint, which appends these lines unchanged while Strata is up (`docs/metrics.md`); clients no longer reach Strata's `/metrics` through the proxy. The tool-call counters are not here but on `/metrics/prometheus` (below). It needs the key (line 5997) and returns Prometheus text with vLLM names and `strata:` names (`serve/prometheus.py`, `render`). Every line carries the label `model_name`:
 
 | Name | Meaning |
 |---|---|
@@ -99,13 +100,22 @@ The Overview uses this endpoint, and so does the proxy's own metrics endpoint, w
 
 Without `format=prometheus` (and without `Accept: text/plain`), `/metrics` returns JSON for the monitor tab. The fields there are the same, e.g. `live.tok_s`.
 
-The tests read real output of `render` from `crates/nas-proxy/tests/fixtures/strata-metrics-*.prom`. If Strata changes, regenerate them from the new `serve/prometheus.py` and update the commit above. `serve/prometheus.py` has not changed between 477ac13 and cbfd5b9.
+The tests read real output of `render` from `crates/nas-proxy/tests/fixtures/strata-metrics-busy.prom` and `strata-metrics-idle.prom`. If Strata changes, regenerate them from the new `serve/prometheus.py` and update the commit above. `serve/prometheus.py` has not changed between 477ac13 and cbfd5b9.
 
 ## `GET /metrics/prometheus`: not for the Overview
 
-This endpoint returns llama-server names (`llamacpp:*`, `Service.prometheus`, line 4289), needs the key and is not suitable for the Overview. The proxy answers `/metrics/prometheus` itself (`docs/metrics.md`) and never fetches Strata's. Two reasons:
+This endpoint returns llama-server names (`llamacpp:*`, `Service.prometheus`, line 4289), needs the key and is not suitable for the Overview. Two reasons:
 - `llamacpp:predicted_tokens_seconds` counts only finished requests and stays at 0 during a running request.
 - Every fetch resets the time window of these values, also for other readers such as Grafana.
+
+The proxy answers `/metrics/prometheus` itself (`docs/metrics.md`). On a scrape of its metrics endpoint it fetches Strata's only for two counters that Strata prints nowhere else, without labels, and drops every other line. Both came after the pin (`Service.prometheus` from line 5044 at Strata c62d5e3a, not at the pin); before their first increment Strata prints 0 (`t.get(..., 0)`):
+
+| Name | Since | Meaning |
+|---|---|---|
+| `strata:tool_calls_unread_total` | 805ebe17 | `<tool_call>` blocks returned as text (an undeclared name or a form the template does not use) |
+| `strata:tool_args_repaired_total` | d7113273 | tool call arguments (a JSON array or object) that were damaged and read as written |
+
+Nothing in Strata reads this endpoint itself, and nothing scrapes Strata on the PC directly, so the proxy's reads disturb no other reader's time window. `crates/nas-proxy/tests/fixtures/strata-metrics-llamacpp.prom` is the output of `Service.prometheus` at c62d5e3a, written from its format string.
 
 ## What the proxy reads from forwarded answers
 

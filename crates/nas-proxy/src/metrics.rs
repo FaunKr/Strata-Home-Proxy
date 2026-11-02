@@ -2,7 +2,8 @@
 //! Prometheus' text format (docs/metrics.md). The proxy answers them itself,
 //! never forwards them, never wakes the PC and never counts them as
 //! activity: Prometheus scrapes every few seconds. Strata's own lines come
-//! along while Strata is up.
+//! along while Strata is up, and its two tool-call counters always, at the
+//! last value read.
 
 use std::{collections::BTreeMap, fmt::Write as _, sync::Arc};
 
@@ -88,8 +89,49 @@ pub struct Scrape {
     /// The PC service's last hardware readings, while the PC is awake or
     /// gaming and they are recent.
     pub hardware: Option<Hardware>,
+    /// Strata's tool-call counters: the last values read.
+    pub tool_calls: ToolCalls,
     /// Strata's Prometheus text while it is up and answers.
     pub strata: Option<String>,
+}
+
+const UNREAD: &str = "strata:tool_calls_unread_total";
+const UNREAD_HELP: &str =
+    "<tool_call> blocks returned as text (an undeclared name or a form the template does not use)";
+const REPAIRED: &str = "strata:tool_args_repaired_total";
+const REPAIRED_HELP: &str =
+    "Tool call arguments (a JSON array or object) that were damaged and read as written";
+
+/// Strata's two tool-call counters, which it prints only on
+/// `/metrics/prometheus`: 0 until the proxy read a value since its start.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ToolCalls {
+    pub unread: u64,
+    pub repaired: u64,
+}
+
+impl ToolCalls {
+    /// These counters with each one `text` prints replaced by its value
+    /// there, also a lower one; one it does not print keeps its value.
+    pub fn updated_from(self, text: &str) -> Self {
+        Self {
+            unread: sample(text, UNREAD).unwrap_or(self.unread),
+            repaired: sample(text, REPAIRED).unwrap_or(self.repaired),
+        }
+    }
+}
+
+/// The value of the sample line of `name` without labels in `text`.
+fn sample(text: &str, name: &str) -> Option<u64> {
+    text.lines().find_map(|line| {
+        let value: f64 = line
+            .strip_prefix(name)?
+            .strip_prefix(' ')?
+            .trim()
+            .parse()
+            .ok()?;
+        (value.is_finite() && value >= 0.0).then_some(value as u64)
+    })
 }
 
 impl Scrape {
@@ -103,10 +145,15 @@ impl Scrape {
             _ if tuning || st.strata().is_none() => false,
             _ => st.strata_ready().await,
         };
-        let strata = match (strata_up, st.strata()) {
-            (true, Some(client)) => client.metrics_text().await.ok(),
-            _ => None,
+        let (strata, llamacpp_text) = match (strata_up, st.strata()) {
+            (true, Some(client)) => {
+                let (text, llamacpp_text) =
+                    tokio::join!(client.metrics_text(), client.metrics_prometheus_text());
+                (text.ok(), llamacpp_text.ok())
+            }
+            _ => (None, None),
         };
+        let tool_calls = st.note_tool_calls(llamacpp_text.as_deref());
         let db = st.events.database();
         let (totals, request_energy_wh) = tokio::task::spawn_blocking(move || {
             let db = db.lock().unwrap();
@@ -147,6 +194,7 @@ impl Scrape {
             pc_energy_joules,
             wake_packets: st.events.wake_packets().await,
             hardware,
+            tool_calls,
             strata,
         }
     }
@@ -408,6 +456,13 @@ pub fn render(s: &Scrape, hiding: Option<&Hiding>) -> String {
         &[],
         s.wake_packets as f64,
     );
+
+    for (name, help, value) in [
+        (UNREAD, UNREAD_HELP, s.tool_calls.unread),
+        (REPAIRED, REPAIRED_HELP, s.tool_calls.repaired),
+    ] {
+        Family::new(&mut out, name, "counter", help).line(name, &[], value as f64);
+    }
 
     if let Some(text) = &s.strata {
         match hiding {

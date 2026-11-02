@@ -185,7 +185,7 @@ Requests and their prompt, cached and output tokens per day, API key, model and 
 _Avoid_: request stats, usage table
 
 **Metrics endpoint**:
-What the proxy answers on `/metrics` and `/metrics/prometheus` for Prometheus, with any API key: the PC's state, power, request totals, request energy, the PC's energy and wake packets, plus Strata's own lines while it is up. A scrape never wakes the PC and is no activity. Rules in `docs/metrics.md`.
+What the proxy answers on `/metrics` and `/metrics/prometheus` for Prometheus, with any API key: the PC's state, power, request totals, request energy, the PC's energy and wake packets, plus Strata's own lines while it is up and Strata's tool-call counters at the last value read. A scrape never wakes the PC and is no activity. Rules in `docs/metrics.md`.
 _Avoid_: telemetry, stats, exporter
 
 **Strata key**:

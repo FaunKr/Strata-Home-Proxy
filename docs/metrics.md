@@ -47,13 +47,27 @@ Code: `crates/nas-proxy/src/metrics.rs`. Tests: `crates/nas-proxy/tests/metrics.
 
 The counters carry on across restarts: they are read from the history's database. The request totals started empty with the release that brought them; the request energy, the PC energy and the wake packets include everything saved before. A deleted database, or a changed `PLUG_SAMPLE_SECS` for the PC energy, makes a counter drop, which Prometheus treats as a reset.
 
+## Strata's tool-call counters
+
+Strata prints two counters only on its `/metrics/prometheus` (`docs/strata-api.md`). The proxy reads them there on every scrape while Strata is up, and they come after the proxy's own lines, with Strata's names, help text and type and without labels:
+
+| Name | Type | Meaning |
+|---|---|---|
+| `strata:tool_calls_unread_total` | counter | `<tool_call>` blocks Strata returned as text: an undeclared tool name or a form the template does not use |
+| `strata:tool_args_repaired_total` | counter | tool call arguments (a JSON array or object) that were damaged and read as written |
+
+- Both are always in the answer. Each shows the latest value Strata printed, also a lower one: Strata keeps these totals in memory, so they drop when Strata restarts.
+- While the PC sleeps or wakes, Strata is not up or does not answer, its `/metrics/prometheus` answers an error, or a Strata without these counters does not print them, each shows the last value the proxy read. A sleeping PC therefore makes no counter reset, and Prometheus counts no tool calls twice after a wake-up.
+- Before the proxy read a value since its start, each shows 0. The last values live in memory only: a restart of the proxy starts at 0 again until Strata is up.
+- No other line of Strata's `/metrics/prometheus` reaches the answer: each has a stand-in among Strata's lines below.
+
 ## Strata's lines
 
-While Strata is up, its own lines from `/metrics?format=prometheus` (`vllm:*`, `strata:*`, `docs/strata-api.md`) follow the proxy's, unchanged. While it is not up, or does not answer, they are missing and the scrape still answers `200`. Strata's `/metrics/prometheus` (`llamacpp:*`) is never fetched: every read resets its time window.
+While Strata is up, its own lines from `/metrics?format=prometheus` (`vllm:*`, `strata:*`, `docs/strata-api.md`) follow, unchanged. While it is not up, or does not answer, they are missing and the scrape still answers `200`. Of Strata's `/metrics/prometheus` (`llamacpp:*`) only the two tool-call counters above are read.
 
 ## Keys that hide the model
 
-For an API key that hides the model, every model name in the answer is the public model name: Strata's `model_name` label and the proxy's `model` label. The image model keeps its own name, as in answers. Series of the proxy that then share all labels add up into one line. Every key sees the counters of all keys by name.
+For an API key that hides the model, every model name in the answer is the public model name: Strata's `model_name` label and the proxy's `model` label. The tool-call counters carry no model name and stay the same. The image model keeps its own name, as in answers. Series of the proxy that then share all labels add up into one line. Every key sees the counters of all keys by name.
 
 ## Scrape config
 

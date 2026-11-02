@@ -51,6 +51,9 @@ use crate::{
 /// Delay between answering a sleep request and going to standby, so the
 /// answer reaches the NAS first.
 const SUSPEND_DELAY: Duration = Duration::from_secs(2);
+/// After a restart Windows began without restarting (a program held it and
+/// the user called it off), the service answers and starts Strata again.
+const RESTART_GIVEN_UP: Duration = Duration::from_secs(300);
 /// A gap in wall-clock time this large between two watchdog passes means the
 /// PC was asleep.
 const RESUME_GAP: Duration = Duration::from_secs(30);
@@ -102,9 +105,12 @@ pub struct Agent {
     pub(crate) presets: PresetsCheck,
     /// An update of this program is under way.
     pub(crate) updating: AtomicBool,
-    /// A sleep request was taken and standby follows; a second one adds
-    /// no second standby.
-    standby_pending: AtomicBool,
+    /// A sleep or restart request was taken and standby or the restart
+    /// follows; a second request joins it and adds no second action.
+    power_pending: AtomicBool,
+    /// A Planned restart was taken: `/status` answers 503 until the PC is
+    /// down, so the proxy counts it as asleep.
+    restarting: AtomicBool,
     pub(crate) output: Arc<StrataOutput>,
     pub jsonschema_limits: crate::jsonschema::LimitsSetting,
     /// A new one comes with every start of Strata.
@@ -180,7 +186,8 @@ impl Agent {
             catalog: CatalogCheck::default(),
             presets: PresetsCheck::default(),
             updating: AtomicBool::new(false),
-            standby_pending: AtomicBool::new(false),
+            power_pending: AtomicBool::new(false),
+            restarting: AtomicBool::new(false),
             output,
             jsonschema_limits: Default::default(),
             strata_key: StrataKey::new(),
@@ -295,6 +302,7 @@ impl Agent {
             expert_learning: self
                 .expert
                 .status(crate::strata::active_model(self).as_deref()),
+            restart: true,
         }
     }
 
@@ -569,13 +577,20 @@ fn gaming_flag(cfg: &Config) -> PathBuf {
     cfg.state_dir().join("gaming-mode")
 }
 
-async fn status(State(agent): State<Arc<Agent>>, req: Request) -> Json<PcStatus> {
+async fn status(State(agent): State<Arc<Agent>>, req: Request) -> Response {
+    if agent.restarting.load(Ordering::SeqCst) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(Refused::new("The PC restarts")),
+        )
+            .into_response();
+    }
     let local = req
         .extensions()
         .get::<ConnectInfo<Peer>>()
         .and_then(|p| p.0.local)
         .map(|a| a.ip());
-    Json(agent.status_for(local).await)
+    Json(agent.status_for(local).await).into_response()
 }
 
 async fn sleep(State(agent): State<Arc<Agent>>) -> Response {
@@ -585,6 +600,17 @@ async fn sleep(State(agent): State<Arc<Agent>>) -> Response {
     }
     tracing::info!("Sleep request accepted");
     go_to_standby(&agent);
+    Json(Answer::accepted()).into_response()
+}
+
+/// A Planned restart: refused for the reasons of a sleep request.
+async fn restart(State(agent): State<Arc<Agent>>) -> Response {
+    if let Err(reason) = agent.may_sleep().await {
+        tracing::info!(%reason, "Restart request refused");
+        return (StatusCode::CONFLICT, Json(Answer::refused(reason))).into_response();
+    }
+    tracing::info!("Restart request accepted");
+    power_action(&agent, PowerAction::Restart);
     Json(Answer::accepted()).into_response()
 }
 
@@ -606,35 +632,75 @@ async fn force_restart(State(agent): State<Arc<Agent>>) -> Response {
     }
 }
 
-/// Standby after an accepted or forced sleep request: after a moment, so
+/// What follows an accepted sleep or restart request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PowerAction {
+    Standby,
+    Restart,
+}
+
+fn go_to_standby(agent: &Arc<Agent>) {
+    power_action(agent, PowerAction::Standby);
+}
+
+/// Standby or the restart after an accepted request: after a moment, so
 /// the answer reaches the NAS first. A job cancelled by a forced sleep ends
-/// before, or is left behind after `cancel_wait_secs`. One standby at a
+/// before, or is left behind after `cancel_wait_secs`. One action at a
 /// time: a request while one is pending only joins it. An update begun in
 /// the meantime calls it off.
-fn go_to_standby(agent: &Arc<Agent>) {
-    if agent.standby_pending.swap(true, Ordering::SeqCst) {
-        tracing::info!("Standby already follows");
+fn power_action(agent: &Arc<Agent>, action: PowerAction) {
+    if agent.power_pending.swap(true, Ordering::SeqCst) {
+        tracing::info!("Standby or restart already follows");
         return;
+    }
+    if action == PowerAction::Restart {
+        agent.restarting.store(true, Ordering::SeqCst);
     }
     let agent = Arc::clone(agent);
     tokio::spawn(async move {
         tokio::time::sleep(SUSPEND_DELAY).await;
         agent.wait_for_cancelled_job().await;
         if agent.updating.load(Ordering::SeqCst) {
-            tracing::warn!("No standby: the PC service is updating");
-            agent.standby_pending.store(false, Ordering::SeqCst);
+            tracing::warn!("No standby or restart: the PC service is updating");
+            agent.restarting.store(false, Ordering::SeqCst);
+            agent.power_pending.store(false, Ordering::SeqCst);
             return;
         }
-        agent.before_standby();
-        let platform_agent = Arc::clone(&agent);
-        let result = tokio::task::spawn_blocking(move || platform_agent.platform.suspend()).await;
-        if let Err(e) = result.map_err(anyhow::Error::from).and_then(|r| r) {
-            tracing::error!("Standby failed: {e}");
+        match action {
+            PowerAction::Standby => standby(&agent).await,
+            PowerAction::Restart => restart_pc(&agent).await,
         }
-        // Also after a failed standby, so a stopped Strata comes back.
-        agent.resumed();
-        agent.standby_pending.store(false, Ordering::SeqCst);
+        agent.power_pending.store(false, Ordering::SeqCst);
     });
+}
+
+async fn standby(agent: &Arc<Agent>) {
+    agent.before_standby();
+    let platform_agent = Arc::clone(agent);
+    let result = tokio::task::spawn_blocking(move || platform_agent.platform.suspend()).await;
+    if let Err(e) = result.map_err(anyhow::Error::from).and_then(|r| r) {
+        tracing::error!("Standby failed: {e}");
+    }
+    // Also after a failed standby, so a stopped Strata comes back.
+    agent.resumed();
+}
+
+/// Stops Strata (cleanly while an expert profile learns) and restarts
+/// Windows. Should Windows not go down after all, the service answers
+/// again after `RESTART_GIVEN_UP` and Strata comes back.
+async fn restart_pc(agent: &Arc<Agent>) {
+    tracing::warn!("Restarting the PC for a Planned restart");
+    agent.strata().stop_cleanly().await;
+    let platform_agent = Arc::clone(agent);
+    let result = tokio::task::spawn_blocking(move || platform_agent.platform.restart()).await;
+    match result.map_err(anyhow::Error::from).and_then(|r| r) {
+        Ok(()) => tokio::time::sleep(RESTART_GIVEN_UP).await,
+        Err(e) => tracing::error!("Restart failed: {e}"),
+    }
+    agent.restarting.store(false, Ordering::SeqCst);
+    if !agent.gaming() {
+        agent.strata().start();
+    }
 }
 
 async fn gaming(State(agent): State<Arc<Agent>>, Json(req): Json<GamingRequest>) -> Json<PcStatus> {
@@ -856,6 +922,7 @@ pub fn router(agent: Arc<Agent>) -> Router {
         .route("/status", get(status))
         .route("/sleep", post(sleep))
         .route("/sleep/force", post(force_sleep))
+        .route("/restart", post(restart))
         .route("/strata/kill", post(force_restart))
         .route("/gaming", post(gaming))
         .route("/strata", get(strata_view))

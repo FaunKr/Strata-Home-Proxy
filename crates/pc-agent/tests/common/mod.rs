@@ -55,6 +55,10 @@ pub struct FakeCommand {
 pub struct Fake {
     pub idle: Mutex<Duration>,
     pub suspends: AtomicUsize,
+    /// Restarts of the PC (a Planned restart).
+    pub restarts: AtomicUsize,
+    /// Restarting the PC fails.
+    pub restart_fails: AtomicBool,
     pub starts: AtomicUsize,
     pub stops: AtomicUsize,
     pub strata_up: AtomicBool,
@@ -247,6 +251,13 @@ impl Platform for FakePlatform {
     }
     fn suspend(&self) -> anyhow::Result<()> {
         self.0.suspends.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    fn restart(&self) -> anyhow::Result<()> {
+        self.0.restarts.fetch_add(1, Ordering::SeqCst);
+        if self.0.restart_fails.load(Ordering::SeqCst) {
+            anyhow::bail!("restart refused by Windows");
+        }
         Ok(())
     }
     /// Runs the fake command named like the start script for Strata's output.
@@ -549,6 +560,17 @@ pub async fn eventually(what: &str, check: impl Fn() -> bool) {
         assert!(Instant::now() < deadline, "{what} did not happen");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// `POST /restart`, a Planned restart: its status and answer.
+pub async fn restart_answer(s: &Setup) -> (u16, Value) {
+    let resp = client()
+        .post(format!("{}/restart", s.url))
+        .bearer_auth("secret")
+        .send()
+        .await
+        .unwrap();
+    (resp.status().as_u16(), resp.json().await.unwrap())
 }
 
 pub async fn sleep_answer(s: &Setup) -> (u16, Value) {

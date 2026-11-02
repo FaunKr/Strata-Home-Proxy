@@ -65,6 +65,11 @@ service. The proxy reads `tune` there: while a tune runs, Strata is off and
 the proxy answers requests with a `503` instead of waking (see `tune`
 below).
 
+`restart` is `true` from the version that takes `POST /restart` (1.4.0);
+missing, so `false`, from an older PC service. The Overview offers *Restart at
+next sleep* only while the service that answered last reports it. While a
+restart it took is under way, `/status` answers `503`.
+
 `version` is the crate version, e.g. `0.2.0`; older builds append
 the build's commit (`0.2.0+5e8b9f1`), which the proxy ignores. The same value
 is in the .exe as the text `strata-pc-agent-version:<version>`; this is how
@@ -189,6 +194,23 @@ The response (`Answer`) comes first, standby follows 2 s later.
 - `409`, refused with a reason, e.g. "User active". The proxy asks again
   after `SLEEP_RETRY_SECS`.
 
+## `POST /restart` (Planned restart)
+
+The proxy sends this instead of `/sleep` after the idle timeout while a
+Planned restart is armed, with no request body. The service runs the checks
+of `/sleep` and answers the same way (`Answer`): `200` accepted, `409`
+refused with the reason. A service from before it answers 404 and reports no
+`restart` in `/status`; the proxy then calls the plan off and sends `/sleep`.
+
+After an accepted one, on the path of the standby: 2 s after the answer
+(and after an update begun meanwhile, not at all) the service stops Strata,
+cleanly while an expert profile learns, and asks Windows to restart without
+installing updates and without forcing programs closed. From the answer on,
+`GET /status` answers `503`, so the proxy counts the PC as asleep until the
+restarted service answers. Should the restart call fail, or Windows still run
+5 minutes after it began (a program held it and the user called it off), the
+service answers again and starts Strata.
+
 ## `POST /sleep/force` (for the web UI)
 
 The forced sleep behind *Force sleep* on the Overview, with no request body.
@@ -205,8 +227,9 @@ its saved switch too.
   field is missing without one.
 - `409` (`Refused` with reason): only during an update of the service.
 
-For `/sleep` and `/sleep/force`: while a standby is already pending, the
-service accepts another sleep request without starting a second standby, so a
+For `/sleep`, `/sleep/force` and `/restart`: while a standby or a restart is
+already pending, the service accepts another request without starting a
+second action, so a
 double click doesn't put the PC back to sleep right after it wakes. If an
 update begins before the standby, the standby is skipped.
 

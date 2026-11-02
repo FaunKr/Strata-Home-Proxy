@@ -453,7 +453,20 @@ async fn the_tool_call_counters_keep_the_last_value_while_strata_does_not_answer
     let s = with_tool_counters().await;
     until_counters(&s, &s.key, 3.0, 5.0).await;
     s.pc.starting.store(true, Ordering::SeqCst);
-    let text = until_value(&s, "strata_proxy_strata_up", &[], 0.0).await;
+    // Strata's last answer to `/health` counts for 5 s (`HEALTH_CACHE`), as
+    // long as `until_value` waits: give it more.
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let text = loop {
+        let text = scrape(&s, &s.key).await;
+        if value(&text, "strata_proxy_strata_up", &[]) == Some(0.0) {
+            break text;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Strata never down:\n{text}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     assert_eq!(counters(&text), (Some(3.0), Some(5.0)), "{text}");
 }
 

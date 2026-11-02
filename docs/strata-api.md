@@ -2,7 +2,7 @@
 
 Strata is its own engine ([Niko1221/Strata](https://github.com/Niko1221/Strata)), not llama-server. Some endpoints carry llama-server or vLLM names so that third-party tools work. What they really return is only in Strata's code.
 
-In the proxy, only `crates/nas-proxy/src/strata_client.rs` talks to Strata: `/health`, the metrics (for the Overview and the metrics endpoint), the request for an update's summary, the list of models after a wake-up and the forwarding. A new call belongs there.
+In the proxy, only `crates/nas-proxy/src/strata_client.rs` talks to Strata: `/health`, the metrics (for the Overview and the metrics endpoint), the request history (for the metrics endpoint's expert tiers), the request for an update's summary, the list of models after a wake-up and the forwarding. A new call belongs there.
 
 As of: commit [`cbfd5b9`](https://github.com/Niko1221/Strata/tree/cbfd5b9) (2026-10-20). The line numbers refer to it.
 
@@ -101,6 +101,19 @@ The Overview uses this endpoint, and so does the proxy's own metrics endpoint, w
 Without `format=prometheus` (and without `Accept: text/plain`), `/metrics` returns JSON for the monitor tab. The fields there are the same, e.g. `live.tok_s`.
 
 The tests read real output of `render` from `crates/nas-proxy/tests/fixtures/strata-metrics-busy.prom` and `strata-metrics-idle.prom`. If Strata changes, regenerate them from the new `serve/prometheus.py` and update the commit above. `serve/prometheus.py` has not changed between 477ac13 and cbfd5b9.
+
+## Request history: `GET /metrics?requests=all`
+
+The JSON `/metrics` (without `format=prometheus`, with the key) lists Strata's finished requests under `requests`, newest first: the last 12, or with `requests=all` every one it keeps, at most 500 (`history`, a deque of 500, `serve/server.py` line 4235 at c62d5e3a; `metrics` from line 4955). Strata keeps them in memory, so a restart of Strata starts an empty history. The proxy reads it for the expert tiers of its metrics endpoint (`docs/metrics.md`), after each finished request, and reads four fields of each entry (`history.append` from line 5900):
+
+| Field | Meaning |
+|---|---|
+| `id` | Strata's own id of the request, 12 random hex digits (`uuid.uuid4().hex[:12]`); never sent to the client, so it cannot be matched to the proxy's requests |
+| `output_tokens` | the request's output tokens |
+| `hit_rate` | decode's expert cache hits over lookups (`hits` / `lookups` of the engine's `DONE` lines, summed over a request's segments by `request_stats`, `_parse_done` from line 1370); `null` without lookups or from an older engine |
+| `pcie_share` | the routed experts the GPU read over PCIe (`--pcie-frac`) or another GPU computed, over lookups plus those (`offloaded`, engine 0.1.39+); not in the hit rate's lookups; `null` from an older engine |
+
+The experts in neither (`1 − hit_rate` of the lookups) the CPU workers compute from RAM. `crates/nas-proxy/tests/fixtures/strata-request-history.json` holds one entry with every key `history.append` writes at c62d5e3a.
 
 ## `GET /metrics/prometheus`: not for the Overview
 

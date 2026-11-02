@@ -41,6 +41,22 @@ pub struct Metrics {
     pub tokens_per_sec: Option<f64>,
 }
 
+/// One finished request of Strata's history (`/metrics?requests=all`), with
+/// the fields the expert tiers read (docs/strata-api.md).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct HistoryEntry {
+    /// Strata's own id: random, never sent to the client.
+    pub id: String,
+    #[serde(default)]
+    pub output_tokens: Option<u64>,
+    /// Decode's expert cache hits over lookups.
+    #[serde(default)]
+    pub hit_rate: Option<f64>,
+    /// Offloaded experts over lookups plus offloaded.
+    #[serde(default)]
+    pub pcie_share: Option<f64>,
+}
+
 /// What a chat request answered.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatAnswer {
@@ -162,6 +178,20 @@ impl StrataClient {
         resp.text().await.map_err(|_| NO_METRICS.into())
     }
 
+    /// Strata's request history: its last finished requests, newest first.
+    pub async fn request_history(&self) -> Result<Vec<HistoryEntry>, String> {
+        const NO_HISTORY: &str = "no request history from Strata";
+        let resp = self
+            .send(self.request(&self.probe, Method::GET, "/metrics?requests=all"))
+            .await
+            .map_err(|_| NO_HISTORY)?;
+        if !resp.status().is_success() {
+            return Err(NO_HISTORY.into());
+        }
+        let body = resp.bytes().await.map_err(|_| NO_HISTORY)?;
+        parse_request_history(&body).ok_or_else(|| NO_HISTORY.into())
+    }
+
     /// `GET /v1/models`: its `Content-Type` and body, for a `200` only.
     pub async fn models(&self) -> Result<(Option<String>, Bytes), String> {
         let resp = self
@@ -269,6 +299,17 @@ pub fn parse_health(body: &[u8]) -> StrataHealth {
     }
 }
 
+/// The `requests` of Strata's JSON `/metrics`; `None` without them.
+pub fn parse_request_history(body: &[u8]) -> Option<Vec<HistoryEntry>> {
+    #[derive(Deserialize)]
+    struct Answer {
+        requests: Vec<HistoryEntry>,
+    }
+    serde_json::from_slice::<Answer>(body)
+        .ok()
+        .map(|a| a.requests)
+}
+
 /// Reads the few values the Proxy needs from Prometheus text.
 pub fn parse_metrics(text: &str) -> Option<Metrics> {
     let value = |name: &str| {
@@ -290,6 +331,23 @@ pub fn parse_metrics(text: &str) -> Option<Metrics> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_strata_request_history() {
+        // Every key of Strata c62d5e3a's `history.append`, docs/strata-api.md.
+        assert_eq!(
+            parse_request_history(include_bytes!(
+                "../tests/fixtures/strata-request-history.json"
+            )),
+            Some(vec![HistoryEntry {
+                id: "3f9c2a7b1e04".into(),
+                output_tokens: Some(212),
+                hit_rate: Some(0.874),
+                pcie_share: Some(0.062),
+            }])
+        );
+        assert_eq!(parse_request_history(b"{}"), None);
+    }
 
     #[test]
     fn reads_strata_metrics() {

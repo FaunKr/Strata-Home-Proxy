@@ -1,0 +1,31 @@
+{
+  "requests": [
+    {
+      "id": "3f9c2a7b1e04",
+      "projection": null,
+      "time": 1761426000.512,
+      "duration_s": 6.4,
+      "finish": "stop",
+      "prompt_tokens": 1820,
+      "reused": 1536,
+      "output_tokens": 212,
+      "first_engine_token_s": 0.81,
+      "prompt_total": 1820,
+      "prompt_read": 284,
+      "reasoning_recoveries": 0,
+      "reasoning_repeat_coverage": 0.0,
+      "engine_generated": 212,
+      "prompt_ms": 640.2,
+      "decode_ms": 5512.7,
+      "decode_tok_s": 38.5,
+      "hit_rate": 0.874,
+      "pcie_share": 0.062,
+      "ram_blobs": 1904,
+      "file_blobs": 0,
+      "file_mb": 0.0,
+      "drafts_offered": 0,
+      "drafts_accepted": 0
+    }
+  ],
+  "requests_kept": 1
+}

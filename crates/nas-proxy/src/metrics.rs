@@ -18,6 +18,7 @@ use axum::{
 use strata_pc_protocol::{Gpu, Hardware};
 
 use crate::{
+    expert_tiers::{self, Tier},
     lifecycle::PcState,
     proxy::{self, Flavor},
     public_name,
@@ -83,6 +84,8 @@ pub struct Scrape {
     pub totals: Vec<Total>,
     /// Request energy per model in Wh; empty without a power plug.
     pub request_energy_wh: Vec<(String, f64)>,
+    /// Output tokens per expert tier and model, over all days.
+    pub expert_tokens: BTreeMap<String, expert_tiers::Tokens>,
     /// `None` without a power plug.
     pub pc_energy_joules: Option<f64>,
     pub wake_packets: u64,
@@ -94,6 +97,9 @@ pub struct Scrape {
     /// Strata's Prometheus text while it is up and answers.
     pub strata: Option<String>,
 }
+
+const EXPERT_TOKENS_HELP: &str = "Output tokens by where their routed experts ran: \
+     the GPU's expert cache (vram), copied over PCIe (pcie), computed by the CPU (cpu).";
 
 const UNREAD: &str = "strata:tool_calls_unread_total";
 const UNREAD_HELP: &str =
@@ -155,7 +161,7 @@ impl Scrape {
         };
         let tool_calls = st.note_tool_calls(llamacpp_text.as_deref());
         let db = st.events.database();
-        let (totals, request_energy_wh) = tokio::task::spawn_blocking(move || {
+        let (totals, request_energy_wh, expert_tokens) = tokio::task::spawn_blocking(move || {
             let db = db.lock().unwrap();
             let totals = request_totals::totals(&db).unwrap_or_else(|e| {
                 tracing::warn!("request totals not read: {e}");
@@ -165,7 +171,11 @@ impl Scrape {
                 tracing::warn!("request energy not read: {e}");
                 Vec::new()
             });
-            (totals, energy)
+            let experts = expert_tiers::totals(&db).unwrap_or_else(|e| {
+                tracing::warn!("expert tiers not read: {e}");
+                BTreeMap::new()
+            });
+            (totals, energy, experts)
         })
         .await
         .unwrap_or_default();
@@ -191,6 +201,7 @@ impl Scrape {
             power_watts: st.plug_latest().filter(|_| plug),
             totals,
             request_energy_wh: if plug { request_energy_wh } else { Vec::new() },
+            expert_tokens,
             pc_energy_joules,
             wake_packets: st.events.wake_packets().await,
             hardware,
@@ -436,6 +447,23 @@ pub fn render(s: &Scrape, hiding: Option<&Hiding>) -> String {
         let mut f = Family::new(&mut out, name, "counter", "Request energy per model.");
         for (m, joules) in &energy {
             f.line(name, &[("model", m)], *joules);
+        }
+    }
+
+    let mut experts: BTreeMap<String, expert_tiers::Tokens> = BTreeMap::new();
+    for (m, tokens) in &s.expert_tokens {
+        let sum = experts.entry(model(m)).or_default();
+        for (into, n) in sum.iter_mut().zip(tokens) {
+            *into += n;
+        }
+    }
+    if !experts.is_empty() {
+        let name = "strata_proxy_expert_tokens_total";
+        let mut f = Family::new(&mut out, name, "counter", EXPERT_TOKENS_HELP);
+        for (m, tokens) in &experts {
+            for (tier, n) in Tier::ALL.into_iter().zip(tokens) {
+                f.line(name, &[("model", m), ("tier", tier.label())], *n);
+            }
         }
     }
 

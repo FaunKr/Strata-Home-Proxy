@@ -17,7 +17,7 @@ use axum::body::Bytes;
 use futures_util::{Stream, StreamExt, stream::BoxStream};
 use rusqlite::{Connection, params};
 use strata_admin_ui::api::{
-    RequestLogMessage, RequestOutcome, RequestRefusal, RequestRow, RequestState,
+    RequestApi, RequestLogMessage, RequestOutcome, RequestRefusal, RequestRow, RequestState,
 };
 use tokio::sync::broadcast;
 
@@ -388,6 +388,13 @@ impl Recording {
             .map(|name| crate::request_energy::model_for(&self.state, name));
         let totals_model = crate::request_totals::model_for(&self.state, &row);
         self.state.expert_learning.note_request(&row);
+        // Strata's history names no model: the request that starts a read
+        // names it. An image request is not in it.
+        if self.sent.is_some() && row.api != RequestApi::Images {
+            self.state
+                .expert_tiers
+                .note_request(&self.state, &totals_model);
+        }
         self.state.requests.finish(row, model, &totals_model);
     }
 

@@ -185,7 +185,7 @@ Requests and their prompt, cached and output tokens per day, API key, model and 
 _Avoid_: request stats, usage table
 
 **Expert tiers**:
-Where the routed experts of a request's decode ran: from the GPU's expert cache in VRAM (`vram`), copied over PCIe (`pcie`), or computed by the CPU from RAM (`cpu`). The metrics endpoint counts each Strata request's output tokens per tier, per model, read from Strata's request history after each finished request; they start with the release that brought them.
+Where the routed experts of a request's decode ran: from the GPU's expert cache in VRAM (`vram`), copied over PCIe (`pcie`), or computed by the CPU from RAM (`cpu`). The metrics endpoint counts each Strata request's output tokens per tier, per model, read from Strata's finished requests after each finished request; they start with the release that brought them.
 _Avoid_: expert placement, offload rate
 
 **Metrics endpoint**:

@@ -85,7 +85,7 @@ pub struct Scrape {
     /// Request energy per model in Wh; empty without a power plug.
     pub request_energy_wh: Vec<(String, f64)>,
     /// Output tokens per expert tier and model, over all days.
-    pub expert_tokens: BTreeMap<String, expert_tiers::Tokens>,
+    pub expert_tokens: BTreeMap<String, expert_tiers::TierTokens>,
     /// `None` without a power plug.
     pub pc_energy_joules: Option<f64>,
     pub wake_packets: u64,
@@ -450,19 +450,20 @@ pub fn render(s: &Scrape, hiding: Option<&Hiding>) -> String {
         }
     }
 
-    let mut experts: BTreeMap<String, expert_tiers::Tokens> = BTreeMap::new();
+    let mut experts: BTreeMap<String, expert_tiers::TierTokens> = BTreeMap::new();
     for (m, tokens) in &s.expert_tokens {
-        let sum = experts.entry(model(m)).or_default();
-        for (into, n) in sum.iter_mut().zip(tokens) {
-            *into += n;
-        }
+        experts.entry(model(m)).or_default().add(tokens);
     }
     if !experts.is_empty() {
         let name = "strata_proxy_expert_tokens_total";
         let mut f = Family::new(&mut out, name, "counter", EXPERT_TOKENS_HELP);
         for (m, tokens) in &experts {
-            for (tier, n) in Tier::ALL.into_iter().zip(tokens) {
-                f.line(name, &[("model", m), ("tier", tier.label())], *n);
+            for tier in Tier::ALL {
+                f.line(
+                    name,
+                    &[("model", m), ("tier", tier.label())],
+                    tokens.get(tier),
+                );
             }
         }
     }

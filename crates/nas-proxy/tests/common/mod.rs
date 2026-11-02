@@ -88,12 +88,13 @@ pub struct FakePc {
     pub metrics_prometheus_requests: AtomicUsize,
     /// `Authorization` header of the last metrics request.
     pub metrics_auth: Mutex<Option<String>>,
-    /// The entries Strata's JSON `/metrics?requests=all` answers under
-    /// `requests`, newest first, like Strata; `{}` (no history) if unset.
-    pub request_history: Mutex<Option<Vec<Value>>>,
+    /// Strata's finished requests, which its JSON `/metrics?requests=all`
+    /// answers under `requests`, newest first; `{}` (an answer without
+    /// them) if unset.
+    pub finished_requests: Mutex<Option<Vec<Value>>>,
     /// Reads of Strata's JSON `/metrics` with `requests=all`, counted once
     /// the answer is taken.
-    pub request_history_reads: AtomicUsize,
+    pub finished_requests_reads: AtomicUsize,
     /// What the PC service's `GET /strata` answers; 404 (an older service) if unset.
     /// The proxy takes it over (`StrataState::last_info`) only when it builds
     /// the Strata page (reading it with `b.call("strata", &[])`, starting a code
@@ -294,13 +295,13 @@ impl FakePc {
         }
     }
 
-    /// Marks `model` as the one active in the Strata report, and no other.
-    /// Strata's request history: `entries` newest first, as its JSON
+    /// Strata's finished requests: `requests` newest first, as its JSON
     /// `/metrics?requests=all` lists them.
-    pub fn set_strata_request_history(&self, entries: Vec<Value>) {
-        *self.request_history.lock().unwrap() = Some(entries);
+    pub fn set_strata_finished_requests(&self, requests: Vec<Value>) {
+        *self.finished_requests.lock().unwrap() = Some(requests);
     }
 
+    /// Marks `model` as the one active in the Strata report, and no other.
     pub fn set_active_model(&self, model: &str) {
         let mut report = self.strata_info.lock().unwrap();
         let Some(models) = report.as_mut().map(|r| &mut r.info.models) else {
@@ -700,15 +701,15 @@ pub async fn metrics(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     if !prometheus {
-        let history = pc.request_history.lock().unwrap().clone();
+        let finished = pc.finished_requests.lock().unwrap().clone();
         if query
             .as_deref()
             .unwrap_or_default()
             .contains("requests=all")
         {
-            pc.request_history_reads.fetch_add(1, Ordering::SeqCst);
+            pc.finished_requests_reads.fetch_add(1, Ordering::SeqCst);
         }
-        return match history {
+        return match finished {
             Some(entries) => Json(json!({"requests": entries})).into_response(),
             None => Json(json!({})).into_response(),
         };

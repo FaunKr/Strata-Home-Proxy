@@ -41,10 +41,10 @@ pub struct Metrics {
     pub tokens_per_sec: Option<f64>,
 }
 
-/// One finished request of Strata's history (`/metrics?requests=all`), with
-/// the fields the expert tiers read (docs/strata-api.md).
+/// One of Strata's finished requests (`/metrics?requests=all`), with the
+/// fields the expert tiers read (docs/strata-api.md).
 #[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct HistoryEntry {
+pub struct StrataRequest {
     /// Strata's own id: random, never sent to the client.
     pub id: String,
     #[serde(default)]
@@ -178,18 +178,18 @@ impl StrataClient {
         resp.text().await.map_err(|_| NO_METRICS.into())
     }
 
-    /// Strata's request history: its last finished requests, newest first.
-    pub async fn request_history(&self) -> Result<Vec<HistoryEntry>, String> {
-        const NO_HISTORY: &str = "no request history from Strata";
+    /// Strata's last finished requests, newest first.
+    pub async fn finished_requests(&self) -> Result<Vec<StrataRequest>, String> {
+        const NO_REQUESTS: &str = "no finished requests from Strata";
         let resp = self
             .send(self.request(&self.probe, Method::GET, "/metrics?requests=all"))
             .await
-            .map_err(|_| NO_HISTORY)?;
+            .map_err(|_| NO_REQUESTS)?;
         if !resp.status().is_success() {
-            return Err(NO_HISTORY.into());
+            return Err(NO_REQUESTS.into());
         }
-        let body = resp.bytes().await.map_err(|_| NO_HISTORY)?;
-        parse_request_history(&body).ok_or_else(|| NO_HISTORY.into())
+        let body = resp.bytes().await.map_err(|_| NO_REQUESTS)?;
+        parse_finished_requests(&body).ok_or_else(|| NO_REQUESTS.into())
     }
 
     /// `GET /v1/models`: its `Content-Type` and body, for a `200` only.
@@ -300,10 +300,10 @@ pub fn parse_health(body: &[u8]) -> StrataHealth {
 }
 
 /// The `requests` of Strata's JSON `/metrics`; `None` without them.
-pub fn parse_request_history(body: &[u8]) -> Option<Vec<HistoryEntry>> {
+pub fn parse_finished_requests(body: &[u8]) -> Option<Vec<StrataRequest>> {
     #[derive(Deserialize)]
     struct Answer {
-        requests: Vec<HistoryEntry>,
+        requests: Vec<StrataRequest>,
     }
     serde_json::from_slice::<Answer>(body)
         .ok()
@@ -333,20 +333,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_strata_request_history() {
+    fn reads_stratas_finished_requests() {
         // Every key of Strata c62d5e3a's `history.append`, docs/strata-api.md.
         assert_eq!(
-            parse_request_history(include_bytes!(
-                "../tests/fixtures/strata-request-history.json"
+            parse_finished_requests(include_bytes!(
+                "../tests/fixtures/strata-finished-requests.json"
             )),
-            Some(vec![HistoryEntry {
+            Some(vec![StrataRequest {
                 id: "3f9c2a7b1e04".into(),
                 output_tokens: Some(212),
                 hit_rate: Some(0.874),
                 pcie_share: Some(0.062),
             }])
         );
-        assert_eq!(parse_request_history(b"{}"), None);
+        assert_eq!(parse_finished_requests(b"{}"), None);
     }
 
     #[test]

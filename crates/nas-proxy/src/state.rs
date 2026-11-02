@@ -100,7 +100,7 @@ pub struct AppState {
     pub pc_setup: crate::pc_setup::PcSetup,
     /// How far each learned expert profile has learned.
     pub expert_learning: crate::expert_learning::ExpertLearning,
-    /// The reads of Strata's request history for the expert tiers.
+    /// The reads of Strata's finished requests for the expert tiers.
     pub expert_tiers: crate::expert_tiers::ExpertTiers,
     /// The code benchmark in the container code-bench.
     pub code_bench: crate::code_bench::CodeBench,

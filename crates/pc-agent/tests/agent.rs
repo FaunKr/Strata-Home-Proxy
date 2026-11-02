@@ -532,6 +532,38 @@ async fn a_failed_restart_starts_strata_again() {
 }
 
 #[tokio::test]
+async fn gaming_mode_switched_on_before_the_restart_calls_it_off() {
+    let s = setup("restart-gaming-later").await;
+    let (code, _) = restart_answer(&s).await;
+    assert_eq!(code, 200);
+    s.agent.set_gaming(true);
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(s.fake.restarts.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        status_json(&s).await["gaming_mode"],
+        true,
+        "status answers again"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_windows_did_not_carry_out_starts_strata_again() {
+    let s = setup_with("restart-given-up", |c| c.restart_given_up_secs = 1).await;
+    let (code, _) = restart_answer(&s).await;
+    assert_eq!(code, 200);
+    eventually("restart", || s.fake.restarts.load(Ordering::SeqCst) == 1).await;
+    eventually("Strata started again", || {
+        s.fake.starts.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    assert_eq!(
+        status_json(&s).await["restart"],
+        true,
+        "status answers again"
+    );
+}
+
+#[tokio::test]
 async fn status_reports_that_the_service_takes_restart() {
     let s = setup("restart-field").await;
     assert_eq!(status_json(&s).await["restart"], true);

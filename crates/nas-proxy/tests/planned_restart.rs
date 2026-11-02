@@ -135,7 +135,7 @@ async fn a_refused_restart_keeps_the_plan_and_shows_the_reason() {
 
 #[tokio::test]
 async fn a_refused_restart_is_tried_again_after_the_sleep_retry() {
-    let (s, mut b, _live) = ready(|_| {}).await;
+    let (s, mut b, _live) = ready(|c| c.sleep_retry = Duration::from_millis(300)).await;
     s.pc.refuse_sleep.store(true, Ordering::SeqCst);
     arm(&s, &mut b).await;
     eventually("restart refused", || {
@@ -169,10 +169,7 @@ async fn a_planned_restart_survives_a_proxy_restart() {
     live.until("planned", planned).await;
     drop(live);
 
-    // The same `DATA_DIR`, with an idle timeout that is over at once.
-    let mut cfg = (*s.state.cfg()).clone();
-    cfg.idle_timeout = Duration::ZERO;
-    let again = strata_nas_proxy::AppState::new(cfg);
+    let again = restarted(&s);
     assert!(
         matches!(
             again.restart_view(),
@@ -181,6 +178,8 @@ async fn a_planned_restart_survives_a_proxy_restart() {
         "{:?}",
         again.restart_view()
     );
+    // The idle timeout of the restarted proxy runs out at once.
+    again.settings.set("IDLE_TIMEOUT_SECS", "0").unwrap();
     again.idle_tick().await;
     assert_eq!(s.pc.restart_requests.load(Ordering::SeqCst), 1);
     let _ = std::fs::remove_dir_all(dir);
@@ -238,7 +237,7 @@ async fn the_pc_back_after_a_restart_is_seen_awake_and_the_idle_timeout_starts_a
     arm(&s, &mut b).await;
     accepted(&s).await;
     live.until("asleep", |v| v["pc"] == "Asleep").await;
-    // Longer than the reboot takes here: only the PC coming back can start
+    // Longer than the restart takes here: only the PC coming back can start
     // it again.
     s.state.settings.set("IDLE_TIMEOUT_SECS", "2").unwrap();
     tokio::time::sleep(Duration::from_millis(2500)).await;
@@ -256,7 +255,7 @@ async fn the_pc_back_after_a_restart_is_seen_awake_and_the_idle_timeout_starts_a
 }
 
 #[tokio::test]
-async fn a_request_during_the_reboot_waits_for_the_pc() {
+async fn a_request_while_the_pc_restarts_waits_for_it() {
     let (s, mut b, mut live) = ready(|_| {}).await;
     arm(&s, &mut b).await;
     accepted(&s).await;

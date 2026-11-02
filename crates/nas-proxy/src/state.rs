@@ -853,7 +853,7 @@ impl AppState {
     async fn request_restart(&self, agent: &AgentClient) -> bool {
         let answer = agent.request_restart().await;
         if let Err(e) = &answer {
-            tracing::warn!("Restart request failed: {e}");
+            tracing::warn!("Planned restart not asked: {e}");
         }
         if matches!(answer, Ok(RestartAnswer::TooOld)) {
             self.cancel_restart(RESTART_TOO_OLD);

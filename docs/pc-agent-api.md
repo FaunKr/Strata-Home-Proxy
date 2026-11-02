@@ -203,13 +203,14 @@ refused with the reason. A service from before it answers 404 and reports no
 `restart` in `/status`; the proxy then calls the plan off and sends `/sleep`.
 
 After an accepted one, on the path of the standby: 2 s after the answer
-(and after an update begun meanwhile, not at all) the service stops Strata,
+(and after an update, gaming mode or a Strata job begun meanwhile, not at
+all) the service stops Strata,
 cleanly while an expert profile learns, and asks Windows to restart without
 installing updates and without forcing programs closed. From the answer on,
 `GET /status` answers `503`, so the proxy counts the PC as asleep until the
 restarted service answers. Should the restart call fail, or Windows still run
-5 minutes after it began (a program held it and the user called it off), the
-service answers again and starts Strata.
+`restart_given_up_secs` (5 min) after it began (a program held it and the user
+called it off), the service answers again and starts Strata.
 
 ## `POST /sleep/force` (for the web UI)
 

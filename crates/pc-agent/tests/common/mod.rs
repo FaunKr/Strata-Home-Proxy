@@ -486,6 +486,7 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         context_start_secs: 1,
         stop_settle_ms: 10,
         cancel_wait_secs: 30,
+        restart_given_up_secs: 300,
         update_stop_wait_secs: 1,
         clean_stop_secs: 1,
         state_dir: Some(dir.to_path_buf()),

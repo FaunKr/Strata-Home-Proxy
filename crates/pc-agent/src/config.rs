@@ -70,6 +70,11 @@ pub struct Config {
     /// longer for the answer (`force_timeout` there).
     #[serde(default = "default_cancel_wait")]
     pub cancel_wait_secs: u64,
+    /// After Windows began a Planned restart, how long the service waits
+    /// for it to go down before it answers again and starts Strata (a
+    /// program held the restart and the user called it off).
+    #[serde(default = "default_restart_given_up")]
+    pub restart_given_up_secs: u64,
     /// How long an update waits for the Strata it stopped to stop answering;
     /// one still answering then refuses the update.
     #[serde(default = "default_update_stop_wait")]
@@ -148,6 +153,9 @@ fn default_stop_settle() -> u64 {
 fn default_cancel_wait() -> u64 {
     60
 }
+fn default_restart_given_up() -> u64 {
+    300
+}
 fn default_clean_stop() -> u64 {
     60
 }
@@ -209,6 +217,10 @@ impl Config {
 
     pub fn cancel_wait(&self) -> Duration {
         Duration::from_secs(self.cancel_wait_secs)
+    }
+
+    pub fn restart_given_up(&self) -> Duration {
+        Duration::from_secs(self.restart_given_up_secs)
     }
 
     pub fn clean_stop(&self) -> Duration {

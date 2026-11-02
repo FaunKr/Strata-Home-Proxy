@@ -51,9 +51,6 @@ use crate::{
 /// Delay between answering a sleep request and going to standby, so the
 /// answer reaches the NAS first.
 const SUSPEND_DELAY: Duration = Duration::from_secs(2);
-/// After a restart Windows began without restarting (a program held it and
-/// the user called it off), the service answers and starts Strata again.
-const RESTART_GIVEN_UP: Duration = Duration::from_secs(300);
 /// A gap in wall-clock time this large between two watchdog passes means the
 /// PC was asleep.
 const RESUME_GAP: Duration = Duration::from_secs(30);
@@ -105,8 +102,8 @@ pub struct Agent {
     pub(crate) presets: PresetsCheck,
     /// An update of this program is under way.
     pub(crate) updating: AtomicBool,
-    /// A sleep or restart request was taken and standby or the restart
-    /// follows; a second request joins it and adds no second action.
+    /// A sleep request or a Planned restart was taken and standby or the
+    /// restart follows; a second one joins it and adds no second action.
     power_pending: AtomicBool,
     /// A Planned restart was taken: `/status` answers 503 until the PC is
     /// down, so the proxy counts it as asleep.
@@ -369,6 +366,18 @@ impl Agent {
         Ok(())
     }
 
+    /// The checks of `may_sleep` that can change between the answer to a
+    /// Planned restart and the restart itself.
+    fn may_restart_now(&self) -> Result<(), String> {
+        if self.gaming() {
+            return Err("Gaming mode is on".into());
+        }
+        if self.jobs.running() {
+            return Err("A Strata job is running".into());
+        }
+        Ok(())
+    }
+
     /// Refuses while this program updates itself.
     fn refuse_while_updating(&self) -> Result<(), String> {
         if self.updating.load(Ordering::SeqCst) {
@@ -606,10 +615,10 @@ async fn sleep(State(agent): State<Arc<Agent>>) -> Response {
 /// A Planned restart: refused for the reasons of a sleep request.
 async fn restart(State(agent): State<Arc<Agent>>) -> Response {
     if let Err(reason) = agent.may_sleep().await {
-        tracing::info!(%reason, "Restart request refused");
+        tracing::info!(%reason, "Planned restart refused");
         return (StatusCode::CONFLICT, Json(Answer::refused(reason))).into_response();
     }
-    tracing::info!("Restart request accepted");
+    tracing::info!("Planned restart accepted");
     power_action(&agent, PowerAction::Restart);
     Json(Answer::accepted()).into_response()
 }
@@ -632,7 +641,7 @@ async fn force_restart(State(agent): State<Arc<Agent>>) -> Response {
     }
 }
 
-/// What follows an accepted sleep or restart request.
+/// What follows an accepted sleep request or Planned restart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PowerAction {
     Standby,
@@ -687,14 +696,20 @@ async fn standby(agent: &Arc<Agent>) {
 
 /// Stops Strata (cleanly while an expert profile learns) and restarts
 /// Windows. Should Windows not go down after all, the service answers
-/// again after `RESTART_GIVEN_UP` and Strata comes back.
+/// again after `restart_given_up_secs` and Strata comes back. Gaming mode or
+/// a Strata job begun since the answer calls the restart off.
 async fn restart_pc(agent: &Arc<Agent>) {
+    if let Err(reason) = agent.may_restart_now() {
+        tracing::warn!(%reason, "Planned restart called off");
+        agent.restarting.store(false, Ordering::SeqCst);
+        return;
+    }
     tracing::warn!("Restarting the PC for a Planned restart");
     agent.strata().stop_cleanly().await;
     let platform_agent = Arc::clone(agent);
     let result = tokio::task::spawn_blocking(move || platform_agent.platform.restart()).await;
     match result.map_err(anyhow::Error::from).and_then(|r| r) {
-        Ok(()) => tokio::time::sleep(RESTART_GIVEN_UP).await,
+        Ok(()) => tokio::time::sleep(agent.cfg.restart_given_up()).await,
         Err(e) => tracing::error!("Restart failed: {e}"),
     }
     agent.restarting.store(false, Ordering::SeqCst);

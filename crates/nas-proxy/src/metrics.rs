@@ -113,7 +113,7 @@ pub struct ToolCalls {
 impl ToolCalls {
     /// These counters with each one `text` prints replaced by its value
     /// there, also a lower one; one it does not print keeps its value.
-    pub fn read(self, text: &str) -> Self {
+    pub fn updated_from(self, text: &str) -> Self {
         Self {
             unread: sample(text, UNREAD).unwrap_or(self.unread),
             repaired: sample(text, REPAIRED).unwrap_or(self.repaired),
@@ -145,21 +145,15 @@ impl Scrape {
             _ if tuning || st.strata().is_none() => false,
             _ => st.strata_ready().await,
         };
-        let (strata, llamacpp) = match (strata_up, st.strata()) {
+        let (strata, llamacpp_text) = match (strata_up, st.strata()) {
             (true, Some(client)) => {
-                let (text, llamacpp) =
+                let (text, llamacpp_text) =
                     tokio::join!(client.metrics_text(), client.metrics_prometheus_text());
-                (text.ok(), llamacpp.ok())
+                (text.ok(), llamacpp_text.ok())
             }
             _ => (None, None),
         };
-        let tool_calls = {
-            let mut kept = st.tool_calls.lock().unwrap();
-            if let Some(text) = &llamacpp {
-                *kept = kept.read(text);
-            }
-            *kept
-        };
+        let tool_calls = st.note_tool_calls(llamacpp_text.as_deref());
         let db = st.events.database();
         let (totals, request_energy_wh) = tokio::task::spawn_blocking(move || {
             let db = db.lock().unwrap();

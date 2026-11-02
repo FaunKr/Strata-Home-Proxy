@@ -108,7 +108,7 @@ This endpoint returns llama-server names (`llamacpp:*`, `Service.prometheus`, li
 - `llamacpp:predicted_tokens_seconds` counts only finished requests and stays at 0 during a running request.
 - Every fetch resets the time window of these values, also for other readers such as Grafana.
 
-The proxy answers `/metrics/prometheus` itself (`docs/metrics.md`). On a scrape of its metrics endpoint it fetches Strata's only for two counters that Strata prints nowhere else, without labels, and drops every other line. Both came after the pin (Strata c62d5e3a, `Service.prometheus`, from line 5044); before their first increment Strata prints 0 (`t.get(..., 0)`):
+The proxy answers `/metrics/prometheus` itself (`docs/metrics.md`). On a scrape of its metrics endpoint it fetches Strata's only for two counters that Strata prints nowhere else, without labels, and drops every other line. Both came after the pin (`Service.prometheus` from line 5044 at Strata c62d5e3a, not at the pin); before their first increment Strata prints 0 (`t.get(..., 0)`):
 
 | Name | Since | Meaning |
 |---|---|---|

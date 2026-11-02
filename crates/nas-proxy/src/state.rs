@@ -117,7 +117,7 @@ pub struct AppState {
     /// after a failed one.
     plug_latest: Mutex<Option<f64>>,
     /// Strata's tool-call counters as the metrics endpoint last read them.
-    pub tool_calls: Mutex<crate::metrics::ToolCalls>,
+    tool_calls: Mutex<crate::metrics::ToolCalls>,
     /// The hardware readings of the PC service's last answer to `/status`
     /// and when it came; `None` readings from a service before them.
     last_hardware: Mutex<Option<(Instant, Option<Hardware>)>>,
@@ -336,6 +336,16 @@ impl AppState {
     }
 
     /// The plug loop's latest reading in watts, without asking the plug.
+    /// Strata's tool-call counters, updated from `text` of its
+    /// `/metrics/prometheus` when the scrape read one.
+    pub fn note_tool_calls(&self, text: Option<&str>) -> crate::metrics::ToolCalls {
+        let mut kept = self.tool_calls.lock().unwrap();
+        if let Some(text) = text {
+            *kept = kept.updated_from(text);
+        }
+        *kept
+    }
+
     pub fn plug_latest(&self) -> Option<f64> {
         *self.plug_latest.lock().unwrap()
     }

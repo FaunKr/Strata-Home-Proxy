@@ -364,7 +364,7 @@ const REPAIRED: &str = "strata:tool_args_repaired_total";
 
 /// Strata's `/metrics/prometheus` with `unread` and `repaired` in place of
 /// the fixture's 3 and 5.
-fn llamacpp(unread: u64, repaired: u64) -> String {
+fn llamacpp_with(unread: u64, repaired: u64) -> String {
     METRICS_LLAMACPP
         .replace(&format!("{UNREAD} 3\n"), &format!("{UNREAD} {unread}\n"))
         .replace(
@@ -374,7 +374,7 @@ fn llamacpp(unread: u64, repaired: u64) -> String {
 }
 
 /// Strata answers `/metrics/prometheus` with the fixture: 3 and 5.
-async fn counting() -> Setup {
+async fn with_tool_counters() -> Setup {
     let s = setup(true, |_| {}).await;
     *s.pc.metrics.lock().unwrap() = Some(METRICS_BUSY.into());
     *s.pc.metrics_prometheus.lock().unwrap() = Some(METRICS_LLAMACPP.into());
@@ -395,7 +395,7 @@ async fn until_counters(s: &Setup, key: &str, unread: f64, repaired: f64) -> Str
 
 #[tokio::test]
 async fn the_tool_call_counters_show_stratas_values_while_strata_is_up() {
-    let s = counting().await;
+    let s = with_tool_counters().await;
     let text = until_counters(&s, &s.key, 3.0, 5.0).await;
     assert_eq!(
         value(&text, "strata_proxy_strata_up", &[]),
@@ -406,7 +406,7 @@ async fn the_tool_call_counters_show_stratas_values_while_strata_is_up() {
 
 #[tokio::test]
 async fn the_tool_call_counters_keep_stratas_help_and_type() {
-    let s = counting().await;
+    let s = with_tool_counters().await;
     let text = until_counters(&s, &s.key, 3.0, 5.0).await;
     for family in [
         "# HELP strata:tool_calls_unread_total <tool_call> blocks returned as text \
@@ -422,7 +422,7 @@ async fn the_tool_call_counters_keep_stratas_help_and_type() {
 
 #[tokio::test]
 async fn the_tool_call_counters_carry_no_labels() {
-    let s = counting().await;
+    let s = with_tool_counters().await;
     let text = until_counters(&s, &s.key, 3.0, 5.0).await;
     for name in [UNREAD, REPAIRED] {
         let lines: Vec<&str> = text.lines().filter(|l| l.starts_with(name)).collect();
@@ -441,7 +441,7 @@ async fn the_tool_call_counters_show_0_before_the_proxy_read_a_value() {
 
 #[tokio::test]
 async fn the_tool_call_counters_keep_the_last_value_while_the_pc_sleeps() {
-    let s = counting().await;
+    let s = with_tool_counters().await;
     until_counters(&s, &s.key, 3.0, 5.0).await;
     s.pc.awake.store(false, Ordering::SeqCst);
     let text = until_value(&s, "strata_proxy_pc_state", &[("state", "asleep")], 1.0).await;
@@ -450,7 +450,7 @@ async fn the_tool_call_counters_keep_the_last_value_while_the_pc_sleeps() {
 
 #[tokio::test]
 async fn the_tool_call_counters_keep_the_last_value_while_strata_does_not_answer() {
-    let s = counting().await;
+    let s = with_tool_counters().await;
     until_counters(&s, &s.key, 3.0, 5.0).await;
     s.pc.starting.store(true, Ordering::SeqCst);
     let text = until_value(&s, "strata_proxy_strata_up", &[], 0.0).await;
@@ -459,7 +459,7 @@ async fn the_tool_call_counters_keep_the_last_value_while_strata_does_not_answer
 
 #[tokio::test]
 async fn the_tool_call_counters_keep_the_last_value_when_metrics_prometheus_answers_an_error() {
-    let s = counting().await;
+    let s = with_tool_counters().await;
     until_counters(&s, &s.key, 3.0, 5.0).await;
     // Unset: Strata answers `/metrics/prometheus` with 404.
     *s.pc.metrics_prometheus.lock().unwrap() = None;
@@ -471,7 +471,7 @@ async fn the_tool_call_counters_keep_the_last_value_when_metrics_prometheus_answ
 
 #[tokio::test]
 async fn the_tool_call_counters_keep_the_last_value_from_a_strata_that_does_not_print_them() {
-    let s = counting().await;
+    let s = with_tool_counters().await;
     until_counters(&s, &s.key, 3.0, 5.0).await;
     let older: String = METRICS_LLAMACPP
         .lines()
@@ -487,24 +487,37 @@ async fn the_tool_call_counters_keep_the_last_value_from_a_strata_that_does_not_
 
 #[tokio::test]
 async fn the_tool_call_counters_follow_a_lower_value_from_strata() {
-    let s = counting().await;
+    let s = with_tool_counters().await;
     until_counters(&s, &s.key, 3.0, 5.0).await;
-    *s.pc.metrics_prometheus.lock().unwrap() = Some(llamacpp(1, 2));
+    *s.pc.metrics_prometheus.lock().unwrap() = Some(llamacpp_with(1, 2));
     until_counters(&s, &s.key, 1.0, 2.0).await;
 }
 
 #[tokio::test]
 async fn a_key_that_hides_the_model_sees_the_same_tool_call_counters() {
-    let s = counting().await;
+    let s = with_tool_counters().await;
     let hidden = key(&s, "Phone", ModelName::Hide);
     until_counters(&s, &hidden, 3.0, 5.0).await;
 }
 
 #[tokio::test]
 async fn llamacpp_lines_never_reach_the_answer() {
-    let s = counting().await;
+    let s = with_tool_counters().await;
     let text = until_counters(&s, &s.key, 3.0, 5.0).await;
     assert!(!text.contains("llamacpp:"), "{text}");
+}
+
+#[tokio::test]
+async fn the_other_strata_lines_of_metrics_prometheus_never_reach_the_answer() {
+    let s = with_tool_counters().await;
+    let text = until_counters(&s, &s.key, 3.0, 5.0).await;
+    for name in [
+        "strata:requests_total",
+        "strata:drafts_offered_total",
+        "strata:model_loaded",
+    ] {
+        assert!(!text.contains(name), "{name}:\n{text}");
+    }
 }
 
 // --- Gauges ---

@@ -28,6 +28,13 @@ pub trait Platform: Send + Sync + 'static {
     /// (ending in `\` or `/`): every program from that folder ends, with all
     /// it started.
     fn stop_strata(&self, processes: &[String]) -> Result<()>;
+    /// Asks the Strata this service started last to end cleanly, as
+    /// Ctrl+Break does in its console: Strata tells the engine to quit,
+    /// which saves a learning expert profile. Returns at once; an error
+    /// when the signal could not be sent.
+    fn break_strata(&self) -> Result<()> {
+        anyhow::bail!("not supported here")
+    }
     /// Starts a command whose output is read line by line.
     fn run(&self, spec: &CommandSpec) -> Result<Running>;
     /// Installed RAM in bytes; 0 if unknown.
@@ -68,6 +75,9 @@ pub trait Platform: Send + Sync + 'static {
 
 pub struct System;
 
+/// The process id of the Strata this service started last.
+static LAST_STRATA: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+
 #[cfg(windows)]
 mod imp {
     use std::os::windows::{ffi::OsStrExt, process::CommandExt};
@@ -105,6 +115,35 @@ mod imp {
                 "SetSuspendState failed: {}",
                 std::io::Error::last_os_error()
             );
+        }
+        Ok(())
+    }
+
+    /// Ctrl+Break to the console of process `pid` (Strata runs in a hidden
+    /// console of its own): this service joins that console for the send
+    /// and ignores the event itself.
+    pub fn break_process(pid: u32) -> Result<()> {
+        use windows_sys::Win32::System::Console::{
+            AttachConsole, CTRL_BREAK_EVENT, FreeConsole, GenerateConsoleCtrlEvent,
+            SetConsoleCtrlHandler,
+        };
+        // SAFETY: plain calls without pointers; the service has no console
+        // of its own to lose (it runs hidden), and frees the one it joins.
+        unsafe {
+            FreeConsole();
+            if AttachConsole(pid) == 0 {
+                bail!(
+                    "console of {pid} not joined: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+            SetConsoleCtrlHandler(None, 1);
+            let sent = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, 0);
+            let error = std::io::Error::last_os_error();
+            FreeConsole();
+            if sent == 0 {
+                bail!("Ctrl+Break not sent: {error}");
+            }
         }
         Ok(())
     }
@@ -180,6 +219,10 @@ mod imp {
 
     pub fn suspend() -> Result<()> {
         bail!("Standby exists only on Windows")
+    }
+
+    pub fn break_process(_pid: u32) -> Result<()> {
+        bail!("Ctrl+Break exists only on Windows")
     }
 
     pub fn stop(processes: &[String]) -> Result<()> {
@@ -399,7 +442,15 @@ impl Platform for System {
         imp::suspend()
     }
     fn start_strata(&self, program: &Path, args: &[String]) -> Result<Running> {
-        command::spawn(&strata_command(program, args)?)
+        let run = command::spawn(&strata_command(program, args)?)?;
+        *LAST_STRATA.lock().unwrap() = run.pid();
+        Ok(run)
+    }
+    fn break_strata(&self) -> Result<()> {
+        let Some(pid) = *LAST_STRATA.lock().unwrap() else {
+            anyhow::bail!("no Strata started by this service");
+        };
+        imp::break_process(pid)
     }
     fn stop_strata(&self, processes: &[String]) -> Result<()> {
         imp::stop(processes)

@@ -208,6 +208,18 @@ _Avoid_: optimize, auto-tune, Optimierung
 Strata's saved settings from a tune, for one model file and its choices (context among them). Strata starts the model with the active one; *Apply* makes a preset active, *Undo* brings back the one before, *Turn off* goes back to the standard settings and keeps the preset saved. Strata says whether the active one still fits: a re-check is offered after a new driver or engine, it is not applied after a new graphics card or model file. After a context switch the model has none until it is tuned again.
 _Avoid_: profile, tuning (for the saved result), Voreinstellung
 
+**Expert profile**:
+The ranking that tells Strata which experts of a model sit in graphics memory. Every model whose run config names one has *Standard*, the one Strata ships, and may have learned expert profiles; one of them is active, and Strata starts the model with it. The web UI shows them in *Engine settings* under *Expert profiles*.
+_Avoid_: profile (alone), expert cache, Expertenprofil
+
+**Learned expert profile**:
+An expert profile with a name of the user's, which the engine learned from the requests it answered. It lives on the PC (`expert-profiles` in the Strata Terminal's folder), starts from *Standard* and stays when Strata updates or setup runs again. *Use* makes it active, *Learn more* continues it, *Delete* removes it.
+_Avoid_: custom profile, trained profile
+
+**Learning**:
+A learned expert profile is learning while the engine saves what it learned into it (`expert_profile_save`): every 5 minutes between requests and when Strata stops cleanly. At most one profile per model learns. The proxy counts the tokens Strata read and wrote meanwhile (cached prompt tokens not) and the minutes the PC service counts; learning ends at the first limit reached or by *Stop learning*, and the profile stays active. Benchmarks hold learning: Strata runs without saving while they run.
+_Avoid_: training, recording
+
 **Pictures**:
 Picture reading for a model: setup's *Pictures* tick in the web UI's install and add-model form, on by default, which makes setup write a picture reader into the run config. An installed model shows *Pictures: on (CPU)*, *on (GPU)* or *off* and switches it with one setup run; a model without a picture reader reads no pictures.
 _Avoid_: vision (except `--vision` and the `vision` section in configs and code), image support, multimodal

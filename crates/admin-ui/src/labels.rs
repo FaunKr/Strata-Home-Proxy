@@ -5,6 +5,9 @@ use crate::api::{EventKind, Overview, PcView, StrataJobKind, StrataView};
 /// Messages that the proxy and the overview both show.
 pub const NOT_CONFIGURED: &str = "The Strata address is missing, the proxy is not set up.";
 pub const NO_MAC: &str = "No MAC address is known, so the PC cannot be woken.";
+/// The end of the refusal of *Learn new profile* for a name the model has
+/// already: a `409`, not a `400`.
+pub const PROFILE_TAKEN: &str = "has an expert profile of that name already.";
 pub const NO_AGENT: &str = "No PC service is set up (PC_AGENT_URL).";
 pub const NO_ANSWER: &str = "The PC service does not answer.";
 pub const TOO_OLD_TO_FORCE: &str =
@@ -276,6 +279,7 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::ForcedSleep => "Forced sleep",
         EventKind::ForcedStrataRestart => "Forced Strata restart",
         EventKind::UpdateSummaryRequested => "Update summary requested",
+        EventKind::ExpertProfileLearned => "Expert profile learned",
     }
 }
 
@@ -337,6 +341,9 @@ pub fn strata_job_label(kind: StrataJobKind) -> &'static str {
         StrataJobKind::ApplyPreset => "Applying preset",
         StrataJobKind::UndoPreset => "Undoing preset",
         StrataJobKind::RepairRunConfigs => "Repairing models after a Strata update",
+        StrataJobKind::ExpertProfile => "Changing the expert profile",
+        StrataJobKind::DeleteExpertProfile => "Deleting an expert profile",
+        StrataJobKind::HoldLearning => "Holding or resuming learning",
     }
 }
 

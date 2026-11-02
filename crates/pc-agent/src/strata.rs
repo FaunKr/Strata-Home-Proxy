@@ -26,6 +26,7 @@ use crate::{
     catalog::{self, Catalog, Size},
     command::CommandSpec,
     config::Config,
+    expert,
     install::{Installation, Kind, Model, SWITCH_FILE},
     job::{JobContext, KEPT_LINES, POLL, Step, unix_now},
     managed::Managed,
@@ -33,6 +34,7 @@ use crate::{
     strata_process::Applied,
     terminal::{self, Terminal},
 };
+use strata_pc_protocol::STANDARD_PROFILE;
 pub use strata_pc_protocol::{
     BenchTool, ChangedFile, Incoming, IncomingCommit, MAX_SWITCHED_CONTEXT, StrataBenchmark,
     StrataFamily, StrataInfo, StrataJob, StrataJobKind, StrataJobRequest, StrataJobState,
@@ -205,6 +207,21 @@ enum Plan {
     /// Sets up again the models whose run config points into a deleted
     /// Strata folder ([`repair_models`]).
     RepairRunConfigs,
+    /// Makes `profile` model `id`'s active expert profile (`None`: the
+    /// shipped one); `learn` starts learning into it, or for the learning
+    /// one `false` ends learning.
+    ExpertProfile {
+        id: String,
+        profile: Option<String>,
+        learn: bool,
+    },
+    DeleteExpertProfile {
+        id: String,
+        profile: String,
+    },
+    HoldLearning {
+        on: bool,
+    },
 }
 
 impl Plan {
@@ -227,13 +244,16 @@ impl Plan {
             | Self::SetEngineSettings { id, .. }
             | Self::SwitchToTerminal { id, .. }
             | Self::Tune { id, .. }
-            | Self::Preset { id, .. } => Some(id.clone()),
+            | Self::Preset { id, .. }
+            | Self::ExpertProfile { id, .. }
+            | Self::DeleteExpertProfile { id, .. } => Some(id.clone()),
             Self::Update
             | Self::SetKey
             | Self::CompareModels { .. }
             | Self::SetRelay { .. }
             | Self::RemoveOldStrataFolder
-            | Self::RepairRunConfigs => None,
+            | Self::RepairRunConfigs
+            | Self::HoldLearning { .. } => None,
         }
     }
 }
@@ -577,6 +597,67 @@ fn check(agent: &Agent, request: StrataJobRequest) -> Result<Plan, Refusal> {
             strata_installed(&install)?;
             Ok(Plan::RepairRunConfigs)
         }
+        StrataJobRequest::ExpertProfile {
+            model,
+            profile,
+            learn,
+        } => {
+            let id = installed_model(agent, &install, &model)?;
+            if let Some(why) = expert::refused(agent, &install, &id) {
+                return Err(Refusal::Conflict(why));
+            }
+            let learning = agent.expert.learning(&id);
+            match (&profile, learn) {
+                (None, true) => {
+                    return Err(Refusal::BadRequest(format!(
+                        "{STANDARD_PROFILE} learns nothing; learning needs a profile of its own"
+                    )));
+                }
+                (None, false) => {}
+                (Some(name), _) => {
+                    if let Some(why) = expert::bad_name(name) {
+                        return Err(Refusal::BadRequest(why));
+                    }
+                    if learn && learning.as_ref().is_some_and(|l| l != name) {
+                        return Err(Refusal::Conflict(format!(
+                            "Profile {} of {id} learns; stop its learning first",
+                            learning.unwrap_or_default()
+                        )));
+                    }
+                    if !learn
+                        && learning.as_deref() != Some(name.as_str())
+                        && !expert::saved(&agent.cfg, &id, name)
+                    {
+                        return Err(Refusal::Conflict(format!(
+                            "Profile {name} of {id} has not saved anything yet"
+                        )));
+                    }
+                }
+            }
+            Ok(Plan::ExpertProfile { id, profile, learn })
+        }
+        StrataJobRequest::DeleteExpertProfile { model, profile } => {
+            let id = installed_model(agent, &install, &model)?;
+            if expert::is_standard(&profile) {
+                return Err(Refusal::BadRequest(format!(
+                    "{STANDARD_PROFILE} is the profile Strata ships and cannot be deleted"
+                )));
+            }
+            if let Some(why) = expert::bad_name(&profile) {
+                return Err(Refusal::BadRequest(why));
+            }
+            if let Some(why) = expert::refused(agent, &install, &id) {
+                return Err(Refusal::Conflict(why));
+            }
+            let learning = agent.expert.learning(&id);
+            if learning.as_deref() != Some(profile.as_str())
+                && !expert::saved(&agent.cfg, &id, &profile)
+            {
+                return Err(Refusal::Conflict(format!("{id} has no profile {profile}")));
+            }
+            Ok(Plan::DeleteExpertProfile { id, profile })
+        }
+        StrataJobRequest::HoldLearning { on } => Ok(Plan::HoldLearning { on }),
     }
 }
 
@@ -717,6 +798,13 @@ async fn run(job: &JobContext, plan: Plan) -> Result<Option<String>, Step> {
         Plan::Tune { id, mode, usage } => tune(job, &id, mode, usage).await,
         Plan::Preset { id, change } => change_preset(job, &id, change).await,
         Plan::RepairRunConfigs => repair_run_configs(job).await,
+        Plan::ExpertProfile { id, profile, learn } => {
+            expert_profile(job, &id, profile, learn).await
+        }
+        Plan::DeleteExpertProfile { id, profile } => {
+            delete_expert_profile(job, &id, &profile).await
+        }
+        Plan::HoldLearning { on } => hold_learning(job, on).await,
     }
 }
 
@@ -894,7 +982,7 @@ async fn activate(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
     let agent = job.agent();
     agent.strata().wait_idle(job).await?;
     job.step("Starting Strata with the new model");
-    agent.strata().stop();
+    agent.strata().stop_cleanly().await;
     let Managed {
         strata_start,
         strata_args,
@@ -926,6 +1014,8 @@ async fn delete(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
         .await
         .map_err(|e| Step::Failed(e.to_string()))??;
     job.agent().output.forget_load(&id);
+    expert::delete_all(&job.agent().cfg, &id);
+    job.agent().expert.forget(&id);
     keep_tune(job.agent(), &id, None);
     job.agent().presets.forget(&id);
     Ok(None)
@@ -971,7 +1061,7 @@ async fn update_terminal(job: &JobContext) -> Result<Option<String>, Step> {
     let agent = job.agent();
     let terminal = Terminal::of(&agent.cfg);
     agent.strata().wait_idle(job).await?;
-    agent.strata().stop();
+    agent.strata().stop_cleanly().await;
     job.step("Updating the engine and the Strata Terminal (download and test start)");
     let updated = ask_terminal_events(job, terminal.update(), terminal::updated).await;
     let repaired = after_update(job, updated.is_ok()).await;
@@ -1256,7 +1346,12 @@ fn round1(v: f64) -> f64 {
 /// Runs Strata's benchmark against the running Strata and keeps its speeds
 /// for the model.
 async fn benchmark(job: &JobContext, id: &str) -> Result<Option<String>, Step> {
-    let record = measure(job, id).await?;
+    let held = hold_for_benchmark(job).await?;
+    let measured = measure(job, id).await;
+    if held {
+        lift_benchmark_hold(job).await?;
+    }
+    let record = measured?;
     let result = record.result.clone();
     keep_benchmark(job.agent(), record);
     Ok(Some(result))
@@ -1341,6 +1436,7 @@ async fn compare_models(
     active: &str,
 ) -> Result<Option<String>, Step> {
     let agent = job.agent();
+    let held = hold_for_benchmark(job).await?;
     let mut outcome = Ok(());
     for (i, id) in ids.iter().enumerate() {
         job.set_prefix(Some(format!("{}/{}: {id}", i + 1, ids.len())));
@@ -1380,6 +1476,11 @@ async fn compare_models(
         }
     }
     job.set_prefix(None);
+    if held {
+        // Before the model from before starts again: it starts learning.
+        agent.expert.set_held_by_job(false);
+        manage(agent).await;
+    }
     if active_model(agent).as_deref() != Some(active) {
         // Back to the model from before, also after a cancel.
         job.cleanup(async {
@@ -1387,6 +1488,8 @@ async fn compare_models(
             activate(job, active).await
         })
         .await?;
+    } else if held {
+        lift_benchmark_hold(job).await?;
     }
     outcome?;
     let benches = load_benchmarks(agent);
@@ -1416,7 +1519,7 @@ async fn tune(
     let status = agent.cfg.state_dir().join(TUNE_STATUS_FILE);
     let _ = std::fs::remove_file(&status);
     agent.strata().wait_idle(job).await?;
-    agent.strata().stop();
+    agent.strata().stop_cleanly().await;
     job.step("Starting the tuner");
     let started = Instant::now();
     let ran = {
@@ -1525,6 +1628,126 @@ async fn change_preset(
         agent.strata().restart_when_idle(job).await?;
     }
     Ok(None)
+}
+
+/// Makes `profile` model `id`'s active expert profile (`None`: the shipped
+/// one) and starts or ends its learning. The active model restarts once it
+/// is idle, as [`change_and_restart`] does; the stop is a clean one while a
+/// profile learned, so the engine saves what it learned since its last
+/// save. The new round of learning starts once Strata runs with it.
+async fn expert_profile(
+    job: &JobContext,
+    id: &str,
+    profile: Option<String>,
+    learn: bool,
+) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    let learning = if learn { profile.clone() } else { None };
+    change_expert_profile(job, id, profile.as_deref(), learning.as_deref()).await?;
+    agent.expert.set_learning(id, learning);
+    Ok(None)
+}
+
+/// The run config change of [`expert_profile`], with its restart.
+async fn change_expert_profile(
+    job: &JobContext,
+    id: &str,
+    active: Option<&str>,
+    learning: Option<&str>,
+) -> Result<(), Step> {
+    let agent = job.agent();
+    let model = load_model(agent, id).await?;
+    let (start, save) =
+        expert::planned(agent, id, &model, active, learning).map_err(Step::Failed)?;
+    let failed = "Strata did not start with the expert profile; the one from before applies again";
+    change_and_restart(
+        job,
+        id,
+        "Restoring the expert profile from before",
+        failed.into(),
+        move |model| expert::apply(model, &start, save.as_deref()),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Deletes profile `name` of model `id`: a learning one ends learning
+/// first and an active one gives way to the shipped profile, both with the
+/// restart of [`expert_profile`] for the active model.
+async fn delete_expert_profile(
+    job: &JobContext,
+    id: &str,
+    name: &str,
+) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    let install = Installation::of(&agent.cfg);
+    let model = load_model(agent, id).await?;
+    let active = expert::profiles(agent, &install, id, &model).and_then(|p| p.active);
+    let learning = agent.expert.learning(id);
+    if active.as_deref() == Some(name) || learning.as_deref() == Some(name) {
+        // The learning profile is the active one: no other is left.
+        change_expert_profile(job, id, None, None).await?;
+        agent.expert.set_learning(id, None);
+    }
+    job.step("Deleting the profile");
+    expert::delete_file(&agent.cfg, id, name).map_err(Step::Failed)?;
+    Ok(None)
+}
+
+/// Holds learning for the proxy's code benchmark, or lifts the hold; the
+/// active model restarts once it is idle when its run config changed.
+async fn hold_learning(job: &JobContext, on: bool) -> Result<Option<String>, Step> {
+    let agent = job.agent();
+    job.step(if on {
+        "Holding learning"
+    } else {
+        "Resuming learning"
+    });
+    agent.expert.set_held_by_proxy(on);
+    restart_if_learning_changed(job).await?;
+    Ok(None)
+}
+
+/// After the hold changed: the configs follow it, and the active model
+/// restarts once idle when its config changed.
+async fn restart_if_learning_changed(job: &JobContext) -> Result<(), Step> {
+    let agent = job.agent();
+    // Only the save keys count: the other keys the service keeps were
+    // brought in at its start.
+    let changed = expert::manage(agent, &Installation::of(&agent.cfg));
+    if active_changed(agent, &changed) && agent.strata_healthy().await {
+        agent.strata().restart_when_idle(job).await?;
+    }
+    Ok(())
+}
+
+/// Holds learning for this job's benchmark when the active model learns and
+/// nothing holds it yet; true when it did.
+async fn hold_for_benchmark(job: &JobContext) -> Result<bool, Step> {
+    let agent = job.agent();
+    let learns = active_model(agent).is_some_and(|id| agent.expert.learning(&id).is_some());
+    if !learns || agent.expert.held() {
+        return Ok(false);
+    }
+    job.step("Holding learning for the benchmark");
+    agent.expert.set_held_by_job(true);
+    if let Err(step) = restart_if_learning_changed(job).await {
+        agent.expert.set_held_by_job(false);
+        manage(agent).await;
+        return Err(step);
+    }
+    Ok(true)
+}
+
+/// Lifts the hold of [`hold_for_benchmark`], also after a cancel.
+async fn lift_benchmark_hold(job: &JobContext) -> Result<(), Step> {
+    let agent = job.agent();
+    agent.expert.set_held_by_job(false);
+    job.cleanup(async {
+        job.step("Resuming learning");
+        restart_if_learning_changed(job).await
+    })
+    .await
 }
 
 /// A tune's time so far for its log: `7m`, from an hour on `1h 05m`.
@@ -2073,9 +2296,18 @@ async fn change_model(
 /// [`Installation::manage`] off the runtime's threads.
 async fn manage(agent: &Agent) -> Vec<String> {
     let install = Installation::of(&agent.cfg);
-    tokio::task::spawn_blocking(move || install.manage())
-        .await
-        .unwrap_or_default()
+    let mut changed = {
+        let install = install.clone();
+        tokio::task::spawn_blocking(move || install.manage())
+            .await
+            .unwrap_or_default()
+    };
+    for id in expert::manage(agent, &install) {
+        if !changed.iter().any(|c| c.eq_ignore_ascii_case(&id)) {
+            changed.push(id);
+        }
+    }
+    changed
 }
 
 /// Whether the active model is among `changed`.
@@ -3057,6 +3289,9 @@ fn kind_text(kind: StrataJobKind) -> &'static str {
         StrataJobKind::UndoPreset => "Undo preset",
         StrataJobKind::SetRelay => "Switch relay mode",
         StrataJobKind::RepairRunConfigs => "Repair models after a Strata update",
+        StrataJobKind::ExpertProfile => "Change the expert profile",
+        StrataJobKind::DeleteExpertProfile => "Delete an expert profile",
+        StrataJobKind::HoldLearning => "Hold or resume learning",
     }
 }
 
@@ -3102,6 +3337,7 @@ pub fn view(agent: &Agent) -> StrataReport {
                 load_lines: agent.output.load_lines(&id),
                 tunable: Some(no_tune.is_none()),
                 tune_unavailable: no_tune,
+                expert_profiles: expert::profiles(agent, &install, &id, &model),
                 presets: build.as_deref().and_then(|build| {
                     let key = presets_key(&install, &id, build, last_tune.as_ref());
                     agent.presets.current(&id, key)

@@ -19,7 +19,7 @@ use strata_admin_ui::{
 
 use strata_pc_protocol::{
     PcStatus, StrataInfo, StrataInstall, StrataJob, StrataJobKind, StrataJobRequest,
-    StrataJobState, is_env_name,
+    StrataJobState, is_env_name, profile_name_problem,
 };
 
 use crate::{
@@ -175,6 +175,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             },
             benchmarks: Vec::new(),
             energy: energy(state, None).await,
+            expert_counts: state.expert_learning.counts(),
         };
     }
     let Some(status) = state.ask_pc(&agent).await else {
@@ -196,6 +197,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             },
             benchmarks,
             energy,
+            expert_counts: state.expert_learning.counts(),
         };
     };
     let Some((mut info, incoming)) = agent.strata().await else {
@@ -210,6 +212,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
             relay: relay_view(&status, None),
             benchmarks: Vec::new(),
             energy: energy(state, None).await,
+            expert_counts: state.expert_learning.counts(),
         };
     };
     with_local_times(&mut info);
@@ -244,6 +247,7 @@ pub async fn page(state: &Arc<AppState>) -> StrataPage {
         key_unreported: state.strata_key.unreported(),
         benchmarks,
         energy,
+        expert_counts: state.expert_learning.counts(),
     }
 }
 
@@ -339,10 +343,14 @@ pub async fn start_job(state: &AppState, form: StrataJobForm) -> Result<(), Stri
         return Err("A code benchmark is running. Strata jobs wait until it ends.".into());
     }
     let request = request(&form)?;
+    let limits = limits(&form)?;
     if state.ask_pc(&agent).await.is_none() {
         wake(state, BY_UI).await?;
     }
-    let job = agent.start_strata_job(&request).await?;
+    if form.new_profile {
+        profile_is_new(state, &request)?;
+    }
+    let job = crate::expert_learning::send(state, &agent, &request, limits).await?;
     state.strata.job_running.store(true, Ordering::SeqCst);
     state
         .events
@@ -484,7 +492,84 @@ fn request(form: &StrataJobForm) -> Result<StrataJobRequest, String> {
             user_args: form.options.as_deref().map(engine_options).transpose()?,
             env: engine_env(form.env.as_deref().unwrap_or(""))?,
         },
+        StrataJobKind::ExpertProfile => {
+            let profile = form
+                .profile
+                .clone()
+                .filter(|p| p != strata_pc_protocol::STANDARD_PROFILE);
+            if form.learn || form.new_profile {
+                let name = profile
+                    .as_deref()
+                    .unwrap_or(form.profile.as_deref().unwrap_or(""));
+                if let Some(problem) = profile_name_problem(name) {
+                    return Err(problem);
+                }
+            }
+            StrataJobRequest::ExpertProfile {
+                model: model()?,
+                profile,
+                learn: form.learn,
+            }
+        }
+        StrataJobKind::DeleteExpertProfile => StrataJobRequest::DeleteExpertProfile {
+            model: model()?,
+            profile: form.profile.clone().ok_or_else(|| need("profile"))?,
+        },
+        StrataJobKind::HoldLearning => {
+            return Err("Comes by itself for the code benchmark.".into());
+        }
     })
+}
+
+/// The limits of a round of learning from their fields: empty is no limit,
+/// anything else a whole number of at least 1.
+fn limits(form: &StrataJobForm) -> Result<crate::expert_learning::Limits, String> {
+    let limit = |field: &Option<String>, what: &str| -> Result<Option<u64>, String> {
+        let text = field.as_deref().map(str::trim).unwrap_or("");
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let digits: String = text
+            .chars()
+            .filter(|c| !matches!(c, ',' | '.' | '_' | ' '))
+            .collect();
+        match digits.parse::<u64>() {
+            Ok(n) if n >= 1 => Ok(Some(n)),
+            _ => Err(format!(
+                "The {what} limit must be a whole number of at least 1."
+            )),
+        }
+    };
+    Ok(crate::expert_learning::Limits {
+        tokens: limit(&form.tokens, "token")?,
+        minutes: limit(&form.minutes, "minute")?,
+    })
+}
+
+/// A new profile's name is not one the model has already, by the PC
+/// service's report.
+fn profile_is_new(state: &AppState, request: &StrataJobRequest) -> Result<(), String> {
+    let StrataJobRequest::ExpertProfile {
+        model,
+        profile: Some(name),
+        ..
+    } = request
+    else {
+        return Ok(());
+    };
+    let info = state.strata.last_info();
+    let taken = info
+        .as_ref()
+        .and_then(|i| i.models.iter().find(|m| m.id == *model))
+        .and_then(|m| m.expert_profiles.as_ref())
+        .is_some_and(|p| p.profiles.iter().any(|p| p.name.eq_ignore_ascii_case(name)));
+    if taken {
+        return Err(format!(
+            "{name}: {model} {}",
+            strata_admin_ui::labels::PROFILE_TAKEN
+        ));
+    }
+    Ok(())
 }
 
 /// The engine environment as its field holds it: a pasted JSON object of

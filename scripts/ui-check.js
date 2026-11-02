@@ -604,6 +604,17 @@ async function engineOptions(page, errors, name) {
     if (process.env.SHOTS === '1') {
       await page.screenshot({ path: `${process.env.OUT}/${name}_engine-settings.jpg`, type: 'jpeg', quality: 60 });
     }
+    // Its expert profiles: Standard, the learning one with its progress,
+    // and Learn new profile.
+    const experts = dialog.locator('.expert-profiles');
+    await experts.getByText('Standard', { exact: true }).waitFor(wait);
+    await experts.getByText(/^learning: .* tokens/).waitFor(wait);
+    await experts.getByRole('button', { name: 'Stop learning' }).waitFor(wait);
+    await experts.getByRole('button', { name: 'Learn new profile' }).waitFor(wait);
+    if (process.env.SHOTS === '1') {
+      await experts.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `${process.env.OUT}/${name}_expert-profiles.jpg`, type: 'jpeg', quality: 60 });
+    }
     // A refused save keeps the dialog open with the reason and what was typed.
     await env.fill('9X=1');
     await save.click(wait);

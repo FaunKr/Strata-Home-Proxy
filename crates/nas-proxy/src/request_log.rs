@@ -387,6 +387,7 @@ impl Recording {
             .and(row.model.as_deref())
             .map(|name| crate::request_energy::model_for(&self.state, name));
         let totals_model = crate::request_totals::model_for(&self.state, &row);
+        self.state.expert_learning.note_request(&row);
         self.state.requests.finish(row, model, &totals_model);
     }
 

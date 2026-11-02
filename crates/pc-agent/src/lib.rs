@@ -9,6 +9,7 @@ pub mod command;
 pub mod config;
 #[cfg(windows)]
 mod d3dkmt;
+pub mod expert;
 pub mod hardware;
 pub mod install;
 pub mod job;

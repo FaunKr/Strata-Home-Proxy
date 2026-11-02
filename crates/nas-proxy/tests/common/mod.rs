@@ -94,6 +94,9 @@ pub struct FakePc {
     pub strata_info: Mutex<Option<StrataReport>>,
     /// The PC service's running or last Strata job.
     pub strata_job: Mutex<Option<StrataJob>>,
+    /// The expert profile that learns on the active model, as `/status`
+    /// reports it; none if unset.
+    pub expert_learning: Mutex<Option<ExpertLearning>>,
     /// Bodies of the jobs the PC service was asked for.
     pub job_bodies: Mutex<Vec<Value>>,
     /// The PC service refuses jobs with this reason.
@@ -293,6 +296,35 @@ impl FakePc {
         }
     }
 
+    /// The status reports `profile` of `model` learning for `secs` this
+    /// round, held or not.
+    pub fn set_expert_learning(&self, model: &str, profile: &str, held: bool, secs: u64) {
+        *self.expert_learning.lock().unwrap() = Some(ExpertLearning {
+            model: model.into(),
+            profile: profile.into(),
+            held,
+            secs,
+        });
+    }
+
+    /// The status reports no learning profile.
+    pub fn clear_expert_learning(&self) {
+        *self.expert_learning.lock().unwrap() = None;
+    }
+
+    /// The Strata report gives `model` these expert profiles.
+    pub fn set_expert_profiles(&self, model: &str, profiles: ExpertProfiles) {
+        let mut info = self.strata_info.lock().unwrap();
+        let report = info.as_mut().expect("no Strata report");
+        let m = report
+            .info
+            .models
+            .iter_mut()
+            .find(|m| m.id == model)
+            .expect("no such model");
+        m.expert_profiles = Some(profiles);
+    }
+
     /// The model the Strata report marks as active, as the PC service reads it
     /// from Strata's start script.
     fn active_model(&self) -> Option<String> {
@@ -319,6 +351,7 @@ impl FakePc {
             version: self.version.lock().unwrap().clone(),
             hardware: self.hardware.lock().unwrap().clone(),
             strata_key_generation: self.reported_generation(),
+            expert_learning: self.expert_learning.lock().unwrap().clone(),
             relay: Some(Relay {
                 on: self.relay.load(Ordering::SeqCst),
                 wanted: (!self.no_switch.load(Ordering::SeqCst)).then(|| {
@@ -814,6 +847,7 @@ pub fn model(id: &str, family: Option<&str>, disk_bytes: u64, active: bool) -> S
         tune_unavailable: None,
         last_tune: None,
         presets: None,
+        expert_profiles: None,
     }
 }
 
@@ -926,7 +960,9 @@ fn start_job(pc: &Pc, body: Value) -> Response {
         | StrataJobRequest::UndoPreset { model, .. }
         | StrataJobRequest::SetUserArgs { model, .. }
         | StrataJobRequest::SetEngineSettings { model, .. }
-        | StrataJobRequest::PresetOff { model } => Some(model.clone()),
+        | StrataJobRequest::PresetOff { model }
+        | StrataJobRequest::ExpertProfile { model, .. }
+        | StrataJobRequest::DeleteExpertProfile { model, .. } => Some(model.clone()),
         _ => None,
     };
     let job = StrataJob {

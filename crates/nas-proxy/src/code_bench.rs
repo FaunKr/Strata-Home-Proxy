@@ -554,6 +554,7 @@ pub async fn start(state: &std::sync::Arc<AppState>) -> Result<(), String> {
         return Err(STRATA_JOB.into());
     }
     let model = active_model(state).await?;
+    hold_learning(state).await?;
     revoke_key(state);
     let key = new_key(state)?;
     // After `active_model`, so the limit comes from the speeds the PC service
@@ -563,6 +564,7 @@ pub async fn start(state: &std::sync::Arc<AppState>) -> Result<(), String> {
         Ok(run) => run,
         Err(e) => {
             revoke_key(state);
+            lift_learning_hold(state).await;
             return Err(e);
         }
     };
@@ -645,6 +647,7 @@ pub async fn start_all(state: &Arc<AppState>) -> Result<(), String> {
         let first = ids.remove(first);
         ids.insert(0, first);
     }
+    hold_learning(state).await?;
     revoke_key(state);
     let key = new_key(state)?;
     state.code_bench.set_restore(&restore);
@@ -722,6 +725,7 @@ async fn run_all(state: &Arc<AppState>, url: &str, key: &str) {
         }
     }
     bring_back(state, &restore).await;
+    lift_learning_hold(state).await;
     *state.code_bench.all.lock().unwrap() = None;
     revoke_key(state);
     state.overview.refresh_now();
@@ -775,6 +779,20 @@ async fn activate(state: &Arc<AppState>, model: &str) -> Result<(), String> {
         Some(format!("Activate {model}")),
     );
     job_end(state, &agent).await
+}
+
+/// Holds learning on the PC for the run when an expert profile learns, so
+/// the run's prompts teach it nothing; waits for the restart.
+async fn hold_learning(state: &AppState) -> Result<(), String> {
+    let agent = state.agent();
+    crate::expert_learning::hold_for_code_bench(state, async || job_end(state, &agent).await).await
+}
+
+/// Lifts the hold of [`hold_learning`] after the run, if it set one.
+async fn lift_learning_hold(state: &AppState) {
+    let agent = state.agent();
+    crate::expert_learning::lift_code_bench_hold(state, async || job_end(state, &agent).await)
+        .await;
 }
 
 /// Whether the PC service's Strata report marks `model` as the active one.
@@ -909,6 +927,7 @@ pub fn resume(state: &Arc<AppState>) {
         if let Some(restore) = state.code_bench.restore_model() {
             bring_back(&state, &restore).await;
         }
+        lift_learning_hold(&state).await;
         revoke_key(&state);
         state.overview.refresh_now();
     });
@@ -963,6 +982,7 @@ async fn follow(state: &Arc<AppState>, url: &str) {
     // The PC stays awake to the run's end, also while the tests run.
     let _active = ActivityGuard::new(state);
     follow_run(state, url, false).await;
+    lift_learning_hold(state).await;
     revoke_key(state);
     state.overview.refresh_now();
 }

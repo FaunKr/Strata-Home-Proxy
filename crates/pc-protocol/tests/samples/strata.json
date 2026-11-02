@@ -121,6 +121,16 @@
           "base_tps": 31.2
         },
         "other_context": false
+      },
+      "expert_profiles": {
+        "active": "coding",
+        "learning": true,
+        "held": false,
+        "by_hand": false,
+        "profiles": [
+          {"name": "chat", "bytes": 1048576, "saved": 1792448000},
+          {"name": "coding", "bytes": null, "saved": null}
+        ]
       }
     },
     {

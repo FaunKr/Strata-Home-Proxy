@@ -15,6 +15,7 @@
 //! `tests/samples` holds an answer of today's PC service per endpoint; a
 //! PC service test checks that they show every field it sends.
 
+mod expert;
 mod job;
 mod machine;
 mod options;
@@ -23,6 +24,10 @@ mod status;
 mod strata;
 mod tune;
 
+pub use expert::{
+    ExpertLearning, ExpertProfile, ExpertProfiles, PROFILE_NAME_MAX, STANDARD_PROFILE,
+    profile_name_problem,
+};
 pub use job::{
     StrataJob, StrataJobKind, StrataJobRequest, StrataJobState, TuneMode, TuneUse, is_env_name,
 };

@@ -118,6 +118,8 @@ pub struct Agent {
     /// Strata's engine folder for this PC per backend, as Strata named it
     /// last: where stale paths move before a start, which asks no program.
     pub(crate) engine_roots: Mutex<HashMap<Option<String>, std::path::PathBuf>>,
+    /// Which expert profile of each model learns.
+    pub(crate) expert: crate::expert::Expert,
 }
 
 struct Watchdog {
@@ -159,6 +161,7 @@ impl Agent {
         }
         let jobs = Jobs::load(&cfg.state_dir());
         let output = Arc::new(StrataOutput::new(cfg.state_dir()));
+        let expert = crate::expert::Expert::load(&cfg.state_dir());
         Arc::new(Self {
             cfg,
             platform,
@@ -184,6 +187,7 @@ impl Agent {
             strata_local: Mutex::new(None),
             machine: Mutex::new(None),
             engine_roots: Mutex::new(HashMap::new()),
+            expert,
         })
     }
 
@@ -288,7 +292,21 @@ impl Agent {
                 on: self.relay_on(),
                 wanted: Some(self.relay_wanted()),
             }),
+            expert_learning: self
+                .expert
+                .status(crate::strata::active_model(self).as_deref()),
         }
+    }
+
+    /// Counts the time the active model's learning expert profile learns:
+    /// while Strata answers, no job runs and nothing holds learning.
+    pub async fn learning_tick(&self) {
+        let active = crate::strata::active_model(self);
+        let learns = active
+            .as_deref()
+            .is_some_and(|id| self.expert.learning(id).is_some());
+        let counts = learns && !self.jobs.running() && self.strata_healthy().await;
+        self.expert.tick(active.as_deref(), counts);
     }
 
     /// The status for a caller that reached this PC at `local`, with the MAC
@@ -541,6 +559,7 @@ impl Agent {
                     agent.resumed();
                 }
                 agent.watchdog_tick().await;
+                agent.learning_tick().await;
             }
         });
     }

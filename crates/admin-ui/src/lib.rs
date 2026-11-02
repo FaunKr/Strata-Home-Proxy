@@ -13,6 +13,7 @@ pub mod app;
 pub mod confirm;
 pub mod copy;
 pub mod energy;
+pub mod expert;
 pub mod hardware;
 pub mod history;
 pub mod icons;

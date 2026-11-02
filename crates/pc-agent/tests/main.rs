@@ -5,6 +5,7 @@ mod common;
 
 mod agent;
 mod command;
+mod expert_profiles;
 mod hardware;
 mod jsonschema;
 mod load_lines;

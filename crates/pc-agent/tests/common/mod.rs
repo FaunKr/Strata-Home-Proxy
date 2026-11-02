@@ -66,6 +66,10 @@ pub struct Fake {
     pub strata_ignores_stop: AtomicBool,
     /// Stopping Strata fails, as `taskkill` may.
     pub stop_fails: AtomicBool,
+    /// Ctrl+Break sent to Strata, a clean stop; `stops` counts hard ones.
+    pub breaks: AtomicUsize,
+    /// Strata ignores Ctrl+Break, so the clean stop's wait runs out.
+    pub strata_ignores_break: AtomicBool,
     pub strata_busy: AtomicBool,
     pub mac: Mutex<Option<[u8; 6]>>,
     pub mac_lookups: AtomicUsize,
@@ -268,6 +272,19 @@ impl Platform for FakePlatform {
         *self.0.strata_cancel.lock().unwrap() = Some(run.canceller());
         Ok(run)
     }
+    /// Like Strata's own Ctrl+Break handler: it ends, unless told to
+    /// ignore it.
+    fn break_strata(&self) -> anyhow::Result<()> {
+        self.0.breaks.fetch_add(1, Ordering::SeqCst);
+        if self.0.strata_ignores_break.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.0.strata_up.store(false, Ordering::SeqCst);
+        if let Some(cancel) = self.0.strata_cancel.lock().unwrap().take() {
+            cancel();
+        }
+        Ok(())
+    }
     fn stop_strata(&self, processes: &[String]) -> anyhow::Result<()> {
         *self.0.stopped.lock().unwrap() = Some(processes.to_vec());
         self.0.stops.fetch_add(1, Ordering::SeqCst);
@@ -459,6 +476,7 @@ pub fn config(strata: SocketAddr, dir: &Path) -> Config {
         stop_settle_ms: 10,
         cancel_wait_secs: 30,
         update_stop_wait_secs: 1,
+        clean_stop_secs: 1,
         state_dir: Some(dir.to_path_buf()),
         mac: None,
         nas_url: None,

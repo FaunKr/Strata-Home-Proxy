@@ -8,6 +8,10 @@ the versions an update brings; each line is written for the user. Rules:
 
 - Restarts the PC when the proxy asks for a Planned restart (*Restart at next sleep* on the Overview), without installing Windows updates.
 
+## 1.3.1
+
+- Stopping Strata cleanly while an expert profile learns no longer ends the PC service too.
+
 ## 1.3.0
 
 - Learned expert profiles: each model can learn expert profiles of its own from your requests, switch between them and back to Standard, all from Engine settings. Benchmarks never teach them.

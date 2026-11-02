@@ -2714,6 +2714,7 @@ fn catalog_command(agent: &Agent) -> CommandSpec {
                 ],
                 dir: Some(dir.clone()),
                 env: vec![("PYTHONNOUSERSITE".into(), "1".into())],
+                ..Default::default()
             }
         }
     }

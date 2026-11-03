@@ -265,10 +265,8 @@ impl FakePc {
             .then(|| self.key_generation.load(Ordering::SeqCst))
     }
 
-    /// Strata streams `events` for a streamed request to `path`, pausing
-    /// `pause` after the first one.
     /// Holds back the next `/status` answer until the returned notify
-    /// fires; `status_held` tells when it was asked for.
+    /// fires; `held_status_asked` tells when it was asked for.
     pub fn hold_next_status(&self) -> Arc<tokio::sync::Notify> {
         let release = Arc::new(tokio::sync::Notify::new());
         *self.held_status.lock().unwrap() = Some(release.clone());
@@ -276,10 +274,12 @@ impl FakePc {
     }
 
     /// The status held by [`FakePc::hold_next_status`] was asked for.
-    pub fn status_held(&self) -> bool {
+    pub fn held_status_asked(&self) -> bool {
         self.held_status.lock().unwrap().is_none()
     }
 
+    /// Strata streams `events` for a streamed request to `path`, pausing
+    /// `pause` after the first one.
     pub fn set_strata_stream(&self, path: &str, events: Vec<String>, pause: Duration) {
         self.strata_streams
             .lock()

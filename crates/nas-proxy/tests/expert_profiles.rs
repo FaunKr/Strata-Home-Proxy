@@ -331,7 +331,7 @@ async fn learned_event_comes_when_a_status_from_before_the_end_arrives_late() {
     let release = s.pc.hold_next_status();
     let late = status_check(&s);
     let rest = async {
-        while !s.pc.status_held() {
+        while !s.pc.held_status_asked() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         status_check(&s).await;

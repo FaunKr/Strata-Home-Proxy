@@ -132,9 +132,15 @@ impl ExpertLearning {
         out
     }
 
-    /// Notes that a job that changes learning goes out now.
-    fn note_job_sent(&self) {
+    /// Sends a job that changes learning, noting when it went out so that
+    /// a status asked for before it is ignored.
+    async fn start_job(
+        &self,
+        agent: &AgentClient,
+        request: &StrataJobRequest,
+    ) -> Result<strata_pc_protocol::StrataJob, String> {
         *self.job_sent.lock().unwrap() = Some(Instant::now());
+        agent.start_strata_job(request).await
     }
 
     /// A status asked for at `asked` was asked for before the last job
@@ -357,8 +363,7 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
             profile: Some(profile.clone()),
             learn: false,
         };
-        ours.note_job_sent();
-        match agent.start_strata_job(&request).await {
+        match ours.start_job(agent, &request).await {
             Ok(_) => {
                 state.strata.set_job_running(true);
                 state.overview.refresh_now();
@@ -380,8 +385,7 @@ pub async fn send(
     limits: Limits,
 ) -> Result<strata_pc_protocol::StrataJob, String> {
     let before = state.expert_learning.plan(request, limits);
-    state.expert_learning.note_job_sent();
-    let sent = agent.start_strata_job(request).await;
+    let sent = state.expert_learning.start_job(agent, request).await;
     if sent.is_err()
         && let Some(before) = before
     {
@@ -400,9 +404,9 @@ pub async fn hold_for_code_bench(
         return Ok(());
     }
     let agent = state.agent();
-    state.expert_learning.note_job_sent();
-    agent
-        .start_strata_job(&StrataJobRequest::HoldLearning { on: true })
+    state
+        .expert_learning
+        .start_job(&agent, &StrataJobRequest::HoldLearning { on: true })
         .await?;
     state.expert_learning.set_code_bench_hold(true);
     state.strata.set_job_running(true);
@@ -428,10 +432,11 @@ async fn lift(state: &AppState) -> bool {
     if !ours.change(|kept| std::mem::replace(&mut kept.code_bench_hold, false)) {
         return false;
     }
-    ours.note_job_sent();
-    match state
-        .agent()
-        .start_strata_job(&StrataJobRequest::HoldLearning { on: false })
+    match ours
+        .start_job(
+            &state.agent(),
+            &StrataJobRequest::HoldLearning { on: false },
+        )
         .await
     {
         Ok(_) => {

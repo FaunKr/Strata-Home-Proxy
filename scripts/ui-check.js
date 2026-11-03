@@ -613,10 +613,11 @@ async function engineOptions(page, errors, name) {
     if (process.env.SHOTS === '1') {
       await page.screenshot({ path: `${process.env.OUT}/${name}_engine-settings.jpg`, type: 'jpeg', quality: 60 });
     }
-    // Its expert profiles: Standard, the learning one with its progress,
-    // and Learn new profile.
+    // Its expert profiles: the warning about learned ones, Standard, the
+    // learning one with its progress, and Learn new profile.
     const experts = dialog.locator('.expert-profiles');
     await experts.getByText('Standard', { exact: true }).waitFor(wait);
+    await experts.locator('.warning', { hasText: 'a learned profile can make the model answer wrongly' }).waitFor(wait);
     await experts.getByText(/^learning: .* tokens/).waitFor(wait);
     await experts.getByRole('button', { name: 'Stop learning' }).waitFor(wait);
     await experts.getByRole('button', { name: 'Learn new profile' }).waitFor(wait);

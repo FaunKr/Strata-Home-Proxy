@@ -421,3 +421,37 @@ async fn strata_page_shows_set_by_hand_without_buttons() {
     assert!(html.contains("Expert profile set by hand"), "{html}");
     assert!(!html.contains("Learn new profile"), "{html}");
 }
+
+const LEARNED_WARNING: &str = "With this Strata, a learned profile can make the model answer \
+     wrongly on long prompts. If answers turn into nonsense, use Standard.";
+
+#[tokio::test]
+async fn expert_profiles_warn_that_learned_profiles_can_answer_wrongly() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.models[0].env = Some(Default::default());
+    report.info.models[0].expert_profiles = Some(coding_profiles(false));
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(
+        html.contains(&format!("<p class=\"warning\">{LEARNED_WARNING}</p>")),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn expert_profiles_set_by_hand_show_no_warning() {
+    let s = setup(true, |_| {}).await;
+    let mut report = strata_info(true);
+    report.info.models[0].env = Some(Default::default());
+    report.info.models[0].expert_profiles = Some(ExpertProfiles {
+        by_hand: true,
+        ..ExpertProfiles::default()
+    });
+    *s.pc.strata_info.lock().unwrap() = Some(report);
+    let b = logged_in(&s.url).await;
+    let html = b.page("/admin/strata").await;
+    assert!(html.contains("Expert profile set by hand"), "{html}");
+    assert!(!html.contains(LEARNED_WARNING), "{html}");
+}

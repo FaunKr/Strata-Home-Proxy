@@ -617,7 +617,7 @@ async function engineOptions(page, errors, name) {
     // learning one with its progress, and Learn new profile.
     const experts = dialog.locator('.expert-profiles');
     await experts.getByText('Standard', { exact: true }).waitFor(wait);
-    await experts.locator('.warning', { hasText: 'a learned profile can make the model answer wrongly' }).waitFor(wait);
+    await experts.locator('.warning', { hasText: 'together with --adapt-async or --expert-cache-per-layer' }).waitFor(wait);
     await experts.getByText(/^learning: .* tokens/).waitFor(wait);
     await experts.getByRole('button', { name: 'Stop learning' }).waitFor(wait);
     await experts.getByRole('button', { name: 'Learn new profile' }).waitFor(wait);

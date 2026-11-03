@@ -71,7 +71,9 @@ const strata = {
     ],
   },
   models: [
-    model('IQ3_XXS', 'qwen', 'IQ3_XXS', true, 65536, false, 'gpu'),
+    // Starts with --adapt-async 1, so its expert profiles warn about learned ones.
+    { ...model('IQ3_XXS', 'qwen', 'IQ3_XXS', true, 65536, false, 'gpu'),
+      started_args: [...strataSample.models[0].started_args, '--adapt-async', '1'] },
     // The presets: the sample's active one, one that waits for Apply, none for a switched context.
     { ...model('coder-IQ1_M', 'coder', 'IQ1_M', false, 65536, true, 'cpu', field('temperature', 0.6, 'chat_settings')),
       presets: { latest: { ...strataSample.models[0].presets.latest, active: false, state: null, reasons: [] }, other_context: false },

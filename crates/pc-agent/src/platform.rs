@@ -112,15 +112,16 @@ mod imp {
             .stdin(Stdio::null())
     }
 
-    /// [`hidden`], for a command whose output nobody reads: it gets empty
-    /// stdout and stderr too, so it starts whatever the service's own
+    /// [`hidden`], for a command whose output nobody reads: empty stdout
+    /// and stderr too, so it starts no matter what the service's own
     /// handles hold.
     pub fn silent(cmd: &mut Command) -> &mut Command {
         hidden(cmd).stdout(Stdio::null()).stderr(Stdio::null())
     }
 
     /// The standard handles: stdin, stdout, stderr.
-    pub const STD: [STD_HANDLE; 3] = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
+    pub const STD_HANDLES: [STD_HANDLE; 3] =
+        [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
 
     /// This process's stdin, stdout and stderr as they were when saved; put
     /// back when dropped. Joining a console sets them to its handles, and
@@ -132,13 +133,13 @@ mod imp {
     impl StdHandles {
         pub fn save() -> Self {
             // SAFETY: plain calls without pointers.
-            Self(STD.map(|which| unsafe { GetStdHandle(which) }))
+            Self(STD_HANDLES.map(|which| unsafe { GetStdHandle(which) }))
         }
     }
 
     impl Drop for StdHandles {
         fn drop(&mut self) {
-            for (which, handle) in STD.into_iter().zip(self.0) {
+            for (which, handle) in STD_HANDLES.into_iter().zip(self.0) {
                 // SAFETY: puts back a value GetStdHandle gave; Windows
                 // stores it without using it.
                 unsafe { SetStdHandle(which, handle) };
@@ -461,12 +462,11 @@ fn replace_program(downloaded: &Path) -> Result<()> {
     if let Ok(dir) = std::env::current_dir() {
         cmd.current_dir(dir);
     }
-    // A windowless program: it uses none, and inheriting this one's could
-    // keep it from starting.
+    // A windowless program, which uses no standard handles: inheriting
+    // this one's could keep it from starting. Windows ignores the
+    // no-window flag for it.
     #[cfg(windows)]
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+    silent(&mut cmd);
     cmd.spawn()
         .context("New program does not start")
         .map_err(undo)?;
@@ -744,7 +744,7 @@ mod tests {
             // Like the service, which runs without a console: no standard
             // handles. As they were when the test ends.
             let _handles = imp::StdHandles::save();
-            for which in imp::STD {
+            for which in imp::STD_HANDLES {
                 // SAFETY: a null handle is what a windowless program has.
                 unsafe {
                     windows_sys::Win32::System::Console::SetStdHandle(which, std::ptr::null_mut())

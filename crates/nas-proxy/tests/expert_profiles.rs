@@ -425,13 +425,6 @@ async fn strata_page_shows_set_by_hand_without_buttons() {
 const LEARNED_WARNING: &str = "With this Strata, a learned profile can make the model answer \
      wrongly on long prompts. If answers turn into nonsense, use Standard.";
 
-/// The opening tag of the element whose text is `text`.
-fn tag_around<'a>(html: &'a str, text: &str) -> Option<&'a str> {
-    let at = html.find(text)?;
-    let open = html[..at].rfind('<')?;
-    Some(&html[open..at])
-}
-
 #[tokio::test]
 async fn expert_profiles_warn_that_learned_profiles_can_answer_wrongly() {
     let s = setup(true, |_| {}).await;
@@ -441,8 +434,10 @@ async fn expert_profiles_warn_that_learned_profiles_can_answer_wrongly() {
     *s.pc.strata_info.lock().unwrap() = Some(report);
     let b = logged_in(&s.url).await;
     let html = b.page("/admin/strata").await;
-    let tag = tag_around(&html, LEARNED_WARNING).unwrap_or_else(|| panic!("{html}"));
-    assert!(tag.contains("class=\"warning\""), "{tag}");
+    assert!(
+        html.contains(&format!("<p class=\"warning\">{LEARNED_WARNING}</p>")),
+        "{html}"
+    );
 }
 
 #[tokio::test]

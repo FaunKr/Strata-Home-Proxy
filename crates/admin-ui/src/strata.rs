@@ -1939,8 +1939,8 @@ struct ExpertAsk {
 /// The hint under *Learn new profile*, from Strata's docs.
 const EXPERT_HINT: &str =
     "A profile learned from one kind of text speeds that kind up and can slow others.";
-/// Strata's engine can answer wrongly with a profile it learned; remove
-/// this once a Strata release fixes it.
+/// Strata's engine can answer wrongly with a learned expert profile;
+/// remove this once a Strata release fixes it.
 const LEARNED_WARNING: &str = "With this Strata, a learned profile can make the model answer \
      wrongly on long prompts. If answers turn into nonsense, use Standard.";
 

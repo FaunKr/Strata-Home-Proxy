@@ -85,17 +85,65 @@ static LAST_STRATA: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
 
 #[cfg(windows)]
 mod imp {
-    use std::os::windows::{ffi::OsStrExt, process::CommandExt};
+    use std::{
+        os::windows::{ffi::OsStrExt, process::CommandExt},
+        process::Stdio,
+    };
 
     use windows_sys::Win32::{
-        System::{Power::SetSuspendState, SystemInformation::GetTickCount},
+        Foundation::HANDLE,
+        System::{
+            Console::{
+                GetStdHandle, STD_ERROR_HANDLE, STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+                SetStdHandle,
+            },
+            Power::SetSuspendState,
+            SystemInformation::GetTickCount,
+        },
         UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO},
     };
 
     use super::*;
 
+    /// Without a window and with an empty stdin, so whatever the service's
+    /// own stdin holds never reaches the command.
     pub fn hidden(cmd: &mut Command) -> &mut Command {
         cmd.creation_flags(super::CREATE_NO_WINDOW)
+            .stdin(Stdio::null())
+    }
+
+    /// [`hidden`], for a command whose output nobody reads: it gets empty
+    /// stdout and stderr too, so it starts whatever the service's own
+    /// handles hold.
+    pub fn silent(cmd: &mut Command) -> &mut Command {
+        hidden(cmd).stdout(Stdio::null()).stderr(Stdio::null())
+    }
+
+    /// The standard handles: stdin, stdout, stderr.
+    pub const STD: [STD_HANDLE; 3] = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
+
+    /// This process's stdin, stdout and stderr as they were when saved; put
+    /// back when dropped. Joining a console sets them to its handles, and
+    /// they stay set when the process leaves it: every program started
+    /// after that with inherited handles then fails with "The handle is
+    /// invalid".
+    pub struct StdHandles([HANDLE; 3]);
+
+    impl StdHandles {
+        pub fn save() -> Self {
+            // SAFETY: plain calls without pointers.
+            Self(STD.map(|which| unsafe { GetStdHandle(which) }))
+        }
+    }
+
+    impl Drop for StdHandles {
+        fn drop(&mut self) {
+            for (which, handle) in STD.into_iter().zip(self.0) {
+                // SAFETY: puts back a value GetStdHandle gave; Windows
+                // stores it without using it.
+                unsafe { SetStdHandle(which, handle) };
+            }
+        }
     }
 
     pub fn user_idle() -> Duration {
@@ -208,11 +256,15 @@ mod imp {
     /// The event goes to `pid`'s process group alone, which `pid` started
     /// as [`CommandSpec::own_group`]: sent to every process on the console,
     /// it would end this service too, as nothing here ignores Ctrl+Break.
+    /// The service's stdin, stdout and stderr are as before afterwards, so
+    /// the programs it starts later still start.
     pub fn break_process(pid: u32) -> Result<()> {
         use windows_sys::Win32::System::Console::{
             AttachConsole, CTRL_BREAK_EVENT, FreeConsole, GenerateConsoleCtrlEvent,
             SetConsoleCtrlHandler,
         };
+        // Back when this returns, after the console is left.
+        let _handles = StdHandles::save();
         // SAFETY: plain calls without pointers; the service has no console
         // of its own to lose (it runs hidden), and frees the one it joins.
         unsafe {
@@ -240,7 +292,7 @@ mod imp {
                 stop_folder(entry)?;
             } else {
                 // Exit code 128 means "not running", which is fine.
-                hidden(Command::new("taskkill").args(["/F", "/T", "/IM", entry])).status()?;
+                silent(Command::new("taskkill").args(["/F", "/T", "/IM", entry])).status()?;
             }
         }
         Ok(())
@@ -254,7 +306,7 @@ mod imp {
             // StartsWith, not -like: brackets in the folder name are no wildcards.
             "Get-Process | Where-Object {{ $_.Path -and $_.Path.StartsWith('{folder}\\', [StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{ taskkill /F /T /PID $_.Id | Out-Null }}"
         );
-        hidden(Command::new("powershell").args([
+        silent(Command::new("powershell").args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
@@ -409,6 +461,12 @@ fn replace_program(downloaded: &Path) -> Result<()> {
     if let Ok(dir) = std::env::current_dir() {
         cmd.current_dir(dir);
     }
+    // A windowless program: it uses none, and inheriting this one's could
+    // keep it from starting.
+    #[cfg(windows)]
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     cmd.spawn()
         .context("New program does not start")
         .map_err(undo)?;
@@ -436,7 +494,7 @@ pub fn end_replaced(pid: u32) -> Result<()> {
         .into_owned();
     #[cfg(windows)]
     {
-        let status = hidden(Command::new("taskkill").args([
+        let status = silent(Command::new("taskkill").args([
             "/F",
             "/PID",
             &pid.to_string(),
@@ -494,7 +552,7 @@ pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub(crate) const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 #[cfg(windows)]
-pub(crate) use imp::hidden;
+pub(crate) use imp::{hidden, silent};
 
 /// Whether an entry of `strata_processes` names a folder rather than a program.
 pub fn is_folder(entry: &str) -> bool {
@@ -678,6 +736,29 @@ mod tests {
                 Some(0xC000_013A_u32 as i32),
                 "the program did not end by Ctrl+Break"
             );
+        }
+
+        #[tokio::test]
+        async fn programs_start_after_ctrl_break() {
+            let _console = CONSOLE.lock().await;
+            // Like the service, which runs without a console: no standard
+            // handles. As they were when the test ends.
+            let _handles = imp::StdHandles::save();
+            for which in imp::STD {
+                // SAFETY: a null handle is what a windowless program has.
+                unsafe {
+                    windows_sys::Win32::System::Console::SetStdHandle(which, std::ptr::null_mut())
+                };
+            }
+            let run = break_sleeper().await;
+            // Started the way the service starts its own commands, with the
+            // output inherited from the service.
+            let started = hidden(&mut Command::new("cmd"))
+                .args(["/C", "exit 0"])
+                .status();
+            run.canceller()();
+            let status = started.expect("no program starts after Ctrl+Break");
+            assert!(status.success(), "the program ended with {status}");
         }
 
         #[tokio::test]

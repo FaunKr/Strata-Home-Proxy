@@ -173,7 +173,7 @@ fn send_line(buf: &mut Vec<u8>, rewritten: bool, to: &mpsc::UnboundedSender<Stri
 
 #[cfg(windows)]
 fn kill_tree(pid: u32) {
-    let _ = crate::platform::hidden(std::process::Command::new("taskkill").args([
+    let _ = crate::platform::silent(std::process::Command::new("taskkill").args([
         "/F",
         "/T",
         "/PID",

@@ -265,14 +265,16 @@ impl AppState {
     /// `None` counts as a sleeping PC, except for one miss in gaming mode:
     /// that reads as gaming mode (`Lifecycle::pc_status`).
     pub async fn ask_pc(&self, agent: &AgentClient) -> Option<PcStatus> {
+        let asked = Instant::now();
         let answer = agent.status().await;
         if let Some(status) = &answer {
-            self.take_over(agent, status).await;
+            self.take_over(agent, status, asked).await;
         }
         self.lifecycle.lock().unwrap().pc_status(answer)
     }
 
-    async fn take_over(&self, agent: &AgentClient, status: &PcStatus) {
+    /// Takes in a status asked for at `asked`.
+    async fn take_over(&self, agent: &AgentClient, status: &PcStatus, asked: Instant) {
         *self.last_hardware.lock().unwrap() = Some((Instant::now(), status.hardware.clone()));
         self.tuning.store(tuning(status), Ordering::SeqCst);
         self.note_relay(status.relay_on());
@@ -292,7 +294,7 @@ impl AppState {
         }
         crate::strata_key::note_status(self, agent, status).await;
         crate::strata::note_status(self, agent, status).await;
-        crate::expert_learning::note_status(self, agent, status).await;
+        crate::expert_learning::note_status(self, agent, status, asked).await;
     }
 
     /// Strata at the current address with the current key; `None` without

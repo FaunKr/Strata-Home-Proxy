@@ -197,6 +197,14 @@ pub struct FakePc {
     /// How long the PC service takes before it answers `/status`, also
     /// while the PC sleeps, like a connection that runs into its timeout.
     pub status_delay: Mutex<Duration>,
+    /// Holds back the next `/status` answer, built when it was asked for,
+    /// until notified: a status that arrives after later ones
+    /// ([`FakePc::hold_next_status`]).
+    pub held_status: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    /// How long the PC service takes before it answers `GET /strata`.
+    pub strata_info_delay: Mutex<Duration>,
+    /// Fires whenever `GET /strata` is asked for.
+    pub strata_info_asked: tokio::sync::Notify,
     /// Streamed answers by path in place of the default ones, with the pause
     /// after the first event (`set_strata_stream`).
     strata_streams: Mutex<std::collections::HashMap<String, (Vec<String>, Duration)>>,
@@ -259,6 +267,19 @@ impl FakePc {
 
     /// Strata streams `events` for a streamed request to `path`, pausing
     /// `pause` after the first one.
+    /// Holds back the next `/status` answer until the returned notify
+    /// fires; `status_held` tells when it was asked for.
+    pub fn hold_next_status(&self) -> Arc<tokio::sync::Notify> {
+        let release = Arc::new(tokio::sync::Notify::new());
+        *self.held_status.lock().unwrap() = Some(release.clone());
+        release
+    }
+
+    /// The status held by [`FakePc::hold_next_status`] was asked for.
+    pub fn status_held(&self) -> bool {
+        self.held_status.lock().unwrap().is_none()
+    }
+
     pub fn set_strata_stream(&self, path: &str, events: Vec<String>, pause: Duration) {
         self.strata_streams
             .lock()
@@ -639,7 +660,12 @@ pub async fn agent_status(State(pc): State<Pc>) -> Response {
         // A sleeping PC does not answer; a refused status is the closest stand-in.
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    Json(pc.status()).into_response()
+    let status = pc.status();
+    let held = pc.held_status.lock().unwrap().take();
+    if let Some(release) = held {
+        release.notified().await;
+    }
+    Json(status).into_response()
 }
 
 /// `GET /strata/key`: the key Strata takes; 404 without one.
@@ -970,6 +996,9 @@ pub async fn agent_strata(State(pc): State<Pc>) -> Response {
     if !pc.up() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    pc.strata_info_asked.notify_waiters();
+    let delay = *pc.strata_info_delay.lock().unwrap();
+    tokio::time::sleep(delay).await;
     match pc.strata_info.lock().unwrap().clone() {
         Some(mut report) => {
             report.info.job = pc.strata_job.lock().unwrap().clone();

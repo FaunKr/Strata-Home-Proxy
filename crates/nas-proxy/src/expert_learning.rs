@@ -3,7 +3,7 @@
 //! in all. The PC service owns the files and which profile learns; the proxy
 //! counts and ends learning when the first limit is reached.
 
-use std::{path::PathBuf, sync::Mutex};
+use std::{path::PathBuf, sync::Mutex, time::Instant};
 
 use serde::{Deserialize, Serialize};
 use strata_admin_ui::{
@@ -95,6 +95,10 @@ pub struct ExpertLearning {
     kept: Mutex<Kept>,
     /// What the PC service's last status said learns.
     last: Mutex<Option<Learning>>,
+    /// When the proxy last sent a job that changes learning: a status asked
+    /// for before then is out of date, also when it arrives after the job
+    /// ended.
+    job_sent: Mutex<Option<Instant>>,
     dir: Option<PathBuf>,
 }
 
@@ -108,6 +112,7 @@ impl ExpertLearning {
         Self {
             kept: Mutex::new(kept),
             last: Mutex::new(None),
+            job_sent: Mutex::new(None),
             dir,
         }
     }
@@ -125,6 +130,20 @@ impl ExpertLearning {
         let out = change(&mut kept);
         self.save(&kept);
         out
+    }
+
+    /// Notes that a job that changes learning goes out now.
+    fn note_job_sent(&self) {
+        *self.job_sent.lock().unwrap() = Some(Instant::now());
+    }
+
+    /// A status asked for at `asked` was asked for before the last job
+    /// that changes learning went out.
+    fn out_of_date(&self, asked: Instant) -> bool {
+        self.job_sent
+            .lock()
+            .unwrap()
+            .is_some_and(|sent| asked < sent)
     }
 
     /// Every profile the proxy counted for, for the Strata page.
@@ -279,8 +298,11 @@ fn entry<'a>(kept: &'a mut Kept, model: &str, profile: &str) -> &'a mut Entry {
 /// Takes over what the PC service's status says learns: the round's
 /// seconds, the end of a round the proxy ended, and a limit reached, which
 /// ends learning. Waits while a Strata job or the code benchmark runs.
-pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatus) {
+pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatus, asked: Instant) {
     let ours = &state.expert_learning;
+    if ours.out_of_date(asked) {
+        return;
+    }
     *ours.last.lock().unwrap() = status.expert_learning.clone();
     let now = status.expert_learning.clone();
     let busy = status.strata_job || state.strata.job_running() || state.code_bench.busy();
@@ -335,6 +357,7 @@ pub async fn note_status(state: &AppState, agent: &AgentClient, status: &PcStatu
             profile: Some(profile.clone()),
             learn: false,
         };
+        ours.note_job_sent();
         match agent.start_strata_job(&request).await {
             Ok(_) => {
                 state.strata.set_job_running(true);
@@ -357,6 +380,7 @@ pub async fn send(
     limits: Limits,
 ) -> Result<strata_pc_protocol::StrataJob, String> {
     let before = state.expert_learning.plan(request, limits);
+    state.expert_learning.note_job_sent();
     let sent = agent.start_strata_job(request).await;
     if sent.is_err()
         && let Some(before) = before
@@ -376,6 +400,7 @@ pub async fn hold_for_code_bench(
         return Ok(());
     }
     let agent = state.agent();
+    state.expert_learning.note_job_sent();
     agent
         .start_strata_job(&StrataJobRequest::HoldLearning { on: true })
         .await?;
@@ -403,6 +428,7 @@ async fn lift(state: &AppState) -> bool {
     if !ours.change(|kept| std::mem::replace(&mut kept.code_bench_hold, false)) {
         return false;
     }
+    ours.note_job_sent();
     match state
         .agent()
         .start_strata_job(&StrataJobRequest::HoldLearning { on: false })

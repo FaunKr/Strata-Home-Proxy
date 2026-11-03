@@ -308,6 +308,52 @@ async fn learned_profile_records_an_event_with_tokens_and_time() {
     assert_eq!((c.total_tokens, c.total_secs), (1050, 7_800));
 }
 
+/// The jobs that end learning the proxy sent.
+fn ending_jobs(s: &Setup) -> usize {
+    bodies(s)
+        .iter()
+        .filter(|b| {
+            **b == json!({"kind": "expert_profile", "model": "IQ3_XXS", "profile": "coding"})
+        })
+        .count()
+}
+
+#[tokio::test]
+async fn learned_event_comes_when_a_status_from_before_the_end_arrives_late() {
+    let s = setup_with_model().await;
+    let mut b = logged_in(&s.url).await;
+    learning(&s, &mut b, "1000", "").await;
+    s.pc.set_expert_learning("IQ3_XXS", "coding", false, 7_800);
+    answered_request(&s, READ_ALL).await;
+    tokens_counted(&s, 1050).await;
+    // A status asked for while the profile still learns, answered only
+    // while the proxy takes in the end of the job that ended learning.
+    let release = s.pc.hold_next_status();
+    let late = status_check(&s);
+    let rest = async {
+        while !s.pc.held_status_asked() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        status_check(&s).await;
+        assert!(learning_ended(&s));
+        s.pc.clear_expert_learning();
+        *s.pc.strata_info_delay.lock().unwrap() = Duration::from_millis(300);
+        let release_during_job_end = async {
+            s.pc.strata_info_asked.notified().await;
+            release.notify_one();
+        };
+        tokio::join!(job_done(&s), release_during_job_end);
+    };
+    tokio::join!(late, rest);
+    *s.pc.strata_info_delay.lock().unwrap() = Duration::ZERO;
+    let event = learned_event(&s).await;
+    assert_eq!(
+        event.detail.as_deref(),
+        Some("Expert profile coding of IQ3_XXS learned: 1K tokens, 2 h 10 min")
+    );
+    assert_eq!(ending_jobs(&s), 1);
+}
+
 #[tokio::test]
 async fn learn_more_counts_the_round_from_zero_and_adds_to_the_totals() {
     let s = setup_with_model().await;
@@ -422,36 +468,116 @@ async fn strata_page_shows_set_by_hand_without_buttons() {
     assert!(!html.contains("Learn new profile"), "{html}");
 }
 
-const LEARNED_WARNING: &str = "With this Strata, a learned profile can make the model answer \
-     wrongly on long prompts. If answers turn into nonsense, use Standard.";
+const LEARNED_WARNING: &str = "With this Strata, a learned profile together with --adapt-async or \
+     --expert-cache-per-layer can make the model answer wrongly on long prompts. If answers turn \
+     into nonsense, use Standard or remove these options.";
 
-#[tokio::test]
-async fn expert_profiles_warn_that_learned_profiles_can_answer_wrongly() {
+/// The Strata page for a model with a learned expert profile (set by hand
+/// with `by_hand`) that starts with `args` under the active preset's
+/// `preset` settings.
+async fn strata_page_with(args: &[&str], preset: &[&str], by_hand: bool) -> String {
+    strata_page_with_preset(args, preset, true, by_hand).await
+}
+
+/// As [`strata_page_with`], with the preset active or not.
+async fn strata_page_with_preset(
+    args: &[&str],
+    preset: &[&str],
+    preset_active: bool,
+    by_hand: bool,
+) -> String {
     let s = setup(true, |_| {}).await;
     let mut report = strata_info(true);
-    report.info.models[0].env = Some(Default::default());
-    report.info.models[0].expert_profiles = Some(coding_profiles(false));
+    let model = &mut report.info.models[0];
+    model.env = Some(Default::default());
+    model.started_args = Some(args.iter().map(|a| a.to_string()).collect());
+    model.expert_profiles = Some(if by_hand {
+        ExpertProfiles {
+            by_hand: true,
+            ..ExpertProfiles::default()
+        }
+    } else {
+        coding_profiles(false)
+    });
+    if !preset.is_empty() {
+        model.presets = Some(StrataPresets {
+            latest: Some(StrataPreset {
+                id: "3f2a9c0e5b7d41c8a6e2f1b0d9c8e7a6".into(),
+                name: "IQ3_XXS 64K – Full speed".into(),
+                active: preset_active,
+                state: None,
+                reasons: Vec::new(),
+                gain_pct: Some(12.4),
+                settings: preset.iter().map(|s| s.to_string()).collect(),
+                decode_tps: Some(35.1),
+                base_tps: Some(31.2),
+            }),
+            other_context: false,
+        });
+    }
     *s.pc.strata_info.lock().unwrap() = Some(report);
     let b = logged_in(&s.url).await;
-    let html = b.page("/admin/strata").await;
-    assert!(
-        html.contains(&format!("<p class=\"warning\">{LEARNED_WARNING}</p>")),
-        "{html}"
-    );
+    b.page("/admin/strata").await
+}
+
+fn warns(html: &str) -> bool {
+    html.contains(&format!("<p class=\"warning\">{LEARNED_WARNING}</p>"))
+}
+
+#[tokio::test]
+async fn expert_profiles_warn_when_the_model_starts_with_adapt_async() {
+    let html = strata_page_with(&["--native", "a.gguf", "--adapt-async", "1"], &[], false).await;
+    assert!(warns(&html), "{html}");
+}
+
+#[tokio::test]
+async fn expert_profiles_warn_when_the_model_starts_with_expert_cache_per_layer() {
+    let html = strata_page_with(
+        &["--native", "a.gguf", "--expert-cache-per-layer"],
+        &[],
+        false,
+    )
+    .await;
+    assert!(warns(&html), "{html}");
+}
+
+#[tokio::test]
+async fn expert_profiles_warn_when_the_active_preset_sets_adapt_async() {
+    let html = strata_page_with(&["--native", "a.gguf"], &["--adapt-async 1"], false).await;
+    assert!(warns(&html), "{html}");
+}
+
+#[tokio::test]
+async fn expert_profiles_warn_when_the_model_starts_with_adapt_async_written_with_equals() {
+    let html = strata_page_with(&["--native", "a.gguf", "--adapt-async=1"], &[], false).await;
+    assert!(warns(&html), "{html}");
+}
+
+#[tokio::test]
+async fn expert_profiles_show_no_warning_when_only_an_inactive_preset_sets_adapt_async() {
+    let html =
+        strata_page_with_preset(&["--native", "a.gguf"], &["--adapt-async 1"], false, false).await;
+    assert!(html.contains("Learn new profile"), "{html}");
+    assert!(!html.contains(LEARNED_WARNING), "{html}");
+}
+
+#[tokio::test]
+async fn expert_profiles_show_no_warning_with_adapt_async_0() {
+    let html = strata_page_with(&["--native", "a.gguf", "--adapt-async", "0"], &[], false).await;
+    assert!(html.contains("Learn new profile"), "{html}");
+    assert!(!html.contains(LEARNED_WARNING), "{html}");
+}
+
+#[tokio::test]
+async fn expert_profiles_show_no_warning_without_either_option() {
+    let html = strata_page_with(&["--native", "a.gguf", "--spec", "4"], &[], false).await;
+    assert!(html.contains("Learn new profile"), "{html}");
+    assert!(!html.contains(LEARNED_WARNING), "{html}");
 }
 
 #[tokio::test]
 async fn expert_profiles_set_by_hand_show_no_warning() {
-    let s = setup(true, |_| {}).await;
-    let mut report = strata_info(true);
-    report.info.models[0].env = Some(Default::default());
-    report.info.models[0].expert_profiles = Some(ExpertProfiles {
-        by_hand: true,
-        ..ExpertProfiles::default()
-    });
-    *s.pc.strata_info.lock().unwrap() = Some(report);
-    let b = logged_in(&s.url).await;
-    let html = b.page("/admin/strata").await;
+    let html = strata_page_with(&["--native", "a.gguf", "--adapt-async", "1"], &[], true).await;
     assert!(html.contains("Expert profile set by hand"), "{html}");
     assert!(!html.contains(LEARNED_WARNING), "{html}");
 }

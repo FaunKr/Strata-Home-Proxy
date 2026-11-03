@@ -1750,7 +1750,12 @@ fn EngineSettings(
     let options_id = format!("{id}-engine-options");
     let env_id = format!("{id}-engine-env");
     let title = format!("Engine settings for {id}");
-    let preset_note = preset.filter(applied).map(|p| {
+    let preset = preset.filter(applied);
+    let at_risk = learned_profile_at_risk(
+        &started,
+        preset.as_ref().map_or(&[][..], |p| p.settings.as_slice()),
+    );
+    let preset_note = preset.map(|p| {
         let sets: Vec<&String> = p
             .settings
             .iter()
@@ -1883,6 +1888,7 @@ fn EngineSettings(
                         <ExpertProfilesSection
                             id=id.clone()
                             active
+                            at_risk
                             profiles
                             counts
                             actions
@@ -1939,10 +1945,38 @@ struct ExpertAsk {
 /// The hint under *Learn new profile*, from Strata's docs.
 const EXPERT_HINT: &str =
     "A profile learned from one kind of text speeds that kind up and can slow others.";
-/// Strata's engine can answer wrongly with a learned expert profile;
-/// remove this once a Strata release fixes it.
-const LEARNED_WARNING: &str = "With this Strata, a learned profile can make the model answer \
-     wrongly on long prompts. If answers turn into nonsense, use Standard.";
+/// Strata's engine can answer wrongly with a learned expert profile and
+/// one of these options; remove this once a Strata release fixes it.
+const LEARNED_WARNING: &str = "With this Strata, a learned profile together with --adapt-async or \
+     --expert-cache-per-layer can make the model answer wrongly on long prompts. If answers turn \
+     into nonsense, use Standard or remove these options.";
+
+/// Whether the model starts with an option that breaks learned expert
+/// profiles: `--adapt-async` other than 0 or `--expert-cache-per-layer`, in
+/// `started` (one entry per word) or the active preset's `settings` (one
+/// option with its value per entry).
+fn learned_profile_at_risk(started: &[String], settings: &[String]) -> bool {
+    let started: Vec<&str> = started.iter().map(String::as_str).collect();
+    breaks_learned_profiles(&started)
+        || settings
+            .iter()
+            .any(|s| breaks_learned_profiles(&s.split_whitespace().collect::<Vec<_>>()))
+}
+
+/// Whether these engine option words hold such an option.
+fn breaks_learned_profiles(words: &[&str]) -> bool {
+    words.iter().enumerate().any(|(index, word)| {
+        let (flag, value) = match word.split_once('=') {
+            Some((flag, value)) => (flag, Some(value)),
+            None => (*word, words.get(index + 1).copied()),
+        };
+        match flag {
+            "--expert-cache-per-layer" => true,
+            "--adapt-async" => value.is_some_and(|v| v.trim() != "0"),
+            _ => false,
+        }
+    })
+}
 
 /// *Expert profiles* in *Engine settings*: the one Strata ships, the
 /// learned ones with their state and buttons, and *Learn new profile*. A
@@ -1951,6 +1985,8 @@ const LEARNED_WARNING: &str = "With this Strata, a learned profile can make the 
 fn ExpertProfilesSection(
     id: String,
     active: bool,
+    /// The model starts with an option that breaks learned expert profiles.
+    at_risk: bool,
     profiles: ExpertProfiles,
     counts: Vec<ExpertCounts>,
     actions: Actions,
@@ -2207,7 +2243,7 @@ fn ExpertProfilesSection(
     view! {
         <div class="expert-profiles">
             {heading}
-            <p class="warning">{LEARNED_WARNING}</p>
+            {at_risk.then(|| view! { <p class="warning">{LEARNED_WARNING}</p> })}
             <ul class="expert-list">{standard}{learned}</ul>
             <div class="expert-new">
                 <div>

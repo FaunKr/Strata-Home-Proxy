@@ -3,7 +3,9 @@
 The repo is public, so its jobs on GitHub-hosted runners cost no Actions
 minutes. While it was private, GitHub Free included 3,000 minutes a month and
 the first two days used about 2,500 of them, so since #151 the CI only runs what
-a change needs (spec #146). That still keeps runs short.
+a change needs (spec #146). The sections below still describe that budget;
+the job selection they explain is what keeps a docs-only PR at about a minute
+and a code change under 10, which is how long a PR waits for its merge.
 
 ## What costs minutes
 

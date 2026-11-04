@@ -9,43 +9,83 @@ fail() {
   echo "check-docs: $1" >&2
   failures=$((failures + 1))
 }
+repo() {
+  local dir
+  dir=$(mktemp -d)
+  git -C "$dir" init -q
+  mkdir -p "$dir/docs"
+  # shellcheck disable=SC2016 # the backticks are Markdown.
+  printf '# Setup\n\n## The PC does not wake\n\n## Setup\n\n## `x-strata-proxy-status` and *Releases*\n\nTitle\n=====\n' >"$dir/docs/setup.md"
+  printf 'one\n' >"$dir/docs/my file.md"
+  echo "$dir"
+}
 commit() {
   git -C "$1" add -A
   git -C "$1" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm t
 }
+# Passes on a repo with this README.md, fails naming $2 on one with $3.
+passes() {
+  local dir
+  dir=$(repo)
+  printf '%s\n' "$1" >"$dir/README.md"
+  commit "$dir"
+  "$check" "$dir" 2>/dev/null || fail "fails: $1"
+  rm -rf "$dir"
+}
+fails() {
+  local dir out
+  dir=$(repo)
+  printf '%s\n' "$1" >"$dir/README.md"
+  commit "$dir"
+  if out=$("$check" "$dir" 2>&1); then
+    fail "passes: $1"
+  elif [[ $out != *"$2"* ]]; then
+    fail "does not name \"$2\": $out"
+  fi
+  rm -rf "$dir"
+}
 
-dir=$(mktemp -d)
-trap 'rm -rf "$dir"' EXIT
-git -C "$dir" init -q
-mkdir -p "$dir/docs"
-printf '# Setup\n\n## The PC does not wake\n' >"$dir/docs/setup.md"
+passes '[setup](docs/setup.md#the-pc-does-not-wake) and [web](https://example.com/x#y)'
+passes '[second Setup heading](docs/setup.md#setup-1)'
+passes '[code and emphasis](docs/setup.md#x-strata-proxy-status-and-releases)'
+passes '[setext heading](docs/setup.md#title)'
+passes '[with a title](docs/setup.md "Setup")'
+passes '[angle brackets](<docs/my file.md>) and [escaped](docs/my%20file.md)'
+passes '[from the root](/docs/setup.md) and [a folder](docs/)'
+passes '[ref]: docs/setup.md'
+passes 'plain symbols: ✓ ✗ ★ ➜'
 # shellcheck disable=SC2016 # the backticks are Markdown.
-printf '[setup](docs/setup.md#the-pc-does-not-wake), [web](https://example.com/x#y)\n\n```\n[not a link](missing.md)\n```\n' >"$dir/README.md"
-commit "$dir"
-"$check" "$dir" 2>/dev/null || fail "a clean repo fails"
+passes '```
+[in a fence](missing.md)
+~~~
+[still in it](missing.md)
+```
+`[inline code](missing.md)`'
+passes '# Here
 
-printf 'Done \xe2\x9c\x85\n' >"$dir/a.md"
-commit "$dir"
-if out=$("$check" "$dir" 2>&1); then
-  fail "an emoji passes"
-fi
-[[ $out == *"a.md:1: emoji"* ]] || fail "the emoji hit does not name file and line: $out"
-rm "$dir/a.md"
+[same file](#here)'
 
-printf 'one\n[gone](docs/gone.md)\n' >"$dir/b.md"
-commit "$dir"
-if out=$("$check" "$dir" 2>&1); then
-  fail "a link to a missing file passes"
-fi
-[[ $out == *"b.md:2: link to missing docs/gone.md"* ]] || fail "the missing file is not named: $out"
-rm "$dir/b.md"
+fails 'Done ✅' 'README.md:1: emoji'
+fails 'Waiting ⏳' 'README.md:1: emoji'
+fails 'one
+[gone](docs/gone.md)' 'README.md:2: link to missing docs/gone.md'
+fails '[gone, with a title](docs/gone.md "t")' 'link to missing docs/gone.md'
+fails '[ref]: docs/gone.md' 'link to missing docs/gone.md'
+fails '[old](docs/setup.md#forgot-password)' 'no heading for #forgot-password'
+fails '[same file](#nowhere)' 'no heading for #nowhere in README.md'
 
-printf '[old](docs/setup.md#forgot-password)\n' >"$dir/c.md"
+dir=$(repo)
+printf '[untracked](docs/new.md)\n' >"$dir/README.md"
 commit "$dir"
-if out=$("$check" "$dir" 2>&1); then
-  fail "a link to a missing heading passes"
+printf 'new\n' >"$dir/docs/new.md"
+if "$check" "$dir" 2>/dev/null; then
+  fail "a link to an untracked file passes"
 fi
-[[ $out == *"no heading for #forgot-password"* ]] || fail "the missing heading is not named: $out"
+printf 'caf\xe9\n' >"$dir/latin1.md"
+git -C "$dir" add latin1.md
+out=$("$check" "$dir" 2>&1) || true
+[[ $out == *"latin1.md: not UTF-8"* ]] || fail "a file that is not UTF-8 is not named: $out"
+rm -rf "$dir"
 
 if ((failures > 0)); then
   exit 1

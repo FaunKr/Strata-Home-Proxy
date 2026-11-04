@@ -133,4 +133,5 @@ It runs in Windows PowerShell 5.1, not in PowerShell 7:
 
 ## Docs
 
-- **No emojis** in Markdown files.
+No emojis in Markdown files, and relative links with their `#anchors` resolve:
+`scripts/check-docs.sh` checks both, in check.sh and in CI.

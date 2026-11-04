@@ -134,6 +134,12 @@ async fn a_body_that_is_not_json_by_content_type_passes_unchecked() {
     assert_ne!(resp.status(), 200);
     let text = resp.text().await.unwrap();
     assert!(!text.contains("arrived as invalid JSON"), "{text}");
+    assert_eq!(
+        s.pc.api_requests.load(Ordering::SeqCst),
+        0,
+        "the fake reads only JSON"
+    );
+    assert_eq!(s.pc.wol_packets.load(Ordering::SeqCst), 0);
     let mut b = logged_in(&s.url).await;
     assert!(rows(&mut b).await.is_empty());
 }
@@ -409,6 +415,21 @@ async fn the_transport_check_needs_the_login() {
         200
     );
     assert_eq!(download(&anonymous, id).await.status(), 401);
+    // An API key opens none of it.
+    let with_key = reqwest::Client::new()
+        .post(format!("{}/admin/api/transport-check", s.url))
+        .bearer_auth(&s.key)
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(with_key.status(), 200);
+    let with_key = reqwest::Client::new()
+        .get(format!("{}/admin/broken-body/{id}", s.url))
+        .bearer_auth(&s.key)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(with_key.status(), 401);
     assert_eq!(only_row(&mut b).await["saved"], true);
 }
 

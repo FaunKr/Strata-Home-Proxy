@@ -193,6 +193,12 @@ mod tests {
     }
 
     #[test]
+    fn each_side_has_its_name() {
+        let names: Vec<&str> = BrokenSide::ALL.iter().map(|s| side_text(*s)).collect();
+        assert_eq!(names, ["Arrival", "Network", "Strata"]);
+    }
+
+    #[test]
     fn a_body_without_content_length_reads_none() {
         assert_eq!(announced_text(None), "none");
     }

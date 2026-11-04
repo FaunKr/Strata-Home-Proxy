@@ -171,11 +171,9 @@ pub fn side_of(relay: Option<RelayCount>, sent: u64) -> BrokenSide {
     match relay {
         Some(RelayCount::Measured {
             received,
-            passed,
             checksum_matches,
-        }) if received != sent || passed != sent || checksum_matches == Some(false) => {
-            BrokenSide::Network
-        }
+            ..
+        }) if received != sent || checksum_matches == Some(false) => BrokenSide::Network,
         _ => BrokenSide::Strata,
     }
 }
@@ -189,7 +187,7 @@ impl TransportCheck {
     /// stays saved, also one from before a restart.
     pub fn new(db: Arc<Mutex<Connection>>, saving: bool) -> Self {
         let check = Self { db };
-        if !saving && let Err(e) = check.db.lock().unwrap().execute(CLEAR, []) {
+        if !saving && let Err(e) = clear(&check.db) {
             tracing::warn!("saved bodies not deleted: {e}");
         }
         check
@@ -218,7 +216,7 @@ impl TransportCheck {
 
     /// A body Strata refused as invalid JSON with `message`, naming
     /// character `at`; `sent` is the body as the proxy sent it.
-    pub async fn strata(
+    pub async fn strata_refusal(
         &self,
         checked: Checked,
         message: String,
@@ -358,21 +356,15 @@ impl TransportCheck {
     /// Deletes every saved body; the rows stay.
     pub async fn delete_bodies(&self) -> Result<(), String> {
         let db = Arc::clone(&self.db);
-        tokio::task::spawn_blocking(move || db.lock().unwrap().execute(CLEAR, []))
+        tokio::task::spawn_blocking(move || clear(&db))
             .await
             .map_err(|e| e.to_string())?
-            .map(|_| ())
-            .map_err(|e| format!("The saved bodies were not deleted: {e}"))
     }
 
-    /// [`Self::delete_bodies`] on this thread, for a setting just saved.
+    /// [`Self::delete_bodies`] on this thread, for a setting just saved:
+    /// one quick write, done before the answer says it is saved.
     pub fn delete_bodies_now(&self) -> Result<(), String> {
-        self.db
-            .lock()
-            .unwrap()
-            .execute(CLEAR, [])
-            .map(|_| ())
-            .map_err(|e| format!("The saved bodies were not deleted: {e}"))
+        clear(&self.db)
     }
 
     /// Rows per side, over all time.
@@ -403,6 +395,14 @@ impl TransportCheck {
 }
 
 const CLEAR: &str = "UPDATE broken_bodies SET body = NULL WHERE body IS NOT NULL";
+
+fn clear(db: &Mutex<Connection>) -> Result<(), String> {
+    db.lock()
+        .unwrap()
+        .execute(CLEAR, [])
+        .map(|_| ())
+        .map_err(|e| format!("The saved bodies were not deleted: {e}"))
+}
 
 #[cfg(test)]
 mod tests {

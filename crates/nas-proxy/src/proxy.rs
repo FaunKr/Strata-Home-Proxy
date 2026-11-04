@@ -253,7 +253,10 @@ struct Incoming {
     /// The public model name, when the client's API key hides the model.
     public: Option<String>,
     /// The body is JSON the Transport check looked at; what its row keeps.
-    checked: Option<Checked>,
+    transport: Option<Checked>,
+    /// The request goes through the PC service's relay, read once when it
+    /// is sent, so its row and its header agree.
+    relayed: bool,
     /// The SHA-256 of `body` for the relay, set once renamed.
     sha256: Option<String>,
 }
@@ -277,7 +280,8 @@ impl Incoming {
     /// can say whether it got the same. Only for a body the Transport check
     /// looked at, and only in relay mode.
     async fn with_checksum(mut self, st: &AppState) -> Self {
-        if self.checked.is_some() && st.relay() {
+        self.relayed = st.relay();
+        if self.transport.is_some() && self.relayed {
             self.sha256 = Some(transport_check::sha256(self.body.clone()).await);
         }
         self
@@ -286,17 +290,17 @@ impl Incoming {
     /// Strata's `400` `answer` refused the body as invalid JSON: the
     /// Transport check's row, with what the proxy sent and what the relay
     /// counted.
-    async fn note_refusal(&self, st: &AppState, relayed: bool, headers: &HeaderMap, answer: &[u8]) {
-        let Some(checked) = &self.checked else {
+    async fn note_refusal(&self, st: &AppState, headers: &HeaderMap, answer: &[u8]) {
+        let Some(checked) = &self.transport else {
             return;
         };
         let Some((message, at)) = transport_check::strata_break(answer) else {
             return;
         };
-        let relay = relayed.then(|| transport_check::relay_count(headers));
+        let relay = self.relayed.then(|| transport_check::relay_count(headers));
         let keep = st.cfg().save_broken_bodies;
         st.transport
-            .strata(checked.clone(), message, at, self.body.clone(), relay, keep)
+            .strata_refusal(checked.clone(), message, at, self.body.clone(), relay, keep)
             .await;
     }
 }
@@ -333,7 +337,7 @@ async fn send_once(
     // Checked before forwarding; only fails if the address was unset since.
     let strata = st.strata_with(key).ok_or("STRATA_URL is not set")?;
     let mut headers = upstream_headers(&req.headers);
-    if let Some(sha256) = req.sha256.as_deref().filter(|_| st.relay())
+    if let Some(sha256) = req.sha256.as_deref().filter(|_| req.relayed)
         && let Ok(value) = HeaderValue::from_str(sha256)
     {
         headers.insert(RELAY_BODY_SHA256, value);
@@ -421,7 +425,6 @@ async fn forward(
             return lost(flavor);
         }
     };
-    let relayed = st.relay();
     let resp = match sent {
         Ok(r) => r,
         Err(e) => {
@@ -435,7 +438,7 @@ async fn forward(
     }
     let sse = is_event_stream(resp.headers());
     let mut headers = copy_headers(resp.headers(), sse);
-    if status == StatusCode::BAD_REQUEST && !sse && req.checked.is_some() {
+    if status == StatusCode::BAD_REQUEST && !sse && req.transport.is_some() {
         // Read whole to look for Strata's JSON refusal; passed on unchanged.
         let upstream_headers = resp.headers().clone();
         let read = tokio::select! {
@@ -452,8 +455,7 @@ async fn forward(
                 return upstream_failed(flavor, &e.to_string());
             }
         };
-        req.note_refusal(&st, relayed, &upstream_headers, &body)
-            .await;
+        req.note_refusal(&st, &upstream_headers, &body).await;
         if let Some(mut rec) = rec {
             rec.whole(&body);
             rec.finish(RequestOutcome::Done);
@@ -709,7 +711,6 @@ async fn pass_on(
     if let Some(rec) = &mut rec {
         rec.sent(sent);
     }
-    let relayed = st.relay();
     let resp = match send_upstream(st, req).await {
         Ok(r) => r,
         Err(e) => {
@@ -737,8 +738,7 @@ async fn pass_on(
         let headers = resp.headers().clone();
         let text = resp.text().await.unwrap_or_default();
         if status == StatusCode::BAD_REQUEST {
-            req.note_refusal(st, relayed, &headers, text.as_bytes())
-                .await;
+            req.note_refusal(st, &headers, text.as_bytes()).await;
         }
         let message = format!("Strata answered with {status}: {text}");
         let _ = tx.send(flavor.error_event("api_error", &message)).await;
@@ -870,7 +870,8 @@ pub async fn handle(State(st): State<Arc<AppState>>, req: Request) -> Response {
         headers: parts.headers,
         body,
         public,
-        checked: transport,
+        transport,
+        relayed: false,
         sha256: None,
     };
     match st.readiness().await {

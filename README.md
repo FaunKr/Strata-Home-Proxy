@@ -49,8 +49,8 @@ More detail: [How it works](docs/how-it-works.md).
   server. The image is built for `linux/amd64` only. The proxy needs little
   CPU and memory.
 - A fixed IP address for the PC (a DHCP reservation in your router).
-
-Strata itself is installed from the web UI later; you do not need it up front.
+- **Strata** on the PC: an LLM engine with an OpenAI- and Anthropic-compatible
+  API. You do not need to install it up front; the web UI sets it up for you.
 
 ## Quick start
 

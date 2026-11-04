@@ -13,7 +13,7 @@ timeout. In gaming mode neither happens.
   app gets `401` with `x-strata-proxy-status: unauthorized` right away, and
   the PC is not woken for it. As long as no key exists, every app gets `401`.
 - **Strata key:** Strata never sees an app's key. The proxy sends the Strata
-  key instead, which only the proxy and the PC service know. The PC service
+  key instead, which apps never see. The PC service
   makes a new one at every start of Strata, and the proxy fetches it.
 - **Streamed requests** get a response right away and a ping event every
   15 s, even while Strata computes silently for a long time (Claude Code
@@ -94,7 +94,8 @@ What to do about each one: [setup guide, Troubleshooting](setup.md#troubleshooti
 Wake and sleep events and per-minute readings of the power plug are stored in
 `/data/events.db` (SQLite). The web UI shows from them how long the PC was
 awake, in gaming mode, asleep or unobserved, per day, week or month, with an
-energy estimate.
+energy estimate. An `events.jsonl` from an older version is imported once on
+the first start and kept as a backup.
 
 ## Prometheus
 

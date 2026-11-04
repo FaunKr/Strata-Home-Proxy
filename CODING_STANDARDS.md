@@ -133,10 +133,4 @@ It runs in Windows PowerShell 5.1, not in PowerShell 7:
 
 ## Docs
 
-- **No emojis** in Markdown files, code comments, commit messages or PR text.
-- **The README is for users.** It says what the product does, what it needs
-  and how to start, and links to `docs/`; feature details go into the user
-  pages listed in `docs/README.md`, and build and test notes into
-  `docs/development.md`.
-- **A new docs page gets a line in `docs/README.md`**, under *For users* or
-  *For developers*.
+- **No emojis** in Markdown files.

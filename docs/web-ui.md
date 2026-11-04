@@ -1,7 +1,8 @@
 # Web UI
 
 The web UI is at `http://<NAS-IP>:8080/admin/`, on the same port as the API.
-Using it never wakes the PC and never keeps it awake. It has five areas:
+Looking at it never wakes the PC and never keeps it awake; only buttons such as
+*Wake PC* do. It has five areas:
 *Overview*, *PC*, *Strata* (tabs *Models*, *Output*, *Version & benchmark*,
 *Connection*, *Requests*), *Access* and *System*. Two badges at the top show
 the state of the PC and of Strata live.
@@ -61,8 +62,9 @@ Every button press ends up in the history as "from the web UI".
   The .exe is in the image and can be fetched without login at
   `/admin/agent/strata-pc-agent.exe`.
 - **PC service version:** shown even while the PC is asleep (the last one
-  reported). When the image contains a newer one, an update button appears.
-  If the update fails, the reason is shown there. Details:
+  reported). When the image contains a newer one, *Update to ...* appears
+  (*Wake PC and update to ...* while the PC sleeps). If the update fails, the
+  reason is shown there. The *Overview* only points to the update. Details:
   [PC service](pc-service.md).
 - **History:** how long the PC was awake, in gaming mode, asleep or
   unobserved, per day, week or month, with an energy estimate.
@@ -117,13 +119,14 @@ the product version.
 ## Settings
 
 Every value from [deploy/env.example](../deploy/env.example) except
-`DATA_DIR` can be changed in its area and applies as soon as the section is
+`DATA_DIR`, `TZ` and `UI_PASSWORD` can be changed in its area and applies as soon as the section is
 saved; only the proxy's own address (`LISTEN_ADDR`) needs a restart.
 
 The value from the page applies, otherwise the environment variable,
 otherwise the built-in default. *Reset* next to a field discards the value
 from the page. The MAC address is the exception: one reported by the PC
-service always applies.
+service always applies. All settings with their defaults:
+[crates/nas-proxy/src/config.rs](../crates/nas-proxy/src/config.rs).
 
 Settings are stored in `/data/settings.json`. Without `DATA_DIR`, the *System*
 area and the checklist warn that changes are lost on restart. The PC

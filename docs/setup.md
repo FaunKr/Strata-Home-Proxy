@@ -138,6 +138,9 @@ docker compose logs -f
 All settings are explained in [deploy/env.example](../deploy/env.example).
 To update later: `docker compose pull && docker compose up -d`.
 
+To send a wake packet with the installed proxy, for testing:
+`docker compose run --rm strata-proxy wake`.
+
 Check: `http://192.168.1.10:8080/admin/` opens the login page.
 
 ## 6. First login
@@ -205,6 +208,8 @@ the app gets an answer.
 2. Send a request from an app. The PC wakes, Strata loads, the answer comes.
 3. Leave the PC alone for 15 minutes. It goes back to standby by itself.
 
+Check: the *Overview* lists the sleep and the wake-up under the last events.
+
 ## Optional
 
 - **Automatic updates on TrueNAS:** [nas-updates.md](nas-updates.md).
@@ -220,15 +225,17 @@ the app gets an answer.
 When the proxy answers instead of Strata, the header `x-strata-proxy-status`
 says why. With curl: `curl -i http://192.168.1.10:8080/v1/models -H "Authorization: Bearer <key>"`.
 
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `401`, `unauthorized` | The app sends no API key or a wrong one. | Create a key under *Access* and set it in the app. |
-| `401`, `strata_unauthorized` | Strata refused the proxy's Strata key. | Check that the PC service runs and is up to date (*PC* area); the PC service makes a new Strata key at every start of Strata. |
-| `503`, `gaming` | Gaming mode is on. | Turn it off on the *Overview* or with the desktop shortcut. |
-| `503`, `tuning` | Strata is tuning a model. | Wait until the tune ends. |
-| `503`, `not_configured` | No Strata address is set. | Set it in the *Strata* area, tab *Connection*. |
-| `503`, `no_mac` | The proxy does not know the PC's MAC address. | Set it in the *PC* area, or wake the PC once by hand so the PC service reports it. |
-| `504`, `wake_timeout` | The PC did not wake within the wake timeout. | See [The PC does not wake](#the-pc-does-not-wake). |
+What each value means: [status header](how-it-works.md#status-header).
+
+| Value | Fix |
+| --- | --- |
+| `unauthorized` | Create a key under *Access* and set it in the app. |
+| `strata_unauthorized` | Check that the PC service runs and is up to date (*PC* area); it makes a new Strata key at every start of Strata. |
+| `gaming` | Turn gaming mode off on the *Overview* or with the desktop shortcut. |
+| `tuning` | Wait until the tune ends. |
+| `not_configured` | Set the Strata address in the *Strata* area, tab *Connection*. |
+| `no_mac` | Set the MAC address in the *PC* area, or wake the PC once by hand so the PC service reports it. |
+| `wake_timeout` | See [The PC does not wake](#the-pc-does-not-wake). |
 
 ### The PC does not wake
 
@@ -249,9 +256,7 @@ request is still open. *Force sleep* puts it to sleep anyway.
 
 ### Forgot the web UI password
 
-Delete `admin-password.json` in the data directory and restart the container.
-Then `admin` (or `UI_PASSWORD`) applies again, all old logins are invalid, and
-a new password is required at the first login.
+See [Web UI, Login](web-ui.md#login).
 
 ### Settings are lost after a restart
 

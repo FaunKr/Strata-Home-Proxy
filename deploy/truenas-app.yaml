@@ -1,6 +1,6 @@
 # TrueNAS SCALE: Apps → Discover Apps → ⋮ → Install via YAML.
-# Once beforehand via SSH: sudo docker login ghcr.io -u FaunKr (token as password)
-# and sudo docker pull ghcr.io/faunkr/strata-home-proxy:latest
+# Once beforehand via SSH: sudo docker pull ghcr.io/faunkr/strata-home-proxy:latest
+# Step by step: docs/setup.md.
 # Then set up everything else under http://<NAS-IP>:8080/admin/ (log in
 # with "admin" or UI_PASSWORD). Values there take precedence over the values here.
 services:

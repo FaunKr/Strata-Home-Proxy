@@ -130,3 +130,7 @@ It runs in Windows PowerShell 5.1, not in PowerShell 7:
   takes no parameters.
 - **Download first, then stop the running service**, and check everything that can
   fail before the one-time code is used up.
+
+## Docs
+
+- **No emojis** in Markdown files.

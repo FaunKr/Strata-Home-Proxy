@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Automatic update with rollback for the Strata Home Proxy on TrueNAS SCALE 24.10+.
-# Run as root from a TrueNAS Cron Job every 15 minutes. Step by step: README.md, section
-# "Automatic updates (TrueNAS)". Holds no secrets: an optional Home Assistant webhook URL
+# Run as root from a TrueNAS Cron Job every 15 minutes. Step by step:
+# docs/nas-updates.md. Holds no secrets: an optional Home Assistant webhook URL
 # comes from the environment or from the file <base dir>/auto-update.webhook.
 #
 # Then the same for the code benchmark's image, without backup or rollback (update_bench).
@@ -198,7 +198,7 @@ rollback() {
     notify "$old_id" "$new_id" true
     return 0
   fi
-  log "ROLLBACK FAILED. The proxy may be down. Data of the failed image: $failed; backup: $backup. Fix by hand (README.md, section \"Automatic updates (TrueNAS)\")."
+  log "ROLLBACK FAILED. The proxy may be down. Data of the failed image: $failed; backup: $backup. Fix by hand (docs/nas-updates.md, \"When the rollback fails\")."
   notify "$old_id" "$new_id" false
   return 1
 }

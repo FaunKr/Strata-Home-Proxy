@@ -181,7 +181,9 @@ async fn the_update_summary_s_chat_goes_through_the_relay() {
 /// The PC answers with an installed Strata; the proxy reaches Strata
 /// directly.
 async fn switchable() -> (Setup, Browser) {
-    let s = setup(true, |_| {}).await;
+    // No idle round: one that asks Strata straight while a test turns relay
+    // mode on counts as a direct request.
+    let s = setup(true, |c| c.idle_check = Duration::from_secs(3600)).await;
     *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
     let b = logged_in(&s.url).await;
     (s, b)

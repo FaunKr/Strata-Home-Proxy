@@ -299,6 +299,8 @@ pub fn event_label(kind: EventKind) -> &'static str {
         EventKind::RestartAccepted => "Restart accepted",
         EventKind::RestartRefused => "Restart refused",
         EventKind::RestartOverdue => "Not back after restart",
+        EventKind::PcServiceUpdatePlanned => "PC service update planned",
+        EventKind::PcServiceUpdatePlanCancelled => "PC service update plan cancelled",
     }
 }
 

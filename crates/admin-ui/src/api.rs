@@ -408,6 +408,23 @@ pub struct PcServiceView {
     /// without an update.
     #[serde(default)]
     pub changes: Vec<PcServiceChange>,
+    /// The Planned PC service update.
+    #[serde(default)]
+    pub planned: PlannedUpdateView,
+}
+
+/// A Planned PC service update, as the PC service card and the Overview's
+/// PC card show it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlannedUpdateView {
+    /// None planned.
+    #[default]
+    Off,
+    /// Armed for the next sleep after the idle timeout; with the reason the
+    /// PC service refused it last.
+    Planned { refused: Option<String> },
+    /// The planned update was sent and has not ended yet.
+    Running,
 }
 
 /// One version of the PC service's changelog, as the PC service card shows it.
@@ -731,6 +748,10 @@ pub enum EventKind {
     RestartRefused,
     /// The PC service had not answered 5 minutes after an accepted restart.
     RestartOverdue,
+    /// A Planned PC service update armed or called off (detail: who; for an
+    /// update by hand, "updated by hand").
+    PcServiceUpdatePlanned,
+    PcServiceUpdatePlanCancelled,
 }
 
 impl EventKind {
@@ -877,6 +898,21 @@ pub async fn plan_restart() -> Result<(), ServerFnError> {
 pub async fn cancel_restart() -> Result<(), ServerFnError> {
     require_login(false).await?;
     backend()?.cancel_restart();
+    Ok(())
+}
+
+/// Arms a Planned PC service update: the next sleep after the idle timeout
+/// updates the PC service first. Never wakes the PC.
+#[server(prefix = "/admin/api", endpoint = "plan-pc-service-update")]
+pub async fn plan_pc_service_update() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?.plan_pc_service_update().map_err(bad_request)
+}
+
+#[server(prefix = "/admin/api", endpoint = "cancel-pc-service-update")]
+pub async fn cancel_pc_service_update() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?.cancel_pc_service_update();
     Ok(())
 }
 

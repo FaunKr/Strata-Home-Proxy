@@ -45,7 +45,11 @@ const UPDATE_TIMEOUT: Duration = Duration::from_secs(330);
 #[derive(Debug, PartialEq, Eq)]
 pub enum UpdateAnswer {
     Accepted,
-    /// The service said no, or failed; it runs on as before.
+    /// The service said no for now (409): Strata is processing a request, a
+    /// job runs, Strata did not stop. It runs on as before.
+    Busy(String),
+    /// The service failed, or is too old for the update; it runs on as
+    /// before.
     Refused(String),
     /// No answer in time: the service may still be loading and finish.
     NoAnswer,
@@ -300,6 +304,9 @@ impl AgentClient {
         };
         if resp.status() == StatusCode::NOT_FOUND {
             return UpdateAnswer::Refused(TOO_OLD_FOR_UPDATE.into());
+        }
+        if resp.status() == StatusCode::CONFLICT {
+            return UpdateAnswer::Busy(reason(resp).await);
         }
         if !resp.status().is_success() {
             return UpdateAnswer::Refused(reason(resp).await);

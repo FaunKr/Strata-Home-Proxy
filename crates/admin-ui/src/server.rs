@@ -83,6 +83,11 @@ pub trait Backend: Send + Sync + 'static {
     fn plan_restart(&self) -> Result<(), String>;
     /// Calls off a Planned restart.
     fn cancel_restart(&self);
+    /// Arms a Planned PC service update; a message for the user when there
+    /// is nothing to update or an update runs.
+    fn plan_pc_service_update(&self) -> Result<(), String>;
+    /// Calls off a Planned PC service update.
+    fn cancel_pc_service_update(&self);
     /// Asks the awake PC's service for a forced Strata restart; never wakes
     /// the PC.
     fn force_restart_strata(&self) -> BoxFuture<'static, Result<ForcedRestart, String>>;

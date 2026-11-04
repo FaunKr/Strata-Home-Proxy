@@ -21,17 +21,7 @@ async fn relayed(awake: bool) -> Setup {
 }
 
 async fn relayed_in(awake: bool, data_dir: Option<std::path::PathBuf>) -> Setup {
-    let s = setup(true, |c| {
-        c.pc_agent_token = Some(TOKEN.into());
-        c.idle_check = Duration::from_secs(3600);
-        c.data_dir = data_dir;
-    })
-    .await;
-    s.pc.relay.store(true, Ordering::SeqCst);
-    s.pc.set_strata_key("strata-key");
-    s.state.ask_pc(&s.state.agent()).await.unwrap();
-    s.pc.awake.store(awake, Ordering::SeqCst);
-    s
+    setup_relayed(awake, |c| c.data_dir = data_dir).await
 }
 
 fn no_direct_request(s: &Setup) {

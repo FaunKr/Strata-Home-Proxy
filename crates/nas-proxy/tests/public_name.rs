@@ -249,15 +249,7 @@ async fn errors_pass_unchanged() {
 
 #[tokio::test]
 async fn relay_mode_hides_the_model_too() {
-    let s = setup(true, |c| {
-        c.hide_model = true;
-        c.pc_agent_token = Some("pc-token".into());
-        c.idle_check = std::time::Duration::from_secs(3600);
-    })
-    .await;
-    s.pc.relay.store(true, Ordering::SeqCst);
-    s.pc.set_strata_key("strata-key");
-    s.state.ask_pc(&s.state.agent()).await.unwrap();
+    let s = setup_relayed(true, |c| c.hide_model = true).await;
     let body: Value = post_json(&s, "/v1/chat/completions", json!({"model": "x"}))
         .await
         .json()

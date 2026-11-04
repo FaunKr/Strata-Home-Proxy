@@ -63,15 +63,7 @@ async fn download(b: &Browser, id: u64) -> reqwest::Response {
 
 /// A PC whose Strata runs in relay mode; the proxy has seen its status.
 async fn relayed() -> Setup {
-    let s = setup(true, |c| {
-        c.pc_agent_token = Some("pc-token".into());
-        c.idle_check = std::time::Duration::from_secs(3600);
-    })
-    .await;
-    s.pc.relay.store(true, Ordering::SeqCst);
-    s.pc.set_strata_key("strata-key");
-    s.state.ask_pc(&s.state.agent()).await.unwrap();
-    s
+    setup_relayed(true, |_| {}).await
 }
 
 #[tokio::test]

@@ -1,8 +1,11 @@
 # CI and Actions minutes
 
-The repo is private; GitHub Free includes 3,000 Actions minutes a month. In
-the first two days about 2,500 of them were used, so since #151 the CI only
-runs what a change needs (spec #146).
+The repo is public, so its jobs on GitHub-hosted runners cost no Actions
+minutes. While it was private, GitHub Free included 3,000 minutes a month and
+the first two days used about 2,500 of them, so since #151 the CI only runs what
+a change needs (spec #146). The sections below still describe that budget;
+the job selection they explain is what keeps a docs-only PR at about a minute
+and a code change under 10, which is how long a PR waits for its merge.
 
 ## What costs minutes
 
@@ -31,8 +34,9 @@ The last step still prints the free disk space.
 
 Which jobs a pull request starts is decided by `scripts/ci-select.sh` from
 the changed paths; `scripts/ci-select.test.sh` checks the mapping against
-the repo. The `changes` job also runs `scripts/check-language.sh` on every
-run, docs-only pull requests included; it takes seconds and adds no job.
+the repo. The `changes` job also runs `scripts/check-language.sh` and
+`scripts/check-docs.sh` on every run, docs-only pull requests included; they
+take seconds and add no job.
 Reference values after #151:
 
 | Run | Jobs | Minutes |

@@ -133,4 +133,6 @@ It runs in Windows PowerShell 5.1, not in PowerShell 7:
 
 ## Docs
 
-- **No emojis** in Markdown files.
+- **No emojis, and links resolve.** `scripts/check-docs.sh` checks both in
+  every tracked Markdown file, in check.sh and in CI; plain symbols such as a
+  check mark or an arrow are fine.

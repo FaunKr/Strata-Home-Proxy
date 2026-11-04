@@ -158,6 +158,9 @@ scripts/ci-publish.test.sh
 # The repo is English: no umlauts in tracked files (scripts/language-allowlist).
 scripts/check-language.test.sh
 scripts/check-language.sh
+# Markdown: no emojis, relative links and #anchors resolve.
+scripts/check-docs.test.sh
+scripts/check-docs.sh
 # No Claude session links in commits or PR bodies; CI checks the PR itself.
 scripts/check-session-links.test.sh
 # CHANGELOG.md has a section for the product version (the workflow Release).

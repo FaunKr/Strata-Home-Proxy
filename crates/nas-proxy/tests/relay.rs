@@ -8,30 +8,17 @@ use std::{sync::atomic::Ordering, time::Duration};
 use common::*;
 use serde_json::json;
 
-const TOKEN: &str = "pc-token";
-
 fn bearer(secret: &str) -> Option<String> {
     Some(format!("Bearer {secret}"))
 }
 
-/// A PC whose Strata runs in relay mode, with its Strata key; the proxy
-/// has seen its status once. Only the test asks for the status.
+/// `setup_relayed`; only the test asks for the status.
 async fn relayed(awake: bool) -> Setup {
     relayed_in(awake, None).await
 }
 
 async fn relayed_in(awake: bool, data_dir: Option<std::path::PathBuf>) -> Setup {
-    let s = setup(true, |c| {
-        c.pc_agent_token = Some(TOKEN.into());
-        c.idle_check = Duration::from_secs(3600);
-        c.data_dir = data_dir;
-    })
-    .await;
-    s.pc.relay.store(true, Ordering::SeqCst);
-    s.pc.set_strata_key("strata-key");
-    s.state.ask_pc(&s.state.agent()).await.unwrap();
-    s.pc.awake.store(awake, Ordering::SeqCst);
-    s
+    setup_relayed(awake, |c| c.data_dir = data_dir).await
 }
 
 fn no_direct_request(s: &Setup) {
@@ -47,7 +34,7 @@ async fn a_client_request_goes_through_the_relay_with_the_pc_service_token() {
         resp.json::<serde_json::Value>().await.unwrap()["choices"][0]["message"]["content"],
         "Hallo"
     );
-    assert_eq!(*s.pc.relay_auth.lock().unwrap(), bearer(TOKEN));
+    assert_eq!(*s.pc.relay_auth.lock().unwrap(), bearer(PC_TOKEN));
     let seen = s.pc.api_auth.lock().unwrap().clone().unwrap();
     assert_eq!(seen.authorization, bearer("strata-key"), "the relay's key");
     assert_eq!(seen.x_api_key, None);
@@ -181,8 +168,7 @@ async fn the_update_summary_s_chat_goes_through_the_relay() {
 /// The PC answers with an installed Strata; the proxy reaches Strata
 /// directly.
 async fn switchable() -> (Setup, Browser) {
-    // No idle round: one that asks Strata straight while a test turns relay
-    // mode on counts as a direct request.
+    // Without idle rounds: `direct_requests` says why.
     let s = setup(true, |c| c.idle_check = Duration::from_secs(3600)).await;
     *s.pc.strata_info.lock().unwrap() = Some(strata_info(true));
     let b = logged_in(&s.url).await;

@@ -189,8 +189,8 @@ pub struct FakePc {
     /// `Authorization` of the last request to the relay.
     pub relay_auth: Mutex<Option<String>>,
     /// Requests that reached Strata from the NAS directly while it listens
-    /// on the PC only. A test that turns `relay` on while the proxy runs
-    /// starts from `setup_relayed` or sets `idle_check` high itself: an idle
+    /// on the PC only. A test that turns `relay` on after `setup` starts
+    /// from `setup_relayed` or sets `idle_check` high itself: an idle
     /// round that began before asks Strata straight and counts here.
     pub direct_requests: AtomicUsize,
     /// Strata's address, for the relay.
@@ -1397,14 +1397,17 @@ pub struct Setup {
     pub plug: String,
 }
 
+/// The PC service token of `setup_relayed`.
+pub const PC_TOKEN: &str = "pc-token";
+
 /// A PC whose Strata runs in relay mode with the Strata key `strata-key`
-/// and the PC service token `pc-token`; the proxy has seen its status once.
+/// and the PC service token `PC_TOKEN`; the proxy has seen its status once.
 /// Without idle rounds, so `direct_requests` counts only what a test sends.
 pub async fn setup_relayed(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     let s = setup(true, |c| {
-        c.pc_agent_token = Some("pc-token".into());
-        c.idle_check = Duration::from_secs(3600);
         tweak(c);
+        c.pc_agent_token = Some(PC_TOKEN.into());
+        c.idle_check = Duration::from_secs(3600);
     })
     .await;
     s.pc.relay.store(true, Ordering::SeqCst);

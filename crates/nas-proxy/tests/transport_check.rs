@@ -61,7 +61,6 @@ async fn download(b: &Browser, id: u64) -> reqwest::Response {
     req.send().await.unwrap()
 }
 
-/// A PC whose Strata runs in relay mode; the proxy has seen its status.
 async fn relayed() -> Setup {
     setup_relayed(true, |_| {}).await
 }

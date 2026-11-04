@@ -105,6 +105,8 @@ pub struct AppState {
     pub expert_learning: crate::expert_learning::ExpertLearning,
     /// The reads of Strata's finished requests for the expert tiers.
     pub expert_tiers: crate::expert_tiers::ExpertTiers,
+    /// Request bodies that broke on their way to Strata.
+    pub transport: crate::transport_check::TransportCheck,
     /// The code benchmark in the container code-bench.
     pub code_bench: crate::code_bench::CodeBench,
     /// Strata's last list of models, answered while Strata is not ready.
@@ -196,12 +198,15 @@ impl AppState {
         let events = History::new(cfg.data_dir.clone());
         let requests = crate::request_log::RequestLog::new(events.database());
         let request_energy = crate::request_energy::RequestEnergy::new(events.database());
+        let transport =
+            crate::transport_check::TransportCheck::new(events.database(), cfg.save_broken_bodies);
         let state = Arc::new(Self {
             auth: Auth::new(cfg.data_dir.clone(), cfg.ui_password.clone()),
             api_keys: ApiKeys::new(cfg.data_dir.clone()),
             events,
             requests,
             request_energy,
+            transport,
             upstream,
             overview: Monitor::default(),
             strata: crate::strata::StrataState::new(cfg.data_dir.clone()),

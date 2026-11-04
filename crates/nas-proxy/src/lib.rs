@@ -35,6 +35,7 @@ pub mod strata_client;
 pub mod strata_key;
 pub mod strata_output;
 pub mod timeouts;
+pub mod transport_check;
 pub mod update_summary;
 pub mod wol;
 

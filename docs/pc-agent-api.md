@@ -183,6 +183,25 @@ In relay mode the proxy fetches no Strata key: the service adds it. The
 relay answers in either mode, so a hand-started Strata gets requests
 through it too.
 
+Since 1.5.0 the relay counts each request body on its way (for the web UI's
+*Transport check*). The proxy sends the SHA-256 of the body it sends, in
+hex, as `x-relay-body-sha256` (`RELAY_BODY_SHA256`); the relay keeps that
+header from Strata. Once the body has been read to its end (all of its
+`Content-Length`, or the stream's end) before Strata's answer begins, the
+relay adds to that answer:
+
+- `x-relay-body-received` (`RELAY_BODY_RECEIVED`): the bytes it got from the
+  proxy.
+- `x-relay-body-passed` (`RELAY_BODY_PASSED`): the bytes it handed on to
+  Strata.
+- `x-relay-body-sha256-match` (`RELAY_BODY_SHA256_MATCH`): `yes` or `no`,
+  whether what it got has the proxy's SHA-256; missing when the proxy sent
+  none.
+
+A body that ends before its `Content-Length` is logged at warn level with
+both numbers. An older service adds none of these headers; the proxy shows
+such a request as not measured.
+
 ## `POST /sleep`
 
 The proxy sends this after the idle timeout. The service checks gaming mode,

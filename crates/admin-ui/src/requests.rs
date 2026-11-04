@@ -620,6 +620,7 @@ fn outcome_text(outcome: RequestOutcome) -> String {
                 RequestRefusal::NoMac => "PC cannot be woken",
                 RequestRefusal::NotSetUp => "Strata not set up",
                 RequestRefusal::TooLarge => "request too large",
+                RequestRefusal::BrokenBody => "body arrived broken",
             }
         ),
     }

@@ -4,6 +4,10 @@ What each version brings, newest first. The web UI's PC service card shows
 the versions an update brings; each line is written for the user. Rules:
 `docs/pc-service.md`.
 
+## 1.5.0
+
+- In relay mode, tells the proxy how many bytes of each request reached Strata, so the web UI's Transport check shows where a broken request lost them.
+
 ## 1.4.1
 
 - Stopping Strata, *Force restart Strata* and updates of the PC service work again after Strata was stopped cleanly while an expert profile learned.

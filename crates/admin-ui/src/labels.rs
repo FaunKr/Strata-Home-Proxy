@@ -112,6 +112,10 @@ pub fn label(key: &str) -> Label {
             "Probe timeout",
             "Time limit for /health and calls to the PC service.",
         ),
+        "SAVE_BROKEN_BODIES" => (
+            "Save broken bodies",
+            "Saves whole requests, prompts included, in the proxy's data folder.",
+        ),
         "MAX_BODY_BYTES" => ("Largest request", "Requests above this size are refused."),
         "LISTEN_ADDR" => ("Proxy address", "Address and port the proxy listens on."),
         "POWER_AWAKE_WATTS" => (
@@ -194,6 +198,14 @@ pub const STRATA_TIMEOUTS: SectionDef = SectionDef {
         "UPDATE_SUMMARY_TIMEOUT_SECS",
         "CODE_BENCH_TASK_TIMEOUT_SECS",
     ],
+    advanced: &[],
+};
+
+pub const STRATA_TRANSPORT: SectionDef = SectionDef {
+    id: "strata-transport",
+    title: "Broken bodies",
+    help: "Only bodies that broke are saved, the last 10. Turning this off deletes them.",
+    keys: &["SAVE_BROKEN_BODIES"],
     advanced: &[],
 };
 

@@ -128,6 +128,7 @@ async fn each_area_shows_its_own_settings() {
                 "CODE_BENCH_TASK_TIMEOUT_SECS",
             ][..],
         ),
+        ("/admin/strata/transport", &["SAVE_BROKEN_BODIES"][..]),
         (
             "/admin/system",
             &[

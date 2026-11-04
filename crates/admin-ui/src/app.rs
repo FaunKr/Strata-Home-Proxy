@@ -20,6 +20,7 @@ use crate::{
     settings::SystemPage,
     strata::{ConnectionTab, ModelsTab, StrataArea, VersionTab},
     strata_output::OutputTab,
+    transport::TransportTab,
 };
 
 /// The HTML page around the app.
@@ -89,6 +90,7 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("version") view=VersionTab />
                         <Route path=path!("connection") view=ConnectionTab />
                         <Route path=path!("requests") view=RequestsTab />
+                        <Route path=path!("transport") view=TransportTab />
                     </ParentRoute>
                     <Route path=path!("access") view=AccessPage />
                     <Route path=path!("system") view=SystemPage />

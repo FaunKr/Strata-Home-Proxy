@@ -15,6 +15,7 @@ use axum::{
     routing::get,
 };
 
+use strata_admin_ui::api::BrokenSide;
 use strata_pc_protocol::{Gpu, Hardware};
 
 use crate::{
@@ -89,6 +90,9 @@ pub struct Scrape {
     /// `None` without a power plug.
     pub pc_energy_joules: Option<f64>,
     pub wake_packets: u64,
+    /// Request bodies that broke on their way to Strata, by side, over all
+    /// time.
+    pub broken_bodies: Vec<(BrokenSide, u64)>,
     /// The PC service's last hardware readings, while the PC is awake or
     /// gaming and they are recent.
     pub hardware: Option<Hardware>,
@@ -204,6 +208,7 @@ impl Scrape {
             expert_tokens,
             pc_energy_joules,
             wake_packets: st.events.wake_packets().await,
+            broken_bodies: st.transport.counts().await,
             hardware,
             tool_calls,
             strata,
@@ -485,6 +490,24 @@ pub fn render(s: &Scrape, hiding: Option<&Hiding>) -> String {
         &[],
         s.wake_packets as f64,
     );
+
+    let name = "strata_proxy_request_body_broken_total";
+    let mut f = Family::new(
+        &mut out,
+        name,
+        "counter",
+        "Request bodies that broke on their way to Strata, by side: when they reached the proxy \
+         (arrival), between the proxy and the PC service's relay (network), or refused by Strata \
+         as invalid JSON (strata).",
+    );
+    for side in BrokenSide::ALL {
+        let count = s
+            .broken_bodies
+            .iter()
+            .find(|(s, _)| *s == side)
+            .map_or(0, |(_, n)| *n);
+        f.line(name, &[("side", side.as_str())], count as f64);
+    }
 
     for (name, help, value) in [
         (UNREAD, UNREAD_HELP, s.tool_calls.unread),

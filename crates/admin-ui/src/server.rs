@@ -29,7 +29,7 @@ use crate::{
         ApiKeysView, BenchmarkKind, CodeBenchPage, CreatedKey, ForcedRestart, HistoryView,
         KeepAwakeChoice, KeyModelName, OutputMessage, Overview, PcSetupCommand, RequestLogMessage,
         Session, SettingValue, SettingsView, Setup, SleepAnswer, StrataJobForm, StrataPage,
-        history_csv,
+        TransportCheckView, history_csv,
     },
     app::{App, shell},
 };
@@ -141,6 +141,12 @@ pub trait Backend: Send + Sync + 'static {
     /// How long the PC was awake, gaming, asleep and unobserved over `range`,
     /// as `api::get_history` takes it.
     fn history(&self, range: String) -> BoxFuture<'static, HistoryView>;
+    /// The tab *Transport check*.
+    fn transport_check(&self) -> BoxFuture<'static, TransportCheckView>;
+    /// The saved body of the Transport check's row `id`, as it was kept.
+    fn broken_body(&self, id: u64) -> BoxFuture<'static, Option<Vec<u8>>>;
+    /// Deletes every saved body of the Transport check; the rows stay.
+    fn delete_broken_bodies(&self) -> BoxFuture<'static, Result<(), String>>;
 }
 
 pub type SharedBackend = Arc<dyn Backend>;
@@ -280,6 +286,36 @@ async fn history_csv_file(
         .into_response()
 }
 
+/// A saved body of the Transport check, for its row's download link.
+async fn broken_body_file(
+    backend: SharedBackend,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<u64>,
+) -> Response {
+    if let Err(refused) = ready_session(&backend, &headers) {
+        return refused.into_response();
+    }
+    let Some(body) = backend.broken_body(id).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let disposition = format!("attachment; filename=\"broken-body-{id}.json\"");
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"),
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(&disposition)
+                    .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
 /// The brand mark from the header as the browser tab's icon.
 const FAVICON: &str = include_str!("../icons/favicon.svg");
 /// The brand mark as a full square for a phone's home screen: rendered by
@@ -353,6 +389,7 @@ where
     let output_backend = Arc::clone(&backend);
     let requests_backend = Arc::clone(&backend);
     let csv_backend = Arc::clone(&backend);
+    let body_backend = Arc::clone(&backend);
     let context = move || provide_context(Arc::clone(&backend));
     // Listing the routes renders the app once, which starts the session
     // resource; without the backend in context that call panics. Meanwhile
@@ -401,6 +438,12 @@ where
             "/admin/history.csv",
             get(move |headers: HeaderMap, query: Query<CsvQuery>| {
                 history_csv_file(Arc::clone(&csv_backend), headers, query)
+            }),
+        )
+        .route(
+            "/admin/broken-body/{id}",
+            get(move |headers: HeaderMap, id: axum::extract::Path<u64>| {
+                broken_body_file(Arc::clone(&body_backend), headers, id)
             }),
         )
         .leptos_routes_with_context(&options, routes, context, {

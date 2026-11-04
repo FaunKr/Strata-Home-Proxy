@@ -38,6 +38,7 @@ pub use options::{
 pub use output::{LOAD_LINES, LoadLines, StrataOutputMessage, StrataOutputNotice};
 pub use status::{
     Answer, Cpu, ForcedRestart, ForcedSleep, GamingRequest, Gpu, Hardware, PcStatus,
+    RELAY_BODY_PASSED, RELAY_BODY_RECEIVED, RELAY_BODY_SHA256, RELAY_BODY_SHA256_MATCH,
     RELAY_NO_STRATA, RELAY_PATH, Refused, Relay, StrataKey,
 };
 pub use strata::{

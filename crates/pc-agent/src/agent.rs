@@ -27,8 +27,8 @@ use axum::{
 };
 use serde::Deserialize;
 use strata_pc_protocol::{
-    Answer, ForcedRestart, ForcedSleep, GamingRequest, PcStatus, RELAY_NO_STRATA, RELAY_PATH,
-    Refused, Relay, StrataJobKind, StrataKey as KeyAnswer,
+    Answer, ForcedRestart, ForcedSleep, GamingRequest, PcStatus, RELAY_BODY_SHA256,
+    RELAY_NO_STRATA, RELAY_PATH, Refused, Relay, StrataJobKind, StrataKey as KeyAnswer,
 };
 use tokio::sync::broadcast;
 
@@ -39,6 +39,7 @@ use crate::{
     managed::Managed,
     output::{StrataOutput, StrataOutputMessage, StrataOutputNotice},
     platform::Platform,
+    relay_body::RelayBody,
     strata::{
         self, CatalogCheck, OptionsCheck, PresetsCheck, Refusal, StrataJobRequest, UpdateCheck,
     },
@@ -874,6 +875,14 @@ async fn relay(State(agent): State<Arc<Agent>>, req: Request) -> Response {
     for name in &HOP_BY_HOP {
         headers.remove(name);
     }
+    let expected = headers
+        .remove(RELAY_BODY_SHA256)
+        .and_then(|v| v.to_str().ok().map(str::to_string));
+    let announced = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok()?.parse().ok());
+    let counted = RelayBody::default();
+    let body = counted.count(body.into_data_stream(), announced);
     let mut upstream = agent
         .relay_http
         .request(
@@ -881,7 +890,7 @@ async fn relay(State(agent): State<Arc<Agent>>, req: Request) -> Response {
             format!("{}{path}{query}", agent.cfg.strata_url),
         )
         .headers(headers)
-        .body(reqwest::Body::wrap_stream(body.into_data_stream()));
+        .body(reqwest::Body::wrap_stream(body));
     if let Some(key) = agent.strata_key.key(&agent.cfg) {
         upstream = upstream.bearer_auth(key);
     }
@@ -903,6 +912,7 @@ async fn relay(State(agent): State<Arc<Agent>>, req: Request) -> Response {
         for name in &HOP_BY_HOP {
             out.remove(name);
         }
+        out.extend(counted.headers(expected.as_deref()));
     }
     resp.body(axum::body::Body::from_stream(answer.bytes_stream()))
         .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())

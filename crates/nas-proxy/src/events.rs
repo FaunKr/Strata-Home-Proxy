@@ -457,6 +457,7 @@ fn create_tables(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(crate::request_log::TABLE)?;
     conn.execute_batch(crate::request_totals::TABLE)?;
     conn.execute_batch(crate::expert_tiers::TABLES)?;
+    conn.execute_batch(crate::transport_check::TABLES)?;
     crate::request_energy::create_tables(conn)
 }
 

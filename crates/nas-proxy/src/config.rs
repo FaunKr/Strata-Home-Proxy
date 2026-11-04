@@ -32,6 +32,9 @@ pub struct Config {
     /// Apps see the public model name instead of the model Strata runs
     /// (`HIDE_MODEL`), unless their API key says otherwise.
     pub hide_model: bool,
+    /// The Transport check saves broken request bodies, prompts included
+    /// (`SAVE_BROKEN_BODIES`).
+    pub save_broken_bodies: bool,
     /// The one model name apps of a hiding API key see (`PUBLIC_MODEL_NAME`).
     pub public_model_name: String,
     /// How long Strata may take for the update summary
@@ -153,6 +156,10 @@ pub const FIELDS: &[Field] = &[
     field("SLEEP_SETTLE_SECS"),
     field("PROBE_TIMEOUT_MS"),
     field("MAX_BODY_BYTES"),
+    Field {
+        switch: true,
+        ..field("SAVE_BROKEN_BODIES")
+    },
     field("POWER_AWAKE_WATTS"),
     field("POWER_ASLEEP_WATTS"),
     field("PRICE_CT_PER_KWH"),
@@ -178,6 +185,7 @@ impl Default for Config {
             shelly_url: None,
             code_bench_url: None,
             hide_model: false,
+            save_broken_bodies: false,
             public_model_name: "strata".to_string(),
             update_summary_timeout: None,
             code_bench_task_timeout: None,
@@ -269,6 +277,7 @@ impl Config {
             "SLEEP_SETTLE_SECS" => self.sleep_settle = secs(raw)?,
             "PROBE_TIMEOUT_MS" => self.probe_timeout = positive(millis(raw)?)?,
             "MAX_BODY_BYTES" => self.max_body_bytes = number(raw, "bytes")?,
+            "SAVE_BROKEN_BODIES" => self.save_broken_bodies = switch(raw)?,
             "POWER_AWAKE_WATTS" => self.power_awake_watts = positive_decimal(raw, "watts")?,
             "POWER_ASLEEP_WATTS" => self.power_asleep_watts = decimal(raw, "watts")?,
             "PRICE_CT_PER_KWH" => self.price_ct_per_kwh = positive_decimal(raw, "ct/kWh")?,
@@ -306,6 +315,7 @@ impl Config {
             "SLEEP_SETTLE_SECS" => secs(self.sleep_settle),
             "PROBE_TIMEOUT_MS" => millis(self.probe_timeout),
             "MAX_BODY_BYTES" => Some(self.max_body_bytes.to_string()),
+            "SAVE_BROKEN_BODIES" => Some(self.save_broken_bodies.to_string()),
             "POWER_AWAKE_WATTS" => Some(self.power_awake_watts.to_string()),
             "POWER_ASLEEP_WATTS" => Some(self.power_asleep_watts.to_string()),
             "PRICE_CT_PER_KWH" => Some(self.price_ct_per_kwh.to_string()),

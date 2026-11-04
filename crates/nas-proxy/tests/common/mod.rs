@@ -175,6 +175,17 @@ pub struct FakePc {
     pub relay_down: AtomicBool,
     /// Requests through the PC service's relay.
     pub relay_requests: AtomicUsize,
+    /// The relay counts each body and says so on Strata's answer, as a PC
+    /// service from 1.5.0; off, as an older one. On unless a test says so.
+    pub relay_measures: AtomicBool,
+    /// The relay loses this many bytes from the middle of the next body,
+    /// as a network that cut them (`set_relay_drops_bytes`).
+    relay_drops: Mutex<usize>,
+    /// The proxy's checksum header on the last request to the relay.
+    pub relay_checksum: Mutex<Option<String>>,
+    /// Strata answers the next API request with this `400` message, as its
+    /// `json.loads` refuses a body that is not JSON (`set_strata_refuses_body`).
+    refuse_body: Mutex<Option<String>>,
     /// `Authorization` of the last request to the relay.
     pub relay_auth: Mutex<Option<String>>,
     /// Requests that reached Strata from the NAS directly while it listens
@@ -285,6 +296,19 @@ impl FakePc {
             .lock()
             .unwrap()
             .insert(path.into(), (events, pause));
+    }
+
+    /// Strata answers the next API request with `400 invalid_request_error`
+    /// and `message`, as Strata's `json.loads` refuses a body that is not
+    /// JSON (`serve/server.py`).
+    pub fn set_strata_refuses_body(&self, message: &str) {
+        *self.refuse_body.lock().unwrap() = Some(message.into());
+    }
+
+    /// The relay passes the next body on with `n` bytes fewer from its
+    /// middle, and counts what it got as the real one does.
+    pub fn set_relay_drops_bytes(&self, n: usize) {
+        *self.relay_drops.lock().unwrap() = n;
     }
 
     /// Strata answers a request to `path` that is not streamed with `answer`.
@@ -1175,6 +1199,28 @@ async fn pc_only(
     next.run(req).await
 }
 
+/// Strata's refusal of a body set with `set_strata_refuses_body`, in the
+/// API's error shape, before the handler reads the body.
+async fn refuses_body(
+    State(pc): State<Pc>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let api = req.method() == axum::http::Method::POST && req.uri().path().starts_with("/v1/");
+    let message = api.then(|| pc.refuse_body.lock().unwrap().take()).flatten();
+    match message {
+        Some(message) => {
+            pc.api_requests.fetch_add(1, Ordering::SeqCst);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"type": "invalid_request_error", "message": message}})),
+            )
+                .into_response()
+        }
+        None => next.run(req).await,
+    }
+}
+
 /// A fake Strata for `pc`; returns its address.
 pub async fn serve_strata(pc: Pc) -> SocketAddr {
     let addr = serve(
@@ -1186,6 +1232,10 @@ pub async fn serve_strata(pc: Pc) -> SocketAddr {
             .route("/v1/chat/completions", post(chat))
             .route("/v1/responses", post(responses))
             .route("/v1/images/generations", post(images))
+            .layer(axum::middleware::from_fn_with_state(
+                pc.clone(),
+                refuses_body,
+            ))
             .route("/v1/models", get(models))
             .route("/models", get(models))
             .layer(axum::middleware::from_fn_with_state(pc.clone(), pc_only))
@@ -1226,7 +1276,28 @@ pub async fn agent_relay(State(pc): State<Pc>, req: axum::extract::Request) -> R
     if let Some(key) = pc.strata_key.lock().unwrap().clone() {
         headers.insert("authorization", format!("Bearer {key}").parse().unwrap());
     }
-    let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+    let checksum = headers
+        .remove(RELAY_BODY_SHA256)
+        .map(|v| v.to_str().unwrap().to_string());
+    let mut body = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .unwrap()
+        .to_vec();
+    // The proxy's own calls (`/health`, the list of models) carry no body.
+    if !body.is_empty() {
+        *pc.relay_checksum.lock().unwrap() = checksum.clone();
+    }
+    let drops = if body.is_empty() {
+        0
+    } else {
+        std::mem::take(&mut *pc.relay_drops.lock().unwrap())
+    };
+    if drops > 0 {
+        let from = (body.len() - drops) / 2;
+        body.drain(from..from + drops);
+        headers.remove("content-length");
+    }
+    let counts = relay_counts(&body, checksum.as_deref());
     let answer = reqwest::Client::new()
         .request(parts.method, format!("http://{strata}{path}{query}"))
         .headers(headers)
@@ -1236,7 +1307,35 @@ pub async fn agent_relay(State(pc): State<Pc>, req: axum::extract::Request) -> R
         .unwrap();
     let mut resp = Response::builder().status(answer.status());
     resp.headers_mut().unwrap().extend(answer.headers().clone());
+    if pc.relay_measures.load(Ordering::SeqCst) {
+        resp.headers_mut().unwrap().extend(counts);
+    }
     resp.body(Body::from_stream(answer.bytes_stream())).unwrap()
+}
+
+/// The headers the PC service's relay adds to Strata's answer for `body`
+/// as it got it (`docs/pc-agent-api.md`).
+fn relay_counts(body: &[u8], checksum: Option<&str>) -> HeaderMap {
+    let mut out = HeaderMap::new();
+    out.insert(RELAY_BODY_RECEIVED, body.len().into());
+    out.insert(RELAY_BODY_PASSED, body.len().into());
+    if let Some(checksum) = checksum {
+        let matches = sha256(body) == checksum;
+        out.insert(
+            RELAY_BODY_SHA256_MATCH,
+            if matches { "yes" } else { "no" }.parse().unwrap(),
+        );
+    }
+    out
+}
+
+/// The SHA-256 of `body` in hex, as the proxy sends it to the relay.
+pub fn sha256(body: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(body)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// A stand-in for the image's `strata-pc-agent.exe` that carries `version`
@@ -1299,6 +1398,7 @@ pub struct Setup {
 pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
     let pc: Pc = Arc::new(FakePc::default());
     pc.awake.store(awake, Ordering::SeqCst);
+    pc.relay_measures.store(true, Ordering::SeqCst);
     let strata = serve_strata(pc.clone()).await;
     let agent = serve(
         Router::new()
@@ -1337,6 +1437,7 @@ pub async fn setup(awake: bool, tweak: impl FnOnce(&mut Config)) -> Setup {
         shelly_url: None,
         code_bench_url: None,
         hide_model: false,
+        save_broken_bodies: false,
         public_model_name: "strata".into(),
         update_summary_timeout: None,
         code_bench_task_timeout: None,
@@ -1388,6 +1489,32 @@ pub async fn eventually(what: &str, check: impl Fn() -> bool) {
 
 pub async fn post_json(s: &Setup, path: &str, body: Value) -> reqwest::Response {
     post_json_to(&s.url, &s.key, path, body).await
+}
+
+/// A client request with `body` as given, sent as `content_type`, with the
+/// `Content-Length` of `body` unless `length` names another one (`None`
+/// inside: no `Content-Length`, a chunked body). `post_json` cannot send
+/// broken JSON.
+pub async fn post_raw(
+    s: &Setup,
+    path: &str,
+    content_type: &str,
+    body: &[u8],
+    length: Option<Option<u64>>,
+) -> reqwest::Response {
+    let req = reqwest::Client::new()
+        .post(format!("{}{path}", s.url))
+        .bearer_auth(&s.key)
+        .header("content-type", content_type);
+    let req = match length {
+        None => req.body(body.to_vec()),
+        Some(None) => {
+            let chunk = Ok::<_, std::io::Error>(Bytes::from(body.to_vec()));
+            req.body(reqwest::Body::wrap_stream(stream::iter([chunk])))
+        }
+        Some(Some(n)) => req.header("content-length", n).body(body.to_vec()),
+    };
+    req.send().await.unwrap()
 }
 
 /// `post_json` without the setup, e.g. for a request in a task of its own.

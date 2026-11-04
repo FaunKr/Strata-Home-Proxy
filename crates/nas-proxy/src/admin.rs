@@ -13,7 +13,7 @@ use strata_admin_ui::{
         ApiKeyInfo, ApiKeysView, BenchmarkKind, CodeBenchPage, CreatedKey, HistoryView,
         KeepAwakeChoice, KeyModelName, OutputMessage, Overview, PcSetupCommand, RequestLogMessage,
         Session, SettingEntry, SettingSuggestion, SettingValue, SettingsView, Setup, Source,
-        StrataJobForm, StrataPage,
+        StrataJobForm, StrataPage, TransportCheckView,
     },
     labels::{NO_AGENT, NO_ANSWER, NO_MAC, NOT_CONFIGURED},
     server::{Backend, SharedBackend},
@@ -156,6 +156,7 @@ impl Backend for UiBackend {
                 .events
                 .record(EventKind::SettingSaved, Some(key.to_string()));
         }
+        self.settle_broken_bodies();
         Ok(())
     }
 
@@ -164,6 +165,7 @@ impl Backend for UiBackend {
         self.0
             .events
             .record(EventKind::SettingReset, Some(key.to_string()));
+        self.settle_broken_bodies();
         Ok(())
     }
 
@@ -433,6 +435,38 @@ impl Backend for UiBackend {
     fn history(&self, range: String) -> BoxFuture<'static, HistoryView> {
         let state = Arc::clone(&self.0);
         async move { crate::history::view(&state, &range).await }.boxed()
+    }
+
+    fn transport_check(&self) -> BoxFuture<'static, TransportCheckView> {
+        let state = Arc::clone(&self.0);
+        async move {
+            let saving = state.cfg().save_broken_bodies;
+            state.transport.view(saving).await
+        }
+        .boxed()
+    }
+
+    fn broken_body(&self, id: u64) -> BoxFuture<'static, Option<Vec<u8>>> {
+        let state = Arc::clone(&self.0);
+        async move { state.transport.body(id).await }.boxed()
+    }
+
+    fn delete_broken_bodies(&self) -> BoxFuture<'static, Result<(), String>> {
+        let state = Arc::clone(&self.0);
+        async move { state.transport.delete_bodies().await }.boxed()
+    }
+}
+
+impl UiBackend {
+    /// Saving broken bodies is off: none stays saved.
+    fn settle_broken_bodies(&self) {
+        if self.0.cfg().save_broken_bodies {
+            return;
+        }
+        // At once, so the saved answer means they are gone: one quick write.
+        if let Err(e) = self.0.transport.delete_bodies_now() {
+            tracing::warn!("{e}");
+        }
     }
 }
 

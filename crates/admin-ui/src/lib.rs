@@ -29,6 +29,7 @@ pub mod strata;
 pub mod strata_output;
 #[cfg(feature = "hydrate")]
 mod stream;
+pub mod transport;
 
 pub use app::{App, shell};
 

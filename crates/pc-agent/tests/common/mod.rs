@@ -395,6 +395,11 @@ async fn echo(
     }))
 }
 
+/// Strata's answer names the headers it got: for the relay.
+async fn header_names(headers: HeaderMap) -> Json<Vec<String>> {
+    Json(headers.keys().map(|k| k.as_str().to_string()).collect())
+}
+
 /// One of Strata's own errors.
 async fn fail() -> (StatusCode, &'static str) {
     (StatusCode::INTERNAL_SERVER_ERROR, "engine says no")
@@ -524,6 +529,7 @@ pub async fn setup_with(name: &str, tweak: impl FnOnce(&mut Config)) -> Setup {
             .route("/health", routing::get(health))
             .route("/slots", routing::get(slots))
             .route("/v1/echo", routing::any(echo))
+            .route("/v1/headers", routing::any(header_names))
             .route("/v1/fail", routing::get(fail))
             .route("/v1/stream", routing::get(endless))
             .with_state(fake.clone()),

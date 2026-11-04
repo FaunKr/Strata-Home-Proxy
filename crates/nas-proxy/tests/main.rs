@@ -38,5 +38,6 @@ mod strata_key;
 mod strata_output;
 mod strata_page;
 mod strata_update;
+mod transport_check;
 mod tune;
 mod ui_language;

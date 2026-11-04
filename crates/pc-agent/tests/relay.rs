@@ -9,7 +9,10 @@ use common::*;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use strata_pc_agent::{managed::Managed, terminal::Terminal};
-use strata_pc_protocol::RELAY_NO_STRATA;
+use strata_pc_protocol::{
+    RELAY_BODY_PASSED, RELAY_BODY_RECEIVED, RELAY_BODY_SHA256, RELAY_BODY_SHA256_MATCH,
+    RELAY_NO_STRATA,
+};
 
 /// The Strata Terminal with one model, served by the service; gives the
 /// run config's path.
@@ -281,4 +284,100 @@ async fn relay_mode_is_refused_for_the_old_strata_folder() {
         get(&s, "/status").await["relay"],
         json!({"on": false, "wanted": false})
     );
+}
+
+/// The SHA-256 of `body` in hex, as the proxy sends it.
+fn sha256(body: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(body.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A request through the relay to Strata's echo with `body`, and the
+/// proxy's checksum header when given.
+async fn relayed(s: &Setup, body: &str, checksum: Option<String>) -> reqwest::Response {
+    let mut req = client()
+        .post(format!("{}/relay/v1/echo", s.url))
+        .bearer_auth("secret")
+        .body(body.to_string());
+    if let Some(checksum) = checksum {
+        req = req.header(RELAY_BODY_SHA256, checksum);
+    }
+    let resp = req.send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    resp
+}
+
+fn header(resp: &reqwest::Response, name: &str) -> Option<String> {
+    resp.headers()
+        .get(name)
+        .map(|v| v.to_str().unwrap().to_string())
+}
+
+const BODY: &str =
+    "{\"model\": \"x\", \"messages\": [{\"role\": \"user\", \"content\": \"café\"}]}";
+
+#[tokio::test]
+async fn the_relay_reports_the_bytes_it_got_and_passed_on() {
+    let s = setup_with("relay-counts", relay_on).await;
+    terminal_installed(&s);
+    s.agent.strata().start();
+    let resp = relayed(&s, BODY, None).await;
+    let bytes = BODY.len().to_string();
+    assert_eq!(header(&resp, RELAY_BODY_RECEIVED), Some(bytes.clone()));
+    assert_eq!(header(&resp, RELAY_BODY_PASSED), Some(bytes));
+}
+
+#[tokio::test]
+async fn the_relay_reports_a_matching_checksum() {
+    let s = setup_with("relay-sha-match", relay_on).await;
+    terminal_installed(&s);
+    s.agent.strata().start();
+    let resp = relayed(&s, BODY, Some(sha256(BODY))).await;
+    assert_eq!(
+        header(&resp, RELAY_BODY_SHA256_MATCH).as_deref(),
+        Some("yes")
+    );
+}
+
+#[tokio::test]
+async fn the_relay_reports_a_checksum_that_does_not_match() {
+    let s = setup_with("relay-sha-differs", relay_on).await;
+    terminal_installed(&s);
+    s.agent.strata().start();
+    let resp = relayed(&s, BODY, Some(sha256("{\"model\": \"y\"}"))).await;
+    assert_eq!(
+        header(&resp, RELAY_BODY_SHA256_MATCH).as_deref(),
+        Some("no")
+    );
+}
+
+#[tokio::test]
+async fn without_the_proxy_s_checksum_the_relay_reports_no_match_header() {
+    let s = setup_with("relay-sha-none", relay_on).await;
+    terminal_installed(&s);
+    s.agent.strata().start();
+    let resp = relayed(&s, BODY, None).await;
+    assert_eq!(header(&resp, RELAY_BODY_SHA256_MATCH), None);
+}
+
+#[tokio::test]
+async fn the_proxy_s_checksum_header_does_not_reach_strata() {
+    let s = setup_with("relay-sha-kept", relay_on).await;
+    terminal_installed(&s);
+    s.agent.strata().start();
+    let resp = client()
+        .post(format!("{}/relay/v1/headers", s.url))
+        .bearer_auth("secret")
+        .header(RELAY_BODY_SHA256, sha256(BODY))
+        .body(BODY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let names: Vec<String> = resp.json().await.unwrap();
+    assert!(!names.iter().any(|n| n == RELAY_BODY_SHA256), "{names:?}");
+    assert!(names.iter().any(|n| n == "content-length"), "{names:?}");
 }

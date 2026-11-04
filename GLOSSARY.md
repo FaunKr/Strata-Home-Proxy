@@ -184,6 +184,10 @@ _Avoid_: log, Verlauf
 The proxy's list of the last 1000 requests through it that made the model work, or would have and were refused, with key, model, type, tokens, speeds, request energy and outcome, never their text; requests on their way show as *waking PC* or *running*; the web UI shows it live in the Strata area (tab *Requests*). Not an event, and not Strata's own request monitor.
 _Avoid_: access log, request history
 
+**Transport check**:
+The web UI's tab in the Strata area that lists the last 100 JSON request bodies that broke on their way to Strata, each with the side it broke on: on arrival at the proxy (which refuses it itself), on the network to the PC service's relay, or refused by Strata as invalid JSON. *Save broken bodies* (`SAVE_BROKEN_BODIES`, off by default) keeps the last 10 such bodies, prompts included; turning it off deletes them.
+_Avoid_: debug page, body check
+
 **Request totals**:
 Requests and their prompt, cached and output tokens per day, API key, model and outcome, kept forever in the history's database for the metrics endpoint; every finished row of the request log adds to them. They start with the release that brought them.
 _Avoid_: request stats, usage table

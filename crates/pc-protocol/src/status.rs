@@ -82,6 +82,24 @@ pub const RELAY_PATH: &str = "/relay";
 /// the answer is the PC service's, not Strata's.
 pub const RELAY_NO_STRATA: &str = "x-relay-no-strata";
 
+/// Request header to the relay: the SHA-256 (hex) of the body the proxy
+/// sends. The relay compares it with what it got and keeps it from Strata.
+pub const RELAY_BODY_SHA256: &str = "x-relay-body-sha256";
+
+/// Header on Strata's answer through the relay (since 1.5.0): the bytes of
+/// the request body the PC service got from the proxy. Present only when
+/// the body had ended before Strata's answer began.
+pub const RELAY_BODY_RECEIVED: &str = "x-relay-body-received";
+
+/// Header on Strata's answer through the relay (since 1.5.0): the bytes of
+/// the request body the PC service handed on to Strata.
+pub const RELAY_BODY_PASSED: &str = "x-relay-body-passed";
+
+/// Header on Strata's answer through the relay (since 1.5.0): `yes` or `no`,
+/// whether the body the PC service got has the SHA-256 the proxy sent in
+/// [`RELAY_BODY_SHA256`]. Missing when the proxy sent none.
+pub const RELAY_BODY_SHA256_MATCH: &str = "x-relay-body-sha256-match";
+
 impl PcStatus {
     /// Strata runs in relay mode: the proxy reaches it through the relay.
     pub fn relay_on(&self) -> bool {

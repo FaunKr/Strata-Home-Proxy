@@ -592,6 +592,8 @@ pub enum RequestRefusal {
     NotSetUp,
     /// The request's body is over the limit.
     TooLarge,
+    /// The request's body arrived as invalid JSON.
+    BrokenBody,
 }
 
 /// How a request ended.
@@ -1791,4 +1793,104 @@ mod tests {
             "date,awake_h,gaming_h,asleep_h,unknown_h,kwh,eur,saved_kwh,saved_eur,source\r\n"
         );
     }
+}
+
+/// Where a broken request body broke, as the Transport check tells it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokenSide {
+    /// Broken when it reached the proxy.
+    Arrival,
+    /// The PC service's relay got fewer or other bytes than the proxy sent.
+    Network,
+    /// Passed on whole, and Strata refused it as invalid JSON.
+    Strata,
+}
+
+impl BrokenSide {
+    pub const ALL: [Self; 3] = [Self::Arrival, Self::Network, Self::Strata];
+
+    /// The label value of the metrics endpoint.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Arrival => "arrival",
+            Self::Network => "network",
+            Self::Strata => "strata",
+        }
+    }
+}
+
+/// What the PC service's relay counted of a body Strata refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RelayCount {
+    /// The PC service sent no counts: one older than 1.5.0.
+    NotMeasured,
+    Measured {
+        /// Bytes it got from the proxy.
+        received: u64,
+        /// Bytes it handed on to Strata.
+        passed: u64,
+        /// Whether what it got has the proxy's SHA-256; `None` when it
+        /// did not say.
+        checksum_matches: Option<bool>,
+    },
+}
+
+/// One request whose body broke on its way to Strata: numbers and the
+/// parser's message only; the body itself is fetched on its own.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BrokenBodyRow {
+    /// Grows with every row.
+    pub id: u64,
+    /// Unix time in seconds when the request reached the proxy.
+    pub at: u64,
+    /// `at` in the NAS's time zone, filled in when the row is sent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub time: String,
+    /// The name of the API key that sent it.
+    pub key: String,
+    pub path: String,
+    pub side: BrokenSide,
+    /// The `Content-Length` the client announced; `None` without one.
+    pub announced: Option<u64>,
+    /// The bytes the proxy received.
+    pub received: u64,
+    /// Where the JSON breaks: a byte of what arrived (side `arrival`), or
+    /// the character Strata's message names.
+    pub break_at: u64,
+    /// The proxy's parser message, or Strata's.
+    pub message: String,
+    /// What the proxy sent on: bytes and characters (Unicode code points,
+    /// as Strata counts them). `None` for a body broken on arrival.
+    pub sent_bytes: Option<u64>,
+    pub sent_chars: Option<u64>,
+    /// The relay's counts; `None` when the request went to Strata directly
+    /// or broke on arrival.
+    pub relay: Option<RelayCount>,
+    /// Its body is saved and can be downloaded.
+    #[serde(default)]
+    pub saved: bool,
+}
+
+/// The tab *Transport check*: the switch and the last broken requests.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TransportCheckView {
+    /// `SAVE_BROKEN_BODIES` is on.
+    pub saving: bool,
+    /// Newest first.
+    pub rows: Vec<BrokenBodyRow>,
+}
+
+#[server(prefix = "/admin/api", endpoint = "transport-check")]
+pub async fn get_transport_check() -> Result<TransportCheckView, ServerFnError> {
+    require_login(false).await?;
+    Ok(backend()?.transport_check().await)
+}
+
+/// Deletes every saved body; the rows stay.
+#[server(prefix = "/admin/api", endpoint = "delete-broken-bodies")]
+pub async fn delete_broken_bodies() -> Result<(), ServerFnError> {
+    require_login(false).await?;
+    backend()?.delete_broken_bodies().await.map_err(bad_request)
 }

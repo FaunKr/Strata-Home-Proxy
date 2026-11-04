@@ -7,7 +7,8 @@ const { chromium } = require('playwright');
 
 const base = process.env.BASE;
 const areas = ['/admin', '/admin/pc', '/admin/pc/history', '/admin/strata', '/admin/strata/output',
-  '/admin/strata/version', '/admin/strata/connection', '/admin/strata/requests', '/admin/access', '/admin/system'];
+  '/admin/strata/version', '/admin/strata/connection', '/admin/strata/requests', '/admin/strata/transport', '/admin/access',
+  '/admin/system'];
 // Texts an area must show, as innerText gives them: with CSS text-transform
 // applied, so e.g. an h3 reads in capitals. The overview's Power row comes from
 // scripts/fake-shelly.js, its Hardware card from scripts/fake-pc.js.
@@ -25,6 +26,8 @@ const expected = {
   // The requests sendRequests made through the proxy.
   '/admin/strata/requests': ['Request log', 'Chat app', 'prompt → tool call', 'Gen. tok/s', '40.0', 'embedding', 'Strata error 404',
     'Speeds by model', 'All keys', 'Qwen3-30B-A3B', '1600.0', 'Generation tok/s over time', 'Generation tok/s by prompt tokens'],
+  // The cut body sendRequests sent, which the proxy refused.
+  '/admin/strata/transport': ['Save broken bodies', 'prompts included', 'Broken request bodies', 'Arrival', 'byte 25 of 25', 'Chat app'],
   '/admin/strata/connection': ['Relay through the PC service', 'Off: the proxy reaches Strata directly over the network.', 'Hide model name', 'Public model name'],
   '/admin/strata/version': ['Update available', 'Summary by Strata (Qwen3-30B-A3B)', 'Run setup again', 'Show 3 changes', 'Compare on GitHub', 'Fastest', '52.3 tok/s', 'Not installed', 'BENCH.bat, not comparable', 'Compare models', '24/33', 'Time limit', 'Last run failed', 'Run code benchmark', 'Benchmark all models', 'No result: model did not load', 'Remove old Strata folder'],
 };
@@ -97,6 +100,13 @@ async function sendRequests(page, errors) {
       body: JSON.stringify({ model: 'any', input: 'hi' }),
     });
     if (embedding.status !== 404) throw new Error(`the embeddings request got ${embedding.status}`);
+    // A body cut after a field name: the proxy refuses it, the Transport check shows it.
+    const cut = await fetch(base + '/v1/chat/completions', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: '{"model": "x", "messages"',
+    });
+    if (cut.status !== 400) throw new Error(`the cut body got ${cut.status}`);
     for (let i = 0; i < 2; i++) {
       const resp = await fetch(base + '/v1/chat/completions', {
         method: 'POST',

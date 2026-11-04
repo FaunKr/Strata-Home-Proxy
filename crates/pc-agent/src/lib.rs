@@ -18,6 +18,7 @@ pub mod machine;
 pub mod managed;
 pub mod output;
 pub mod platform;
+mod relay_body;
 pub mod releases;
 pub mod sampling;
 pub mod stale_paths;

@@ -1660,3 +1660,63 @@ async fn a_key_that_hides_the_model_sees_the_public_name_in_expert_tokens() {
     );
     assert!(!text.contains("IQ3_XXS"), "{text}");
 }
+
+const BROKEN: &str = "strata_proxy_request_body_broken_total";
+/// A body cut right after a field name.
+const CUT: &[u8] = br#"{"model": "x", "messages""#;
+
+#[tokio::test]
+async fn broken_bodies_are_counted_by_side() {
+    let s = setup(true, |_| {}).await;
+    for _ in 0..2 {
+        let resp = post_raw(&s, "/v1/chat/completions", "application/json", CUT, None).await;
+        assert_eq!(resp.status(), 400);
+    }
+    s.pc.set_strata_refuses_body("Expecting ',' delimiter: line 1 column 9 (char 8)");
+    let resp = post_json(&s, "/v1/chat/completions", chat()).await;
+    assert_eq!(resp.status(), 400);
+    let text = scrape(&s, &s.key).await;
+    assert_eq!(
+        value(&text, BROKEN, &[("side", "arrival")]),
+        Some(2.0),
+        "{text}"
+    );
+    assert_eq!(
+        value(&text, BROKEN, &[("side", "strata")]),
+        Some(1.0),
+        "{text}"
+    );
+    assert_eq!(
+        value(&text, BROKEN, &[("side", "network")]),
+        Some(0.0),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn the_broken_body_counter_lists_every_side_at_zero() {
+    let s = setup(true, |_| {}).await;
+    let text = scrape(&s, &s.key).await;
+    for side in ["arrival", "network", "strata"] {
+        assert_eq!(
+            value(&text, BROKEN, &[("side", side)]),
+            Some(0.0),
+            "{side}: {text}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_broken_body_counter_stays_over_a_restart() {
+    let s = setup(true, |c| c.data_dir = Some(data_dir("broken-counter"))).await;
+    let resp = post_raw(&s, "/v1/chat/completions", "application/json", CUT, None).await;
+    assert_eq!(resp.status(), 400);
+    let url = serve_proxy(restarted(&s)).await;
+    let again = Setup { url, ..s.clone() };
+    let text = scrape(&again, &s.key).await;
+    assert_eq!(
+        value(&text, BROKEN, &[("side", "arrival")]),
+        Some(1.0),
+        "{text}"
+    );
+}

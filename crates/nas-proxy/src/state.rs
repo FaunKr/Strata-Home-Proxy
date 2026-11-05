@@ -820,13 +820,20 @@ impl AppState {
     }
 
     /// One pass of the idle check: asks the PC to sleep when nothing has
-    /// happened for `idle_timeout`.
-    pub async fn idle_tick(&self) {
+    /// happened for `idle_timeout`, or runs the Planned PC service update in
+    /// place of that sleep request.
+    pub async fn idle_tick(self: &Arc<Self>) {
         let agent = self.agent();
         if !agent.configured() {
             return;
         }
         let status = self.ask_pc(&agent).await;
+        if let Some(reason) = self.pc_setup.expire_now() {
+            self.events
+                .record(EventKind::PcServiceUpdateFailed, Some(reason));
+        }
+        let ended = self.pc_setup.take_planned_ended();
+        self.lifecycle.lock().unwrap().sleep_soon(ended);
         // A missed answer is no sleeping PC while Strata still answers (a
         // busy PC or network); waking it again would restart the idle time.
         let strata_answers_nas = status.is_none() && self.strata_healthy().await;
@@ -842,6 +849,19 @@ impl AppState {
                 return;
             }
             if !seen.up || !lifecycle.wants_sleep(self.in_flight(), now, t) {
+                return;
+            }
+            // No sleep request while the planned update runs.
+            if self.pc_setup.planned_running() {
+                return;
+            }
+            // The plan takes the sleep request's place: the update runs in
+            // the background, and this pass ends here.
+            if let Some(available) = self.pc_setup.take_planned_due() {
+                let state = Arc::clone(self);
+                tokio::spawn(async move {
+                    crate::pc_setup::run_planned(&state, &available).await;
+                });
                 return;
             }
             lifecycle.restart_planned()

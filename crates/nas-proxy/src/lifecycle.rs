@@ -158,6 +158,9 @@ pub struct Lifecycle {
     restart_accepted_at: Option<Instant>,
     /// The restart that is not back yet was recorded as overdue.
     restart_overdue_noted: bool,
+    /// When the planned PC service update that just ended was sent: the next
+    /// sleep request does not wait for the idle timeout.
+    sleep_soon: Option<Instant>,
 }
 
 impl Lifecycle {
@@ -180,6 +183,7 @@ impl Lifecycle {
             restart_refused: None,
             restart_accepted_at: None,
             restart_overdue_noted: false,
+            sleep_soon: None,
         }
     }
 
@@ -295,11 +299,24 @@ impl Lifecycle {
         self.seen(from)
     }
 
+    /// When a planned PC service update that ended was sent: the sleep
+    /// request does not wait for the idle timeout, unless a request came
+    /// since.
+    pub fn sleep_soon(&mut self, sent: Option<Instant>) {
+        self.sleep_soon = sent;
+    }
+
     /// Whether to ask the PC to sleep now: the PC is up, nothing ran for the
-    /// idle timeout, no keep awake, and no refusal or failure waits.
+    /// idle timeout, no keep awake, and no refusal or failure waits. A
+    /// planned update that just ended makes the idle timeout hold already,
+    /// as long as no request came since it was sent.
     pub fn wants_sleep(&self, in_flight: usize, now: Now, t: Timings) -> bool {
+        let idle = now.at.saturating_duration_since(self.last_activity) >= t.idle_timeout
+            || self
+                .sleep_soon
+                .is_some_and(|sent| self.last_activity <= sent);
         in_flight == 0
-            && now.at.saturating_duration_since(self.last_activity) >= t.idle_timeout
+            && idle
             && !self.kept_awake(now)
             && self.next_sleep_attempt.is_none_or(|at| at <= now.at)
     }
@@ -320,6 +337,7 @@ impl Lifecycle {
                 self.last_healthy = None;
                 self.next_sleep_attempt = None;
                 self.refused = None;
+                self.sleep_soon = None;
                 Some(Record::new(EventKind::SleepAccepted, None))
             }
             Some(SleepAnswer::Refused(reason)) => {

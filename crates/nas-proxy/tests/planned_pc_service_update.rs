@@ -117,6 +117,10 @@ async fn the_pc_sleeps_right_after_the_planned_update() {
     // From now on only the planned update's own sleep can come in time.
     s.state.settings.set("IDLE_TIMEOUT_SECS", "3600").unwrap();
     sleep_sent(&s).await;
+    eventually("sleep in the history", || {
+        kinds(&s.state).contains(&EventKind::SleepAccepted)
+    })
+    .await;
     let kinds = own_kinds(&s.state);
     let updated = kinds
         .iter()
@@ -277,8 +281,10 @@ async fn a_refused_planned_update_is_followed_by_a_sleep_request() {
 
 #[tokio::test]
 async fn a_refused_planned_update_is_tried_again_after_the_sleep_retry() {
-    let (s, mut b, _live) =
-        ready("refused-retry", |c| c.sleep_retry = Duration::from_millis(300)).await;
+    let (s, mut b, _live) = ready("refused-retry", |c| {
+        c.sleep_retry = Duration::from_millis(300)
+    })
+    .await;
     *s.pc.refuse_update.lock().unwrap() = Some("Strata is processing a request".into());
     s.pc.refuse_sleep.store(true, Ordering::SeqCst);
     arm(&s, &mut b).await;
@@ -392,8 +398,11 @@ async fn sleep_now_leaves_a_planned_update_armed() {
 
 #[tokio::test]
 async fn a_planned_restart_follows_the_planned_update() {
-    let (s, mut b, _live) = ready("then-restart", |_| {}).await;
+    let (s, mut b, mut live) = ready("then-restart", |_| {}).await;
     s.pc.takes_restart.store(true, Ordering::SeqCst);
+    // The proxy needs one answer with the service's new capability first.
+    live.until("restart offered", |v| v["restart"] == "Off")
+        .await;
     let resp = b.call("plan-restart", &[]).await;
     assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
     arm(&s, &mut b).await;

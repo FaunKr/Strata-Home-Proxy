@@ -732,7 +732,11 @@ pub async fn agent_update(State(pc): State<Pc>) -> Response {
         return (StatusCode::CONFLICT, Json(Refused::new(reason))).into_response();
     }
     if let Some(reason) = pc.fail_update.lock().unwrap().clone() {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(Refused::new(reason))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(Refused::new(reason)),
+        )
+            .into_response();
     }
     if let Some(version) = pc.update_to.lock().unwrap().clone() {
         *pc.version.lock().unwrap() = Some(version);

@@ -94,6 +94,10 @@ _Avoid_: hard sleep
 A restart of the PC that the proxy asks for instead of its next sleep request after the idle timeout. Armed with *Restart at next sleep* on the Overview; the PC service refuses it for the reasons it refuses a sleep request. Ends once the PC service accepts it.
 _Avoid_: reboot, restart request
 
+**Planned PC service update**:
+A PC service update that the proxy runs instead of its next sleep request after the idle timeout, followed by that sleep request as soon as the new version answers. Armed with *Update before next sleep* on the PC service card; it updates to the version the NAS carries then and ends once the PC service runs that version or a newer one.
+_Avoid_: agent update, update at sleep
+
 **Settling**:
 The short time after an accepted sleep request during which the PC may still answer and yet counts as asleep.
 _Avoid_: Nachlauf

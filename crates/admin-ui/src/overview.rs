@@ -7,8 +7,8 @@ use leptos::prelude::*;
 use crate::{
     api::{
         CancelRestart, ForceSleep, KeepAwake, KeepAwakeChoice, Overview, PcServiceView, PcView,
-        PlanRestart, PowerView, RestartView, SetGaming, Setup, SleepAnswer, SleepNow, SleepView,
-        StrataView, Wake, error_text, get_setup,
+        PlanRestart, PlannedUpdateView, PowerView, RestartView, SetGaming, Setup, SleepAnswer,
+        SleepNow, SleepView, StrataView, Wake, error_text, get_setup,
     },
     confirm::{Confirm, Question},
     hardware::HardwareCard,
@@ -269,7 +269,17 @@ fn Hero(overview: Overview, actions: Actions) -> impl IntoView {
     let pc = overview.pc;
     let (_, class) = pc_badge(pc);
     let restart = overview.restart.clone();
-    let (title, sub) = match (&restart, pc) {
+    let planned = overview
+        .pc_service
+        .as_ref()
+        .map(|s| s.planned.clone())
+        .unwrap_or_default();
+    let (title, sub) = match &planned {
+        PlannedUpdateView::Running => (
+            "Updating the PC service …".to_string(),
+            "The PC sleeps once the new version answers.".to_string(),
+        ),
+        _ => match (&restart, pc) {
         (RestartView::Restarting, _) => (
             "Restarting …".to_string(),
             "The PC restarts and comes back by itself.".to_string(),
@@ -296,6 +306,7 @@ fn Hero(overview: Overview, actions: Actions) -> impl IntoView {
             "Unknown".to_string(),
             "The proxy has not reached the PC yet.".to_string(),
         ),
+        },
         },
     };
     let setup = overview.setup;
@@ -380,6 +391,8 @@ fn Hero(overview: Overview, actions: Actions) -> impl IntoView {
             />
             <ForceSleepResult force_sleep asleep=pc == PcView::Asleep />
             <RestartControls restart agent=setup.agent_configured plan_restart cancel_restart />
+            {matches!(planned, PlannedUpdateView::Planned { .. })
+                .then(|| view! { <p role="status">"PC service update planned"</p> })}
         </section>
     }
 }

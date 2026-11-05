@@ -2,7 +2,8 @@
 //! carries, the one-time code behind the setup command, and the sign-up that
 //! trades the code for the token. All under `/admin/agent/`; like the rest of
 //! `/admin/`, nothing here wakes the PC or counts as activity. Only the
-//! update button does: it wakes a sleeping PC first.
+//! update button does: it wakes a sleeping PC first. A Planned PC service
+//! update instead waits for the idle check's next sleep request.
 
 use std::{
     collections::HashMap,
@@ -19,9 +20,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use strata_admin_ui::api::{PcServiceView, PcSetupCommand};
+use strata_admin_ui::api::{PcServiceView, PcSetupCommand, PlannedUpdateView};
 
 use crate::{
     agent::UpdateAnswer,
@@ -46,6 +48,14 @@ const VERSION_MARKER: &[u8] = b"strata-pc-agent-version:";
 /// button failed; the service may take 5 min for the download alone.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(420);
 const RUNNING: &str = "An update is running already.";
+const NO_PROGRAM: &str = "This image carries no PC service to update.";
+const ALREADY_RUNS: &str = "The PC service already runs the version on the NAS or a newer one.";
+/// A Planned PC service update is armed while this file exists in `DATA_DIR`.
+const PLANNED_FILE: &str = "planned-pc-service-update";
+/// The detail of the history's update request for a planned update.
+const BEFORE_SLEEP: &str = "before next sleep";
+/// Why the update button ends a Planned PC service update.
+const BY_HAND: &str = "updated by hand";
 /// The version the PC service reported last, in `DATA_DIR`.
 const VERSION_FILE: &str = "pc-service-version.json";
 const UPDATE_TIMED_OUT: &str = "The PC service reported no new version after the update. Is it still running? Otherwise run the install command from the PC area on the PC.";
@@ -75,6 +85,18 @@ struct UpdateState {
     /// new version, refuses or the update times out.
     running_since: Option<Instant>,
     error: Option<String>,
+    /// A Planned PC service update is armed.
+    planned: bool,
+    /// Why the PC service refused the planned update last.
+    planned_refused: Option<String>,
+    /// When the running update was sent for the plan.
+    planned_sent: Option<Instant>,
+    /// When a planned update that has ended was sent; the idle check takes
+    /// it to send the sleep request without a new idle timeout.
+    planned_ended: Option<Instant>,
+    /// The PC service refused the planned update: the idle check's next
+    /// pass sends the sleep request instead.
+    sleep_next: bool,
 }
 
 impl UpdateState {
@@ -108,6 +130,9 @@ impl PcSetup {
             .and_then(|dir| std::fs::read(dir.join(VERSION_FILE)).ok())
             .and_then(|bytes| serde_json::from_slice::<SavedVersion>(&bytes).ok())
             .map(|saved| saved.version);
+        let planned = dir
+            .as_ref()
+            .is_some_and(|dir| dir.join(PLANNED_FILE).exists());
         Self {
             dir,
             program: Mutex::new(program),
@@ -116,6 +141,7 @@ impl PcSetup {
             program_version: Mutex::new(None),
             update: Mutex::new(UpdateState {
                 reported,
+                planned,
                 ..UpdateState::default()
             }),
             update_timeout: Mutex::new(UPDATE_TIMEOUT),
@@ -192,9 +218,131 @@ impl PcSetup {
         if !current {
             return false;
         }
-        // Up to date, however it got there: an old failure no longer matters.
+        // Up to date, however it got there: an old failure no longer matters,
+        // nor does a plan to update.
         update.error = None;
+        self.end_plan(&mut update);
         update.running_since.take().is_some()
+    }
+
+    /// Ends the plan, without a trace; a planned update that ran leaves
+    /// its time for the sleep request that follows.
+    fn end_plan(&self, update: &mut UpdateState) {
+        if let Some(sent) = update.planned_sent.take() {
+            update.planned_ended = Some(sent);
+        }
+        update.planned_refused = None;
+        update.sleep_next = false;
+        if std::mem::take(&mut update.planned) {
+            self.save_plan(false);
+        }
+    }
+
+    /// Keeps the plan for after a restart; without `DATA_DIR`, nowhere.
+    fn save_plan(&self, planned: bool) {
+        let Some(dir) = &self.dir else { return };
+        let saved = if planned {
+            write_private(dir, PLANNED_FILE, b"")
+        } else {
+            match std::fs::remove_file(dir.join(PLANNED_FILE)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            }
+        };
+        if let Err(e) = saved {
+            tracing::warn!("Planned PC service update not saved: {e}");
+        }
+    }
+
+    /// Arms a Planned PC service update; whether that changed anything.
+    /// Refused as the update button is when there is nothing to update or
+    /// an update runs.
+    fn plan(&self) -> Result<bool, String> {
+        let available = self.program_version().ok_or(NO_PROGRAM)?;
+        let mut update = self.update.lock().unwrap();
+        self.expire(&mut update);
+        if update.running_since.is_some() {
+            return Err(RUNNING.into());
+        }
+        if update.already_runs(&available) {
+            return Err(ALREADY_RUNS.into());
+        }
+        if update.planned {
+            return Ok(false);
+        }
+        update.planned = true;
+        update.planned_refused = None;
+        self.save_plan(true);
+        Ok(true)
+    }
+
+    /// Calls off a Planned PC service update; whether one was armed. A
+    /// planned update already sent runs on.
+    fn cancel_plan(&self) -> bool {
+        let mut update = self.update.lock().unwrap();
+        if !update.planned {
+            return false;
+        }
+        update.planned = false;
+        update.planned_refused = None;
+        update.sleep_next = false;
+        self.save_plan(false);
+        true
+    }
+
+    /// Ends an update that took too long, for the idle check; its reason if
+    /// it did.
+    pub fn expire_now(&self) -> Option<String> {
+        let mut update = self.update.lock().unwrap();
+        self.expire(&mut update)
+    }
+
+    /// The planned update was sent and has not ended: the idle check sends
+    /// no sleep request.
+    pub fn planned_running(&self) -> bool {
+        self.update.lock().unwrap().planned_sent.is_some()
+    }
+
+    /// When a planned update that has ended since was sent; once.
+    pub fn take_planned_ended(&self) -> Option<Instant> {
+        self.update.lock().unwrap().planned_ended.take()
+    }
+
+    /// The version to update to in place of the sleep request, marked as
+    /// running; `None` when the sleep request goes ahead. A plan with
+    /// nothing left to update ends here without a trace.
+    pub fn take_planned_due(&self) -> Option<String> {
+        let available = self.program_version();
+        let mut update = self.update.lock().unwrap();
+        if !update.planned || update.running_since.is_some() {
+            return None;
+        }
+        if std::mem::take(&mut update.sleep_next) {
+            return None;
+        }
+        match available {
+            Some(available) if !update.already_runs(&available) => {
+                let now = Instant::now();
+                update.running_since = Some(now);
+                update.planned_sent = Some(now);
+                update.error = None;
+                Some(available)
+            }
+            _ => {
+                self.end_plan(&mut update);
+                None
+            }
+        }
+    }
+
+    /// The PC service refused the planned update: the plan stays with the
+    /// reason, and the sleep request follows.
+    fn planned_refused(&self, reason: &str) {
+        let mut update = self.update.lock().unwrap();
+        update.running_since = None;
+        update.planned_sent = None;
+        update.planned_refused = Some(reason.to_string());
+        update.sleep_next = true;
     }
 
     /// Keeps `version` for after a restart; without `DATA_DIR`, nowhere.
@@ -222,6 +370,9 @@ impl PcSetup {
         }
         update.running_since = None;
         update.error = Some(UPDATE_TIMED_OUT.to_string());
+        if update.planned_sent.is_some() {
+            self.end_plan(update);
+        }
         Some(UPDATE_TIMED_OUT.to_string())
     }
 
@@ -241,7 +392,17 @@ impl PcSetup {
             } else {
                 Vec::new()
             };
+            let planned = if update.planned_sent.is_some() {
+                PlannedUpdateView::Running
+            } else if update.planned {
+                PlannedUpdateView::Planned {
+                    refused: update.planned_refused.clone(),
+                }
+            } else {
+                PlannedUpdateView::Off
+            };
             PcServiceView {
+                planned,
                 update_available,
                 // Without the build suffix of an older service.
                 version: version.map(|v| pc_changelog::without_build(&v).unwrap_or(v)),
@@ -274,19 +435,21 @@ impl PcSetup {
             return Err(RUNNING.into());
         }
         if update.already_runs(available) {
-            return Err(
-                "The PC service already runs the version on the NAS or a newer one.".into(),
-            );
+            return Err(ALREADY_RUNS.into());
         }
         update.running_since = Some(Instant::now());
         update.error = None;
         Ok(())
     }
 
+    /// Also ends the plan when the update was the planned one.
     fn update_failed(&self, reason: &str) {
         let mut update = self.update.lock().unwrap();
         update.running_since = None;
         update.error = Some(reason.to_string());
+        if update.planned_sent.is_some() {
+            self.end_plan(&mut update);
+        }
     }
 
     /// A new code and the command around it; the previous code stops working.
@@ -371,9 +534,10 @@ pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
         return Err(strata_admin_ui::labels::NO_AGENT.into());
     }
     let Some(available) = state.pc_setup.program_version() else {
-        return Err("This image carries no PC service to update.".into());
+        return Err(NO_PROGRAM.into());
     };
     let requested = || {
+        cancel_plan(state, BY_HAND);
         state
             .events
             .record(EventKind::PcServiceUpdateRequested, Some(by.to_string()));
@@ -411,7 +575,7 @@ pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
         UpdateAnswer::NoAnswer => {
             tracing::warn!("PC service did not answer the update, waiting for the new version")
         }
-        UpdateAnswer::Refused(reason) => {
+        UpdateAnswer::Refused(reason) | UpdateAnswer::Failed(reason) => {
             tracing::warn!("Update of the PC service: {reason}");
             state.pc_setup.update_failed(&reason);
             state
@@ -422,6 +586,76 @@ pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
     state.overview.refresh_now();
     // The reason shows on the overview, where it stays.
     Ok(())
+}
+
+/// *Update before next sleep*: arms a Planned PC service update for `by`.
+/// Never wakes the PC.
+pub fn plan(state: &AppState, by: &str) -> Result<(), String> {
+    if !state.agent().configured() {
+        return Err(strata_admin_ui::labels::NO_AGENT.into());
+    }
+    if state.pc_setup.plan()? {
+        state
+            .events
+            .record(EventKind::PcServiceUpdatePlanned, Some(by.to_string()));
+    }
+    Ok(())
+}
+
+/// Calls off a Planned PC service update, with `detail` (who, or why).
+pub fn cancel_plan(state: &AppState, detail: &str) {
+    if state.pc_setup.cancel_plan() {
+        state.events.record(
+            EventKind::PcServiceUpdatePlanCancelled,
+            Some(detail.to_string()),
+        );
+    }
+}
+
+/// The planned update the idle check started in place of its sleep request
+/// (`take_planned_due` marked it running): asks the PC service and notes
+/// the answer. The new version reporting, a failure or the time-out ends
+/// it; a refusal keeps the plan and lets the sleep request go ahead.
+pub fn run_planned(state: Arc<AppState>, available: String) -> BoxFuture<'static, ()> {
+    Box::pin(async move {
+        state.events.record(
+            EventKind::PcServiceUpdateRequested,
+            Some(BEFORE_SLEEP.to_string()),
+        );
+        state.overview.refresh_now();
+        let refused = match state.agent().update().await {
+            UpdateAnswer::Accepted => {
+                tracing::info!("PC service is updating to {available} before the next sleep");
+                false
+            }
+            UpdateAnswer::NoAnswer => {
+                tracing::warn!("PC service did not answer the update, waiting for the new version");
+                false
+            }
+            UpdateAnswer::Refused(reason) => {
+                tracing::info!("Planned update of the PC service refused: {reason}");
+                state.pc_setup.planned_refused(&reason);
+                state
+                    .events
+                    .record(EventKind::PcServiceUpdateFailed, Some(reason));
+                true
+            }
+            UpdateAnswer::Failed(reason) => {
+                tracing::warn!("Planned update of the PC service: {reason}");
+                state.pc_setup.update_failed(&reason);
+                state
+                    .events
+                    .record(EventKind::PcServiceUpdateFailed, Some(reason));
+                false
+            }
+        };
+        state.overview.refresh_now();
+        // A refusal must not keep the PC awake: the next idle pass sends the
+        // sleep request at once, with every idle condition checked again.
+        if refused {
+            state.idle_tick().await;
+        }
+    })
 }
 
 fn new_code() -> String {

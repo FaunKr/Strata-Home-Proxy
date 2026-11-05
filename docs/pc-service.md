@@ -78,6 +78,20 @@ If the update fails, the old service keeps running, starts the Strata it
 stopped again, and the **PC** area names the reason. A service set up before the update button existed needs
 the command from above once.
 
+**Update before next sleep:** Next to the update button, **Update before next
+sleep** arms a Planned PC service update instead of updating at once; it does
+not wake the PC. The next time the proxy would send its sleep request after
+the idle timeout, it asks the PC service to update to the version the NAS
+carries then, and sends that sleep request as soon as the new version answers,
+without waiting out another idle timeout. A Planned restart armed as well
+takes the sleep request's place. The card shows **Update planned before next
+sleep** with **Cancel**, the Overview says *PC service update planned*, and the
+plan survives a restart of the proxy. Pressing the update button ends it
+(*updated by hand*). It ends on its own once the PC service runs the NAS's
+version or a newer one. A refused update stays armed with the reason and the
+PC sleeps anyway; a failed one ends the plan with today's failure reason and
+the PC sleeps.
+
 **What's new:** While an update is available, the PC service card lists what
 it brings, from the service's changelog (`crates/pc-agent/CHANGELOG.md`, built
 into the proxy): the versions above the installed one up to the one on the

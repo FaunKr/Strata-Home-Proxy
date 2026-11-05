@@ -21,6 +21,7 @@ mod overview;
 mod pc_service_changelog;
 mod pc_service_update;
 mod pc_setup;
+mod planned_pc_service_update;
 mod planned_restart;
 mod power;
 mod power_samples;

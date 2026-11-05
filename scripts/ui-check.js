@@ -399,6 +399,113 @@ async function forced(page, errors) {
   return findings;
 }
 
+// Drives the Planned PC service update against scripts/fake-pc.js: the card's
+// two buttons, the armed line with the Overview's, a refusal, and the hero
+// while the update runs. Returns the number of findings.
+async function pcServiceUpdate(page, errors, name) {
+  // Long enough for the idle loop to wake from its default interval after
+  // IDLE_CHECK_SECS below is saved.
+  const wait = { timeout: 30000 };
+  let findings = 0;
+  const fake = (path, query) => fetch(`${process.env.FAKE_PC}/fake/${path}?${query}`, { method: 'POST' });
+  const save = values => page.evaluate(async values => {
+    const resp = await fetch('/admin/api/save-settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ values }),
+    });
+    if (!resp.ok) throw new Error(`save-settings ${resp.status}: ${await resp.text()}`);
+  }, values.map(([key, value]) => ({ key, value })));
+  const call = path => page.evaluate(async path => {
+    const resp = await fetch(`/admin/api/${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    return resp.status;
+  }, path);
+  const sees = text => page.getByText(text).first().waitFor(wait);
+  const shot = async file => {
+    if (process.env.SHOTS === '1') {
+      await page.screenshot({ path: `${process.env.OUT}/${name}_pc-service-${file}.jpg`, type: 'jpeg', quality: 60, fullPage: true });
+    }
+  };
+  const step = async (label, file, run) => {
+    errors.length = 0;
+    let issue = null;
+    try {
+      await run();
+    } catch (e) {
+      const lines = e.message.replace(/\x1b\[\d+m/g, '').trim().split('\n');
+      const shown = await page.locator('[role=status], [role=alert]').allInnerTexts().catch(() => []);
+      issue = [lines[0], shown.length ? `page shows: ${shown.join(' / ')}` : null,
+        ...errors.map(e => `JS error: ${e}`)]
+        .filter(Boolean).join('\n     ');
+    }
+    if (!issue && errors.length) issue = `JS error: ${errors[0]}`;
+    console.log(`${issue ? 'FAIL' : 'ok  '} ${name} PC service update: ${label}${issue ? '\n     ' + issue : ''}`);
+    await shot(file);
+    if (issue) findings++;
+  };
+  const arm = async () => {
+    const status = await call('plan-pc-service-update');
+    if (status !== 200) throw new Error(`plan-pc-service-update got ${status}`);
+  };
+
+  await step('the plan button next to the main button', 'button', async () => {
+    await fake('update', 'mode=reset');
+    await fake('pc', 'state=awake');
+    // The idle check reads its interval each round; a short one lets the
+    // refusal and the running update arrive without waiting out the default.
+    // The short retry lets the next plan run right after a refused sleep.
+    await save([['IDLE_CHECK_SECS', '1'], ['SLEEP_RETRY_SECS', '1']]);
+    await page.goto(base + '/admin/pc', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'Update to 0.3.1' }).waitFor(wait);
+    await page.getByRole('button', { name: 'Update before next sleep' }).waitFor(wait);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    if (overflow > 0) throw new Error(`scrolls sideways by ${overflow}px`);
+  });
+  await step('an armed plan keeps the main button and shows Cancel', 'planned', async () => {
+    await arm();
+    await page.goto(base + '/admin/pc', { waitUntil: 'domcontentloaded' });
+    await sees('Update planned before next sleep');
+    await page.getByRole('button', { name: 'Update to 0.3.1' }).waitFor(wait);
+    await page.getByRole('button', { name: 'Cancel' }).waitFor(wait);
+    await shot('planned-card');
+    await page.goto(base + '/admin', { waitUntil: 'domcontentloaded' });
+    await sees('PC service update planned');
+  });
+  await step('a refused planned update shows its reason', 'refused', async () => {
+    await fake('update', 'mode=refuse');
+    await save([['IDLE_TIMEOUT_SECS', '1']]);
+    await page.goto(base + '/admin/pc', { waitUntil: 'domcontentloaded' });
+    await sees('Last try refused: Strata is processing a request');
+    // The main button stays next to the plan's line.
+    await page.getByRole('button', { name: 'Update to 0.3.1' }).waitFor(wait);
+    await page.getByRole('button', { name: 'Cancel' }).click(wait);
+    await page.getByRole('button', { name: 'Update before next sleep' }).waitFor(wait);
+  });
+  await step('the hero says the planned update runs', 'running', async () => {
+    await fake('update', 'mode=slow');
+    await arm();
+    await page.goto(base + '/admin', { waitUntil: 'domcontentloaded' });
+    await sees('Updating the PC service …');
+    await sees('The PC sleeps once the new version answers.');
+    await shot('running-hero');
+    await page.goto(base + '/admin/pc', { waitUntil: 'domcontentloaded' });
+    await sees('The PC service restarts with the new version …');
+    // End the slow update now, so the next pass starts from the old version.
+    await fake('update', 'mode=finish');
+    await page.goto(base + '/admin/pc', { waitUntil: 'domcontentloaded' });
+    await sees('Up to date');
+  });
+  await save([['IDLE_TIMEOUT_SECS', '900'], ['IDLE_CHECK_SECS', '15'], ['SLEEP_RETRY_SECS', '60']]);
+  await fake('update', 'mode=finish');
+  await page.waitForTimeout(1500);
+  await fake('update', 'mode=reset');
+  await fake('pc', 'state=awake');
+  return findings;
+}
+
 // Opens the optimization prompt of the first installed model: the dialog
 // with the text and Copy. Returns the number of findings.
 async function optimizationPrompt(page, errors, name) {
@@ -814,6 +921,11 @@ async function codeBench(page, errors) {
     // The fake PC finishes the first Activate and the runner reports a task
     // running, so the progress reaches the first task of the first model.
     await sees('Model 1 of 3 · task 1 of 4');
+    // Stop it, so the run does not keep the PC awake throughout the phone pass.
+    await page.getByRole('button', { name: 'Cancel code benchmark' }).click(wait);
+    const cancelDialog = page.locator('dialog.confirm');
+    await cancelDialog.locator('button.danger').click();
+    await page.getByText(/The last run with .* was cancelled\./).waitFor(wait);
   });
   return findings;
 }
@@ -849,6 +961,8 @@ async function codeBench(page, errors) {
     findings += await tune(page, errors, name);
     findings += await engineOptions(page, errors, name);
     findings += await energyUnit(page, errors, name);
+    // Before the code benchmark, whose background run holds the PC awake.
+    findings += await pcServiceUpdate(page, errors, name);
     findings += await sameVersion(page, errors, name);
     findings += await publicName(page, errors, name);
     if (name === 'desk') {

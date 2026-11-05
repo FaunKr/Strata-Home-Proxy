@@ -6,7 +6,10 @@ use leptos::prelude::*;
 use leptos_router::components::{A, Outlet};
 
 use crate::{
-    api::{NewPcSetupCommand, PcServiceChange, PcServiceView, PcView, UpdatePcService, error_text},
+    api::{
+        CancelPcServiceUpdate, NewPcSetupCommand, PcServiceChange, PcServiceView, PcView,
+        PlanPcServiceUpdate, PlannedUpdateView, UpdatePcService, error_text,
+    },
     copy::CopyField,
     labels::{PC_CONNECTION, PC_WAKE_SLEEP},
     overview::Live,
@@ -50,12 +53,16 @@ pub fn PcSetupTab() -> impl IntoView {
 fn PcService() -> impl IntoView {
     let live = expect_context::<Live>();
     let update = ServerAction::<UpdatePcService>::new();
+    let plan = ServerAction::<PlanPcServiceUpdate>::new();
+    let cancel = ServerAction::<CancelPcServiceUpdate>::new();
     let body = move || {
         let Some(o) = live.overview.get() else {
             return view! { <p class="hint">"Loading …"</p> }.into_any();
         };
         match o.pc_service {
-            Some(service) => view! { <ServiceState service pc=o.pc update /> }.into_any(),
+            Some(service) => {
+                view! { <ServiceState service pc=o.pc update plan cancel /> }.into_any()
+            }
             None => {
                 let (badge, text) = if o.setup.agent_configured {
                     (
@@ -89,6 +96,12 @@ fn PcService() -> impl IntoView {
                     .and_then(Result::err)
                     .map(|e| view! { <p class="error" role="alert">{error_text(&e)}</p> })
             }}
+            {move || {
+                plan.value()
+                    .get()
+                    .and_then(Result::err)
+                    .map(|e| view! { <p class="error" role="alert">{error_text(&e)}</p> })
+            }}
         </section>
     }
 }
@@ -98,6 +111,8 @@ fn ServiceState(
     service: PcServiceView,
     pc: PcView,
     update: ServerAction<UpdatePcService>,
+    plan: ServerAction<PlanPcServiceUpdate>,
+    cancel: ServerAction<CancelPcServiceUpdate>,
 ) -> impl IntoView {
     let awake = matches!(pc, PcView::Awake | PcView::Gaming);
     let (badge, class) = if service.updating {
@@ -130,7 +145,43 @@ fn ServiceState(
             <WhatsNew changes=service.changes.clone() />
         }
     });
-    let button = (service.update_available && !service.updating).then(|| {
+    let planned = service.planned.clone();
+    let refused = match &planned {
+        PlannedUpdateView::Planned { refused } => refused.clone(),
+        _ => None,
+    };
+    let controls = (service.update_available && !service.updating).then(|| {
+        let secondary = match planned {
+            PlannedUpdateView::Planned { .. } => view! {
+                <div class="toggle-row">
+                    <p role="status">"Update planned before next sleep"</p>
+                    <button
+                        type="button"
+                        class="secondary"
+                        disabled=move || cancel.pending().get()
+                        on:click=move |_| {
+                            cancel.dispatch(CancelPcServiceUpdate {});
+                        }
+                    >
+                        "Cancel"
+                    </button>
+                </div>
+            }
+            .into_any(),
+            _ => view! {
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || plan.pending().get()
+                    on:click=move |_| {
+                        plan.dispatch(PlanPcServiceUpdate {});
+                    }
+                >
+                    "Update before next sleep"
+                </button>
+            }
+            .into_any(),
+        };
         view! {
             <div class="actions">
                 <button
@@ -147,8 +198,12 @@ fn ServiceState(
                         (true, false) => target.clone(),
                     }}
                 </button>
+                {secondary}
             </div>
+            {refused
+                .map(|r| view! { <p class="hint">{format!("Last try refused: {r}")}</p> })}
         }
+        .into_any()
     });
     view! {
         <div class="card-head">
@@ -172,7 +227,7 @@ fn ServiceState(
             .update_error
             .map(|e| view! { <p class="error" role="alert">{format!("Last update failed: {e}")}</p> })}
         {changes}
-        {button}
+        {controls}
     }
 }
 

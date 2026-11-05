@@ -136,6 +136,8 @@ pub struct Lifecycle {
     last_activity_at: SystemTime,
     /// Start or end of the last forwarded request.
     last_request: Option<SystemTime>,
+    /// The same moment, for the planned update's sleep marker.
+    last_request_at: Option<Instant>,
     last_healthy: Option<Instant>,
     sleep_accepted_at: Option<Instant>,
     next_sleep_attempt: Option<Instant>,
@@ -158,6 +160,10 @@ pub struct Lifecycle {
     restart_accepted_at: Option<Instant>,
     /// The restart that is not back yet was recorded as overdue.
     restart_overdue_noted: bool,
+    /// When the planned PC service update that just ended was sent: the next
+    /// sleep request does not wait for the idle timeout while no request came
+    /// since.
+    sleep_soon: Option<Instant>,
 }
 
 impl Lifecycle {
@@ -168,6 +174,7 @@ impl Lifecycle {
             last_activity: now.at,
             last_activity_at: now.wall,
             last_request: None,
+            last_request_at: None,
             last_healthy: None,
             sleep_accepted_at: None,
             next_sleep_attempt: None,
@@ -180,6 +187,7 @@ impl Lifecycle {
             restart_refused: None,
             restart_accepted_at: None,
             restart_overdue_noted: false,
+            sleep_soon: None,
         }
     }
 
@@ -295,11 +303,25 @@ impl Lifecycle {
         self.seen(from)
     }
 
+    /// Marks a planned PC service update as sent at `sent`: the next sleep
+    /// request does not wait for the idle timeout, unless a request came
+    /// since. Kept until it is used or a request, an accepted sleep or an
+    /// accepted restart ends it.
+    pub fn sleep_soon(&mut self, sent: Instant) {
+        self.sleep_soon = Some(sent);
+    }
+
     /// Whether to ask the PC to sleep now: the PC is up, nothing ran for the
-    /// idle timeout, no keep awake, and no refusal or failure waits.
+    /// idle timeout, no keep awake, and no refusal or failure waits. A
+    /// planned update that just ended makes the idle timeout hold already,
+    /// as long as no request came since it was sent.
     pub fn wants_sleep(&self, in_flight: usize, now: Now, t: Timings) -> bool {
+        let idle = now.at.saturating_duration_since(self.last_activity) >= t.idle_timeout
+            || self
+                .sleep_soon
+                .is_some_and(|sent| self.last_request_at.is_none_or(|request| request <= sent));
         in_flight == 0
-            && now.at.saturating_duration_since(self.last_activity) >= t.idle_timeout
+            && idle
             && !self.kept_awake(now)
             && self.next_sleep_attempt.is_none_or(|at| at <= now.at)
     }
@@ -320,6 +342,7 @@ impl Lifecycle {
                 self.last_healthy = None;
                 self.next_sleep_attempt = None;
                 self.refused = None;
+                self.sleep_soon = None;
                 Some(Record::new(EventKind::SleepAccepted, None))
             }
             Some(SleepAnswer::Refused(reason)) => {
@@ -399,10 +422,13 @@ impl Lifecycle {
         self.refused = None;
     }
 
-    /// A forwarded request started or ended.
+    /// A forwarded request started or ended. It ends the planned update's
+    /// immediate sleep: the PC sleeps after the idle timeout again.
     pub fn request_seen(&mut self, now: Now) {
         self.touch(now);
         self.last_request = Some(now.wall);
+        self.last_request_at = Some(now.at);
+        self.sleep_soon = None;
     }
 
     /// Keeps the PC awake until `until`, or ends that with `None`.

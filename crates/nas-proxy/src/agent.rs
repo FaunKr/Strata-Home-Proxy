@@ -45,12 +45,12 @@ const UPDATE_TIMEOUT: Duration = Duration::from_secs(330);
 #[derive(Debug, PartialEq, Eq)]
 pub enum UpdateAnswer {
     Accepted,
-    /// The service said no for now (409): Strata is processing a request, a
+    /// The service refused for now (409): Strata is processing a request, a
     /// job runs, Strata did not stop. It runs on as before.
-    Busy(String),
-    /// The service failed, or is too old for the update; it runs on as
-    /// before.
     Refused(String),
+    /// The service failed, or is too old for the update (404, 500 and other
+    /// errors); it runs on as before.
+    Failed(String),
     /// No answer in time: the service may still be loading and finish.
     NoAnswer,
 }
@@ -297,19 +297,19 @@ impl AgentClient {
     /// own and restart.
     pub async fn update(&self) -> UpdateAnswer {
         let Some(req) = self.request(reqwest::Method::POST, "/update") else {
-            return UpdateAnswer::Refused("PC_AGENT_URL is not set".into());
+            return UpdateAnswer::Failed("PC_AGENT_URL is not set".into());
         };
         let Ok(resp) = req.timeout(UPDATE_TIMEOUT).send().await else {
             return UpdateAnswer::NoAnswer;
         };
         if resp.status() == StatusCode::NOT_FOUND {
-            return UpdateAnswer::Refused(TOO_OLD_FOR_UPDATE.into());
+            return UpdateAnswer::Failed(TOO_OLD_FOR_UPDATE.into());
         }
         if resp.status() == StatusCode::CONFLICT {
-            return UpdateAnswer::Busy(reason(resp).await);
+            return UpdateAnswer::Refused(reason(resp).await);
         }
         if !resp.status().is_success() {
-            return UpdateAnswer::Refused(reason(resp).await);
+            return UpdateAnswer::Failed(reason(resp).await);
         }
         UpdateAnswer::Accepted
     }

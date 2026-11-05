@@ -112,9 +112,11 @@ async fn idle_timeout_updates_a_pc_service_with_a_planned_update() {
 #[tokio::test]
 async fn the_pc_sleeps_right_after_the_planned_update() {
     let (s, mut b, _live) = ready("sleeps-after", |_| {}).await;
+    *s.pc.update_delay.lock().unwrap() = Duration::from_secs(2);
     arm(&s, &mut b).await;
     update_sent(&s).await;
-    // From now on only the planned update's own sleep can come in time.
+    // While the update runs, only the planned update's own sleep can come in
+    // time: the idle timeout no longer holds.
     s.state.settings.set("IDLE_TIMEOUT_SECS", "3600").unwrap();
     sleep_sent(&s).await;
     eventually("sleep in the history", || {
@@ -131,6 +133,25 @@ async fn the_pc_sleeps_right_after_the_planned_update() {
         .position(|k| *k == EventKind::SleepAccepted)
         .expect("sleep in the history");
     assert!(updated < asleep, "{kinds:?}");
+}
+
+#[tokio::test]
+async fn a_missed_status_answer_does_not_delay_the_sleep_after_the_planned_update() {
+    let (s, mut b, mut live) = ready("missed-status", |_| {}).await;
+    *s.pc.update_delay.lock().unwrap() = Duration::from_secs(2);
+    arm(&s, &mut b).await;
+    update_sent(&s).await;
+    // The PC service restarts with the update: its status misses once and
+    // Strata is not back yet, so the miss reads as a sleeping PC. The next
+    // status marks it awake again and starts the idle time.
+    s.pc.status_misses.store(1, Ordering::SeqCst);
+    s.pc.starting.store(true, Ordering::SeqCst);
+    s.state.settings.set("IDLE_TIMEOUT_SECS", "3600").unwrap();
+    live.until("new version, plan over", |v| {
+        v["pc_service"]["version"] == NEW && v["pc_service"]["planned"] == "Off"
+    })
+    .await;
+    sleep_sent(&s).await;
 }
 
 #[tokio::test]
@@ -433,10 +454,8 @@ async fn arming_is_refused_without_an_update() {
         .await;
     let resp = b.call("plan-pc-service-update", &[]).await;
     assert_eq!(resp.status(), 400);
-    assert!(
-        resp.text().await.unwrap().contains("already runs"),
-        "the update button's text"
-    );
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("already runs"), "{text}");
     assert_eq!(count(&s, EventKind::PcServiceUpdatePlanned), 0);
 }
 
@@ -451,6 +470,7 @@ async fn arming_is_refused_while_an_update_runs() {
         .await;
     let resp = b.call("plan-pc-service-update", &[]).await;
     assert_eq!(resp.status(), 400);
-    assert!(resp.text().await.unwrap().contains("running already"));
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("running already"), "{text}");
     assert_eq!(count(&s, EventKind::PcServiceUpdatePlanned), 0);
 }

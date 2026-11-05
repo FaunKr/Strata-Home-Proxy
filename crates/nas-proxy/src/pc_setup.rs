@@ -20,6 +20,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use strata_admin_ui::api::{PcServiceView, PcSetupCommand, PlannedUpdateView};
@@ -574,7 +575,7 @@ pub async fn update(state: &Arc<AppState>, by: &str) -> Result<(), String> {
         UpdateAnswer::NoAnswer => {
             tracing::warn!("PC service did not answer the update, waiting for the new version")
         }
-        UpdateAnswer::Busy(reason) | UpdateAnswer::Refused(reason) => {
+        UpdateAnswer::Refused(reason) | UpdateAnswer::Failed(reason) => {
             tracing::warn!("Update of the PC service: {reason}");
             state.pc_setup.update_failed(&reason);
             state
@@ -615,35 +616,46 @@ pub fn cancel_plan(state: &AppState, detail: &str) {
 /// (`take_planned_due` marked it running): asks the PC service and notes
 /// the answer. The new version reporting, a failure or the time-out ends
 /// it; a refusal keeps the plan and lets the sleep request go ahead.
-pub async fn run_planned(state: &AppState, available: &str) {
-    state.events.record(
-        EventKind::PcServiceUpdateRequested,
-        Some(BEFORE_SLEEP.to_string()),
-    );
-    state.overview.refresh_now();
-    match state.agent().update().await {
-        UpdateAnswer::Accepted => {
-            tracing::info!("PC service is updating to {available} before the next sleep")
+pub fn run_planned(state: Arc<AppState>, available: String) -> BoxFuture<'static, ()> {
+    Box::pin(async move {
+        state.events.record(
+            EventKind::PcServiceUpdateRequested,
+            Some(BEFORE_SLEEP.to_string()),
+        );
+        state.overview.refresh_now();
+        let refused = match state.agent().update().await {
+            UpdateAnswer::Accepted => {
+                tracing::info!("PC service is updating to {available} before the next sleep");
+                false
+            }
+            UpdateAnswer::NoAnswer => {
+                tracing::warn!("PC service did not answer the update, waiting for the new version");
+                false
+            }
+            UpdateAnswer::Refused(reason) => {
+                tracing::info!("Planned update of the PC service refused: {reason}");
+                state.pc_setup.planned_refused(&reason);
+                state
+                    .events
+                    .record(EventKind::PcServiceUpdateFailed, Some(reason));
+                true
+            }
+            UpdateAnswer::Failed(reason) => {
+                tracing::warn!("Planned update of the PC service: {reason}");
+                state.pc_setup.update_failed(&reason);
+                state
+                    .events
+                    .record(EventKind::PcServiceUpdateFailed, Some(reason));
+                false
+            }
+        };
+        state.overview.refresh_now();
+        // A refusal must not keep the PC awake: the next idle pass sends the
+        // sleep request at once, with every idle condition checked again.
+        if refused {
+            state.idle_tick().await;
         }
-        UpdateAnswer::NoAnswer => {
-            tracing::warn!("PC service did not answer the update, waiting for the new version")
-        }
-        UpdateAnswer::Busy(reason) => {
-            tracing::info!("Planned update of the PC service refused: {reason}");
-            state.pc_setup.planned_refused(&reason);
-            state
-                .events
-                .record(EventKind::PcServiceUpdateFailed, Some(reason));
-        }
-        UpdateAnswer::Refused(reason) => {
-            tracing::warn!("Planned update of the PC service: {reason}");
-            state.pc_setup.update_failed(&reason);
-            state
-                .events
-                .record(EventKind::PcServiceUpdateFailed, Some(reason));
-        }
-    }
-    state.overview.refresh_now();
+    })
 }
 
 fn new_code() -> String {

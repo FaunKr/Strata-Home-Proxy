@@ -116,6 +116,10 @@ const strata = {
 const idleMetrics = 'vllm:num_requests_running{model_name="Qwen3-30B-A3B"} 0\nvllm:num_requests_waiting{model_name="Qwen3-30B-A3B"} 0\n';
 let pcState = 'awake';
 let summaryMode = 'answer';
+// How POST /update answers: ok, refuse (409) or slow (the new version
+// reports after a pause). The generation keeps a reset from being undone by
+// a pause that is still running.
+const pcUpdate = { mode: 'ok', generation: 0 };
 // A run over all models: the fake accepts an Activate job and finishes it, so
 // the card's progress can reach the first task of the first model; the runner
 // reports that run with its first task running.
@@ -161,6 +165,22 @@ http.createServer((req, res) => {
     res.statusCode = 503;
     res.end();
   }
+  else if (req.method === 'POST' && req.url === '/update') {
+    if (pcUpdate.mode === 'refuse') {
+      refuse({ reason: 'Strata is processing a request' });
+    } else {
+      res.statusCode = 202;
+      json({ accepted: true });
+      if (pcUpdate.mode === 'slow') {
+        const generation = ++pcUpdate.generation;
+        setTimeout(() => {
+          if (generation === pcUpdate.generation) status.version = '0.3.1+ui-check';
+        }, 10000);
+      } else {
+        status.version = '0.3.1+ui-check';
+      }
+    }
+  }
   else if (req.method === 'POST' && req.url === '/sleep') {
     refuse({ ...sample('sleep-refused.json'), reason: 'Someone used the PC 2 min ago' });
   }
@@ -192,6 +212,16 @@ http.createServer((req, res) => {
   }
   else if (req.method === 'POST' && req.url.startsWith('/fake/pc')) {
     pcState = new URL(req.url, 'http://fake').searchParams.get('state');
+    res.end();
+  }
+  // What POST /update does next: reset (the old version again), refuse, slow,
+  // or finish (the new version reports now).
+  else if (req.method === 'POST' && req.url.startsWith('/fake/update')) {
+    const mode = new URL(req.url, 'http://fake').searchParams.get('mode') || 'reset';
+    pcUpdate.mode = mode === 'refuse' || mode === 'slow' ? mode : 'ok';
+    pcUpdate.generation++;
+    if (mode === 'reset' || mode === 'ok') status.version = '0.1.0+ui-check';
+    if (mode === 'finish') status.version = '0.3.1+ui-check';
     res.end();
   }
   else if (req.url.startsWith('/health')) json({ status: 'ok', loaded: true, service: 'strata', model: 'Qwen3-30B-A3B', max_context: 32768, opencode: '1.19.3' });

@@ -146,9 +146,13 @@ fn ServiceState(
         }
     });
     let planned = service.planned.clone();
-    let controls = match planned {
-        PlannedUpdateView::Planned { refused } => Some(
-            view! {
+    let refused = match &planned {
+        PlannedUpdateView::Planned { refused } => refused.clone(),
+        _ => None,
+    };
+    let controls = (service.update_available && !service.updating).then(|| {
+        let secondary = match planned {
+            PlannedUpdateView::Planned { .. } => view! {
                 <div class="toggle-row">
                     <p role="status">"Update planned before next sleep"</p>
                     <button
@@ -162,44 +166,45 @@ fn ServiceState(
                         "Cancel"
                     </button>
                 </div>
-                {refused
-                    .map(|r| view! { <p class="hint">{format!("Last try refused: {r}")}</p> })}
             }
             .into_any(),
-        ),
-        _ if service.update_available && !service.updating => Some(
-            view! {
-                <div class="actions">
-                    <button
-                        type="button"
-                        disabled=move || update.pending().get()
-                        on:click=move |_| {
-                            update.dispatch(UpdatePcService {});
-                        }
-                    >
-                        {move || match (awake, update.pending().get()) {
-                            (false, true) => "Waking PC …".to_string(),
-                            (false, false) => wake_target.clone(),
-                            (true, true) => "Updating …".to_string(),
-                            (true, false) => target.clone(),
-                        }}
-                    </button>
-                    <button
-                        type="button"
-                        class="secondary"
-                        disabled=move || plan.pending().get()
-                        on:click=move |_| {
-                            plan.dispatch(PlanPcServiceUpdate {});
-                        }
-                    >
-                        "Update before next sleep"
-                    </button>
-                </div>
+            _ => view! {
+                <button
+                    type="button"
+                    class="secondary"
+                    disabled=move || plan.pending().get()
+                    on:click=move |_| {
+                        plan.dispatch(PlanPcServiceUpdate {});
+                    }
+                >
+                    "Update before next sleep"
+                </button>
             }
             .into_any(),
-        ),
-        _ => None,
-    };
+        };
+        view! {
+            <div class="actions">
+                <button
+                    type="button"
+                    disabled=move || update.pending().get()
+                    on:click=move |_| {
+                        update.dispatch(UpdatePcService {});
+                    }
+                >
+                    {move || match (awake, update.pending().get()) {
+                        (false, true) => "Waking PC …".to_string(),
+                        (false, false) => wake_target.clone(),
+                        (true, true) => "Updating …".to_string(),
+                        (true, false) => target.clone(),
+                    }}
+                </button>
+                {secondary}
+            </div>
+            {refused
+                .map(|r| view! { <p class="hint">{format!("Last try refused: {r}")}</p> })}
+        }
+        .into_any()
+    });
     view! {
         <div class="card-head">
             <h2>"PC service"</h2>
